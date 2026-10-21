@@ -1,0 +1,86 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { isModelVisible, pickDefaultModel, visibleModels } from '../web/src/model-selection.ts'
+
+const model = (provider, id) => ({ provider, id, value: JSON.stringify([provider, id]), name: id, description: null })
+const sol = model('openai-codex', 'gpt-6.1-sol')
+const terra = model('openai-codex', 'gpt-5.6-terra')
+const claude = model('anthropic', 'claude-sonnet-5-5')
+const custom = model('anthropic', 'my-custom-model')
+const deepseek = model('deepseek-official', 'deepseek-chat')
+const catalog = [sol, terra, claude, custom, deepseek]
+function server(modelVisibility, defaultModel = null) {
+  return {
+    catalog: { models: catalog },
+    settings: { modelVisibility, defaultModel },
+    accounts: { chatgpt: { signedIn: true }, claude: { configured: true }, deepseek: { configured: false } },
+  }
+}
+
+test('older settings show every model; hiding Terra leaves the catalog intact and checking restores it', () => {
+  assert.deepEqual(visibleModels(server(undefined)), catalog)
+  const state = server({ [terra.value]: false })
+  assert.deepEqual(visibleModels(state), [sol, claude, custom, deepseek])
+  assert.deepEqual(state.catalog.models, catalog)
+  state.settings.modelVisibility[terra.value] = true
+  assert.deepEqual(visibleModels(state), catalog)
+})
+
+test('visibility covers custom models, uses the provider-qualified value, and tolerates absent models', () => {
+  const other = model('openai-codex', custom.id)
+  const state = server({ [custom.value]: false, [deepseek.value]: false, '["anthropic","removed"]': false })
+  state.catalog = { models: [...catalog, other] }
+  assert.deepEqual(visibleModels(state), [sol, terra, claude, other])
+  state.catalog.models = [...state.catalog.models, model('anthropic', 'new-model')]
+  assert.equal(visibleModels(state).at(-1).id, 'new-model')
+})
+
+test('new tasks retain visible choices, but skip hidden current and saved defaults', () => {
+  assert.equal(pickDefaultModel(server({}), terra.value), terra.value)
+  assert.equal(pickDefaultModel(server({}, terra.value), null), terra.value)
+  const state = server({ [terra.value]: false }, terra.value)
+  assert.equal(pickDefaultModel(state, terra.value), sol.value)
+  state.settings.modelVisibility[sol.value] = false
+  assert.equal(pickDefaultModel(state, null), claude.value)
+  state.settings.modelVisibility[terra.value] = true
+  assert.equal(pickDefaultModel(state, null), terra.value)
+})
+
+test('default selection requires a connected provider and never resurrects a hidden or stale choice', () => {
+  const state = server(Object.fromEntries(catalog.map((entry) => [entry.value, false])), terra.value)
+  assert.equal(pickDefaultModel(state, terra.value), null)
+  state.settings.modelVisibility[deepseek.value] = true
+  assert.equal(pickDefaultModel(state, terra.value), null)
+  state.accounts.deepseek.configured = true
+  assert.equal(pickDefaultModel(state, terra.value), deepseek.value)
+  state.catalog.models = []
+  assert.equal(pickDefaultModel(state, terra.value), null)
+})
+
+test('possibly retired models are hidden by default, including when no other model remains', () => {
+  const old = { ...terra, retired: true }
+  const state = server({})
+  state.catalog = { models: [old, sol, claude] }
+  assert.deepEqual(visibleModels(state), [sol, claude])
+  assert.equal(pickDefaultModel(state, old.value), sol.value)
+  state.settings.defaultModel = old.value
+  assert.equal(pickDefaultModel(state, null), sol.value)
+  state.catalog = { models: [old] }
+  assert.equal(pickDefaultModel(state, null), null)
+  state.settings.modelVisibility[old.value] = true
+  assert.deepEqual(visibleModels(state), [old])
+  assert.equal(pickDefaultModel(state, null), old.value)
+})
+
+test('default visibility follows retirement changes without overwriting explicit choices', () => {
+  const old = { ...terra, retired: true }
+  const state = server(undefined)
+  assert.equal(isModelVisible(state, old), false)
+  assert.equal(isModelVisible(state, terra), true)
+  state.settings.modelVisibility = { [old.value]: true }
+  assert.equal(isModelVisible(state, old), true)
+  state.settings.modelVisibility[old.value] = false
+  assert.equal(isModelVisible(state, old), false)
+  assert.equal(isModelVisible(state, terra), false)
+  assert.deepEqual(terra, catalog[1])
+})

@@ -1,0 +1,518 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import {
+  API_KEY_ENV, DEFAULT_TITLE, REDRAW_DELAY_MS, TerminalManager, cleanTitle, findClaude, hookEffect, hookSettings, launchCommand,
+  parseDialog, teamHookSettings,
+} from '../server/terminals.js'
+
+/** A stand-in for node-pty that records what the manager does with each process. */
+function fakePty() {
+  const spawned = []
+  return {
+    spawned,
+    spawn(file, args, options) {
+      const data = []
+      const exits = []
+      const proc = {
+        file, args, options, written: [], killed: false, size: { cols: options.cols, rows: options.rows },
+        onData: (fn) => data.push(fn),
+        onExit: (fn) => exits.push(fn),
+        write: (text) => proc.written.push(text),
+        resize: (cols, rows) => {
+          proc.size = { cols, rows }
+        },
+        kill: () => {
+          proc.killed = true
+          proc.exit(0)
+        },
+        emit: (text) => data.forEach((fn) => fn(text)),
+        exit: (exitCode) => exits.forEach((fn) => fn({ exitCode })),
+      }
+      spawned.push(proc)
+      return proc
+    },
+  }
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 30))
+
+async function setup({ launch } = {}) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-terminals-'))
+  const workspace = path.join(dir, 'project')
+  const claudeHome = path.join(dir, 'claude')
+  await fs.mkdir(workspace)
+  const pty = fakePty()
+  const sent = []
+  const manager = await new TerminalManager({
+    file: path.join(dir, 'terminals.json'),
+    settingsFile: path.join(dir, 'claude-terminal-settings.json'),
+    hookUrl: () => 'http://127.0.0.1:47130/api/terminal-hook',
+    send: (client, frame) => sent.push({ client, frame }),
+    pty,
+    findClaude: () => 'C:\\Tools\\claude.exe',
+    claudeHome,
+    launch,
+  }).load()
+  return { dir, workspace, claudeHome, pty, sent, manager }
+}
+
+test('findClaude searches PATH, then the installers\' folders', () => {
+  const found = new Set(['C:\\bin\\claude.cmd', 'C:\\Users\\me\\.local\\bin\\claude.exe'])
+  const exists = (file) => found.has(file)
+  assert.equal(findClaude({ env: { PATH: 'C:\\empty;C:\\bin' }, platform: 'win32', home: 'C:\\Users\\me', exists }), 'C:\\bin\\claude.cmd')
+  assert.equal(findClaude({ env: { Path: 'C:\\empty' }, platform: 'win32', home: 'C:\\Users\\me', exists }), 'C:\\Users\\me\\.local\\bin\\claude.exe')
+  assert.equal(findClaude({ env: { PATH: '/usr/bin' }, platform: 'linux', home: '/home/me', exists: (file) => file === '/home/me/.local/bin/claude' }), '/home/me/.local/bin/claude')
+  assert.equal(findClaude({ env: {}, platform: 'win32', home: 'C:\\Users\\me', exists: () => false }), null)
+})
+
+test('launchCommand runs an npm .cmd shim\'s script under node', () => {
+  const script = 'C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js'
+  assert.deepEqual(
+    launchCommand('C:\\npm\\claude.cmd', ['--x'], { platform: 'win32', exists: (file) => file === script, node: 'C:\\node.exe' }),
+    { file: 'C:\\node.exe', args: [script, '--x'] },
+  )
+  assert.deepEqual(launchCommand('C:\\bin\\claude.exe', ['--x'], { platform: 'win32' }), { file: 'C:\\bin\\claude.exe', args: ['--x'] })
+})
+
+test('cleanTitle drops the spinner and Claude Code\'s default title', () => {
+  assert.equal(cleanTitle('✳ Fix the login bug'), 'Fix the login bug')
+  assert.equal(cleanTitle('⠂ ログインを直す'), 'ログインを直す')
+  assert.equal(cleanTitle('✳ Claude Code'), '')
+  assert.equal(cleanTitle('claude'), '')
+  assert.equal(cleanTitle('C:\\Users\\me\\.local\\bin\\claude.exe'), '')
+  assert.equal(cleanTitle('/usr/local/bin/claude'), '')
+})
+
+test('hookSettings runs the hook script for each event, with forward slashes', () => {
+  const settings = hookSettings('C:\\Program Files\\nodejs\\node.exe', 'F:\\app\\server\\claude-hook.js')
+  assert.deepEqual(Object.keys(settings.hooks), ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'PostModelSwitch'])
+  const [command] = settings.hooks.Stop[0].hooks
+  assert.equal(command.command, '"C:/Program Files/nodejs/node.exe" "F:/app/server/claude-hook.js"')
+  assert.equal(command.async, true)
+})
+
+test('hookEffect follows a turn: prompt, approval, tool, stop', () => {
+  assert.deepEqual(hookEffect({ hook_event_name: 'UserPromptSubmit' }, 'idle'), { activity: 'running', touched: true })
+  assert.equal(hookEffect({ hook_event_name: 'Notification', notification_type: 'permission_prompt' }, 'running').activity, 'approval')
+  assert.equal(hookEffect({ hook_event_name: 'Notification', notification_type: 'idle_prompt' }, 'idle').activity, 'idle')
+  assert.equal(hookEffect({ hook_event_name: 'PostToolUse' }, 'approval').activity, 'running')
+  assert.deepEqual(hookEffect({ hook_event_name: 'Stop' }, 'running'), { activity: 'idle', touched: true, finished: true })
+  assert.equal(hookEffect({ hook_event_name: 'SessionStart', source: 'compact', session_id: 'x' }, 'running').activity, 'running')
+})
+
+test('a task starts claude with its session id and the hooks, without a parent Claude\'s markers', async () => {
+  const { workspace, pty, manager, dir } = await setup()
+  process.env.CLAUDECODE = '1'
+  try {
+    const terminal = await manager.create({ workspace, size: { cols: 90, rows: 20 } })
+    const [proc] = pty.spawned
+    assert.equal(proc.file, 'C:\\Tools\\claude.exe')
+    assert.deepEqual(proc.args, ['--session-id', terminal.sessionId, '--settings', path.join(dir, 'claude-terminal-settings.json')])
+    assert.equal(proc.options.cwd, workspace)
+    assert.deepEqual(proc.size, { cols: 90, rows: 20 })
+    assert.equal(proc.options.env.CLAUDECODE, undefined)
+    assert.equal(proc.options.env.AGENT_DESK_TERMINAL_ID, terminal.id)
+    assert.equal(terminal.title, DEFAULT_TITLE)
+    assert.equal(terminal.state, 'running')
+    const saved = JSON.parse(await fs.readFile(path.join(dir, 'terminals.json'), 'utf8'))
+    assert.equal(saved.terminals[0].id, terminal.id)
+  } finally {
+    delete process.env.CLAUDECODE
+  }
+})
+
+test('a viewer gets the screen so far, then the live output', async () => {
+  const { workspace, pty, manager, sent } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  proc.emit('\x1b[?1006hhello\r\n')
+  const viewer = { name: 'pc' }
+  const { snapshot } = await manager.attach(terminal.id, viewer, { cols: 100, rows: 30 })
+  assert.match(snapshot, /hello/)
+  // The SGR mouse encoding is not part of xterm's serialized modes.
+  assert.match(snapshot, /\x1b\[\?1006h/)
+  proc.emit('world')
+  await settle()
+  assert.deepEqual(sent.filter((entry) => entry.frame.event === 'termData').map((entry) => [entry.client, entry.frame.data]), [[viewer, 'world']])
+  manager.detach(terminal.id, viewer)
+  proc.emit('more')
+  await settle()
+  assert.equal(sent.filter((entry) => entry.frame.event === 'termData').length, 1)
+})
+
+test('the viewer that types last sizes the terminal; only it answers queries', async () => {
+  const { workspace, pty, manager, sent } = await setup()
+  const terminal = await manager.create({ workspace, size: { cols: 120, rows: 40 } })
+  const [proc] = pty.spawned
+  const pc = { name: 'pc' }
+  const phone = { name: 'phone' }
+  await manager.attach(terminal.id, pc, { cols: 120, rows: 40 })
+  await manager.attach(terminal.id, phone, { cols: 44, rows: 30 })
+  assert.deepEqual(proc.size, { cols: 44, rows: 30 })
+  assert.ok(sent.some((entry) => entry.client === pc && entry.frame.event === 'termSize' && entry.frame.size.cols === 44))
+
+  // The PC's terminal answering a query while the phone is in control is dropped.
+  assert.equal(manager.input(terminal.id, pc, '\x1b[?1;2c', true), false)
+  assert.equal(manager.input(terminal.id, phone, '\x1b[?1;2c', true), true)
+  // A size from the screen not in control is kept, not applied.
+  manager.resize(terminal.id, pc, { cols: 110, rows: 36 }, false)
+  assert.deepEqual(proc.size, { cols: 44, rows: 30 })
+  // Typing on the PC takes control back, at the PC's latest size.
+  assert.equal(manager.input(terminal.id, pc, 'a'), true)
+  assert.deepEqual(proc.size, { cols: 110, rows: 36 })
+  assert.deepEqual(proc.written, ['\x1b[?1;2c', 'a'])
+  // Once the resizes stop, Claude Code is asked once to draw the screen again (Ctrl+L).
+  await new Promise((resolve) => setTimeout(resolve, REDRAW_DELAY_MS + 50))
+  assert.deepEqual(proc.written, ['\x1b[?1;2c', 'a', '\x0c'])
+})
+
+test('hooks report the session and activity, only with the process\'s secret', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  const secret = proc.options.env.AGENT_DESK_TERMINAL_SECRET
+  const events = []
+  manager.on('turn-finished', (info) => events.push(['finished', info.terminalId]))
+  manager.on('approval-needed', (info) => events.push(['approval', info.terminalId]))
+
+  assert.equal(manager.hook(terminal.id, 'wrong', { hook_event_name: 'UserPromptSubmit' }), false)
+  const session = '0b8e4c1e-5d1a-4b5c-9a43-2f8f5f0c1a11'
+  assert.equal(manager.hook(terminal.id, secret, { hook_event_name: 'SessionStart', source: 'clear', session_id: session, transcript_path: 'x.jsonl' }), true)
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit' })
+  assert.equal(manager.busy, true)
+  manager.hook(terminal.id, secret, { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+  assert.equal(manager.summary(manager.records.get(terminal.id)).activity, 'approval')
+  manager.hook(terminal.id, secret, { hook_event_name: 'Stop' })
+  assert.equal(manager.busy, false)
+  assert.equal(manager.records.get(terminal.id).sessionId, session)
+  assert.deepEqual(events, [['approval', terminal.id], ['finished', terminal.id]])
+})
+
+test('Claude Code names the task through its terminal title until the user renames it', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  proc.emit('\x1b]0;✳ Add dark mode\x07')
+  await settle()
+  assert.equal(manager.records.get(terminal.id).title, 'Add dark mode')
+  await manager.update(terminal.id, { title: 'My name' })
+  proc.emit('\x1b]0;✳ Something else\x07')
+  await settle()
+  assert.equal(manager.records.get(terminal.id).title, 'My name')
+})
+
+test('a task resumes its saved conversation after the app restarts or Claude exits', async () => {
+  const { workspace, pty, manager, claudeHome, dir } = await setup()
+  const terminal = await manager.create({ workspace })
+  pty.spawned[0].exit(0)
+  await settle()
+  assert.equal(manager.summary(manager.records.get(terminal.id)).state, 'exited')
+
+  // Claude Code saved the conversation: the restart resumes it.
+  await fs.mkdir(path.join(claudeHome, 'projects', 'some-project'), { recursive: true })
+  await fs.writeFile(path.join(claudeHome, 'projects', 'some-project', `${terminal.sessionId}.jsonl`), '{}\n')
+  manager.restart(terminal.id, null, { cols: 80, rows: 24 })
+  assert.deepEqual(pty.spawned[1].args.slice(0, 2), ['--resume', terminal.sessionId])
+
+  // A new app instance knows the task but has no process: opening it starts one.
+  await manager.shutdown()
+  const next = await new TerminalManager({
+    file: path.join(dir, 'terminals.json'),
+    settingsFile: path.join(dir, 'claude-terminal-settings.json'),
+    hookUrl: () => 'http://127.0.0.1:1/api/terminal-hook',
+    send: () => {},
+    pty,
+    findClaude: () => 'claude',
+    claudeHome,
+  }).load()
+  assert.equal(next.list()[0].state, 'stopped')
+  await next.attach(terminal.id, {}, { cols: 80, rows: 24 })
+  assert.deepEqual(pty.spawned[2].args.slice(0, 2), ['--resume', terminal.sessionId])
+})
+
+test('hooks report the model and reasoning level Claude Code uses', () => {
+  assert.equal(hookEffect({ hook_event_name: 'SessionStart', source: 'startup', model: 'claude-opus-5-5' }, 'idle').model, 'claude-opus-5-5')
+  assert.equal(hookEffect({ hook_event_name: 'PostModelSwitch', to_model: 'claude-haiku-5-5' }, 'idle').model, 'claude-haiku-5-5')
+  assert.equal(hookEffect({ hook_event_name: 'Stop', effort: { level: 'xhigh' } }, 'running').effort, 'xhigh')
+  assert.equal(hookEffect({ hook_event_name: 'Stop', effort: { level: 'nonsense' } }, 'running').effort, undefined)
+})
+
+test('a new model or level restarts an idle Claude Code on the same conversation, as session-only flags', async () => {
+  const { workspace, pty, manager, claudeHome, dir } = await setup()
+  const terminal = await manager.create({ workspace })
+  assert.equal(pty.spawned[0].args.includes('--model'), false)
+  const transcript = path.join(claudeHome, 'projects', 'p', `${terminal.sessionId}.jsonl`)
+  await fs.mkdir(path.dirname(transcript), { recursive: true })
+  await fs.writeFile(transcript, '{}\n')
+
+  const viewer = {}
+  const updated = await manager.configure(terminal.id, viewer, { model: 'claude-haiku-5-5' })
+  assert.equal(pty.spawned[0].killed, true)
+  assert.deepEqual(pty.spawned[1].args.slice(0, 4), ['--resume', terminal.sessionId, '--model', 'claude-haiku-5-5'])
+  assert.equal(updated.model, 'claude-haiku-5-5')
+  assert.equal(updated.state, 'running')
+
+  // Leaving one out keeps it; null goes back to Claude Code's own default.
+  await manager.configure(terminal.id, viewer, { effort: 'max' })
+  assert.deepEqual(pty.spawned[2].args.slice(2, 6), ['--model', 'claude-haiku-5-5', '--effort', 'max'])
+  await manager.configure(terminal.id, viewer, { model: null })
+  assert.deepEqual(pty.spawned[3].args.slice(2, 4), ['--effort', 'max'])
+
+  // The last choice is what a new task starts with.
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'terminals.json'), 'utf8'))
+  assert.deepEqual(saved.defaults, { model: null, effort: 'max' })
+  const next = await manager.create({ workspace })
+  assert.equal(next.effort, 'max')
+})
+
+test('the model is not changed while Claude Code works, and odd values are refused', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  await assert.rejects(manager.configure(terminal.id, {}, { model: 'opus; rm -rf' }), /指定できません/)
+  await assert.rejects(manager.configure(terminal.id, {}, { effort: 'ultra' }), /指定できません/)
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit' })
+  await assert.rejects(manager.configure(terminal.id, {}, { model: 'opus' }), /作業中/)
+  assert.equal(pty.spawned.length, 1)
+})
+
+test('removing a task ends its process and forgets it', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const removed = []
+  manager.on('removed', (info) => removed.push(info.terminalId))
+  assert.deepEqual(await manager.remove(terminal.id), { removed: true })
+  assert.equal(pty.spawned[0].killed, true)
+  assert.deepEqual(manager.list(), [])
+  assert.deepEqual(removed, [terminal.id])
+})
+
+test('a missing claude or folder is reported, and no task is left behind', async () => {
+  const { workspace, manager } = await setup()
+  manager.findClaude = () => null
+  await assert.rejects(manager.create({ workspace }), /claude コマンド/)
+  await assert.rejects(manager.create({ workspace: path.join(workspace, 'gone') }), /フォルダが見つかりません/)
+  assert.deepEqual(manager.list(), [])
+})
+
+test('the conversation is read from the file Claude Code keeps, found by session id before any hook has named it', async () => {
+  const { workspace, manager, claudeHome } = await setup()
+  const terminal = await manager.create({ workspace })
+  assert.deepEqual((await manager.conversation(terminal.id)).turns, [])
+  await fs.mkdir(path.join(claudeHome, 'projects', 'some-project'), { recursive: true })
+  const entry = { parentUuid: null, isSidechain: false, type: 'user', uuid: 'u1', timestamp: '2026-10-20T00:00:00Z', message: { role: 'user', content: 'こんにちは' } }
+  await fs.writeFile(path.join(claudeHome, 'projects', 'some-project', `${terminal.sessionId}.jsonl`), `${JSON.stringify(entry)}\n`)
+  const first = await manager.conversation(terminal.id)
+  assert.deepEqual(first.turns.map((turn) => turn.user.text), ['こんにちは'])
+  const again = await manager.conversation(terminal.id, { epoch: first.epoch, since: first.rev })
+  assert.equal(again.turns.length, 0)
+  await assert.rejects(manager.conversation('nope'), /見つかりません/)
+})
+
+test('a message sent without the screen is pasted into Claude Code, then Enter follows', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  manager.sendMessage(terminal.id, 'one\ntwo')
+  assert.deepEqual(proc.written, ['one\ntwo'])
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.deepEqual(proc.written, ['one\ntwo', '\r'])
+  // Claude Code stayed idle (the Enter was taken as part of the paste): Enter is pressed once more.
+  await new Promise((resolve) => setTimeout(resolve, 1700))
+  assert.deepEqual(proc.written, ['one\ntwo', '\r', '\r'])
+
+  // Claude Code asked for bracketed paste: the message goes inside it, so its line breaks stay in the message.
+  proc.emit('\x1b[?2004h')
+  await settle()
+  proc.written.length = 0
+  manager.sendMessage(terminal.id, 'a\nb')
+  assert.deepEqual(proc.written, ['\x1b[200~a\nb\x1b[201~'])
+  assert.throws(() => manager.sendMessage('nope', 'x'), /動いていません/)
+})
+
+
+test('a team task gets its own settings and flags, with the first prompt after the single-value --settings', async () => {
+  const launches = []
+  const { workspace, pty, manager, dir } = await setup({
+    launch: (record) => {
+      launches.push(record.team)
+      return { args: ['--mcp-config', 'mcp.json', '--allowedTools', 'mcp__agent-team'] }
+    },
+  })
+  const team = { id: 'team-1', role: 'leader' }
+  const terminal = await manager.create({ workspace, team, model: 'opus', effort: null, prompt: 'Read the file: C:\\a b\\task.md' })
+  const [proc] = pty.spawned
+  assert.deepEqual(proc.args, [
+    '--session-id', terminal.sessionId, '--model', 'opus', '--mcp-config', 'mcp.json', '--allowedTools', 'mcp__agent-team',
+    '--settings', path.join(dir, 'claude-team-leader-settings.json'), 'Read the file: C:\\a b\\task.md',
+  ])
+  assert.deepEqual(launches, [team])
+  assert.deepEqual(terminal.team, team)
+  // Started on a prompt, it is working from the start, also through its SessionStart.
+  assert.equal(terminal.activity, 'running')
+  const secret = proc.options.env.AGENT_DESK_TERMINAL_SECRET
+  manager.hook(terminal.id, secret, { hook_event_name: 'SessionStart', source: 'startup', session_id: terminal.sessionId })
+  assert.equal(manager.status(terminal.id).activity, 'running')
+  manager.hook(terminal.id, secret, { hook_event_name: 'Stop' })
+  assert.equal(manager.status(terminal.id).activity, 'idle')
+  // A task of its own keeps the plain flags and asks no launch.
+  await manager.create({ workspace })
+  assert.deepEqual(pty.spawned[1].args.slice(-2), ['--settings', path.join(dir, 'claude-terminal-settings.json')])
+  assert.equal(launches.length, 1)
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'claude-team-leader-settings.json'), 'utf8'))
+  assert.equal(saved.skipDangerousModePermissionPrompt, true)
+  assert.ok(saved.hooks.StopFailure)
+})
+
+test('settle: a turn that ended without its Stop hook is read from the conversation file', async () => {
+  const { workspace, pty, manager, dir } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  const secret = proc.options.env.AGENT_DESK_TERMINAL_SECRET
+  const file = path.join(dir, 'transcript.jsonl')
+  manager.hook(terminal.id, secret, { hook_event_name: 'SessionStart', session_id: terminal.sessionId, transcript_path: file })
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit' })
+  const line = (entry) => `${JSON.stringify(entry)}\n`
+  await fs.writeFile(file, line({ parentUuid: null, type: 'user', uuid: 'u1', timestamp: new Date().toISOString(), message: { role: 'user', content: 'hi' } }))
+  // Still working: nothing changes.
+  assert.equal(await manager.settle(terminal.id, { quietMs: 0 }), false)
+  assert.equal(manager.status(terminal.id).activity, 'running')
+  await fs.appendFile(file, line({ parentUuid: 'u1', type: 'assistant', uuid: 'a1', timestamp: new Date().toISOString(), message: { content: [{ type: 'text', text: 'done' }] } })
+    + line({ type: 'system', subtype: 'turn_duration', parentUuid: 'a1', uuid: 's1', timestamp: new Date().toISOString() }))
+  // Written just now: it waits for the file to be still.
+  assert.equal(await manager.settle(terminal.id), false)
+  assert.equal(await manager.settle(terminal.id, { quietMs: 0 }), true)
+  assert.equal(manager.status(terminal.id).activity, 'idle')
+})
+
+test('interrupt presses Esc, then marks the task idle once the conversation file shows the interruption', async () => {
+  const { workspace, pty, manager, dir } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  const secret = proc.options.env.AGENT_DESK_TERMINAL_SECRET
+  const file = path.join(dir, 'transcript.jsonl')
+  manager.hook(terminal.id, secret, { hook_event_name: 'SessionStart', session_id: terminal.sessionId, transcript_path: file })
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit' })
+  const line = (entry) => `${JSON.stringify(entry)}\n`
+  await fs.writeFile(file, line({ parentUuid: null, type: 'user', uuid: 'u1', timestamp: new Date().toISOString(), message: { role: 'user', content: 'hi' } }))
+  const written = []
+  proc.write = (data) => written.push(data)
+  assert.equal(manager.interrupt(terminal.id, 'viewer'), true)
+  assert.deepEqual(written, ['\x1b'])
+  // Claude Code runs no Stop hook for an interruption; it only records it.
+  await fs.appendFile(file, line({ parentUuid: 'u1', type: 'user', uuid: 'u2', timestamp: new Date().toISOString(), message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } }))
+  for (let tries = 0; tries < 20 && manager.status(terminal.id).activity !== 'idle'; tries++) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(manager.status(terminal.id).activity, 'idle')
+})
+
+test('a team title stays as given; model and level are checked', async () => {
+  const { workspace, manager } = await setup()
+  const terminal = await manager.create({ workspace, title: 'A: 効果音', model: 'claude-haiku-5-5', effort: 'low' })
+  assert.equal(terminal.title, 'A: 効果音')
+  assert.equal(manager.records.get(terminal.id).renamed, true)
+  await assert.rejects(manager.create({ workspace, model: 'bad model' }), /このモデル/)
+  await assert.rejects(manager.create({ workspace, effort: 'turbo' }), /この推論レベル/)
+})
+
+test('teamHookSettings: an error ends a leader\'s turn too, and bypass mode starts without its dialog', () => {
+  const leader = teamHookSettings('C:\\node.exe', 'F:\\app\\claude-hook.js')
+  assert.equal(leader.hooks.StopFailure[0].hooks[0].command, '"C:/node.exe" "F:/app/claude-hook.js"')
+  assert.equal(leader.hooks.PermissionRequest, undefined)
+  assert.equal(leader.skipDangerousModePermissionPrompt, true)
+  assert.deepEqual(hookEffect({ hook_event_name: 'StopFailure' }, 'running'), { activity: 'idle', touched: true, finished: true, failed: true })
+})
+
+test('status says when Claude Code takes typed input, and who typed last', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  assert.equal(manager.status(terminal.id).ready, false)
+  manager.hook(terminal.id, proc.options.env.AGENT_DESK_TERMINAL_SECRET, { hook_event_name: 'SessionStart', session_id: terminal.sessionId })
+  manager.live.get(terminal.id).sessionAt -= 5000
+  assert.equal(manager.status(terminal.id).ready, true)
+  manager.input(terminal.id, 'client', 'x')
+  assert.ok(Date.now() - manager.status(terminal.id).inputAt < 1000)
+  assert.equal(manager.status('nope'), null)
+})
+
+test('a team session never gets an API key: Claude Code stays on the subscription it is signed in with', async () => {
+  const { workspace, pty, manager } = await setup({ launch: () => ({ args: [] }) })
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-api-test'
+  process.env.ANTHROPIC_AUTH_TOKEN = 'token-test'
+  try {
+    await manager.create({ workspace, team: { id: 'team-1', role: 'child', childId: 'c1' } })
+    await manager.create({ workspace })
+    const [team, own] = pty.spawned
+    for (const name of API_KEY_ENV) assert.equal(team.options.env[name], undefined)
+    // A task of the user's own keeps their environment as it is.
+    assert.equal(own.options.env.ANTHROPIC_API_KEY, 'sk-ant-api-test')
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+  }
+})
+
+/** Claude Code 2.1's approval for a shell command, as its screen reads (captured from a real one). */
+const APPROVAL_SCREEN = [
+  '● Removing the specified nonexistent test directory',
+  '  ⎿  $ rm -r ./test-dir',
+  '',
+  '─'.repeat(100),
+  ' Bash command',
+  ' Tip: auto mode handles these prompts for you — choose "switch to auto mode" below',
+  ' Remove the specified nonexistent test directory',
+  '╌'.repeat(100),
+  ' rm -r ./test-dir',
+  '╌'.repeat(100),
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  '   2. Yes, and always allow access to F:\\Agent-Desk-DSH from this project',
+  '   3. Yes, and switch to auto mode · auto mode handles these prompts for you',
+  '   4. No',
+  '',
+  ' Esc to cancel · Tab to amend',
+]
+
+test('parseDialog reads the choice Claude Code waits on off its screen', () => {
+  const dialog = parseDialog(APPROVAL_SCREEN)
+  assert.deepEqual(dialog.text, ['Bash command', 'Remove the specified nonexistent test directory', 'rm -r ./test-dir', 'Do you want to proceed?'])
+  assert.deepEqual(dialog.options.map((option) => [option.key, option.label, option.selected]), [
+    ['1', 'Yes', true],
+    ['2', 'Yes, and always allow access to F:\\Agent-Desk-DSH from this project', false],
+    ['3', 'Yes, and switch to auto mode · auto mode handles these prompts for you', false],
+    ['4', 'No', false],
+  ])
+  // A question's entries can have a description under them.
+  const question = parseDialog(['─'.repeat(40), ' どちらの形式にしますか？', '', ' ❯ 1. GLB', '      一つのファイルにまとめる', '   2. FBX', '      Blender 向け'])
+  assert.deepEqual(question.text, ['どちらの形式にしますか？'])
+  assert.deepEqual(question.options.map((option) => [option.label, option.detail]), [['GLB', '一つのファイルにまとめる'], ['FBX', 'Blender 向け']])
+  // AskUserQuestion as Claude Code 2.1 draws it: a rule sets its last entry apart.
+  const asked = parseDialog([
+    '─'.repeat(100), ' ☐ 3D形式', '3Dフォーマットはどちらを優先しますか？', '❯ 1. GLB', '     単一バイナリで扱いやすい', '  2. FBX', '     DCC ツール向け',
+    '  3. Type something.', '─'.repeat(100), '  4. Chat about this', 'Enter to select · ↑/↓ to navigate · Esc to cancel',
+  ])
+  assert.deepEqual(asked.text, ['☐ 3D形式', '3Dフォーマットはどちらを優先しますか？'])
+  assert.deepEqual(asked.options.map((option) => option.label), ['GLB', 'FBX', 'Type something.', 'Chat about this'])
+  assert.equal(asked.options[0].detail, '単一バイナリで扱いやすい')
+  // A numbered list Claude wrote is not a choice.
+  assert.equal(parseDialog(['● 手順:', '  1. ビルドする', '  2. テストする', '', '❯ ']), null)
+})
+
+test('the choice Claude Code waits on is answered from the chat view by its number', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  const secret = proc.options.env.AGENT_DESK_TERMINAL_SECRET
+  proc.emit(APPROVAL_SCREEN.join('\r\n'))
+  // Not asked for anything yet.
+  assert.equal(await manager.dialog(terminal.id), null)
+  manager.hook(terminal.id, secret, { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+  const dialog = await manager.dialog(terminal.id)
+  assert.equal(dialog.options.length, 4)
+  await assert.rejects(manager.choose(terminal.id, '4', 'Yes'), /画面が変わりました/)
+  assert.deepEqual(await manager.choose(terminal.id, '4', 'No'), { chosen: '4' })
+  assert.equal(proc.written.at(-1), '4')
+})

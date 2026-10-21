@@ -1,0 +1,114 @@
+# Agent Desk
+
+[English README](README.en.md)
+
+DeepSeek Harness（`dsh`）をエンジンにした、Codex 風のデスクトップ用エージェントアプリです。
+ChatGPT のサブスクリプションと Claude の API キーで、ローカルのワークスペースを操作するコーディングエージェントを動かせます。
+
+## 主な機能
+
+- **GPT（ChatGPT サブスク）:** Agent Desk の名前で公式「Sign in with ChatGPT」に接続し、公開 Responses API で GPT チャットと Web 検索を使います。旧接続のユーザーは再サインインが必要です。
+- **Claude・DeepSeek（API キー）:** Claude は Anthropic の API キー、DeepSeek は任意で API キーを登録して使います。
+- **Codex 風の画面:** ワークスペースごとのタスク、コマンドと差分の表示、承認カードを備えます。
+- **Claude Code（CL）:** この PC の Claude Code を、アプリ内のターミナルでタスクとして動かします。
+- **エージェントチーム（TM）:** リーダーが作業を分け、GPT・Claude・DeepSeek の子エージェントに任せます。
+- **変更を戻す:** リクエストごとに保存したワークスペースを、依頼の前の状態へ戻せます。
+- **使用量の表示:** 回答ごとのトークン数、Claude・DeepSeek の概算料金、ChatGPT の利用上限を表示します。
+- **スマホから使う:** Tailscale を通じて、スマホのブラウザからタスクの確認・送信・承認ができます。
+- **権限モード:** 読み取り専用・ワークスペース・フルアクセスから、タスクごとに選べます。
+- **ブラウザ・デスクトップ操作:** 設定でオンにすると、Chrome の操作と Windows の画面操作ができます。
+- **その他:** 画像生成、Web 検索、別モデルのサブエージェント、高速モード、カスタム指示（パーソナライズ）など。
+
+詳しい機能は [機能の詳細](docs/features.md) を見てください。
+
+## 必要なもの
+
+- Node.js 22.19 以上、または 24 以上
+- Windows 10/11、macOS、Linux のいずれか
+- アプリウィンドウ表示には Microsoft Edge か Google Chrome（なければ既定のブラウザで開きます）
+
+## 起動
+
+まずリポジトリを取得します。
+
+```sh
+git clone https://github.com/Kansoku111/agent-desk.git
+cd agent-desk
+```
+
+### スタートメニュー・タスクバーから（Windows）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-shortcut.ps1
+```
+
+スタートメニューに「Agent Desk」ができます。右クリック →「タスクバーにピン留めする」で固定してください（Windows はアプリ自身によるピン留めを許可していません）。
+
+このショートカットは、常にこのフォルダの最新のコードで起動します。
+
+- `package-lock.json` が変わっていれば `npm install` を実行します。
+- 画面のソースが変わっていればビルドし直します。
+- 古いコードのサーバーが動いていれば、作業中のタスクがないときに入れ替えます。開いているウィンドウは自動で再接続し、新しい画面に読み込み直します。
+
+コンソール画面は出ません。起動の記録は `%APPDATA%\AgentDesk\launcher.log` に残ります。
+
+### コマンドから
+
+Windows では `AgentDesk.cmd` をダブルクリックしても起動できます。初回は依存パッケージをインストールします。
+
+コマンドで起動する場合は次のとおりです。
+
+```sh
+npm install
+npm start
+```
+
+起動するとアプリウィンドウが開きます。ウィンドウを閉じて30秒たつと、作業中のエージェントがいなければサーバーも終了します。
+
+## クイックスタート（初期設定）
+
+1. 左下の「設定」を開き、「アカウント」タブを選びます。
+2. 「GPT チャットと Web 検索（公式）」の **Continue with ChatGPT** を押し、ブラウザで Agent Desk の登録と ChatGPT プラン使用を承認します。以前の Codex OAuth 接続はチャット・検索には再利用しません。画像生成と利用上限の表示は、別カード「画像生成と利用上限（Codex）」で追加サインインします。
+3. Claude を使う場合は、Anthropic の API キーを貼り付けて保存します。保存時にキーが有効か確認します。
+   - 貼り付けるのは、キーを作成したときに一度だけ表示される `sk-ant-api…` で始まる文字列です。Console の一覧に出る `apikey_…` はキーの ID なので使えません。
+   - ワークスペースを限定しない個人キーやサービスアカウントキーでは、使うワークスペースの指定が必要です。保存後に表示される欄で選ぶか、`wrkspc_…` の ID を入力してください。
+4. ホーム画面でワークスペースのフォルダを選び、依頼を入力して送信します。
+
+公式 SIWC は `127.0.0.1` のローカルコールバックで完了します。戻らない場合はキャンセルして再試行してください。Codex 接続にはデバイスコードの代替手段があります。Codex は同梱の `@openai/codex` **0.163.0** の公式 app-server を使い、データを Agent Desk の `codex-home` に分離します。ユーザーの PATH にある codex や `~/.codex` は使いません。
+
+画像生成は既定でオンですが、Codex の別接続が必要です。GPT の高速モードは公式 SIWC 経路では利用できません（Claude の高速モードは従来どおり）。Codex の週間・5時間上限と SIWC のアプリ別使用枠は異なります。正確な使用枠は [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage) で確認してください。認証情報はローカルに保存し、チャット/検索/画像の依頼は該当する OpenAI サービスへ送信されます。SIWC 利用に有料版の購入は必要ありません。
+
+## ドキュメント
+
+詳しい説明は、以下の日本語のドキュメントにあります。
+
+- [機能の詳細](docs/features.md): できること、権限モード
+- [エージェントチーム](docs/team.md): TM のリーダーと子エージェントの使い方
+- [スマホから使う](docs/remote.md): Tailscale 経由での接続
+- [使用量の表示](docs/usage.md): 概算料金と Claude の請求額
+- [変更を戻す](docs/restore.md): ワークスペースの巻き戻し
+- [dsh のアップデート](docs/dsh-update.md): dsh の更新と復旧
+- [仕組みとデータの保存場所](docs/architecture.md): 構成と保存先
+- [既知の制約](docs/known-issues.md): 現在の制約
+- [開発](docs/development.md): 開発コマンドと主なファイルの役割
+
+開発への参加、セキュリティの報告、変更履歴は次のファイルにあります。
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): 開発環境とプルリクエストの流れ
+- [SECURITY.md](SECURITY.md): 脆弱性の報告先
+- [CHANGELOG.md](CHANGELOG.md): 変更履歴
+
+## 免責事項 / Disclaimer
+
+- Agent Desk は非公式のプロジェクトです。OpenAI、Anthropic、DeepSeek のいずれとも提携しておらず、各社の承認や支援も受けていません。
+- ChatGPT のサブスクリプションでのサインイン、Claude や DeepSeek の API キーの利用は、各サービスの利用規約に従ってください。規約を守るかどうかは利用者の責任です。
+- デスクトップ操作（Windows）は、この PC の実際の画面をマウスとキーボードで承認なしに操作します。ブラウザ操作（Chrome）は、この PC で起動した Chrome を操作します。どちらも実際のマシンの上で動くため、使うときだけオンにし、重要なデータは事前にバックアップしてください。
+- Agent Desk が計算する使用量と料金は概算です。正確な請求額は、各社の管理画面で確認してください。
+- 本ソフトウェアは MIT ライセンスに従い、「現状のまま（AS IS）」で提供されます。商品性や特定目的への適合性を含め、明示・黙示を問わず一切の保証はありません。本ソフトウェアの利用によって生じたいかなる損害についても、作者と貢献者は責任を負いません。
+- ChatGPT、Codex、Claude、DeepSeek、Chrome、Tailscale などの名称は、それぞれの権利者の商標です。
+
+## ライセンス
+
+DeepSeek Harness は MIT ライセンスです。依存パッケージのライセンスは各パッケージに従います。
+
+Agent Desk は MIT ライセンスで公開しています（Copyright (c) 2026 Kansoku111）。全文は [LICENSE](LICENSE) を見てください。

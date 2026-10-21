@@ -1,0 +1,25 @@
+{
+  "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+  "checkedAt": "2026-10-17",
+  "currency": "USD",
+  "holidaySource": "https://www.beijing.gov.cn/zhengce/zhengcefagui/202511/t20251104_4258873.html",
+  "holidays": {
+    "2026": [["01-01", "01-03"], ["02-15", "02-23"], ["04-04", "04-06"], ["05-01", "05-05"], ["06-19", "06-21"], ["09-25", "09-27"], ["10-01", "10-07"]]
+  },
+  "rates": {
+    "flash": {
+      "offPeak": { "input": 0.15, "output": 0.6, "cacheRead": 0.003, "cacheWrite": 0.15 },
+      "peak": { "input": 0.3, "output": 1.2, "cacheRead": 0.006, "cacheWrite": 0.3 }
+    },
+    "pro": {
+      "offPeak": { "input": 0.66, "output": 1.98, "cacheRead": 0.022, "cacheWrite": 0.66 },
+      "peak": { "input": 1.32, "output": 3.96, "cacheRead": 0.044, "cacheWrite": 1.32 }
+    }
+  },
+  "models": {
+    "deepseek-flash": "flash",
+    "deepseek-v4-flash": "flash",
+    "deepseek-v4-flash-vision-exp": "flash",
+    "deepseek-v4-pro": "pro"
+  }
+}

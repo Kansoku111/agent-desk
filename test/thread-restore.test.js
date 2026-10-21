@@ -1,0 +1,117 @@
+import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { test } from 'node:test'
+import { Checkpoints } from '../server/checkpoints.js'
+import { isUndoable, restoreNoteText, ThreadManager } from '../server/threads.js'
+
+/** A runtime whose agent runs `act(promptText)` instead of a model. */
+function fakePool(act) {
+  const prompts = []
+  const runtime = {
+    liveSessions: new Set(),
+    async newSession() {
+      const sessionId = `s-${this.liveSessions.size + 1}`
+      this.liveSessions.add(sessionId)
+      return { sessionId, configOptions: [] }
+    },
+    async setOption() {
+      return []
+    },
+    async prompt(_sessionId, blocks) {
+      prompts.push(blocks.map((block) => block.text).join('\n'))
+      await act(blocks.at(-1).text)
+      return { stopReason: 'end_turn' }
+    },
+    async cancel() {},
+    async closeSession() {},
+  }
+  const pool = Object.assign(new EventEmitter(), {
+    get: async () => runtime,
+    holderOf: (sessionId) => (runtime.liveSessions.has(sessionId) ? runtime : null),
+    status: () => ({}),
+  })
+  return { pool, prompts }
+}
+
+async function settled(manager, threadId) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const { turns } = await manager.get(threadId)
+    const last = turns.at(-1)
+    if (last.status !== 'running' && last.checkpoint?.changed !== undefined) return turns
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error('turn did not settle')
+}
+
+test('a turn can be undone, the agent is told, and the undo can be taken back', async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-restore-'))
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  const workspace = path.join(base, 'work')
+  await fs.mkdir(workspace)
+  await fs.writeFile(path.join(workspace, 'notes.txt'), 'original')
+  const file = (name) => fs.readFile(path.join(workspace, name), 'utf8').catch(() => null)
+
+  const { pool, prompts } = fakePool(async (text) => {
+    if (text === 'edit') {
+      await fs.writeFile(path.join(workspace, 'notes.txt'), 'edited by the agent')
+      await fs.writeFile(path.join(workspace, 'new.txt'), 'created')
+    }
+  })
+  const manager = new ThreadManager({
+    paths: {
+      threadsIndex: path.join(base, 'threads.json'),
+      threadsDir: path.join(base, 'threads'),
+      attachmentsDir: path.join(base, 'attachments'),
+      dshHome: path.join(base, 'dsh-home'),
+      runtimeCwd: path.join(base, 'runtime'),
+    },
+    pool,
+    catalog: { learn: () => false },
+    getAccounts: async () => ({}),
+    getTurnUsage: async () => null,
+    checkpoints: new Checkpoints({ root: path.join(base, 'checkpoints') }),
+  })
+  t.after(() => manager.shutdown())
+
+  const thread = await manager.create({ workspace, model: '["test","model"]' })
+  await manager.send(thread.id, { text: 'edit' })
+  let turns = await settled(manager, thread.id)
+  assert.equal(turns[0].checkpoint.changed, 2)
+  assert.equal(await file('notes.txt'), 'edited by the agent')
+
+  const preview = await manager.checkpointPreview(thread.id, turns[0].id)
+  assert.deepEqual(preview.files.map((entry) => entry.action).sort(), ['delete', 'restore'])
+
+  const restored = await manager.restoreCheckpoint(thread.id, turns[0].id)
+  assert.deepEqual(restored, { files: 2, error: null })
+  assert.equal(await file('notes.txt'), 'original')
+  assert.equal(await file('new.txt'), null)
+  turns = (await manager.get(thread.id)).turns
+  assert.equal(turns[0].revertedBy, turns[0].id)
+  assert.ok(isUndoable(turns, turns[0]))
+
+  // Undo the restore: the agent's work comes back, and nothing needs telling.
+  await manager.undoRestore(thread.id, turns[0].id)
+  assert.equal(await file('notes.txt'), 'edited by the agent')
+  assert.equal(await file('new.txt'), 'created')
+  assert.equal(turns[0].revertedBy, undefined)
+
+  // Restore again and send: the agent hears about it once, and the restore is final.
+  await manager.restoreCheckpoint(thread.id, turns[0].id)
+  await manager.send(thread.id, { text: 'look' })
+  turns = await settled(manager, thread.id)
+  assert.match(prompts[1], /restored the workspace files to how they were before their first request/)
+  assert.equal(isUndoable(turns, turns[0]), false)
+  await assert.rejects(manager.undoRestore(thread.id, turns[0].id), /取り消せません/)
+  await manager.send(thread.id, { text: 'again' })
+  await settled(manager, thread.id)
+  assert.doesNotMatch(prompts[2], /Agent Desk/)
+})
+
+test('restoreNoteText names a later request by its first line', () => {
+  const text = restoreNoteText({ request: 'fix the header\nand the footer', first: false })
+  assert.match(text, /before an earlier request of theirs \("fix the header"\)/)
+})

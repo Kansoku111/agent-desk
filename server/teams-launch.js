@@ -1,0 +1,89 @@
+// What a team's leader and Claude children start with: the MCP server config,
+// the instructions file and the flags of their turns (teams.js writes them each
+// time: the server's port may have changed).
+import fs from 'node:fs'
+import path from 'node:path'
+import { childPrompt, leaderPrompt, tierLines } from './teams-prompts.js'
+
+/** The leader's MCP server; its tools are mcp__agent-team__spawn and so on. */
+export const MCP_SERVER = 'agent-team'
+
+/**
+ * Tools a Claude child does without: those that would stop it waiting for a
+ * person, and those that start other agents (subagents, workflows, scheduled
+ * or remote runs). A child does its own work, so the team stays the size the
+ * user set and everything that runs shows in the team panel. GPT and DeepSeek
+ * children run in dsh processes without subagent tools (dsh-config.js teamChildPatch).
+ */
+const CHILD_DISALLOWED = [
+  'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode',
+  'Task', 'Agent', 'Workflow', 'SendMessage', 'ListAgents', 'RemoteTrigger', 'CronCreate', 'ScheduleWakeup',
+].join(',')
+
+/** Writes a file a Claude Code reads (its MCP config, its instructions). */
+function writeFile(dir, name, text) {
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, name)
+  fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 })
+  return file
+}
+
+/**
+ * The flags a team leader's Claude Code starts with (TerminalManager's
+ * `launch`). The files are written each time: the server's port may have changed.
+ */
+export function leaderLaunch({ team, config, models, dir, node, script, apiUrl }) {
+  const mcp = writeFile(dir, 'mcp.json', JSON.stringify({
+    mcpServers: {
+      [MCP_SERVER]: {
+        type: 'stdio',
+        command: node,
+        args: [script],
+        env: { AGENT_DESK_TEAM_URL: apiUrl, AGENT_DESK_TEAM_ID: team.id, AGENT_DESK_TEAM_SECRET: team.secret },
+      },
+    },
+  }, null, 2))
+  const prompt = writeFile(dir, 'leader.md', leaderPrompt({
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models),
+  }))
+  return {
+    args: [
+      ...(config.leaderBypass ? ['--permission-mode', 'bypassPermissions'] : []),
+      '--mcp-config', mcp,
+      // The team's own tools never ask, whatever the permission mode.
+      '--allowedTools', `mcp__${MCP_SERVER}`,
+      '--append-system-prompt-file', prompt,
+    ],
+  }
+}
+
+/**
+ * The MCP server a GPT leader's dsh session mounts (index.js mcpServersFor):
+ * the team's tools, with its instructions as the server's own. Written each
+ * time a session starts: the server's port may have changed.
+ */
+export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl }) {
+  const prompt = writeFile(dir, 'leader.md', leaderPrompt({
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true,
+  }))
+  return {
+    name: MCP_SERVER,
+    command: node,
+    args: [script],
+    env: [
+      { name: 'AGENT_DESK_TEAM_URL', value: apiUrl },
+      { name: 'AGENT_DESK_TEAM_ID', value: team.id },
+      { name: 'AGENT_DESK_TEAM_SECRET', value: team.secret },
+      { name: 'AGENT_DESK_TEAM_INSTRUCTIONS', value: prompt },
+    ],
+  }
+}
+
+/**
+ * The flags of every turn of a Claude child: no approvals (what would still
+ * ask is denied, and the report lists it), no tools that wait for a person.
+ */
+export function childTurnArgs({ child, dir }) {
+  const prompt = writeFile(dir, `${child.id}.md`, childPrompt(child.name))
+  return ['--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt]
+}

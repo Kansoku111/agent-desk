@@ -1,0 +1,7 @@
+node_modules/
+web/dist/
+*.log
+recovery/
+release/
+research/
+generated-images/
