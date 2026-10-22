@@ -10,6 +10,7 @@ import { ThreadView } from './components/ThreadView'
 import { TerminalView } from './components/TerminalView'
 import { AgentView } from './components/AgentView'
 import { FileMenuHost } from './components/FileRef'
+import { useSidebarSwipe } from './sidebarSwipe'
 import { getState, navigate, remoteHost, setState, teamChildOf, useStore } from './store'
 
 function useTheme() {
@@ -63,6 +64,7 @@ function Toasts() {
 export function App() {
   useTheme()
   useShortcuts()
+  useSidebarSwipe()
   const connection = useStore((state) => state.connection)
   const ready = useStore((state) => state.server !== null)
   const route = useStore((state) => state.route)

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Agent teams: a "Claude (API)" child that runs as a dsh task on the user's Anthropic API key, so the monthly API credits of Max and Team plans can be used by a team. It is off by default and needs an Anthropic API key in Settings → Accounts.
 - Agent teams: before a Claude Code child starts, `claude auth status` (which asks no model anything) is checked. A run that would use an API key (environment, Claude Code settings or `apiKeyHelper`) or a cloud account (Bedrock, Vertex, Foundry) is not started, and the leader is told why.
+- On a phone, a swipe right opens the task list and a swipe left closes it. It does not act inside text fields, over a dialog, while the page is pinch-zoomed, or on something that scrolls sideways and can still move that way.
 
 ### Changed
 
