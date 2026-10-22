@@ -69,9 +69,10 @@ export class TeamManager extends EventEmitter {
    * @param {{ data: { models: object[] } }} options.catalog
    * @param {() => object} options.getSettings  the saved `agentTeams` settings: the values a new team starts from
    * @param {() => string} options.apiUrl  where team-mcp.js calls (POST /api/team)
+   * @param {() => string} [options.instructions]  the user's custom instructions, added to a Claude leader's and child's prompt
    */
   constructor({
-    file, dir, threads, terminals, agents, catalog, getSettings, apiUrl, authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
+    file, dir, threads, terminals, agents, catalog, getSettings, apiUrl, instructions = () => '', authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
     node = process.execPath, script = mcpScript, log = () => {}, now = Date.now,
   }) {
     super()
@@ -85,6 +86,7 @@ export class TeamManager extends EventEmitter {
     this.catalog = catalog
     this.getSettings = getSettings
     this.apiUrl = apiUrl
+    this.instructions = instructions
     this.node = node
     this.script = script
     this.log = log
@@ -318,13 +320,13 @@ export class TeamManager extends EventEmitter {
     if (!team || record.team.role !== 'leader') return null
     return leaderLaunch({
       team, config: this.config(team), models: this.catalog.data.models, dir: this.#teamDir(team),
-      node: this.node, script: this.script, apiUrl: this.apiUrl(),
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(),
     })
   }
 
   /** The flags of every turn of a Claude child: no approvals, no tools that wait for a person (teams-launch.js). */
   #agentArgs(team, child) {
-    return childTurnArgs({ child, dir: this.#teamDir(team) })
+    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions() })
   }
 
   /**

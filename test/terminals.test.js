@@ -39,7 +39,7 @@ function fakePty() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30))
 
-async function setup({ launch, preflight = () => null } = {}) {
+async function setup({ launch, preflight = () => null, instructions } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-terminals-'))
   const workspace = path.join(dir, 'project')
   const claudeHome = path.join(dir, 'claude')
@@ -54,7 +54,7 @@ async function setup({ launch, preflight = () => null } = {}) {
     pty,
     findClaude: () => 'C:\\Tools\\claude.exe',
     claudeHome,
-    launch, preflight,
+    launch, preflight, instructions,
   }).load()
   return { dir, workspace, claudeHome, pty, sent, manager }
 }
@@ -337,6 +337,26 @@ test('a message sent without the screen is pasted into Claude Code, then Enter f
   assert.throws(() => manager.sendMessage('nope', 'x'), /動いていません/)
 })
 
+
+test('a task starts with the custom instructions as an appended system prompt, read again at each start', async () => {
+  let text = 'git操作はお任せします。'
+  const { workspace, pty, manager, dir } = await setup({ instructions: () => text })
+  const terminal = await manager.create({ workspace })
+  const file = path.join(dir, 'claude-instructions.md')
+  assert.deepEqual(pty.spawned[0].args, ['--session-id', terminal.sessionId, '--append-system-prompt-file', file, '--settings', path.join(dir, 'claude-terminal-settings.json')])
+  assert.match(await fs.readFile(file, 'utf8'), /<user_instructions>\ngit操作はお任せします。\n<\/user_instructions>/)
+  text = '日本語で答えること。'
+  pty.spawned[0].exit(0)
+  await settle()
+  manager.restart(terminal.id, null, { cols: 80, rows: 24 })
+  assert.match(await fs.readFile(file, 'utf8'), /日本語で答えること。/)
+})
+
+test('a task without custom instructions adds no prompt flag', async () => {
+  const { workspace, pty, manager } = await setup({ instructions: () => '  ' })
+  await manager.create({ workspace })
+  assert.ok(!pty.spawned[0].args.includes('--append-system-prompt-file'))
+})
 
 test('a team task gets its own settings and flags, with the first prompt after the single-value --settings', async () => {
   const launches = []

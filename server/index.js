@@ -128,6 +128,7 @@ const terminals = await new TerminalManager({
     if (client.socket?.readyState === client.socket?.OPEN) client.socket.send(JSON.stringify(frame))
   },
   launch: (record) => teams?.launchFor(record) ?? null,
+  instructions: () => settings.customInstructions,
   preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
   log,
 }).load()
@@ -334,6 +335,7 @@ teams = await new TeamManager({
   catalog,
   getSettings: () => settings.agentTeams,
   apiUrl: () => `http://127.0.0.1:${server.address().port}/api/team`,
+  instructions: () => settings.customInstructions,
   log,
 }).load()
 

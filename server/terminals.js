@@ -11,6 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { ClaudeTranscripts } from './claude-transcript.js'
+import { instructionsSection } from './instructions-plugin.js'
 import { readJson, writeJson } from './json-file.js'
 import { sameToken } from './remote.js'
 import {
@@ -50,10 +51,11 @@ export class TerminalManager extends EventEmitter {
    * @param {() => string|null} [options.findClaude]
    * @param {string} [options.claudeHome]  Claude Code's own data folder (resumable transcripts)
    * @param {(record: object) => ({ args?: string[] } | null)} [options.launch]  more flags for a team's leader or child
+   * @param {() => string} [options.instructions]  the user's custom instructions (a team's leader gets them in its own prompt, teams-launch.js)
    */
   constructor({
     file, settingsFile, hookUrl, send, pty = null, findClaude: find = () => findClaude(), log = () => {},
-    claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null, preflight = null,
+    claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null, preflight = null, instructions = () => '',
   }) {
     super()
     this.file = file
@@ -61,6 +63,8 @@ export class TerminalManager extends EventEmitter {
     // A team's leader gets its own hook settings (teamHookSettings).
     this.teamSettingsFile = path.join(path.dirname(settingsFile), 'claude-team-leader-settings.json')
     this.launch = launch
+    this.instructions = instructions
+    this.instructionsFile = path.join(path.dirname(settingsFile), 'claude-instructions.md')
     this.preflight = preflight
     this.hookUrl = hookUrl
     this.send = send
@@ -314,6 +318,9 @@ export class TerminalManager extends EventEmitter {
     if (!fs.statSync(record.workspace, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`作業フォルダが見つかりません: ${record.workspace}`)
     const resume = this.#resumable(record)
     const extra = (record.team && this.launch(record)) || null
+    const standing = record.team ? '' : instructionsSection(this.instructions())
+    // Written at each start, so a resume picks up what the settings say now.
+    if (standing) fs.writeFileSync(this.instructionsFile, standing, { encoding: 'utf8', mode: 0o600 })
     const command = launchCommand(claude, [
       ...(resume ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
       // Flags apply to this session only; `/model` typed in Claude Code would change the user's default everywhere.
@@ -321,6 +328,7 @@ export class TerminalManager extends EventEmitter {
       ...(record.effort ? ['--effort', record.effort] : []),
       // Some of these flags take a list (--mcp-config, --allowedTools), so the
       // single-value --settings comes last: the prompt after it stays the prompt.
+      ...(standing ? ['--append-system-prompt-file', this.instructionsFile] : []),
       ...(extra?.args ?? []),
       '--settings', extra ? this.teamSettingsFile : this.settingsFile,
       ...(prompt ? [prompt] : []),

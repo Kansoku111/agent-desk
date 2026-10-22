@@ -3,6 +3,7 @@
 // time: the server's port may have changed).
 import fs from 'node:fs'
 import path from 'node:path'
+import { instructionsSection } from './instructions-plugin.js'
 import { childPrompt, leaderPrompt, tierLines } from './teams-prompts.js'
 
 /** The leader's MCP server; its tools are mcp__agent-team__spawn and so on. */
@@ -28,11 +29,19 @@ function writeFile(dir, name, text) {
   return file
 }
 
+/** A team's prompt with the user's custom instructions after it (one --append-system-prompt-file carries both). */
+function withInstructions(prompt, instructions) {
+  const section = instructionsSection(instructions)
+  return section ? `${prompt}
+
+${section}` : prompt
+}
+
 /**
  * The flags a team leader's Claude Code starts with (TerminalManager's
  * `launch`). The files are written each time: the server's port may have changed.
  */
-export function leaderLaunch({ team, config, models, dir, node, script, apiUrl }) {
+export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, instructions = '' }) {
   const mcp = writeFile(dir, 'mcp.json', JSON.stringify({
     mcpServers: {
       [MCP_SERVER]: {
@@ -43,9 +52,9 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl }
       },
     },
   }, null, 2))
-  const prompt = writeFile(dir, 'leader.md', leaderPrompt({
+  const prompt = writeFile(dir, 'leader.md', withInstructions(leaderPrompt({
     workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models),
-  }))
+  }), instructions))
   return {
     args: [
       ...(config.leaderBypass ? ['--permission-mode', 'bypassPermissions'] : []),
@@ -83,7 +92,7 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
  * The flags of every turn of a Claude child: no approvals (what would still
  * ask is denied, and the report lists it), no tools that wait for a person.
  */
-export function childTurnArgs({ child, dir }) {
-  const prompt = writeFile(dir, `${child.id}.md`, childPrompt(child.name))
+export function childTurnArgs({ child, dir, instructions = '' }) {
+  const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name), instructions))
   return ['--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt]
 }
