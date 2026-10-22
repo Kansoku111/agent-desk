@@ -10,12 +10,9 @@
 // this one. --replay-user-messages gives each message back by its uuid when
 // Claude Code takes it, which is how the turn knows it arrived.
 //
-// It is the same `claude` the user signed in to, so it runs on their Claude
-// subscription. Before a turn starts, `claude auth status` (which asks no
-// model anything) says which sign-in it would use, and a run that would use an
-// API key or a cloud account does not start (claude-auth.js). The first event
-// of the run says it again as a last guard; it comes too late to be a promise,
-// because the request follows it within a few tens of milliseconds.
+// Before each turn, model-free auth inspection must match the team's explicit
+// user consent. Credentials are inherited, not replaced or selected here.
+// The init event is too late to prevent billing; authorization precedes spawn.
 import { spawn as spawnProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -24,7 +21,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import { normalizeClaudeLimits } from './claude-limits.js'
 import { readJson, writeJson } from './json-file.js'
-import { API_KEY_ENV, INHERITED_MARKERS, findClaude, launchCommand } from './terminals.js'
+import { INHERITED_MARKERS, findClaude, launchCommand } from './terminals.js'
 
 /** Turns kept per session (older ones drop off; Claude Code keeps the whole conversation itself). */
 const TURNS_KEPT = 60
@@ -35,8 +32,6 @@ const STDERR_TAIL = 4000
 const KILL_WAIT_MS = 5000
 /** How long a turn that has answered waits for a message it was handed but has not taken yet. */
 const STEER_GRACE_MS = 15_000
-/** Credentials a run may use: Claude Code's own sign-in, never an API key. */
-const SUBSCRIPTION_SOURCES = new Set(['none', undefined])
 
 const CUT_OFF = 'Agent Desk が終了したため、作業が途中で止まりました。'
 
@@ -118,7 +113,7 @@ export class ClaudeRunner extends EventEmitter {
     /** @type {Map<string, object>} sessions by id */
     this.records = new Map()
     /**
-     * The running turn of a session: { proc, turn, stopping, apiKey, refusal, stderr, result, exited, steers, early, denials, ended, grace }
+     * The running turn of a session: { proc, turn, stopping, refusal, stderr, result, exited, steers, early, denials, ended, grace }
      * (proc is null until the preflight is through; `steers` are the messages added to the turn by uuid, `ended` is true once stdin is closed)
      */
     this.live = new Map()
@@ -230,7 +225,7 @@ export class ClaudeRunner extends EventEmitter {
       ...record.args,
     ]
     const env = { ...process.env }
-    for (const name of [...INHERITED_MARKERS, ...API_KEY_ENV]) delete env[name]
+    for (const name of INHERITED_MARKERS) delete env[name]
     const command = launchCommand(claude, args)
     const spawnOptions = { cwd: record.workspace, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }
     const live = {
@@ -268,10 +263,11 @@ export class ClaudeRunner extends EventEmitter {
   async #startChecked(record, live, { claude, command, spawnOptions, text }) {
     let refusal = null
     try {
-      refusal = await this.preflight({ claude, cwd: spawnOptions.cwd, env: spawnOptions.env })
+      refusal = await this.preflight({ record, claude, cwd: spawnOptions.cwd, env: spawnOptions.env })
     } catch (error) {
-      // An unreadable answer is not a reason to refuse; the first event of the run still checks.
-      this.log('claude runner: sign-in check failed:', error.message)
+      // Never start a billable run when inspection failed.
+      refusal = 'Claude Code の認証確認に失敗しました。チームの設定で再確認してください。'
+      this.log('claude runner: sign-in check failed')
     }
     if (live.stopping || this.closing) return this.#onExit(record, live, null, null)
     if (refusal) {
@@ -364,11 +360,6 @@ export class ClaudeRunner extends EventEmitter {
     if (event.type === 'system' && event.subtype === 'init') {
       record.started = true
       record.modelInUse = event.model ?? record.modelInUse
-      if (!SUBSCRIPTION_SOURCES.has(event.apiKeySource)) {
-        // An API key (an apiKeyHelper, a key in the settings): never used by a team.
-        live.apiKey = String(event.apiKeySource)
-        this.#kill(live)
-      }
       return
     }
     if (event.type === 'result') {
@@ -412,12 +403,6 @@ export class ClaudeRunner extends EventEmitter {
     }
     const { result } = live
     if (live.refusal) return this.#finish(record, live.turn, { status: 'error', message: live.refusal })
-    if (live.apiKey) {
-      return this.#finish(record, live.turn, {
-        status: 'error',
-        message: `Claude Code が API キー（${live.apiKey}）で動こうとしたため止めました。チームはサブスクリプションでしか動かしません。Claude Code の設定から API キーを外してください。`,
-      })
-    }
     // The app is closing: the turn is saved as cut off, and nobody hears of it until the next start.
     if (this.closing) return this.#finish(record, live.turn, { status: 'error', message: CUT_OFF, quiet: true })
     if (live.stopping) return this.#finish(record, live.turn, { status: 'cancelled' })

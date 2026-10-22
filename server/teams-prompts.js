@@ -11,8 +11,8 @@ export const CATALOG_PROVIDER = { gpt: 'openai-codex', claude: 'anthropic', clau
 /** How each provider's children run, as the leader reads it. */
 const PROVIDER_WHAT = {
   gpt: 'GPT on the user\'s ChatGPT subscription',
-  claude: 'Claude Code on the user\'s Claude subscription',
-  claudeApi: 'Claude through the user\'s Anthropic API key, billed per token (or paid by their plan\'s monthly API credits)',
+  claude: 'Claude Code using its own user-confirmed subscription, API key or cloud authentication',
+  claudeApi: 'Claude through dsh on the user\'s Anthropic API key, billed per token (credits depend on their plan)',
   deepseek: 'DeepSeek, billed per token to the user\'s DeepSeek API key (low cost)',
 }
 const CLAUDE_ALIASES = { opus: 'Opus（最新）', sonnet: 'Sonnet（最新）', haiku: 'Haiku（最新）', fable: 'Fable（最新）' }

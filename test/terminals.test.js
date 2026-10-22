@@ -39,7 +39,7 @@ function fakePty() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30))
 
-async function setup({ launch } = {}) {
+async function setup({ launch, preflight = () => null } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-terminals-'))
   const workspace = path.join(dir, 'project')
   const claudeHome = path.join(dir, 'claude')
@@ -54,7 +54,7 @@ async function setup({ launch } = {}) {
     pty,
     findClaude: () => 'C:\\Tools\\claude.exe',
     claudeHome,
-    launch,
+    launch, preflight,
   }).load()
   return { dir, workspace, claudeHome, pty, sent, manager }
 }
@@ -504,7 +504,7 @@ test('status says when Claude Code takes typed input, and who typed last', async
   assert.equal(manager.status('nope'), null)
 })
 
-test('a team session never gets an API key: Claude Code stays on the subscription it is signed in with', async () => {
+test('a confirmed team session inherits the same credential environment as an independent task', async () => {
   const { workspace, pty, manager } = await setup({ launch: () => ({ args: [] }) })
   process.env.ANTHROPIC_API_KEY = 'sk-ant-api-test'
   process.env.ANTHROPIC_AUTH_TOKEN = 'token-test'
@@ -512,13 +512,74 @@ test('a team session never gets an API key: Claude Code stays on the subscriptio
     await manager.create({ workspace, team: { id: 'team-1', role: 'child', childId: 'c1' } })
     await manager.create({ workspace })
     const [team, own] = pty.spawned
-    for (const name of API_KEY_ENV) assert.equal(team.options.env[name], undefined)
+    assert.equal(team.options.env.ANTHROPIC_API_KEY, 'sk-ant-api-test')
+    assert.equal(team.options.env.ANTHROPIC_AUTH_TOKEN, 'token-test')
     // A task of the user's own keeps their environment as it is.
     assert.equal(own.options.env.ANTHROPIC_API_KEY, 'sk-ant-api-test')
   } finally {
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_AUTH_TOKEN
   }
+})
+
+test('team PTY create, restart, model restart and restored attach all check consent before spawn', async () => {
+  let refusal = 'confirmation required'
+  let checks = 0
+  const { workspace, pty, manager } = await setup({ preflight: async () => { checks++; return refusal } })
+  await assert.rejects(manager.create({ workspace, team: { id: 't' } }), /confirmation required/)
+  assert.equal(pty.spawned.length, 0)
+  refusal = null
+  const terminal = await manager.create({ workspace, team: { id: 't' } })
+  assert.equal(pty.spawned.length, 1)
+  manager.stop(terminal.id)
+  refusal = 'auth changed'
+  await assert.rejects(manager.restart(terminal.id), /auth changed/)
+  assert.equal(pty.spawned.length, 1)
+  refusal = null
+  await manager.restart(terminal.id)
+  refusal = 'auth changed'
+  await assert.rejects(manager.configure(terminal.id, null, { model: 'sonnet' }), /auth changed/)
+  assert.equal(pty.spawned.length, 2)
+  manager.live.delete(terminal.id)
+  await assert.rejects(manager.attach(terminal.id, 'client'), /auth changed/)
+  assert.equal(pty.spawned.length, 2)
+  assert.equal(checks, 6)
+  await manager.shutdown()
+})
+
+test('a report joining a pending prompt-less attach is retained in the single launch', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace, team: { id: 't' } })
+  manager.stop(terminal.id)
+  manager.live.delete(terminal.id)
+  let release
+  manager.preflight = () => new Promise((resolve) => { release = resolve })
+  const attaching = manager.attach(terminal.id, 'viewer')
+  assert.equal(manager.status(terminal.id).starting, true)
+  const reporting = manager.restart(terminal.id, null, undefined, { prompt: 'report must survive' })
+  release(null)
+  await Promise.all([attaching, reporting])
+  assert.equal(pty.spawned.length, 2)
+  assert.equal(pty.spawned[1].args.at(-1), 'report must survive')
+  await manager.shutdown()
+})
+
+test('pending team PTY inspection is deduplicated and stop cancels launch', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace, team: { id: 't' } })
+  manager.stop(terminal.id)
+  let release, checks = 0
+  manager.preflight = () => { checks++; return new Promise((resolve) => { release = resolve }) }
+  const first = manager.restart(terminal.id)
+  const second = manager.restart(terminal.id)
+  assert.equal(checks, 1)
+  assert.equal(manager.busy, true)
+  manager.stop(terminal.id)
+  release(null)
+  await assert.rejects(first, /キャンセル/)
+  await assert.rejects(second, /キャンセル/)
+  assert.equal(pty.spawned.length, 1)
+  await manager.shutdown()
 })
 
 /** Claude Code 2.1's approval for a shell command, as its screen reads (captured from a real one). */

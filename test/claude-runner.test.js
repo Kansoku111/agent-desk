@@ -65,7 +65,7 @@ test('a turn is one claude -p run: the prompt on stdin, its events folded into t
     '--permission-prompts', 'none', '--model', 'haiku', '--effort', 'low', '--append-system-prompt-file', 'child.md',
   ])
   assert.equal(proc.options.cwd, '/work')
-  assert.equal(proc.options.env.ANTHROPIC_API_KEY, undefined)
+  assert.equal(proc.options.env.ANTHROPIC_API_KEY, 'sk-ant-api-test')
   assert.equal(runner.get(session.id).state, 'running')
   assert.equal(runner.busy, true)
   await tick()
@@ -210,16 +210,17 @@ test('a message added while the sign-in is still checked goes in behind the prom
   assert.deepEqual(inputLines(spawned[0]).map((line) => line.message.content), ['最初', '二つ目'])
 })
 
-test('a run that would use an API key is stopped before it does anything', async (t) => {
+test('API authentication is not rejected by the init event after preflight', async (t) => {
   const { runner, spawned, done } = await setup(t)
   const session = await runner.create({ workspace: '/work' })
   runner.run(session.id, 'x')
   const ended = done()
   spawned[0].write(init('ANTHROPIC_API_KEY'))
+  spawned[0].write({ type: 'result', is_error: false, result: 'ok' })
+  spawned[0].end(0)
   const info = await ended
-  assert.equal(spawned[0].killed, true)
-  assert.equal(info.status, 'error')
-  assert.match(info.error, /API キー（ANTHROPIC_API_KEY）/)
+  assert.equal(spawned[0].killed, false)
+  assert.equal(info.status, 'done')
 })
 
 test('stop cancels the turn; an error result and a crash report what went wrong', async (t) => {

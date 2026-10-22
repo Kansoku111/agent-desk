@@ -7,6 +7,8 @@ import { effortLabel, pickableEfforts, workspaceLabel } from '../util'
 import { Modal } from './Modal'
 import { byNewest } from './Pickers'
 import { claudeEfforts, claudeModelName, claudeModels } from './TerminalPickers'
+import { ClaudeAuthConsent } from './ClaudeAuthConsent'
+import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 
 const MAX_CHILDREN = 12
 const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek']
@@ -149,8 +151,8 @@ function TierRow({ server, config, provider, tier, label, note, onChange }: {
 
 const PROVIDER_NOTE: Record<TeamProvider, string> = {
   gpt: 'dsh のタスクとして、ChatGPT サブスクリプションで動きます。',
-  claude: '画面なしの Claude Code として、Claude Code にログインしているサブスクリプションで動きます。確認が要る操作は実行せず、報告でリーダーに伝えます。',
-  claudeApi: 'dsh のタスクとして、Anthropic の API キーで動きます（使った分だけ課金されます。Max・Team プランに付く毎月の API クレジットが使えます。Claude Code のサブスクリプションは使いません）。子としてだけ使えます。',
+  claude: '画面なしの Claude Code です。Claude Code 自身の認証（サブスクリプション・API キー・クラウド）を使い、起動前に課金方式を確認します。Agent Desk に登録した API キーとは別です。',
+  claudeApi: 'チームの自動処理に推奨。dsh から Anthropic API を使い、使った分だけ課金されます。Claude Code やそのサブスクリプションとは別の実行方式で、設定・ツール・会話の履歴も異なります。子としてだけ使えます。',
   deepseek: 'dsh のタスクとして、DeepSeek の API キーで動きます（使った分だけ DeepSeek に課金されます）。子としてだけ使えます。',
 }
 
@@ -162,7 +164,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
     <section className={`account-card team-provider-card ${on ? '' : 'off'}`}>
       <div className="setting compact">
         <div>
-          <h3>{PROVIDER_NAME[provider]} の子</h3>
+          <h3>{PROVIDER_NAME[provider]} の子{provider === 'claudeApi' && <span className="muted">（自動処理に推奨）</span>}</h3>
           <p className="muted">
             {PROVIDER_NOTE[provider]}
             {signedOut && ' ChatGPT にサインインすると使えます（設定 → アカウント）。'}
@@ -181,6 +183,9 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
           <span />
         </label>
       </div>
+      {on && provider === 'claudeApi' && (
+        <p className="team-warning">API の従量課金を有効にしています。並列数や長い会話で費用が増えます。開始前に Claude Console の利用上限・通知を確認してください。この画面の設定は金額上限ではなく、サブスクからの自動切替もしません。</p>
+      )}
       {on && TIERS.map((entry) => <TierRow key={entry.tier} server={server} config={config} provider={provider} onChange={onChange} {...entry} />)}
     </section>
   )
@@ -197,7 +202,7 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
           <p className="muted">
             {gptLeads
               ? 'GPT（dsh のタスク）がリーダーになり、ChatGPT サブスクリプションで動きます。Claude の上限を使わずにチームを回せます。'
-              : 'Claude Code がリーダーになり、Claude Code にログインしているサブスクリプションで動きます。'}
+              : 'Claude Code がリーダーになります。Claude Code 自身の認証を使い、サブスクリプション・API キー・クラウドの課金方式を起動前に確認します。'}
             {gptLeads && !server.accounts.chatgpt.signedIn && ' ChatGPT にサインインすると使えます（設定 → アカウント）。'}
           </p>
         </div>
@@ -280,14 +285,19 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
   const [draft, setDraft] = useState<Config | null>(() => (server?.settings.agentTeams ? fullConfig(server.settings.agentTeams) : null))
   const [details, setDetails] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
+  const [authRevision, setAuthRevision] = useState(0)
   const close = () => setState({ teamStart: null })
   if (!server || !draft) return null
   const change: Change = (patch) => setDraft((current) => (current ? applyPatch(current, patch) : current))
+  const needsAuth = needsClaudeAuth(draft)
   const start = async () => {
+    if (needsAuth && !auth.ready) return
     setStarting(true)
-    const started = await startTeam(workspace, draft)
+    const started = await startTeam(workspace, draft, needsAuth ? auth.confirmation : undefined)
     setStarting(false)
     if (started) close()
+    else if (needsAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
   }
   return (
     <Modal title="エージェントチームを始める" onClose={close} width={620} className="team-start-modal">
@@ -296,6 +306,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
           フォルダ: <strong>{workspaceLabel(workspace, server.app.myPc, server.settings.projectNames)}</strong>。
           前回のチームの選び方が入っています。このまま始めても、ここで変えてもかまいません。
         </p>
+        <p className="muted">Claude の自動処理には「Claude（API）」の子を推奨します。選択は自動で変更せず、API 利用は従量課金です。</p>
         <LeaderSection server={server} config={draft} onChange={change} />
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
@@ -310,10 +321,11 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
             <BypassSwitch config={draft} onChange={change} />
           </section>
         )}
+        {needsAuth && <ClaudeAuthConsent key={authRevision} workspace={workspace} onChange={setAuth} />}
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={close}>キャンセル</button>
-        <button type="button" className="button primary" disabled={starting || !anyChildOn(draft)} onClick={() => void start()}>始める</button>
+        <button type="button" className="button primary" disabled={starting || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void start()}>始める</button>
       </div>
     </Modal>
   )
@@ -327,6 +339,8 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const server = useStore((state) => state.server)
   const [draft, setDraft] = useState<Config | null>(() => (team.config ? fullConfig(team.config) : null))
   const [saving, setSaving] = useState(false)
+  const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
+  const [authRevision, setAuthRevision] = useState(0)
   if (!server) return null
   if (!draft) {
     return (
@@ -336,11 +350,15 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
     )
   }
   const change: Change = (patch) => setDraft((current) => (current ? applyPatch(current, patch) : current))
+  const needsAuth = needsClaudeAuth(draft, team)
+  const showAuth = needsAuth || team.children.some((child) => child.kind === 'agent' && child.state !== 'removed')
   const save = async () => {
+    if (needsAuth && !auth.ready) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, patch: { gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
+    else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
   }
   const leader = draft.leaderProvider === 'gpt' ? 'GPT' : 'Claude Code'
   return (
@@ -354,10 +372,11 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
         </section>
         {PROVIDERS.map((provider) => <ProviderCard key={provider} server={server} config={draft} provider={provider} onChange={change} />)}
         {!anyChildOn(draft) && <p className="team-warning">子に使うものを、少なくとも一つオンにしてください。</p>}
+        {showAuth && <ClaudeAuthConsent key={authRevision} workspace={team.workspace} teamId={team.id} onChange={setAuth} />}
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={onClose}>キャンセル</button>
-        <button type="button" className="button primary" disabled={saving || !anyChildOn(draft)} onClick={() => void save()}>保存</button>
+        <button type="button" className="button primary" disabled={saving || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
       </div>
     </Modal>
   )
@@ -386,7 +405,7 @@ export function TeamSettings() {
               動いているチームの子の枠と数は、チームのパネルの「このチームの設定」から変えられます。
             </p>
             <p className="muted">
-              リーダーが選ぶのは枠と GPT / Claude / Claude（API） / DeepSeek だけで、モデル名は選びません。Claude Code の子はサブスクリプションで、Claude（API）の子は API キーで動きます。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
+              リーダーが選ぶのは枠と GPT / Claude / Claude（API） / DeepSeek だけで、モデル名は選びません。Claude Code の子は Claude Code 自身の認証と課金方式で、Claude（API）の子は Agent Desk に登録した API キーで動きます。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
             </p>
           </div>
         </div>

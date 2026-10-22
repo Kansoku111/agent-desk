@@ -229,6 +229,31 @@ async function setup(t, settings = {}) {
   }
 }
 
+test('team auth consent persists sanitized mode without changing providers and guards existing disabled children', async (t) => {
+  const { manager, team, tool, terminals, leader, workspace } = await setup(t)
+  manager.claudeAuth.find = () => 'fake'
+  manager.claudeAuth.detect = async () => ({ loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty', email: 'private@example.test', token: 'SECRET' })
+  const before = structuredClone(team.config)
+  const context = { record: terminals.records.get(leader), cwd: workspace, env: {}, claude: 'fake' }
+  assert.ok(await manager.guardClaudeLaunch(context))
+  const view = await manager.inspectClaudeAuth({ teamId: team.id })
+  await manager.updateConfig(team.id, {}, { challenge: view.challenge })
+  assert.equal(await manager.guardClaudeLaunch(context), null)
+  assert.ok(await manager.guardClaudeLaunch({ ...context, cwd: path.join(workspace, 'other') }))
+  assert.deepEqual(team.config, before)
+  await tool('spawn', { provider: 'claude', tier: 'low', title: 'child', task: 'work' })
+  const child = team.children[0]
+  manager.updateConfig(team.id, { claude: { enabled: false } })
+  assert.equal(await manager.guardClaudeLaunch({ ...context, record: { id: child.taskId } }), null)
+  manager.claudeAuth.detect = async () => null
+  assert.ok(await manager.guardClaudeLaunch({ ...context, record: { id: child.taskId } }))
+  await manager.writes
+  const saved = JSON.parse(await fs.readFile(manager.file, 'utf8'))
+  assert.deepEqual(saved.teams[0].claudeAuthConsent, team.claudeAuthConsent)
+  assert.doesNotMatch(JSON.stringify(saved), /private@example|SECRET/)
+  assert.ok(await manager.guardClaudeLaunch({ ...context, record: { id: 'orphan' } }))
+})
+
 test('the leader starts with the team tools and instructions; other options come from the settings', async (t) => {
   const { terminals, leader, team, workspace } = await setup(t)
   const create = terminals.calls.find((call) => call[0] === 'create')[1]
@@ -1012,7 +1037,9 @@ test('a Claude (API) child is a full-access dsh task on an Anthropic model, not 
   })
   const args = terminals.records.get(leader).launch.args
   const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
-  assert.match(prompt, /provider "claudeApi" \(Claude through the user's Anthropic API key.*low = Claude Haiku 5\.5, mid = turned off/)
+  assert.match(prompt, /provider "claudeApi" \(Claude through dsh on the user's Anthropic API key.*low = Claude Haiku 5\.5, mid = turned off/)
+  assert.match(prompt, /Claude Code using its own user-confirmed subscription, API key or cloud authentication/)
+  assert.doesNotMatch(prompt, /monthly API credits/)
   assert.match(await tool('spawn', { title: '要約', task: 'docs を要約', tier: 'low', provider: 'claudeApi', name: 'A' }), /子「A」を起動しました（Claude Haiku 5\.5・低）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {

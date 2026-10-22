@@ -41,7 +41,7 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
       // Something other than null: the page takes null as a failure.
       return { inserted: true }
     },
-    'terminal.restart': ({ terminalId, size }, client) => ({ terminal: terminals.restart(terminalId, client, size) }),
+    'terminal.restart': async ({ terminalId, size }, client) => ({ terminal: await terminals.restart(terminalId, client, size) }),
     // `model` / `effort`: a value, null for Claude Code's own default, or left out to keep the current one.
     'terminal.configure': async ({ terminalId, model, effort }, client) => ({ terminal: await terminals.configure(terminalId, client, { model, effort }) }),
     'terminal.stop': ({ terminalId }) => ({ terminal: terminals.stop(terminalId) }),
@@ -54,8 +54,9 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
 
     // Agent teams (TM). `size` is the viewer's terminal, as for terminal.create.
     // `choices`: what the user picked in the start dialog; the next team starts from them.
-    'team.create': async ({ workspace, size, choices }) => {
-      const result = await teams.create({ workspace, size, choices })
+    'team.claudeAuth': (input) => teams.inspectClaudeAuth(input),
+    'team.create': async ({ workspace, size, choices, authConfirmation }) => {
+      const result = await teams.create({ workspace, size, choices, authConfirmation })
       const folder = result.team.workspace
       if (folder !== paths.myPc && !getSettings().workspaces.includes(folder)) getSettings().workspaces.unshift(folder)
       getSettings().agentTeams = result.team.config
@@ -63,7 +64,7 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
       broadcast('settings', { settings: getSettings() })
       return result
     },
-    'team.update': ({ teamId, patch }) => teams.updateConfig(teamId, patch),
+    'team.update': ({ teamId, patch, authConfirmation }) => teams.updateConfig(teamId, patch, authConfirmation),
     'team.approve': ({ teamId, approvalId, allow }) => teams.approveById(teamId, approvalId, allow === true),
     'team.dismissAsk': ({ teamId, askId }) => teams.dismissAsk(teamId, askId),
     'team.deliver': ({ teamId }) => teams.retryDelivery(teamId),

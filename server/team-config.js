@@ -37,10 +37,10 @@ export const TEAM_DEFAULTS = {
   // offered to the leader.
   // GPT: the ChatGPT subscription.
   gpt: { enabled: false, low: { enabled: true, model: null, effort: 'medium' }, mid: { enabled: true, model: null, effort: 'high' } },
-  // Claude Code on the user's Claude subscription.
+  // Claude Code with the user's own, explicitly confirmed auth/billing mode.
   claude: { enabled: false, low: { enabled: true, model: 'haiku', effort: null }, mid: { enabled: true, model: 'sonnet', effort: null } },
-  // Claude through their Anthropic API key, billed per token
-  // (or paid by the monthly API credits that Max and Team plans include).
+  // Claude through dsh and their Anthropic API key, billed per token.
+  // Any credits are subject to the user's provider plan conditions.
   claudeApi: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // Billed per token to their DeepSeek API key.
   deepseek: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },

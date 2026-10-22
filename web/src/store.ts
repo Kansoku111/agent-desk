@@ -1,7 +1,7 @@
 // App state plus the WebSocket connection to the Agent Desk server.
 import { useSyncExternalStore } from 'react'
 import type {
-  AppState, Attachment, DshUpdate, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
+  AppState, Attachment, ClaudeAuthConfirmation, DshUpdate, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
 } from './types'
 import { Outbox, readQueues, type QueuedMessage } from './outbox'
 import { RpcClient } from './rpc-client'
@@ -572,8 +572,8 @@ function upsertTeam(team: TeamSummary) {
 
 /** Starts an agent team in a project (or My PC): its Claude Code leader opens to talk to. */
 /** Starts a team in the folder with the choices of the start dialog; its leader (Claude Code or GPT) opens. */
-export async function startTeam(workspace: string, choices: TeamSettings) {
-  const result = await act<{ team: TeamSummary; terminal?: TerminalSummary; thread?: ThreadSummary }>('team.create', { workspace, choices })
+export async function startTeam(workspace: string, choices: TeamSettings, authConfirmation?: ClaudeAuthConfirmation) {
+  const result = await act<{ team: TeamSummary; terminal?: TerminalSummary; thread?: ThreadSummary }>('team.create', { workspace, choices, authConfirmation })
   if (!result) return false
   upsertTeam(result.team)
   if (result.thread) {

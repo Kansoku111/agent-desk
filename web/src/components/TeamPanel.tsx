@@ -228,14 +228,14 @@ function ClaudeLimitsCard() {
   if (!limits || limits.windows.length === 0) {
     return (
       <div className="limits team-limits">
-        <div className="limits-head"><span>Claude の利用上限</span></div>
-        <p className="fine-print">まだ取得していません。チームの Claude が1回動くと表示されます。</p>
+        <div className="limits-head"><span>Claude サブスクリプションの利用上限</span></div>
+        <p className="fine-print">まだ取得していません。Claude Code が上限情報を出力すると表示されます。API・クラウドの料金や残高ではありません。</p>
       </div>
     )
   }
   return (
     <div className="limits team-limits">
-      <div className="limits-head"><span>Claude の利用上限</span></div>
+      <div className="limits-head"><span>Claude サブスクリプションの利用上限</span></div>
       {limits.windows.map((window) => {
         const reset = window.resetAt !== null && window.resetAt <= now
         const left = Math.max(0, 100 - Math.round(window.usedPercent))
@@ -254,7 +254,8 @@ function ClaudeLimitsCard() {
           </div>
         )
       })}
-      <span className="limit-reset">{relativeTime(limits.fetchedAt)}に取得 · チームの Claude が動くたびに更新</span>
+      <span className="limit-reset">{relativeTime(limits.fetchedAt)}に取得 · Claude Code が上限情報を出力したときに更新</span>
+      <p className="fine-print">直近に取得したサブスクリプションの情報です。現在のチームの課金方式や API・クラウドの料金・残高を示すものではありません。</p>
     </div>
   )
 }

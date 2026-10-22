@@ -53,7 +53,7 @@ export class TerminalManager extends EventEmitter {
    */
   constructor({
     file, settingsFile, hookUrl, send, pty = null, findClaude: find = () => findClaude(), log = () => {},
-    claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null,
+    claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null, preflight = null,
   }) {
     super()
     this.file = file
@@ -61,6 +61,7 @@ export class TerminalManager extends EventEmitter {
     // A team's leader gets its own hook settings (teamHookSettings).
     this.teamSettingsFile = path.join(path.dirname(settingsFile), 'claude-team-leader-settings.json')
     this.launch = launch
+    this.preflight = preflight
     this.hookUrl = hookUrl
     this.send = send
     this.pty = pty
@@ -72,6 +73,7 @@ export class TerminalManager extends EventEmitter {
     this.records = new Map()
     /** Running (or exited, with their last screen) processes by task id. */
     this.live = new Map()
+    this.starting = new Map()
     /** Windows and phones showing each task. */
     this.subscribers = new Map()
     /** The model and level a new task starts with: the last ones chosen (null: Claude Code's own default). */
@@ -135,7 +137,7 @@ export class TerminalManager extends EventEmitter {
 
   /** Whether Claude is working in any task (the app must not exit or be replaced then). */
   get busy() {
-    return [...this.live.values()].some((live) => live.alive && live.activity === 'running')
+    return this.starting.size > 0 || [...this.live.values()].some((live) => live.alive && live.activity === 'running')
   }
 
   #changed(record) {
@@ -161,7 +163,7 @@ export class TerminalManager extends EventEmitter {
     }
     this.records.set(record.id, record)
     try {
-      this.#start(record, clampSize(size), prompt)
+      await this.#start(record, clampSize(size), prompt)
     } catch (error) {
       this.records.delete(record.id)
       throw error
@@ -279,8 +281,35 @@ export class TerminalManager extends EventEmitter {
 
   /** `prompt`: a first message Claude Code starts working on (a team's task or report). */
   #start(record, size, prompt = null) {
-    const pty = this.#loadPty()
+    if (!record.team) return this.#startNow(record, size, prompt)
+    if (this.starting.has(record.id)) {
+      const pending = this.starting.get(record.id)
+      if (prompt && pending.prompt && pending.prompt !== prompt) return Promise.reject(new Error('Claude Code は別のメッセージで起動中です。後でもう一度送ってください。'))
+      if (prompt) pending.prompt = prompt
+      return pending.promise
+    }
+    const pending = { cancelled: false, prompt }
+    pending.promise = this.#startTeam(record, size, prompt, pending).finally(() => {
+      if (this.starting.get(record.id) === pending) this.starting.delete(record.id)
+    })
+    this.starting.set(record.id, pending)
+    return pending.promise
+  }
+
+  async #startTeam(record, size, prompt, pending) {
     const claude = this.findClaude()
+    const env = { ...process.env }
+    for (const name of INHERITED_MARKERS) delete env[name]
+    if (!this.preflight) throw new Error('チームの設定で Claude Code の認証方法を確認してください。')
+    const refusal = await this.preflight({ record, claude, cwd: record.workspace, env })
+    if (refusal) throw new Error(refusal)
+    if (pending.cancelled || this.records.get(record.id) !== record) throw new Error('Claude Code の起動はキャンセルされました。')
+    this.#startNow(record, size, pending.prompt, { claude, env })
+  }
+
+  #startNow(record, size, prompt = null, checked = null) {
+    const pty = this.#loadPty()
+    const claude = checked?.claude ?? this.findClaude()
     if (!claude) throw new Error('Claude Code（claude コマンド）が見つかりません。Claude Code をインストールしてから開き直してください。')
     if (!fs.statSync(record.workspace, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`作業フォルダが見つかりません: ${record.workspace}`)
     const resume = this.#resumable(record)
@@ -297,9 +326,8 @@ export class TerminalManager extends EventEmitter {
       ...(prompt ? [prompt] : []),
     ])
     const secret = randomBytes(18).toString('hex')
-    const env = { ...process.env }
+    const env = checked?.env ?? { ...process.env }
     for (const name of INHERITED_MARKERS) delete env[name]
-    if (record.team) for (const name of API_KEY_ENV) delete env[name]
     Object.assign(env, {
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
@@ -387,7 +415,7 @@ export class TerminalManager extends EventEmitter {
   async attach(id, client, size) {
     const record = this.#record(id)
     if (!this.live.has(id)) {
-      this.#start(record, clampSize(size))
+      await this.#start(record, clampSize(size))
       this.#changed(record)
     }
     const live = this.live.get(id)
@@ -528,6 +556,7 @@ export class TerminalManager extends EventEmitter {
       state: live ? (live.alive ? 'running' : 'exited') : 'stopped',
       activity: live?.alive ? live.activity : 'idle',
       ready,
+      starting: this.starting.has(id),
       inputAt: live?.inputAt ?? 0,
     }
   }
@@ -592,10 +621,13 @@ export class TerminalManager extends EventEmitter {
     const current = this.live.get(id)
     if (current?.alive && !current.replacing) return this.summary(record)
     this.#broadcast(id, { event: 'termReset', terminalId: id })
-    this.#start(record, clampSize(size ?? current?.size), prompt)
-    if (client) this.live.get(id).sizes.set(client, clampSize(size))
-    this.#changed(record)
-    return this.summary(record)
+    const started = this.#start(record, clampSize(size ?? current?.size), prompt)
+    const done = () => {
+      if (client) this.live.get(id).sizes.set(client, clampSize(size))
+      this.#changed(record)
+      return this.summary(record)
+    }
+    return started?.then ? started.then(done) : done()
   }
 
   /**
@@ -624,7 +656,7 @@ export class TerminalManager extends EventEmitter {
         live.proc.kill()
         setTimeout(resolve, 5000)
       })
-      this.restart(id, client, live.size)
+      await this.restart(id, client, live.size)
     } else {
       this.#changed(record)
     }
@@ -632,6 +664,8 @@ export class TerminalManager extends EventEmitter {
   }
 
   stop(id) {
+    const pending = this.starting.get(id)
+    if (pending) pending.cancelled = true
     const live = this.live.get(id)
     if (live?.alive) live.proc.kill()
     return this.summary(this.#record(id))
@@ -703,6 +737,7 @@ export class TerminalManager extends EventEmitter {
 
   /** Ends every Claude Code process (the app is quitting); their tasks resume on the next start. */
   async shutdown() {
+    for (const pending of this.starting.values()) pending.cancelled = true
     for (const live of this.live.values()) {
       if (!live.alive) continue
       try {

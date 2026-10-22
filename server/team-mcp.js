@@ -40,7 +40,7 @@ const TOOLS = [
         title: { type: 'string', description: 'A short title of the child\'s job, shown to the user (e.g. "生き物 1〜50 のモデル改善").' },
         task: { type: 'string', description: 'The full task, readable on its own: goal, exact scope (which files or items), what done means, where results go, what to report. Put long material in a file and give its path.' },
         tier: { type: 'string', enum: ['low', 'mid'], description: 'low: simple, repetitive or high-volume work. mid: work that needs judgment, design or quality.' },
-        provider: { type: 'string', enum: ['gpt', 'claude', 'claudeApi', 'deepseek'], description: 'gpt: GPT on the ChatGPT subscription. claude: Claude Code on the Claude subscription. claudeApi: Claude on the user\'s Anthropic API key (billed per token, or paid by their plan\'s monthly API credits). deepseek: DeepSeek on the user\'s DeepSeek API key (billed per token). Use only the ones `status` lists as available; may be left out when only one is turned on.' },
+        provider: { type: 'string', enum: ['gpt', 'claude', 'claudeApi', 'deepseek'], description: 'gpt: GPT on the ChatGPT subscription. claude: Claude Code using its own user-confirmed subscription/API/cloud authentication. claudeApi: Claude through dsh on the user\'s Anthropic API key (metered billing; credits depend on their plan). deepseek: DeepSeek on the user\'s DeepSeek API key (billed per token). Use only the ones `status` lists as available; may be left out when only one is turned on.' },
         name: { type: 'string', description: 'Optional short unique name for the child (e.g. "A" or "効果音"). Default: 子1, 子2, ...' },
       },
       required: ['title', 'task', 'tier'],

@@ -2,7 +2,7 @@
 // or GPT as a dsh task), which hands work to "child" agents with the agent-team MCP tools (team-mcp.js) and
 // audits what they report. A GPT child is an ordinary dsh task on the ChatGPT
 // subscription; a Claude child is Claude Code run headless (claude-runner.js)
-// on the Claude subscription, so neither touches an API key. Reports reach the
+// with the user's explicitly confirmed Claude Code auth mode. Reports reach the
 // leader one at a time, in the order the children finish, when it is idle (typed into
 // a Claude leader's terminal, sent to a GPT leader as a message): between
 // reports the leader sleeps and spends nothing.
@@ -22,6 +22,7 @@ import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
 import { CATALOG_PROVIDER, childPrompt, clip, describeTool, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { markOf, reportMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
+import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
 
 const mcpScript = fileURLToPath(new URL('./team-mcp.js', import.meta.url))
 
@@ -86,6 +87,7 @@ export class TeamManager extends EventEmitter {
     this.script = script
     this.log = log
     this.now = now
+    this.claudeAuth = new TeamClaudeAuth()
     /** @type {Map<string, object>} saved teams by id */
     this.teams = new Map()
     /** Approvals a GPT child waits for: { id, teamId, childId, taskId, requestId, tool, at, timer }. */
@@ -326,6 +328,22 @@ export class TeamManager extends EventEmitter {
     return tierLines(config, this.catalog.data.models)
   }
 
+  async inspectClaudeAuth({ workspace, teamId } = {}) {
+    const team = teamId ? this.teams.get(teamId) : null
+    if (teamId && !team) throw new Error('チームが見つかりません')
+    const dir = team?.workspace ?? String(workspace ?? '')
+    if (!path.isAbsolute(dir) || !fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error('作業フォルダが見つかりません')
+    if (!this.claudeAuth.find()) throw new Error('Claude Code（claude コマンド）が見つかりません。インストールしてから再確認してください。')
+    return this.claudeAuth.inspect(dir, team)
+  }
+
+  guardClaudeLaunch(context) {
+    const team = context.record?.team?.id
+      ? this.teams.get(context.record.team.id) : this.#byTask(context.record?.id)?.team
+    if (!team || typeof context.cwd !== 'string' || path.resolve(context.cwd) !== path.resolve(team.workspace)) return AUTH_REQUIRED
+    return this.claudeAuth.guard(team, context)
+  }
+
   // ---------------------------------------------------------------- teams
 
   /**
@@ -334,7 +352,7 @@ export class TeamManager extends EventEmitter {
    * starting it (a patch over the saved settings, as settings.update takes);
    * the result's `config` is what the team runs with, to remember for the next one.
    */
-  async create({ workspace, size, choices = {} }) {
+  async create({ workspace, size, choices = {}, authConfirmation }) {
     const config = mergeTeamConfig(this.getSettings(), choices ?? {})
     assertChildrenOn(config)
     const now = this.now()
@@ -343,6 +361,7 @@ export class TeamManager extends EventEmitter {
       id: randomUUID(), secret: randomBytes(24).toString('hex'), workspace: String(workspace ?? ''), leaderId: '',
       leaderKind: gpt ? 'thread' : 'terminal', config, createdAt: now, updatedAt: now, seq: 0, children: [], queue: [], asks: [],
     }
+    if (authConfirmation) await this.claudeAuth.confirm(team, authConfirmation, false)
     if (gpt) return this.#createGptLed(team, config)
     this.teams.set(team.id, team)
     let terminal
@@ -830,9 +849,10 @@ export class TeamManager extends EventEmitter {
    * providers and tiers and how many may be open. Who leads stays (the leader
    * is its own task). The leader hears what it may use now.
    */
-  updateConfig(teamId, patch) {
+  updateConfig(teamId, patch, authConfirmation) {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
+    if (authConfirmation) return this.claudeAuth.confirm(team, authConfirmation, true, () => this.teams.get(teamId) === team).then(() => this.updateConfig(teamId, patch))
     const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren'].includes(key)))
     const before = this.#tierLines(this.config(team)).join('\n') + this.config(team).maxChildren
     const next = mergeTeamConfig(this.config(team), allowed)
@@ -899,6 +919,9 @@ export class TeamManager extends EventEmitter {
     if (team.leaderKind === 'thread') return this.#pumpThread(team)
     const status = this.terminals.status(team.leaderId)
     if (!status) return
+    // An attach may be inspecting auth before its prompt-less launch. Do not
+    // coalesce a report-bearing restart into that launch and lose the report.
+    if (status.starting) return this.#later(team.id, () => this.#pump(team), RETRY_MS)
     if (status.state === 'stopped') {
       // Not started since the app started: it resumes its conversation on the report.
       const item = team.queue.shift()
@@ -979,14 +1002,18 @@ export class TeamManager extends EventEmitter {
    * meanwhile waits for it), then gives the report back.
    * The delivery is marked first: the leader starting is not the user writing.
    */
-  #deliver(team, item, action) {
+  async #deliver(team, item, action) {
     const entry = { item, entered: false, timer: null, pasted: this.now() }
     this.delivering.set(team.id, entry)
     try {
-      action()
+      const result = action()
+      if (result?.then) await result
     } catch (error) {
       this.delivering.delete(team.id)
       team.queue.unshift(item)
+      team.deliveryFailed = true
+      void this.#save()
+      this.#emit(team)
       this.log(`team ${team.id}: could not hand the leader a report:`, error.message)
       return
     }

@@ -29,7 +29,7 @@ import { resetPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
 import { fetchChatGptUsage, normalizeCodexRateLimits } from './chatgpt-usage.js'
-import { checkClaudeAuth } from './claude-auth.js'
+import { AUTH_REQUIRED } from './claude-auth.js'
 import { mergeClaudeLimits, readSavedClaudeLimits } from './claude-limits.js'
 import { CodexAppServer } from './codex-app-server.js'
 import { accountModelAdditions, markRetired, retiredModels, withCodexModelLimits } from './codex-models.js'
@@ -128,6 +128,7 @@ const terminals = await new TerminalManager({
     if (client.socket?.readyState === client.socket?.OPEN) client.socket.send(JSON.stringify(frame))
   },
   launch: (record) => teams?.launchFor(record) ?? null,
+  preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
   log,
 }).load()
 /** Whether an agent or a Claude Code task is working: the app must not exit or be replaced then. */
@@ -313,8 +314,8 @@ threads = new ThreadManager({
 await threads.load()
 
 // Agent teams: a Claude Code leader hands work to GPT (dsh) and Claude Code children.
-// The Claude children run headless (claude -p), on the Claude subscription.
-const agents = await new ClaudeRunner({ dir: path.join(paths.home, 'team-agents'), preflight: checkClaudeAuth, log }).load()
+// Claude children run headless (claude -p), after per-team auth consent checks.
+const agents = await new ClaudeRunner({ dir: path.join(paths.home, 'team-agents'), preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED, log }).load()
 agents.on('turn', ({ id, turn }) => broadcast('agentTurn', { id, turn }))
 // The Claude subscription's limits, as the team's `claude -p` runs last reported them.
 const claudeLimitsFile = path.join(paths.home, 'claude-limits.json')

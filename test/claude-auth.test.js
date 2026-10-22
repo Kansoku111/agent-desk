@@ -5,24 +5,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { test } from 'node:test'
-import { authProblem, checkClaudeAuth, claudeAuthStatus } from '../server/claude-auth.js'
+import { authDescriptor, authProblem, checkClaudeAuth, claudeAuthStatus, TeamClaudeAuth, AUTH_REQUIRED } from '../server/claude-auth.js'
 import { ClaudeRunner } from '../server/claude-runner.js'
 
-test('only the Claude subscription may run a team child; an API key, a helper or a cloud account may not', () => {
-  assert.equal(authProblem({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' }), null)
-  assert.match(authProblem({ loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' }), /API キーで動こう/)
-  assert.match(authProblem({ loggedIn: true, authMethod: 'api_key_helper', apiProvider: 'firstParty' }), /apiKeyHelper/)
-  assert.match(authProblem({ loggedIn: true, authMethod: 'third_party', apiProvider: 'bedrock' }), /Amazon Bedrock/)
-  assert.match(authProblem({ loggedIn: true, authMethod: 'third_party', apiProvider: 'vertex' }), /Vertex/)
+test('descriptors distinguish auth modes and never retain tokens or email', () => {
+  for (const [authMethod, apiProvider, mode] of [['claude.ai', 'firstParty', 'subscription'], ['api_key', 'firstParty', 'api'], ['api_key_helper', 'firstParty', 'api'], ['third_party', 'bedrock', 'cloud'], ['third_party', 'vertex', 'cloud'], ['third_party', 'foundry', 'cloud']]) {
+    const status = { loggedIn: true, authMethod, apiProvider, email: 'private@example.test', token: 'SECRET' }
+    assert.equal(authDescriptor(status).mode, mode)
+    assert.equal(authProblem(status), null)
+    assert.doesNotMatch(JSON.stringify(authDescriptor(status)), /private|SECRET/)
+  }
   assert.match(authProblem({ loggedIn: false }), /ログインしていません/)
-  // The refusal says where to go instead.
-  assert.match(authProblem({ authMethod: 'api_key' }), /Claude（API）/)
-})
-
-test('an answer that cannot be read lets the run through (the run still checks its own first event)', () => {
-  assert.equal(authProblem(null), null)
-  assert.equal(authProblem('nope'), null)
-  assert.equal(authProblem({ authMethod: 'something_new' }), null)
+  for (const status of [null, 'nope', {}, { loggedIn: true, authMethod: 'SECRET', apiProvider: 'private@example.test' }]) assert.equal(authDescriptor(status).mode, 'unknown')
 })
 
 function fakeAuthSpawn(output, { exit = 0, hang = false } = {}) {
@@ -50,7 +44,7 @@ test('claudeAuthStatus runs `claude auth status` in the workspace with the given
   assert.deepEqual(calls[0].args, ['auth', 'status'])
   assert.equal(calls[0].options.cwd, '/work')
   assert.equal(calls[0].options.env, env)
-  assert.match(await checkClaudeAuth({ claude: '/usr/bin/claude', cwd: '/work', env }, { spawn }), /API キー/)
+  assert.equal(await checkClaudeAuth({ claude: '/usr/bin/claude', cwd: '/work', env }, { spawn }), AUTH_REQUIRED)
 })
 
 test('a check that fails, prints nothing readable or hangs gives no answer', async () => {
@@ -106,7 +100,7 @@ test('a turn whose sign-in is refused never starts claude, and ends as an error 
   assert.equal(runner.busy, false)
   assert.equal(asked[0].claude, '/usr/bin/claude')
   assert.equal(asked[0].cwd, '/work')
-  assert.equal(asked[0].env.ANTHROPIC_API_KEY, undefined)
+  assert.equal(asked[0].env.ANTHROPIC_API_KEY, process.env.ANTHROPIC_API_KEY)
 })
 
 test('a turn whose sign-in passes starts claude after the check and runs as usual', async (t) => {
@@ -142,16 +136,88 @@ test('stopping a turn while its sign-in is being checked cancels it without star
   assert.equal(spawned.length, 0)
 })
 
-test('a check that throws does not stop the run', async (t) => {
+test('every resumed child turn rechecks auth before spawning', async (t) => {
+  let checks = 0
+  const { runner, spawned, session, finished } = await setup(t, async () => ++checks === 1 ? null : AUTH_REQUIRED)
+  runner.run(session.id, 'first')
+  await new Promise((resolve) => setImmediate(resolve))
+  const proc = spawned[0]
+  proc.stdout.write(`${JSON.stringify({ type: 'system', subtype: 'init' })}\n`)
+  proc.stdout.write(`${JSON.stringify({ type: 'result', is_error: false, result: 'ok' })}\n`)
+  proc.stdout.end(); proc.stderr.end(); proc.emit('close', 0)
+  await finished
+  const second = new Promise((resolve) => runner.once('finished', resolve))
+  runner.run(session.id, 'resume')
+  assert.equal((await second).status, 'error')
+  assert.equal(checks, 2)
+  assert.equal(spawned.length, 1)
+})
+
+test('a check that throws fails closed without starting the run', async (t) => {
   const { runner, spawned, session, finished } = await setup(t, async () => { throw new Error('boom') })
   runner.run(session.id, 'x')
-  await new Promise((resolve) => setImmediate(resolve))
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(spawned.length, 1)
-  const [proc] = spawned
-  proc.exitCode = 0
-  proc.stdout.end()
-  proc.stderr.end()
-  setImmediate(() => proc.emit('close', 0))
-  await finished
+  assert.equal((await finished).status, 'error')
+  assert.equal(spawned.length, 0)
+})
+
+for (const [authMethod, apiProvider] of [['claude.ai', 'firstParty'], ['api_key', 'firstParty'], ['api_key_helper', 'firstParty'], ['third_party', 'bedrock'], ['third_party', 'vertex'], ['third_party', 'foundry']]) {
+  test(`explicit per-team consent permits ${authMethod}/${apiProvider} and drift requires reconfirmation`, async () => {
+    let status = { loggedIn: true, authMethod, apiProvider }
+    const auth = new TeamClaudeAuth({ detect: async () => status, find: () => 'fake' })
+    const team = { id: 'a', workspace: '/work' }
+    assert.equal(await auth.guard(team, {}), AUTH_REQUIRED)
+    const view = await auth.inspect('/work', team)
+    assert.equal(view.confirmed, false)
+    await auth.confirm(team, { challenge: view.challenge })
+    assert.equal(await auth.guard(team, {}), null)
+    assert.equal((await auth.inspect('/work', team)).confirmed, true)
+    assert.equal(await auth.guard({ id: 'b', workspace: '/work' }, {}), AUTH_REQUIRED)
+    status = null
+    assert.equal(await auth.guard(team, {}), AUTH_REQUIRED)
+    status = { loggedIn: false }
+    assert.match(await auth.guard(team, {}), /ログインしていません/)
+  })
+}
+
+test('unknown consent requires explicit risk acknowledgement; challenges expire and bind workspace/team', async () => {
+  let now = 0
+  const auth = new TeamClaudeAuth({ detect: async () => { throw new Error('private failure') }, find: () => 'fake', now: () => now })
+  const team = { id: 'a', workspace: '/work' }
+  const view = await auth.inspect('/work', team)
+  assert.equal(view.descriptor.mode, 'unknown')
+  await assert.rejects(auth.confirm(team, { challenge: view.challenge }), /不明/)
+  await assert.rejects(auth.confirm({ ...team, id: 'b' }, { challenge: view.challenge, acknowledgeUnknown: true }))
+  await assert.rejects(auth.confirm({ ...team, workspace: '/other' }, { challenge: view.challenge, acknowledgeUnknown: true }))
+  await auth.confirm(team, { challenge: view.challenge, acknowledgeUnknown: true })
+  assert.equal(await auth.guard(team, {}), null)
+  await assert.rejects(auth.confirm(team, { challenge: view.challenge, acknowledgeUnknown: true }))
+  const expired = await auth.inspect('/work', team)
+  now = 300001
+  await assert.rejects(auth.confirm(team, { challenge: expired.challenge, acknowledgeUnknown: true }))
+})
+
+test('concurrent confirmation cannot replay a challenge or authorize a removed team', async () => {
+  const status = { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' }
+  const auth = new TeamClaudeAuth({ detect: async () => status, find: () => 'fake' })
+  const team = { id: 'a', workspace: '/work' }
+  const view = await auth.inspect('/work', team)
+  let release
+  auth.detect = () => new Promise((resolve) => { release = () => resolve(status) })
+  const pending = auth.confirm(team, { challenge: view.challenge }, true, () => false)
+  await assert.rejects(auth.confirm(team, { challenge: view.challenge }))
+  release()
+  await assert.rejects(pending)
+  assert.equal(team.claudeAuthConsent, undefined)
+})
+
+test('confirmation rechecks auth and logged-out inspections cannot be approved', async () => {
+  let status = { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' }
+  const auth = new TeamClaudeAuth({ detect: async () => status, find: () => 'fake' })
+  const team = { id: 'a', workspace: '/work' }
+  const view = await auth.inspect('/work', team)
+  status = { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' }
+  await assert.rejects(auth.confirm(team, { challenge: view.challenge }))
+  status = { loggedIn: false }
+  assert.equal((await auth.inspect('/work', team)).challenge, null)
+  assert.equal(team.claudeAuthConsent, undefined)
 })

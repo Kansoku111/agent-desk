@@ -4828,6 +4828,21 @@ button.team-node:disabled {
   margin: 0;
 }
 
+.claude-auth-consent > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.claude-auth-consent > summary .muted {
+  margin-left: 12px;
+  font-weight: 400;
+}
+
+.claude-auth-consent-body {
+  padding-top: 8px;
+}
+
 .team-start-details {
   display: inline-flex;
   align-items: center;

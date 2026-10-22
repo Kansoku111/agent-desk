@@ -83,7 +83,24 @@ export interface TeamChild {
   lastReport: { at: number; kind: string; text: string } | null
 }
 
-/** An agent team ("TM"): a Claude Code leader and the children it started. */
+/** Sanitized CLI auth metadata only: no credentials or account identity. */
+export interface ClaudeAuthInspection {
+  descriptor: {
+    version: 1
+    mode: 'subscription' | 'api' | 'cloud' | 'unknown' | 'logged-out'
+    authMethod: string
+    apiProvider: string
+  }
+  challenge: string | null
+  confirmed: boolean
+}
+
+export interface ClaudeAuthConfirmation {
+  challenge: string
+  acknowledgeUnknown?: boolean
+}
+
+/** An agent team ("TM"): a Claude Code or GPT leader and its children. */
 export interface TeamSummary {
   id: string
   workspace: string
