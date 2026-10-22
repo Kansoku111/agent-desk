@@ -301,12 +301,16 @@ test('a missing claude or folder is reported, and no task is left behind', async
 test('the conversation is read from the file Claude Code keeps, found by session id before any hook has named it', async () => {
   const { workspace, manager, claudeHome } = await setup()
   const terminal = await manager.create({ workspace })
-  assert.deepEqual((await manager.conversation(terminal.id)).turns, [])
+  const before = await manager.conversation(terminal.id)
+  assert.deepEqual(before.turns, [])
+  assert.equal(before.file, null)
   await fs.mkdir(path.join(claudeHome, 'projects', 'some-project'), { recursive: true })
   const entry = { parentUuid: null, isSidechain: false, type: 'user', uuid: 'u1', timestamp: '2026-10-20T00:00:00Z', message: { role: 'user', content: 'こんにちは' } }
-  await fs.writeFile(path.join(claudeHome, 'projects', 'some-project', `${terminal.sessionId}.jsonl`), `${JSON.stringify(entry)}\n`)
+  const file = path.join(claudeHome, 'projects', 'some-project', `${terminal.sessionId}.jsonl`)
+  await fs.writeFile(file, `${JSON.stringify(entry)}\n`)
   const first = await manager.conversation(terminal.id)
   assert.deepEqual(first.turns.map((turn) => turn.user.text), ['こんにちは'])
+  assert.equal(first.file, file)
   const again = await manager.conversation(terminal.id, { epoch: first.epoch, since: first.rev })
   assert.equal(again.turns.length, 0)
   await assert.rejects(manager.conversation('nope'), /見つかりません/)

@@ -187,13 +187,14 @@ export class TerminalManager extends EventEmitter {
   /**
    * The conversation as chat turns (see claude-transcript.js): all of it for a
    * viewer's first read, then what changed after the `epoch` and `since` of its
-   * last one.
+   * last one. `file` is the path of the conversation file (null before it exists).
    */
   async conversation(id, { epoch, since } = {}) {
     const record = this.#record(id)
     const file = this.#transcriptFile(record)
-    if (!file) return { epoch: null, rev: 0, omitted: 0, reset: true, turns: [], ids: [] }
-    return this.transcripts.read(file, { epoch: typeof epoch === 'string' ? epoch : null, since: Number(since) > 0 ? Number(since) : 0 })
+    if (!file) return { epoch: null, rev: 0, omitted: 0, reset: true, turns: [], ids: [], file: null }
+    const snapshot = await this.transcripts.read(file, { epoch: typeof epoch === 'string' ? epoch : null, since: Number(since) > 0 ? Number(since) : 0 })
+    return { ...snapshot, file }
   }
 
   /**

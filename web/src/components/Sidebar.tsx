@@ -52,6 +52,22 @@ async function copyHistory(thread: ThreadSummary) {
   }
 }
 
+/** Copies a Claude Code task's conversation, read from the file Claude Code keeps, as `copyHistory` does for a thread. */
+async function copyTerminalHistory(terminal: TerminalSummary) {
+  const snapshot = await act<{ turns: Turn[]; omitted: number; file: string | null }>('terminal.conversation', { terminalId: terminal.id })
+  if (!snapshot) return
+  if (!snapshot.turns.length) {
+    toast('コピーできる会話がまだありません', 'info')
+    return
+  }
+  try {
+    await copyText(threadMarkdown({ ...terminal, model: terminal.modelInUse ?? terminal.model }, snapshot.turns, { omitted: snapshot.omitted, file: snapshot.file }))
+    toast('履歴をコピーしました', 'success')
+  } catch {
+    toast('コピーできませんでした', 'error')
+  }
+}
+
 function ThreadStatus({ thread }: { thread: ThreadSummary }) {
   // A GPT team leader also shows what its children are doing, as a Claude leader does.
   const team = useLedTeam(thread.id)
@@ -259,6 +275,14 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
                   close()
                   setTitle(terminal.title)
                   setRenaming(true)
+                }}
+              />
+              <MenuItem
+                icon={<Copy size={14} />}
+                label="履歴をコピー"
+                onSelect={() => {
+                  close()
+                  void copyTerminalHistory(terminal)
                 }}
               />
               <MenuItem

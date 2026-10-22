@@ -28,11 +28,19 @@ function toolLines(item: ToolItem) {
  * The task's conversation as Markdown, for pasting into another agent or chat.
  * Replies, user messages and plans are kept; tool calls shrink to one line
  * each (plus the start of the output when one failed) and thinking is left
- * out, so the text stays readable and short.
+ * out, so the text stays readable and short. For a Claude Code task, `omitted`
+ * is how many earlier exchanges it no longer holds, and `file` the full
+ * conversation it keeps, which an agent on this PC can read.
  */
-export function threadMarkdown(thread: Pick<ThreadSummary, 'title' | 'workspace' | 'model'>, turns: readonly Turn[]) {
+export function threadMarkdown(
+  thread: Pick<ThreadSummary, 'title' | 'workspace' | 'model'>,
+  turns: readonly Turn[],
+  { omitted = 0, file = null }: { omitted?: number; file?: string | null } = {},
+) {
   const lines = [`# ${thread.title}`, '', `- 作業フォルダ: ${thread.workspace}`]
   if (thread.model) lines.push(`- モデル: ${thread.model}`)
+  if (file) lines.push(`- 元の会話ファイル: \`${file}\`（この履歴は省略版です。詳しく見るにはこのファイルを読んでください。JSON Lines 形式（1行1件）で大きいため、検索や一部だけ読む方法が向いています）`)
+  if (omitted > 0) lines.push(`- これより前の ${omitted} 件のやり取りは含まれていません`)
   for (const turn of turns) {
     lines.push('', '## ユーザー', '', turn.user.text.trim() || '（テキストなし）')
     if (turn.user.images.length) lines.push('', `（画像 ${turn.user.images.length} 枚を添付）`)

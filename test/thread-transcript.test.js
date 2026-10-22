@@ -45,3 +45,18 @@ test('marks steering, images, cancellation and errors', () => {
   assert.match(text, /（ユーザーが中断）\n\n（エラー）boom\n$/)
   assert.doesNotMatch(text, /モデル/)
 })
+
+test('says how many earlier exchanges the source no longer holds', () => {
+  const kept = threadMarkdown({ title: 'x', workspace: 'w', model: null }, [turn({})], { omitted: 12 })
+  assert.match(kept, /^# x\n\n- 作業フォルダ: w\n- これより前の 12 件のやり取りは含まれていません\n\n## ユーザー/)
+  assert.doesNotMatch(threadMarkdown({ title: 'x', workspace: 'w', model: null }, [turn({})]), /含まれていません/)
+})
+
+test('names the full conversation file by its path, and only when there is one', () => {
+  const file = 'C:\\Users\\a\\.claude\\projects\\p\\0123.jsonl'
+  const text = threadMarkdown({ title: 'x', workspace: 'w', model: null }, [turn({})], { file })
+  assert.match(text, new RegExp(`^# x\\n\\n- 作業フォルダ: w\\n- 元の会話ファイル: \`${file.replace(/\\/g, '\\\\').replace(/\./g, '\\.')}\`（`))
+  assert.match(text, /このファイルを読んでください/)
+  assert.doesNotMatch(text, /セッション/)
+  assert.doesNotMatch(threadMarkdown({ title: 'x', workspace: 'w', model: null }, [turn({})], { file: null }), /会話ファイル/)
+})
