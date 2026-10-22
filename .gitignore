@@ -5,3 +5,46 @@ recovery/
 release/
 research/
 generated-images/
+
+# Secrets and credentials, in case one ends up in the working tree
+.env
+.env.*
+!.env.example
+.credentials.yaml
+.credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.bak
+*.backup
+
+# Agent Desk's data folder, if AGENT_DESK_HOME is pointed inside the repository.
+# It holds API keys, sign-in credentials, conversations and attachments.
+/dsh-home/
+/codex-home/
+/threads/
+/threads.json
+/attachments/
+/checkpoints/
+/browser-profile/
+/chrome-tool-profile/
+/chrome-tool.json
+/my-pc/
+/runtime-cwd/
+/team-agents/
+/teams/
+/teams.json
+/terminals.json
+/settings.json
+/remote.json
+/server.json
+/catalog.json
+/usage-history.json
+/claude-cost.json
+/claude-limits.json
+/claude-*-settings.json
+/team-child.patch.yml
+/dsh-update-backup/
+/dsh-update.json
+/launcher.log
