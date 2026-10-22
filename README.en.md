@@ -2,19 +2,19 @@
 
 [日本語版 README](README.md)
 
-Agent Desk is a Codex-style desktop agent app built on DeepSeek Harness (`dsh`). It runs a coding agent that works on a local workspace, using a ChatGPT subscription (GPT models) and/or Claude API keys.
+Agent Desk is a Codex-style desktop agent app built on DeepSeek Harness (`dsh`). It runs a coding agent that works on a local workspace, using a ChatGPT subscription (GPT models), Claude API keys, and/or the Claude Code installed on this PC (your Claude sign-in).
 
 > The detailed documentation is currently written in Japanese only. The UI labels are also in Japanese (for example, 設定 = Settings).
 
 ## Features
 
 - **GPT via ChatGPT subscription:** Agent Desk uses its own official Sign in with ChatGPT registration and the public Responses API for chat and web search. Existing users must sign in again.
-- **Claude and DeepSeek via API keys:** Register an Anthropic API key. A DeepSeek API key is optional.
+- **Claude and DeepSeek via API keys:** Choosing Claude in a regular task uses an Anthropic API key you register. A DeepSeek API key is optional. Claude Code tasks and team Claude children take the separate route below.
 - **Codex-style UI:** Per-workspace task list, command and diff views, and approval cards.
-- **Claude Code tasks (CL):** Run the Claude Code installed on this PC in the app's terminal.
-- **Agent teams (TM):** A leader splits the work among GPT, Claude, and DeepSeek child agents.
+- **Claude Code tasks (CL):** Run the Claude Code installed on this PC in the app's terminal. Authentication and billing are Claude Code's own (for example a subscription); API keys registered in Agent Desk are not used.
+- **Agent teams (TM):** A leader splits the work among GPT, Claude, and DeepSeek child agents. A Claude leader or child runs as the Claude Code on this PC (`claude -p`), not through the Claude API.
 - **Restore changes:** Return the workspace to its state before a request.
-- **Usage display:** Per-turn token counts, estimated cost for Claude and DeepSeek, and ChatGPT usage limits.
+- **Usage display:** Per-turn token counts, estimated cost for Claude and DeepSeek, and ChatGPT usage limits. The team panel also shows the Claude five-hour and weekly limits, read from what the team's Claude prints (no extra requests).
 - **Phone access:** View and control tasks from a phone browser over Tailscale.
 - **Permission modes:** Read-only, workspace, or full access, chosen per task.
 - **Browser and desktop control:** Available when turned on in Settings. Windows desktop control is off by default.
@@ -68,6 +68,7 @@ Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Security: [SECURITY.md](SECU
 
 - Agent Desk is an unofficial project. It is not affiliated with, endorsed by, or sponsored by OpenAI, Anthropic, or DeepSeek.
 - You are responsible for complying with each provider's terms of service, including when you sign in with a ChatGPT subscription or use Claude or DeepSeek API keys.
+- Claude Code tasks and team Claude children simply launch the `claude` command you installed on this PC. Agent Desk does not read, store, or send your Claude sign-in tokens. Whether using a Claude subscription this way is allowed is up to Anthropic's terms, so check the current terms before you use it.
 - Desktop control (Windows) operates this PC's real screen with the mouse and keyboard, without asking for approval. Browser control (Chrome) operates a Chrome instance launched on this PC. Both act on your real machine, so turn them on only when you need them, and back up important data beforehand.
 - Costs calculated by Agent Desk are estimates. Check your provider's console for the exact billed amounts.
 - This software is provided "AS IS", under the MIT License, without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement. The authors and contributors are not liable for any claim or damages arising from the use of this software.

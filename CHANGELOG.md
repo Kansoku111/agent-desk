@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Agent team panel: a usage button that shows the Claude subscription's five-hour and weekly limits next to the GPT (Codex) limits. The Claude limits are read from the `rate_limit_event` that the team's own `claude -p` runs print, so nothing extra is requested and no usage is spent; the values are as fresh as the last team turn.
+- Agent team panel: a stop-all button that ends the turn of every working child. The leader is told the user stopped them and not to continue on its own.
+
+### Fixed
+
+- Text typed in the Claude Code task field or in a team child's field is kept when you switch to another session and come back.
+
+### Changed
+
+- The README now describes the Claude routes accurately: API keys for regular tasks, and the local Claude Code (its own sign-in) for Claude Code tasks and team Claude children.
+
 ## [0.1.0] - 2026-10-22
 
 ### Changed
