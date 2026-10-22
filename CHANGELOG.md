@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The README and known issues now say what Anthropic's Legal and compliance page allows and forbids for a Claude subscription (the unmodified Claude Code signed in by the user is not prevented; routing through subscription credentials for others and collecting, storing or intermediating them are forbidden), instead of only pointing at the terms.
 - Agent teams: every kind of child (GPT, Claude Code, Claude (API), DeepSeek) is now off in a new install, so nothing runs, bills or signs in until the user turns it on in the team start dialog. The start button needs at least one on; a running team's settings keep one on too. Settings already saved are unchanged.
 - The CLI's own `init` event is only a last guard: the first model request follows it within tens of milliseconds, so it cannot promise that nothing was requested. The docs no longer say it does.
 - The cloud-switch variables (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, `AWS_BEARER_TOKEN_BEDROCK`) are no longer passed to a team's Claude Code, like the API key variables.
