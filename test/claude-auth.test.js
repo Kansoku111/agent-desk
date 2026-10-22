@@ -57,7 +57,14 @@ test('a check that fails, prints nothing readable or hangs gives no answer', asy
   assert.equal(await claudeAuthStatus({ claude: 'c', cwd: '/w', env: {}, spawn: fakeAuthSpawn('not json').spawn }), null)
   assert.equal(await claudeAuthStatus({ claude: 'c', cwd: '/w', env: {}, spawn: () => { throw new Error('ENOENT') } }), null)
   const hung = fakeAuthSpawn('', { hang: true })
-  assert.equal(await claudeAuthStatus({ claude: 'c', cwd: '/w', env: {}, spawn: hung.spawn, timeoutMs: 20 }), null)
+  // The check's own timer is unref'd (a real run has the child process to keep the loop up); this fake has none.
+  const keepAlive = setInterval(() => {}, 1000)
+  try {
+    assert.equal(await claudeAuthStatus({ claude: 'c', cwd: '/w', env: {}, spawn: hung.spawn, timeoutMs: 20 }), null)
+  } finally {
+    clearInterval(keepAlive)
+  }
+  assert.equal(hung.calls.length, 1)
 })
 
 // ------------------------------------------------------------ the runner
