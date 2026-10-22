@@ -24,7 +24,7 @@ ChatGPT のサブスクリプション、Claude の API キー、この PC に�
 ## 必要なもの
 
 - Node.js 22.19 以上、または 24 以上
-- Windows 10/11、macOS、Linux のいずれか
+- Windows 10/11（動作確認と CI は Windows のみです。macOS と Linux は未検証で、一部の機能が動かないことがあります）
 - アプリウィンドウ表示には Microsoft Edge か Google Chrome（なければ既定のブラウザで開きます）
 
 ## 起動
