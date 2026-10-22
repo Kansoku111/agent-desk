@@ -34,6 +34,8 @@ const SEND_ENTER_MS = 150
 const SEND_ENTER_MAX_MS = 1500
 const SEND_RETRY_MS = 1500
 const SEND_RETRIES = 2
+/** How long a Stop hook has to arrive after Claude Code says it is idle, before the task is taken as idle without it. */
+const IDLE_GRACE_MS = 2500
 
 /** DEC private modes the serialized screen leaves out: mouse encodings, cursor visibility, focus reports. */
 const TRACKED_MODES = [25, 1004, 1005, 1006, 1015]
@@ -197,7 +199,9 @@ export class TerminalManager extends EventEmitter {
   /**
    * A backup for a turn whose Stop hook never came (a hook that failed to
    * run): when the conversation file has been still for `quietMs` and says the
-   * last turn ended, the task is marked idle. True when it is idle now.
+   * last turn ended, the task is marked idle. A turn stopped before Claude Code
+   * answered leaves nothing in that file either; Claude Code's own report that
+   * it went idle ends it then. True when it is idle now.
    */
   async settle(id, { quietMs = 30_000 } = {}) {
     const record = this.records.get(id)
@@ -205,14 +209,50 @@ export class TerminalManager extends EventEmitter {
     if (!record || !live?.alive) return false
     if (live.activity !== 'running') return live.activity === 'idle'
     const file = this.#transcriptFile(record)
-    if (!file || (quietMs > 0 && Date.now() - fs.statSync(file).mtimeMs < quietMs)) return false
-    const last = (await this.transcripts.read(file)).turns.at(-1)
-    if (!last || last.status === 'running' || live.activity !== 'running' || !live.alive) return false
+    if (file && (quietMs <= 0 || Date.now() - fs.statSync(file).mtimeMs >= quietMs)) {
+      const last = (await this.transcripts.read(file)).turns.at(-1)
+      if (last && last.status !== 'running' && live.activity === 'running' && live.alive) return this.#settled(id, record, live, 'the conversation file')
+    }
+    const idleAt = await this.#claudeIdleAt(record, live)
+    if (idleAt !== null && Date.now() - idleAt >= IDLE_GRACE_MS && live.activity === 'running' && live.alive) {
+      return this.#settled(id, record, live, 'Claude Code\'s session file')
+    }
+    return false
+  }
+
+  #settled(id, record, live, source) {
     live.activity = 'idle'
     live.promptPending = false
-    this.log(`terminal ${id}: its turn ended without a Stop hook; marked idle from the conversation file`)
+    this.log(`terminal ${id}: its turn ended without a Stop hook; marked idle from ${source}`)
     this.#changed(record)
     return true
+  }
+
+  /**
+   * When Claude Code's own session file (`sessions/<pid>.json`) says this
+   * task's process went idle after the turn began; null while it works, or
+   * when the file says nothing about it. The folder also holds the files of
+   * other sessions and of processes that ended, so one is picked by session and start.
+   */
+  async #claudeIdleAt(record, live) {
+    const dir = path.join(this.claudeHome, 'sessions')
+    let mine = null
+    try {
+      for (const name of await fs.promises.readdir(dir)) {
+        if (!name.endsWith('.json')) continue
+        let info
+        try {
+          info = JSON.parse(await fs.promises.readFile(path.join(dir, name), 'utf8'))
+        } catch {
+          continue
+        }
+        if (info?.sessionId !== record.sessionId || !(info.startedAt >= live.startedAt - 5000)) continue
+        if (!mine || info.startedAt > mine.startedAt) mine = info
+      }
+    } catch {
+      return null
+    }
+    return mine?.status === 'idle' && mine.statusUpdatedAt > live.runningAt ? mine.statusUpdatedAt : null
   }
 
   /** Whether Claude Code saved the session, so `--resume` can open it. */
@@ -306,6 +346,8 @@ export class TerminalManager extends EventEmitter {
       startedAt: Date.now(), sessionAt: null, inputAt: 0,
       // Started on a prompt: working from the start, until its turn is seen.
       promptPending: Boolean(prompt),
+      // When the turn now working began (0 while idle): an idle report from before it says nothing about it.
+      runningAt: prompt ? Date.now() : 0,
     }
     this.live.set(record.id, live)
     // Output goes out once the mirror has parsed it, so a new viewer's screen and the stream line up.
@@ -419,13 +461,14 @@ export class TerminalManager extends EventEmitter {
 
   /**
    * Stops what Claude Code is doing (Esc). Claude Code runs no Stop hook for an
-   * interruption, so the task is marked idle once the conversation file shows it.
+   * interruption, so the task is marked idle once the conversation file shows it
+   * (or, when it stopped before answering and wrote nothing, Claude Code's own report: see `settle`).
    */
   interrupt(id, client) {
     if (!this.input(id, client, '\x1b')) return false
     const live = this.live.get(id)
     void (async () => {
-      for (let tries = 0; tries < 12 && this.live.get(id) === live && live.alive; tries++) {
+      for (let tries = 0; tries < 16 && this.live.get(id) === live && live.alive; tries++) {
         await new Promise((resolve) => setTimeout(resolve, 400))
         if (await this.settle(id, { quietMs: 0 }).catch(() => false)) return
       }
@@ -647,6 +690,7 @@ export class TerminalManager extends EventEmitter {
     if (input.hook_event_name === 'SessionStart') live.sessionAt = Date.now()
     const before = live.activity
     live.activity = effect.activity
+    if (live.activity === 'running' && (before !== 'running' || event === 'UserPromptSubmit')) live.runningAt = Date.now()
     if (save) void this.#save()
     if (save || reported || before !== live.activity) this.#changed(record)
     if (live.activity === 'approval' && before !== 'approval') this.emit('approval-needed', { terminalId: id, title: record.title })

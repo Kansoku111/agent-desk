@@ -408,6 +408,68 @@ test('interrupt presses Esc, then marks the task idle once the conversation file
   assert.equal(manager.status(terminal.id).activity, 'idle')
 })
 
+/** A task whose prompt Claude Code took (and wrote to the conversation file) but never answered. */
+async function droppedTurn() {
+  const harness = await setup()
+  const { workspace, pty, manager, dir, claudeHome } = harness
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  const secret = proc.options.env.AGENT_DESK_TERMINAL_SECRET
+  const file = path.join(dir, 'transcript.jsonl')
+  manager.hook(terminal.id, secret, { hook_event_name: 'SessionStart', session_id: terminal.sessionId, transcript_path: file })
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit' })
+  await fs.writeFile(file, `${JSON.stringify({ parentUuid: null, type: 'user', uuid: 'u1', timestamp: new Date().toISOString(), message: { role: 'user', content: 'hi' } })}\n`)
+  const live = manager.live.get(terminal.id)
+  // The turn began a minute ago.
+  live.runningAt = Date.now() - 60_000
+  const sessions = path.join(claudeHome, 'sessions')
+  await fs.mkdir(sessions, { recursive: true })
+  /** Claude Code's session file for this task's process (`status`: what it reports; `at`: when it did). */
+  const report = (status, at, extra = {}) => fs.writeFile(path.join(sessions, `${extra.pid ?? 4242}.json`), JSON.stringify({
+    pid: 4242, sessionId: terminal.sessionId, startedAt: live.startedAt + 500, status, statusUpdatedAt: at, ...extra,
+  }))
+  return { ...harness, terminal, proc, report, now: Date.now() }
+}
+
+test('settle: a turn stopped before Claude Code answered is ended by its own idle report', async () => {
+  const { manager, terminal, report } = await droppedTurn()
+  // Working: the conversation file shows a turn without an answer and Claude Code says busy.
+  await report('busy', Date.now() - 30_000)
+  assert.equal(await manager.settle(terminal.id, { quietMs: 0 }), false)
+  assert.equal(manager.status(terminal.id).activity, 'running')
+  // Idle since after the turn began, but only just: a Stop hook may still be on its way.
+  await report('idle', Date.now() - 100)
+  assert.equal(await manager.settle(terminal.id, { quietMs: 0 }), false)
+  assert.equal(manager.status(terminal.id).activity, 'running')
+  await report('idle', Date.now() - 10_000)
+  assert.equal(await manager.settle(terminal.id, { quietMs: 0 }), true)
+  assert.equal(manager.status(terminal.id).activity, 'idle')
+})
+
+test('settle: an idle report from before the turn, or of another session or process, does not end it', async () => {
+  const { manager, terminal, report, claudeHome } = await droppedTurn()
+  // Idle, but from before this turn began.
+  await report('idle', Date.now() - 120_000)
+  assert.equal(await manager.settle(terminal.id, { quietMs: 0 }), false)
+  // The file of an unrelated session (or of the process this one replaced) says idle.
+  await report('idle', Date.now() - 10_000, { pid: 1, sessionId: 'someone-else' })
+  await report('idle', Date.now() - 10_000, { pid: 2, startedAt: 1 })
+  await fs.writeFile(path.join(claudeHome, 'sessions', 'broken.json'), '{ not json')
+  assert.equal(await manager.settle(terminal.id, { quietMs: 0 }), false)
+  assert.equal(manager.status(terminal.id).activity, 'running')
+})
+
+test('interrupt: a task whose turn is already over in Claude Code stops showing as working', async () => {
+  const { manager, terminal, proc, report } = await droppedTurn()
+  const written = []
+  proc.write = (data) => written.push(data)
+  await report('idle', Date.now() - 10_000)
+  assert.equal(manager.interrupt(terminal.id, 'viewer'), true)
+  assert.deepEqual(written, ['\x1b'])
+  for (let tries = 0; tries < 20 && manager.status(terminal.id).activity !== 'idle'; tries++) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(manager.status(terminal.id).activity, 'idle')
+})
+
 test('a team title stays as given; model and level are checked', async () => {
   const { workspace, manager } = await setup()
   const terminal = await manager.create({ workspace, title: 'A: 効果音', model: 'claude-haiku-5-5', effort: 'low' })
