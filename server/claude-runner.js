@@ -4,6 +4,12 @@
 // reply and every tool call come from Claude Code's own output, not from hooks
 // or the screen, and a message is handed over on stdin, not typed into a box.
 //
+// Messages go in as stream-json lines and stdin stays open while the turn
+// runs, so one can be added to it (`steer`): Claude Code reads it at the next
+// step of the work, or, with no step left, as a turn of its own right after
+// this one. --replay-user-messages gives each message back by its uuid when
+// Claude Code takes it, which is how the turn knows it arrived.
+//
 // It is the same `claude` the user signed in to, so it runs on their Claude
 // subscription. Before a turn starts, `claude auth status` (which asks no
 // model anything) says which sign-in it would use, and a run that would use an
@@ -27,12 +33,17 @@ const OUTPUT_KEEP = 8000
 const STDERR_TAIL = 4000
 /** How long a stopped run may take to exit before it is killed outright. */
 const KILL_WAIT_MS = 5000
+/** How long a turn that has answered waits for a message it was handed but has not taken yet. */
+const STEER_GRACE_MS = 15_000
 /** Credentials a run may use: Claude Code's own sign-in, never an API key. */
 const SUBSCRIPTION_SOURCES = new Set(['none', undefined])
 
 const CUT_OFF = 'Agent Desk が終了したため、作業が途中で止まりました。'
 
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text)
+
+/** A message for stdin: one stream-json line, with the uuid Claude Code gives back when it takes the message. */
+const userLine = (text, uuid) => `${JSON.stringify({ type: 'user', message: { role: 'user', content: String(text) }, parent_tool_use_id: null, session_id: '', ...(uuid ? { uuid } : {}) })}\n`
 
 /** A tool result's content (a string or text blocks) as text. */
 function resultText(content) {
@@ -91,7 +102,10 @@ export class ClaudeRunner extends EventEmitter {
    * @param {(context: { claude: string, cwd: string, env: object }) => Promise<string|null>} [options.preflight]
    *   asked before each turn starts: a message when the run must not start, else null
    */
-  constructor({ dir, findClaude: find = () => findClaude(), spawn = spawnProcess, preflight = null, log = () => {}, now = Date.now, platform = process.platform }) {
+  constructor({
+    dir, findClaude: find = () => findClaude(), spawn = spawnProcess, preflight = null, log = () => {}, now = Date.now, platform = process.platform,
+    steerGraceMs = STEER_GRACE_MS,
+  }) {
     super()
     this.dir = dir
     this.findClaude = find
@@ -100,9 +114,13 @@ export class ClaudeRunner extends EventEmitter {
     this.log = log
     this.now = now
     this.platform = platform
+    this.steerGraceMs = steerGraceMs
     /** @type {Map<string, object>} sessions by id */
     this.records = new Map()
-    /** The running turn of a session: { proc, turn, stopping, apiKey, refusal, stderr, result, exited } (proc is null until the preflight is through) */
+    /**
+     * The running turn of a session: { proc, turn, stopping, apiKey, refusal, stderr, result, exited, steers, early, denials, ended, grace }
+     * (proc is null until the preflight is through; `steers` are the messages added to the turn by uuid, `ended` is true once stdin is closed)
+     */
     this.live = new Map()
     this.writes = new Map()
   }
@@ -204,7 +222,7 @@ export class ClaudeRunner extends EventEmitter {
 
     const args = [
       ...(record.started ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
-      '-p', '--output-format', 'stream-json', '--verbose',
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
       // Nobody is there to answer a permission prompt: what would ask is denied, and the report says so.
       '--permission-prompts', 'none',
       ...(record.model ? ['--model', record.model] : []),
@@ -215,7 +233,10 @@ export class ClaudeRunner extends EventEmitter {
     for (const name of [...INHERITED_MARKERS, ...API_KEY_ENV]) delete env[name]
     const command = launchCommand(claude, args)
     const spawnOptions = { cwd: record.workspace, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }
-    const live = { proc: null, turn, stopping: false, apiKey: null, refusal: null, stderr: '', result: null }
+    const live = {
+      proc: null, turn, stopping: false, apiKey: null, refusal: null, stderr: '', result: null,
+      steers: new Map(), early: [], denials: [], ended: false, grace: null,
+    }
     live.exited = new Promise((resolve) => { live.markExited = resolve })
 
     if (this.preflight) {
@@ -266,11 +287,55 @@ export class ClaudeRunner extends EventEmitter {
     this.#attach(record, live, proc, text)
   }
 
+  /**
+   * Adds a message to the turn that is running. Claude Code reads it at the next
+   * step of the work, or as a turn of its own right after this one; either way it
+   * shows in this turn once taken. False when no turn can take it (none runs, or
+   * its input is closed already): the caller keeps the message for the next turn.
+   */
+  steer(id, text) {
+    const live = this.live.get(id)
+    const body = String(text ?? '')
+    if (!live || live.ended || live.stopping || !body.trim()) return false
+    const uuid = randomUUID()
+    live.steers.set(uuid, { text: body, taken: false })
+    const line = userLine(body, uuid)
+    // Still being checked: it goes in behind the prompt once the run starts.
+    if (live.proc) this.#write(live, line)
+    else live.early.push(line)
+    return true
+  }
+
+  #write(live, line) {
+    try {
+      live.proc.stdin?.write(line)
+    } catch {}
+  }
+
+  /** Closes the run's input: Claude Code exits once it has nothing left to do. */
+  #endInput(live) {
+    clearTimeout(live.grace)
+    if (live.ended) return
+    live.ended = true
+    try {
+      live.proc?.stdin?.end()
+    } catch {}
+  }
+
+  /** The turn answered: input closes now, unless a message was handed over that Claude Code has not taken (it follows as a turn of its own). */
+  #answered(live) {
+    clearTimeout(live.grace)
+    if ([...live.steers.values()].every((steer) => steer.taken)) return this.#endInput(live)
+    live.grace = setTimeout(() => this.#endInput(live), this.steerGraceMs)
+    live.grace.unref?.()
+  }
+
   /** Feeds the prompt to a started run and follows its output until it exits. */
   #attach(record, live, proc, text) {
     live.proc = proc
     proc.stdin?.on('error', () => {})
-    proc.stdin?.end(String(text))
+    this.#write(live, userLine(text))
+    for (const line of live.early.splice(0)) this.#write(live, line)
     proc.stderr?.setEncoding('utf8')
     proc.stderr?.on('data', (chunk) => {
       live.stderr = (live.stderr + chunk).slice(-STDERR_TAIL)
@@ -308,6 +373,19 @@ export class ClaudeRunner extends EventEmitter {
     }
     if (event.type === 'result') {
       live.result = event
+      live.denials.push(...(Array.isArray(event.permission_denials) ? event.permission_denials : []))
+      this.#answered(live)
+      return
+    }
+    // A message added to the turn, given back as Claude Code takes it.
+    const steer = event.type === 'user' && event.isReplay ? live.steers.get(event.uuid) : undefined
+    if (steer) {
+      if (!steer.taken) {
+        steer.taken = true
+        live.turn.items.push({ type: 'steer', id: event.uuid, text: steer.text, images: [], at: this.now() })
+        record.updatedAt = this.now()
+        this.emit('turn', { id: record.id, turn: live.turn })
+      }
       return
     }
     if (event.type === 'rate_limit_event') {
@@ -323,7 +401,15 @@ export class ClaudeRunner extends EventEmitter {
 
   #onExit(record, live, code, error) {
     if (this.live.get(record.id) === live) this.live.delete(record.id)
+    clearTimeout(live.grace)
+    live.ended = true
     live.markExited()
+    // A message Claude Code never took is said so in the turn, not dropped quietly.
+    for (const [uuid, steer] of live.steers) {
+      if (steer.taken) continue
+      steer.taken = true
+      live.turn.items.push({ type: 'notice', id: uuid, level: 'warning', text: `作業中に送ったメッセージは Claude Code に届きませんでした: ${clip(steer.text, 200)}` })
+    }
     const { result } = live
     if (live.refusal) return this.#finish(record, live.turn, { status: 'error', message: live.refusal })
     if (live.apiKey) {
@@ -336,7 +422,7 @@ export class ClaudeRunner extends EventEmitter {
     if (this.closing) return this.#finish(record, live.turn, { status: 'error', message: CUT_OFF, quiet: true })
     if (live.stopping) return this.#finish(record, live.turn, { status: 'cancelled' })
     if (result && !result.is_error) {
-      return this.#finish(record, live.turn, { status: 'done', text: String(result.result ?? ''), denials: result.permission_denials ?? [], stopReason: result.stop_reason })
+      return this.#finish(record, live.turn, { status: 'done', text: String(result.result ?? ''), denials: live.denials, stopReason: result.stop_reason })
     }
     const message = result
       ? String(result.result || result.subtype || 'Claude Code がエラーで止まりました')

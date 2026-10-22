@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowDown, FolderOpen, Loader2, PanelLeftOpen, Send, Square } from 'lucide-react'
+import { ArrowDown, Clock3, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, Send, Square, X } from 'lucide-react'
 import { act, isTouch, setState, teamChildOf, useRemote, useStore } from '../store'
 import { useDraft } from '../drafts'
 import { workspaceLabel } from '../util'
@@ -10,7 +10,8 @@ import { TurnView } from './TurnView'
 /**
  * A team's Claude child: Claude Code run headless (server/claude-runner.js),
  * shown as its turns. The user can watch it, write to it (the reply also goes
- * to the leader) and stop its turn.
+ * to the leader) and stop its turn. A message written while it works waits for
+ * the turn to end, or is given to the turn at once ("割り込む"), as in a task.
  */
 export function AgentView({ taskId }: { taskId: string }) {
   // The team itself, not a new { team, child } each time: useStore compares by identity.
@@ -37,9 +38,10 @@ export function AgentView({ taskId }: { taskId: string }) {
 
   if (!team || !child) return <div className="main-empty">この子は見つかりません</div>
   const working = child.state === 'running'
+  const followups = child.followups ?? []
   const submit = async () => {
     const body = text.trim()
-    if (!body || working || sending) return
+    if (!body || sending) return
     setSending(true)
     const result = await act('team.message', { teamId: team.id, childId: child.id, text: body })
     setSending(false)
@@ -111,21 +113,52 @@ export function AgentView({ taskId }: { taskId: string }) {
             )}
           </div>
           <div className="terminal-touch">
+            {followups.length > 0 && (
+              <div className="queued">
+                {followups.map((followup) => (
+                  <div key={followup.id} className="queued-item">
+                    <Clock3 size={13} />
+                    <span className="queued-text">{followup.text}</span>
+                    <span className="queued-note">{working ? '作業が終わったら送信' : '送信待ち'}</span>
+                    {working && (
+                      <button
+                        type="button"
+                        className="steer-button"
+                        title="作業中のこの子に今すぐ送ります（次のステップで読みます）"
+                        onClick={() => void act('team.steerFollowup', { teamId: team.id, childId: child.id, followupId: followup.id })}
+                      >
+                        <CornerDownRight size={13} />
+                        割り込む
+                      </button>
+                    )}
+                    <button type="button" className="icon-button small" aria-label="送信待ちを取り消す"
+                      onClick={() => void act('team.dropFollowup', { teamId: team.id, childId: child.id, followupId: followup.id })}>
+                      <X size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="terminal-input">
               <textarea
                 value={text}
                 rows={1}
-                disabled={working}
-                placeholder={working ? '作業中です。終わると送れます' : `子「${child.name}」に送るメッセージ（返事はリーダーにも届きます）`}
+                placeholder={working ? 'フォローアップを入力（作業が終わったら送信します）' : `子「${child.name}」に送るメッセージ（返事はリーダーにも届きます）`}
                 aria-label={`子「${child.name}」に送るメッセージ`}
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || isTouch()) return
+                  if (event.nativeEvent.isComposing) return
+                  if (event.key === 'Escape' && working) {
+                    event.preventDefault()
+                    void act('team.stopChild', { teamId: team.id, childId: child.id })
+                    return
+                  }
+                  if (event.key !== 'Enter' || event.shiftKey || isTouch()) return
                   event.preventDefault()
                   void submit()
                 }}
               />
-              <button type="button" className="terminal-send" aria-label="送信" disabled={working || sending || !text.trim()}
+              <button type="button" className="terminal-send" aria-label="送信" title={working ? '送信待ちに追加' : '送信'} disabled={sending || !text.trim()}
                 onPointerDown={(event) => event.preventDefault()} onClick={() => void submit()}>
                 <Send size={16} />
               </button>

@@ -13,7 +13,7 @@ export function restoreTeams(saved, getSettings) {
     team.children = (Array.isArray(team.children) ? team.children : [])
       // Claude children used to be terminal tasks; those are plain Claude Code tasks now.
       .filter((child) => child?.kind === 'thread' || child?.kind === 'agent')
-      .map((child) => ({ pending: [], reports: [], ...child }))
+      .map((child) => ({ pending: [], followups: [], reports: [], ...child }))
     team.queue = Array.isArray(team.queue) ? team.queue.filter((item) => item.kind !== 'approval') : []
     team.asks = Array.isArray(team.asks) ? team.asks : []
     team.leaderKind = team.leaderKind === 'thread' ? 'thread' : 'terminal'

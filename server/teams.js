@@ -202,6 +202,8 @@ export class TeamManager extends EventEmitter {
       closed: Boolean(child.closed),
       awaiting: Boolean(child.awaiting),
       pending: child.pending.length,
+      // What the user wrote to a Claude child while it worked: it goes when the turn ends, or at once with steerFollowup.
+      followups: (child.followups ?? []).map(({ id, text }) => ({ id, text })),
       createdAt: child.createdAt,
       updatedAt: child.updatedAt,
       reports: child.reports.length,
@@ -503,7 +505,7 @@ export class TeamManager extends EventEmitter {
     const child = {
       id: randomUUID(), name: this.#childName(team, args.name), title, provider, tier, model, effort: effort ?? null,
       kind: provider === 'claude' ? 'agent' : 'thread', taskId: null, createdAt: now, updatedAt: now,
-      closed: false, awaiting: true, pending: [], reports: [],
+      closed: false, awaiting: true, pending: [], followups: [], reports: [],
     }
     team.children.push(child)
     // The task's name in the lists; a leader that named the child after its job gets it once.
@@ -581,10 +583,11 @@ export class TeamManager extends EventEmitter {
     return '送りました'
   }
 
-  /** A Claude child takes a message as its next turn, which resumes its conversation. */
+  /** A Claude child takes a message as its next turn, which resumes its conversation; one that works reads it at its next step. */
   #toAgent(child, body) {
     if (!this.agents.get(child.taskId)) throw new Error(`子「${child.name}」のタスクは削除されています`)
     if (this.agents.running(child.taskId)) {
+      if (this.agents.steer(child.taskId, body)) return '作業中のところへ割り込みで渡しました'
       child.pending.push(body)
       return 'いまの作業が終わりしだい渡します'
     }
@@ -594,9 +597,11 @@ export class TeamManager extends EventEmitter {
 
   /** Messages for a child that was busy when they came: they go together once it is free. */
   async #flushChild(team, child) {
-    if (!child.pending.length || !this.teams.has(team.id)) return
-    const text = child.pending.join('\n\n')
+    // What the user wrote to a Claude child while it worked goes along with what the leader sent.
+    const followups = child.kind === 'agent' ? (child.followups ?? []) : []
+    if ((!child.pending.length && !followups.length) || !this.teams.has(team.id)) return
     if (child.kind === 'thread') {
+      const text = child.pending.join('\n\n')
       const thread = this.threads.threads.get(child.taskId)
       if (!thread || thread.status === 'running') return
       child.pending = []
@@ -608,13 +613,20 @@ export class TeamManager extends EventEmitter {
       }
     } else {
       if (!this.agents.get(child.taskId) || this.agents.running(child.taskId)) return
+      const text = [...child.pending, ...followups.map((entry) => entry.text)].join('\n\n')
+      // Only the leader's work is awaited; a turn of the user's alone reports as the user's own.
+      const fromLeader = child.pending.length > 0
       child.pending = []
-      child.awaiting = true
+      child.followups = []
+      if (fromLeader) child.awaiting = true
       try {
         this.agents.run(child.taskId, text)
       } catch (error) {
-        child.awaiting = false
-        this.#report(team, child, 'error', `リーダーからの指示を渡せませんでした: ${error.message}`)
+        child.followups = followups
+        if (fromLeader) {
+          child.awaiting = false
+          this.#report(team, child, 'error', `リーダーからの指示を渡せませんでした: ${error.message}`)
+        }
       }
     }
     void this.#save()
@@ -738,13 +750,47 @@ export class TeamManager extends EventEmitter {
    * the leader (as a report it did not ask for) while the child is open.
    */
   messageChild(teamId, childId, text) {
+    const { team, child } = this.#agentChild(teamId, childId)
+    const body = String(text ?? '').trim()
+    if (!body) throw new Error('送る内容を書いてください')
+    if (this.agents.running(child.taskId)) {
+      // While the child works the message waits for its turn to end (or `steerFollowup` gives it at once).
+      child.followups = [...(child.followups ?? []), { id: randomUUID(), text: body, at: this.now() }]
+      void this.#save()
+      this.#emit(team)
+    } else {
+      this.agents.run(child.taskId, body)
+    }
+    return { team: this.summary(team) }
+  }
+
+  /** Gives a message the user left waiting to the turn that is running now, which reads it at its next step. */
+  steerFollowup(teamId, childId, followupId) {
+    const { team, child } = this.#agentChild(teamId, childId)
+    const item = (child.followups ?? []).find((entry) => entry.id === followupId)
+    const steered = Boolean(item) && this.agents.running(child.taskId) && this.agents.steer(child.taskId, item.text)
+    if (steered) {
+      child.followups = child.followups.filter((entry) => entry !== item)
+      void this.#save()
+      this.#emit(team)
+    }
+    return { team: this.summary(team), steered }
+  }
+
+  /** Takes back a message the user left waiting for a Claude child. */
+  dropFollowup(teamId, childId, followupId) {
+    const { team, child } = this.#agentChild(teamId, childId)
+    child.followups = (child.followups ?? []).filter((entry) => entry.id !== followupId)
+    void this.#save()
+    this.#emit(team)
+    return { team: this.summary(team) }
+  }
+
+  #agentChild(teamId, childId) {
     const team = this.teams.get(teamId)
     const child = team?.children.find((entry) => entry.id === childId)
     if (!child || child.kind !== 'agent') throw new Error('この子は見つかりません')
-    const body = String(text ?? '').trim()
-    if (!body) throw new Error('送る内容を書いてください')
-    this.agents.run(child.taskId, body)
-    return { team: this.summary(team) }
+    return { team, child }
   }
 
   /** The user stopped a Claude child's turn in its view (the leader hears it was stopped). */

@@ -133,6 +133,17 @@ export class ClaudeConversation {
       }
       return
     }
+    // What the user typed while Claude Code worked: it read it at its next step (the other queued commands are notifications, not the user).
+    if (entry.type === 'attachment') {
+      const queued = entry.attachment
+      const turn = this.#current
+      const text = queued?.type === 'queued_command' && queued.commandMode === 'prompt' && queued.origin?.kind === 'human' ? userText(queued.prompt) : ''
+      if (turn && text) {
+        turn.items.push({ type: 'steer', id: String(entry.uuid), text, images: [], at: time(entry) })
+        this.#touch(turn)
+      }
+      return
+    }
     const content = entry.message?.content
     if (entry.type === 'user') {
       if (entry.isMeta || entry.isCompactSummary) return

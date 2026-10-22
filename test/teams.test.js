@@ -145,6 +145,13 @@ function fakeAgents() {
       session.running = true
       agents.emit('session', agents.get(id))
     },
+    /** A message added to the turn that is running (false when none runs, or `session.steerable` is off). */
+    steer(id, text) {
+      const session = agents.sessions.get(id)
+      if (!session?.running || session.steerable === false) return false
+      agents.calls.push(['steer', id, text])
+      return true
+    },
     stop(id) {
       const session = agents.sessions.get(id)
       if (!session?.running) return false
@@ -483,11 +490,79 @@ test('a Claude child is headless Claude Code in bypass mode that starts on its t
   terminals.set(leader, { activity: 'running' })
   manager.messageChild(team.id, child.id, 'ついでに音量もそろえて')
   assert.deepEqual(agents.calls.at(-1), ['run', child.taskId, 'ついでに音量もそろえて'])
-  assert.throws(() => manager.messageChild(team.id, child.id, 'もう一つ'), /作業中/)
+  // While it works, another message waits for the turn to end.
+  assert.deepEqual(manager.messageChild(team.id, child.id, 'もう一つ').team.children[0].followups.map((entry) => entry.text), ['もう一つ'])
   terminals.set(leader, { activity: 'idle' })
   agents.finish(child.taskId, '音量もそろえました')
   assert.equal(typed().length, 2)
   assert.match(typed()[1], /子「S」.*から追加の報告が届きました（あなたが送った指示とは別に/)
+})
+
+test('what the user writes to a working Claude child waits, then goes as one turn; it can be given at once or taken back', async (t) => {
+  const { agents, terminals, tool, leader, team, manager, typed } = await setup(t)
+  await tool('spawn', { title: 'job', task: 'a', tier: 'mid', provider: 'claude', name: 'S' })
+  const child = team.children[0]
+  const followups = () => manager.summary(team).children[0].followups
+  terminals.set(leader, { activity: 'idle' })
+
+  // It works: messages wait, in order, and are kept with the team.
+  manager.messageChild(team.id, child.id, 'one')
+  manager.messageChild(team.id, child.id, 'two')
+  manager.messageChild(team.id, child.id, 'three')
+  assert.deepEqual(followups().map((entry) => entry.text), ['one', 'two', 'three'])
+  assert.equal(agents.calls.filter((call) => call[0] === 'run').length, 1)
+  assert.equal(JSON.parse(JSON.stringify(team)).children[0].followups.length, 3)
+
+  // "Interrupt": one is given to the running turn now, and leaves the wait.
+  const [, second] = followups()
+  assert.equal(manager.steerFollowup(team.id, child.id, second.id).steered, true)
+  assert.deepEqual(agents.calls.at(-1), ['steer', child.taskId, 'two'])
+  assert.deepEqual(followups().map((entry) => entry.text), ['one', 'three'])
+  // Taken back: gone without being sent.
+  manager.dropFollowup(team.id, child.id, followups()[0].id)
+  assert.deepEqual(followups().map((entry) => entry.text), ['three'])
+  // One that is not there any more does nothing.
+  assert.equal(manager.steerFollowup(team.id, child.id, second.id).steered, false)
+
+  // The turn ends: what waits goes as the next turn, and the reply is the user's own, not the leader's.
+  agents.finish(child.taskId, '最初の作業')
+  assert.deepEqual(agents.calls.at(-1), ['run', child.taskId, 'three'])
+  assert.equal(followups().length, 0)
+  assert.equal(child.awaiting, false)
+  assert.equal(typed().length, 1)
+  // The leader takes the first report and finishes with it.
+  terminals.set(leader, { activity: 'running' })
+  terminals.set(leader, { activity: 'idle' })
+  agents.finish(child.taskId, '返事')
+  assert.match(typed()[1], /から追加の報告が届きました/)
+
+  // A turn that cannot take it leaves it waiting.
+  agents.run(child.taskId, 'x')
+  agents.sessions.get(child.taskId).steerable = false
+  manager.messageChild(team.id, child.id, 'late')
+  assert.equal(manager.steerFollowup(team.id, child.id, followups()[0].id).steered, false)
+  assert.deepEqual(followups().map((entry) => entry.text), ['late'])
+  assert.throws(() => manager.messageChild(team.id, 'no-such-child', 'x'), /見つかりません/)
+})
+
+test('the leader\'s message reaches a working Claude child at its next step, or waits for the turn to end when it cannot', async (t) => {
+  const { agents, tool, team, manager } = await setup(t)
+  await tool('spawn', { title: 'job', task: 'a', tier: 'mid', provider: 'claude', name: 'S' })
+  const child = team.children[0]
+  assert.match(await tool('send', { child: 'S', message: '方針を変えて' }), /割り込みで渡しました/)
+  assert.deepEqual(agents.calls.at(-1), ['steer', child.taskId, '[リーダーから]\n方針を変えて'])
+  assert.equal(child.pending.length, 0)
+  assert.equal(child.awaiting, true)
+
+  agents.sessions.get(child.taskId).steerable = false
+  assert.match(await tool('send', { child: 'S', message: '続きはこれ' }), /終わりしだい渡します/)
+  assert.equal(child.pending.length, 1)
+  // The user's own message and the leader's go together once the child is free; the leader's makes it theirs to answer.
+  manager.messageChild(team.id, child.id, 'ついでに')
+  agents.finish(child.taskId, '終わり')
+  assert.deepEqual(agents.calls.at(-1), ['run', child.taskId, '[リーダーから]\n続きはこれ\n\nついでに'])
+  assert.equal(child.awaiting, true)
+  assert.equal(manager.summary(team).children[0].followups.length, 0)
 })
 
 test('a closed child\'s own turns stay its own', async (t) => {
@@ -574,7 +649,10 @@ test('send reaches a child however it is: idle, busy, or closed', async (t) => {
   await tool('spawn', { title: 'claude job', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
   await tool('spawn', { title: 'gpt job', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
   const [claude, gpt] = team.children
-  // Busy: Claude gets it when its turn ends; GPT, whose steer failed, too.
+  // Busy: Claude reads it at its next step; when that cannot be, it gets it when its turn ends, as GPT does whose steer failed.
+  assert.match(await tool('send', { child: 'C', message: '手順を変えて' }), /割り込みで渡しました/)
+  assert.deepEqual(agents.calls.at(-1), ['steer', claude.taskId, '[リーダーから]\n手順を変えて'])
+  agents.sessions.get(claude.taskId).steerable = false
   assert.match(await tool('send', { child: 'C', message: '色を直して' }), /終わりしだい/)
   assert.match(await tool('send', { child: 'G', message: '名前を直して' }), /終わりしだい/)
   agents.finish(claude.taskId, '一回目')

@@ -70,6 +70,8 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
     // A Claude child's own view: its turns, a message from the user, stopping its turn.
     'team.childTurns': ({ taskId }) => ({ turns: agents.turns(String(taskId ?? '')) ?? [] }),
     'team.message': ({ teamId, childId, text }) => teams.messageChild(teamId, childId, text),
+    'team.steerFollowup': ({ teamId, childId, followupId }) => teams.steerFollowup(teamId, childId, followupId),
+    'team.dropFollowup': ({ teamId, childId, followupId }) => teams.dropFollowup(teamId, childId, followupId),
     'team.stopChild': ({ teamId, childId }) => teams.stopChild(teamId, childId),
     'team.stopAll': ({ teamId }) => teams.stopAll(teamId),
   }

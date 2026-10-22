@@ -75,6 +75,8 @@ export interface TeamChild {
   awaiting: boolean
   /** Messages from the leader waiting for the child to be free. */
   pending: number
+  /** What the user wrote to a Claude child while it worked: sent when its turn ends, or at once with "割り込む". */
+  followups: { id: string; text: string }[]
   createdAt: number
   updatedAt: number
   reports: number

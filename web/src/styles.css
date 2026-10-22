@@ -4158,6 +4158,11 @@ select:focus {
   margin-top: 6px;
 }
 
+/* Messages written to a team's Claude child while it works. */
+.terminal-touch .queued {
+  padding: 2px 0 0;
+}
+
 .terminal-input textarea {
   flex: 1;
   min-height: 38px;

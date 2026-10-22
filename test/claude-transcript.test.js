@@ -73,6 +73,33 @@ test('meta lines, subagent lines, summaries and command output are not shown', (
   assert.equal(conversation.turns[0].items.length, 0)
 })
 
+test('a message the user typed while Claude Code worked shows in that turn; notifications and other commands do not', () => {
+  const queued = (uuid, prompt, n, extra = {}) => ({
+    parentUuid: null, isSidechain: false, type: 'attachment', uuid, timestamp: stamp(n),
+    attachment: { type: 'queued_command', prompt, commandMode: 'prompt', origin: { kind: 'human' }, ...extra },
+  })
+  const conversation = conversationOf([
+    queued('q0', '始まる前の入力', 0),
+    user('u1', '調べて', 1),
+    assistant('a1', [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'a.md' } }], 2),
+    queued('q1', 'その後デプロイして', 3),
+    queued('q2', '<task-notification>done</task-notification>', 4, { origin: { kind: 'task-notification' } }),
+    queued('q3', 'ls', 5, { commandMode: 'bash' }),
+    queued('q4', [{ type: 'text', text: '<system-reminder>x</system-reminder>' }], 6),
+    user('u2', [{ type: 'tool_result', tool_use_id: 't1', content: '中身', is_error: false }], 7),
+    assistant('a2', [{ type: 'text', text: '済み' }], 8),
+  ])
+  const [turn] = conversation.turns
+  assert.equal(conversation.turns.length, 1)
+  assert.deepEqual(turn.items.map((item) => item.type), ['tool', 'steer', 'agent'])
+  assert.deepEqual({ ...turn.items[1], at: undefined }, { type: 'steer', id: 'q1', text: 'その後デプロイして', images: [], at: undefined })
+  assert.equal(turn.items[1].at, Date.parse(stamp(3)))
+  // It is a change to the turn, so a viewer that has the turn already gets it again.
+  const before = conversation.rev
+  conversation.add(queued('q5', 'もう一つ', 9))
+  assert.equal(conversation.rev, before + 1)
+})
+
 test('userText shows a slash command as typed and strips reminders from a prompt', () => {
   assert.equal(userText('<command-name>/model</command-name>\n <command-message>model</command-message>\n <command-args>opus</command-args>'), '/model opus')
   assert.equal(userText([{ type: 'text', text: '<system-reminder>x</system-reminder>\n質問です' }, { type: 'image', source: {} }]), '質問です\n\n[画像]')

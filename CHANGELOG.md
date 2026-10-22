@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent teams: a "Claude (API)" child that runs as a dsh task on the user's Anthropic API key, so the monthly API credits of Max and Team plans can be used by a team. It is off by default and needs an Anthropic API key in Settings → Accounts.
 - Agent teams: before a Claude Code child starts, `claude auth status` (which asks no model anything) is checked. A run that would use an API key (environment, Claude Code settings or `apiKeyHelper`) or a cloud account (Bedrock, Vertex, Foundry) is not started, and the leader is told why.
 - On a phone, a swipe right opens the task list and a swipe left closes it. It does not act inside text fields, over a dialog, while the page is pinch-zoomed, or on something that scrolls sideways and can still move that way.
+- Agent teams: a Claude child takes messages while it works, as a task does. What you write in its view waits above the input and is sent when its turn ends, and "割り込む" gives it to the turn at once (Claude Code reads it at its next step; with no step left, it follows as a turn of its own). The leader's `send` reaches a working Claude child the same way instead of waiting for the turn to end. To do this the child's `claude -p` reads stream-json on stdin (`--input-format stream-json --replay-user-messages`) and its input stays open while the turn runs.
 - A Claude Code task's menu now has "Copy history" like a GPT task's. The copy starts with the full path of Claude Code's own conversation file, so an agent on the same PC can read the whole conversation, and says how many earlier exchanges (Agent Desk shows the last 80) it leaves out.
 
 ### Changed
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Claude Code task's conversation view now shows a message you typed while it worked (Claude Code keeps it as a queued command, which was skipped), in the turn it was read in.
 - A Claude Code task no longer stays "working" (with a stop button that does nothing) after a turn was stopped before Claude Code answered. That leaves no Stop hook and no note in the conversation file, so the task is now ended by Claude Code's own idle report (`~/.claude/sessions`) when stop is pressed.
 - A finished turn no longer folds away part of the answer. When the agent wrote its conclusion and then a short note on it (no tool call between them), only the note was shown and the conclusion was hidden inside "worked for…". Every message after the last tool call is now shown as the answer, and the context carried into a new session (after a permission mode change) includes all of them instead of the last one only.
 
