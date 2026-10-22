@@ -162,19 +162,22 @@ export class TerminalManager extends EventEmitter {
   /** Applies what a hook says about background work (see hookEffect); true when the count changed. */
   #trackBackground(live, change) {
     const before = this.#background(live)
+    if (change.agentsIdle) {
+      for (const id of live.background.keys()) if (id.startsWith('agent:')) live.background.delete(id)
+    }
     if (change.started) {
-      // A resumed agent keeps its id, so its start clears the mark of its earlier end.
-      live.ended.delete(change.started)
-      live.background.set(change.started, Date.now())
+      // Ordered lifecycle hooks allow a resumed agent to reuse its id.
+      live.background.set(`agent:${change.started}`, Date.now())
     }
     if (change.stopped) {
-      live.ended.add(change.stopped)
-      live.background.delete(change.stopped)
+      live.background.delete(`agent:${change.stopped}`)
     }
     if (change.running) {
-      // The hook runs apart from Claude Code, so a Stop report can reach us after the end of an agent it still lists.
+      // Registry snapshots describe non-agent tasks only. Never replace the
+      // lifecycle agents with a parent's snapshot (or assume task ids are agent ids).
       const now = Date.now()
-      live.background = new Map(change.running.filter((id) => !live.ended.has(id)).map((id) => [id, live.background.get(id) ?? now]))
+      for (const id of live.background.keys()) if (id.startsWith('task:')) live.background.delete(id)
+      for (const id of change.running) live.background.set(`task:${id}`, now)
     }
     return this.#background(live) !== before
   }
@@ -419,8 +422,8 @@ export class TerminalManager extends EventEmitter {
     const live = {
       proc, term, serialize, modes, secret, size, alive: true, activity: prompt ? 'running' : 'idle', exitCode: null, controller: null, sizes: new Map(),
       model: record.model, effort: record.effort, exited: null,
-      // Background agents and commands (id -> when seen) that go on after a turn ends, and the agents that have ended.
-      background: new Map(), ended: new Set(),
+      // Background lifecycle agents and registry tasks (namespaced id -> when seen).
+      background: new Map(),
       // When it started, when Claude Code said its session started, and when someone last typed in it.
       startedAt: Date.now(), sessionAt: null, inputAt: 0,
       // Started on a prompt: working from the start, until its turn is seen.

@@ -93,7 +93,9 @@ test('hookSettings runs the hook script for each event, with forward slashes', (
   ])
   const [command] = settings.hooks.Stop[0].hooks
   assert.equal(command.command, '"C:/Program Files/nodejs/node.exe" "F:/app/server/claude-hook.js"')
-  assert.equal(command.async, true)
+  assert.equal(command.async, false)
+  for (const event of ['SubagentStart', 'SubagentStop', 'Notification']) assert.equal(settings.hooks[event][0].hooks[0].async, false)
+  assert.equal(settings.hooks.PostToolUse[0].hooks[0].async, true)
 })
 
 test('hookEffect follows a turn: prompt, approval, tool, stop', () => {
@@ -285,9 +287,9 @@ test('hookEffect reads the background work a turn leaves behind', () => {
   const task = (id, status = 'running', type = 'subagent') => ({ id, type, status, description: 'x' })
   assert.deepEqual(hookEffect({ hook_event_name: 'SubagentStart', agent_id: 'a1' }, 'running').background, { started: 'a1' })
   assert.deepEqual(hookEffect({ hook_event_name: 'SubagentStop', agent_id: 'a1' }, 'idle').background, { stopped: 'a1' })
-  // A Stop lists what still runs; what is over does not count, whatever kind of task it is.
+  // Registry ids for subagents are not lifecycle agent ids; do not count them twice.
   const stop = hookEffect({ hook_event_name: 'Stop', background_tasks: [task('a1'), task('b2', 'completed'), task('c3', 'running', 'shell')] }, 'running')
-  assert.deepEqual(stop.background, { running: ['a1', 'c3'] })
+  assert.deepEqual(stop.background, { running: ['c3'] })
   assert.equal(stop.activity, 'idle')
   // An older Claude Code sends no list: nothing is known, so nothing changes.
   assert.equal(hookEffect({ hook_event_name: 'Stop' }, 'running').background, undefined)
@@ -330,6 +332,9 @@ test('a turn that ended with agents still working in the background keeps the ta
   hook({ hook_event_name: 'SubagentStart', agent_id: 'a1' })
   assert.equal(summary().background, 1)
   hook({ hook_event_name: 'Stop', background_tasks: [] })
+  assert.equal(summary().background, 1)
+  assert.equal(manager.busy, true)
+  hook({ hook_event_name: 'SubagentStop', agent_id: 'a1' })
   assert.equal(summary().background, 0)
 
   // With nothing left, the model changes as before; the new process starts with no background work.
@@ -338,6 +343,70 @@ test('a turn that ended with agents still working in the background keeps the ta
   await manager.configure(terminal.id, {}, { model: 'opus' })
   assert.equal(pty.spawned.length, 2)
   assert.equal(manager.summary(manager.records.get(terminal.id)).background, 0)
+})
+
+test('registry snapshots reconcile non-agent work without duplicating or completing lifecycle agents', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  const hook = (event) => manager.hook(terminal.id, secret, event)
+  const count = () => manager.summary(manager.records.get(terminal.id)).background
+  hook({ hook_event_name: 'SubagentStart', agent_id: 'agent-1' })
+  hook({ hook_event_name: 'Stop', background_tasks: [
+    { id: 'different-task-id', type: 'subagent', status: 'running' },
+    { id: 'shell-1', type: 'shell', status: 'running' },
+  ] })
+  assert.equal(count(), 2)
+  // A task-list item completing is not evidence that its agent stopped.
+  hook({ hook_event_name: 'TaskCompleted', task_id: 'agent-1', agent_id: 'agent-1' })
+  assert.equal(count(), 2)
+  // Older versions omit snapshots; do not infer completion.
+  hook({ hook_event_name: 'Stop' })
+  assert.equal(count(), 2)
+  // The final agent stop carries a fresh parent snapshot, even without another Stop.
+  hook({ hook_event_name: 'SubagentStop', agent_id: 'agent-1', background_tasks: [] })
+  assert.equal(count(), 0)
+  assert.equal(manager.busy, false)
+})
+
+test('only supported workers with an explicit active status count in registry snapshots', () => {
+  const tasks = [
+    { id: 'hook', type: 'hook', status: 'running' },
+    { id: 'unknown', type: 'future-internal-type', status: 'running' },
+    { id: 'missing', type: 'shell' },
+    { id: 'odd', type: 'shell', status: 'unknown' },
+    { id: 'finished', type: 'shell', status: 'completed' },
+    { id: 'failed', type: 'shell', status: 'failed' },
+    { id: '', type: 'shell', status: 'running' },
+    { id: 'shell', type: 'shell', status: 'running' },
+    { id: 'mcp', type: 'MCP task', status: 'running' },
+  ]
+  assert.deepEqual(hookEffect({ hook_event_name: 'Stop', background_tasks: tasks }, 'running').background,
+    { running: ['shell', 'mcp'] })
+})
+
+test('idle notification repairs missed agent completion but never clears shell work', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  const hook = (event) => manager.hook(terminal.id, secret, event)
+  const count = () => manager.summary(manager.records.get(terminal.id)).background
+  hook({ hook_event_name: 'SubagentStart', agent_id: 'a1' })
+  hook({ hook_event_name: 'Stop', background_tasks: [{ id: 's1', type: 'shell', status: 'running' }] })
+  hook({ hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+  assert.equal(count(), 2)
+  // Hooks also fire inside children: a child's idle state says nothing about siblings.
+  hook({ hook_event_name: 'SubagentStart', agent_id: 'sibling' })
+  hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt', agent_id: 'a1' })
+  assert.equal(count(), 3)
+  hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt' })
+  assert.equal(count(), 1)
+  assert.equal(manager.busy, true)
+  // A resumed agent is still counted after the repair, even with the same id.
+  hook({ hook_event_name: 'SubagentStart', agent_id: 'a1' })
+  assert.equal(count(), 2)
+  hook({ hook_event_name: 'SubagentStop', agent_id: 'a1', background_tasks: [] })
+  assert.equal(count(), 0)
 })
 
 test('background work that never reported its end stops counting after a while', async () => {

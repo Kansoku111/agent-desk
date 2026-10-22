@@ -96,7 +96,11 @@ export function hookSettings(node = process.execPath, script = hookScript) {
   const command = { type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: true }
   // SubagentStart / SubagentStop: a turn ends (Stop) while its background agents go on working.
   const events = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'PostModelSwitch', 'SubagentStart', 'SubagentStop']
-  return { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [command] }]])) }
+  // Lifecycle reports must finish before Claude can advance: an async Start can
+  // arrive after Stop and resurrect an agent that has already finished (including
+  // a resumed agent, which legitimately reuses its id).
+  const ordered = new Set(['SubagentStart', 'SubagentStop', 'Stop', 'Notification'])
+  return { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [{ ...command, async: !ordered.has(event) }] }]])) }
 }
 
 /**
@@ -107,7 +111,7 @@ export function hookSettings(node = process.execPath, script = hookScript) {
 export function teamHookSettings(node = process.execPath, script = hookScript) {
   const settings = hookSettings(node, script)
   const slash = (file) => file.replace(/\\/g, '/')
-  settings.hooks.StopFailure = [{ hooks: [{ type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: true }] }]
+  settings.hooks.StopFailure = [{ hooks: [{ type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: false }] }]
   settings.skipDangerousModePermissionPrompt = true
   return settings
 }
@@ -130,26 +134,33 @@ export function hookEffect(input, activity) {
   return effect
 }
 
-/** A background task's status once it is over; any other one counts as still working. */
-const TASK_OVER = new Set(['completed', 'failed', 'killed', 'stopped', 'cancelled', 'canceled', 'error'])
+/** Only actual workers with an explicit active status count, not internal hook tasks. */
+const BACKGROUND_WORKERS = new Set(['shell', 'monitor', 'workflow', 'teammate', 'cloud session', 'MCP task'])
+const TASK_ACTIVE = new Set(['running', 'pending', 'queued', 'in_progress'])
 
 /**
- * Background work (agents, shell commands) outlives the turn that started it:
- * the Stop hook of that turn lists what still runs (`background_tasks`), and
- * SubagentStart / SubagentStop tell when an agent begins and ends in between.
- * `running` is the whole list (Stop), `started` / `stopped` one agent's id.
+ * Agent lifecycle ids and background task registry ids are different namespaces.
+ * Track agents only by their lifecycle; a parent's Stop must not erase them.
+ * Stop and SubagentStop carry parent-session registry snapshots on newer CLIs.
+ * Older CLIs omit them, which is not evidence that anything has finished.
+ * TaskCompleted is a TaskUpdate/task-list event, not background completion.
  */
 function backgroundChange(input, event) {
   const id = typeof input?.agent_id === 'string' && input.agent_id ? input.agent_id : null
-  if (event === 'SubagentStart') return id ? { started: id } : null
-  if (event === 'SubagentStop') return id ? { stopped: id } : null
-  if ((event === 'Stop' || event === 'StopFailure') && Array.isArray(input.background_tasks)) {
-    const running = input.background_tasks
-      .filter((task) => task && typeof task.id === 'string' && !TASK_OVER.has(String(task.status ?? 'running').toLowerCase()))
+  const change = {}
+  if (event === 'SubagentStart' && id) change.started = id
+  if (event === 'SubagentStop' && id) change.stopped = id
+  // Claude documents idle_prompt as suppressed while any background agent runs.
+  // This repairs a missed agent completion, without making claims about shells.
+  if (event === 'Notification' && input.notification_type === 'idle_prompt' && !id) change.agentsIdle = true
+  if (['Stop', 'StopFailure', 'SubagentStop'].includes(event) && Array.isArray(input.background_tasks)) {
+    change.running = input.background_tasks
+      // Agents have reliable start/stop events; registry ids cannot complete them.
+      .filter((task) => task && BACKGROUND_WORKERS.has(task.type) && typeof task.id === 'string' && task.id
+        && TASK_ACTIVE.has(String(task.status ?? '').toLowerCase()))
       .map((task) => task.id)
-    return { running }
   }
-  return null
+  return Object.keys(change).length ? change : null
 }
 
 function hookActivity(input, event, activity) {
