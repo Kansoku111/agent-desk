@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { CodexAppServer, bundledCodex, CODEX_SIGNIN_HINT, DISABLED_CODEX_FEATURES, codexEnvironment } from '../server/codex-app-server.js'
 import { normalizeCodexRateLimits, fetchChatGptUsage } from '../server/chatgpt-usage.js'
 import { generateImage } from '../server/imagegen.js'
+import { createRequire } from 'node:module'
+
+const packageVersion = createRequire(import.meta.url)('../package.json').version
 const fake = fileURLToPath(new URL('./helpers/fake-codex-app-server.mjs', import.meta.url))
 async function setup(t, extra = {}) {
   // The client removes real paths; a short-name temp dir (C:\Users\RUNNER~1) would never match the mocks below.
@@ -75,7 +78,7 @@ test('app-server initializes under own identity with lean config, login/logout a
   assert.deepEqual(methods[0].params.clientInfo, {
     name: 'agent_desk',
     title: 'Agent Desk',
-    version: '0.1.0'
+    version: packageVersion
   })
   assert.deepEqual(await client.logout(), {
     signedIn: false,
