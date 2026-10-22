@@ -1363,3 +1363,54 @@ test('a lasting failure reaches the leader at once, and stopping all also stops 
   terminals.set(leader, { activity: 'idle' })
   assert.match(typed()[0], /rate limit[\s\S]*ユーザーが全停止で止めました/)
 })
+
+test('more passing failures dsh and the services report are told apart', () => {
+  for (const message of ['stream disconnected before completion', 'An error occurred while processing your request. server_error', 'We are experiencing high demand', '522 Connection timed out', 'premature close', 'other side closed', 'terminated']) {
+    assert.equal(transientError(message), true, message)
+  }
+})
+
+test('a closed child does not go on, and stopping all does not report it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { threads, terminals, tool, leader, manager, team } = await setup(t)
+  terminals.set(leader, { activity: 'running' })
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  failThread(threads, 'thread-1', '503 Service Unavailable')
+  await tool('close', { child: 'A' })
+  assert.equal((await manager.stopAll(team.id)).stopped, 0)
+  const calls = threads.calls.length
+  t.mock.timers.tick(RESUME_DELAY_MS)
+  assert.equal(threads.calls.length, calls)
+  assert.equal(team.queue.length, 0)
+})
+
+test('fresh is refused while the child waits for an approval, and still works when the old task is already gone', async (t) => {
+  const { threads, tool, team } = await setup(t)
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  threads.threads.get('thread-1').pendingApproval = true
+  await assert.rejects(tool('send', { child: 'A', message: 'b', fresh: true }), /承認待ちです/)
+  threads.threads.get('thread-1').pendingApproval = false
+  threads.finish('thread-1', 'done')
+  // Gone without a word: its removal throws at once.
+  threads.remove = (id) => {
+    if (id === 'thread-1') throw new Error('タスクが見つかりません')
+    threads.threads.delete(id)
+  }
+  assert.match(await tool('send', { child: 'A', message: 'b', fresh: true }), /新しい会話で始めました/)
+  assert.equal(threads.calls.filter((call) => call[0] === 'create').length, 2)
+  assert.ok(threads.threads.has(team.children[0].taskId))
+  assert.equal(team.children[0].awaiting, true)
+})
+
+test('a team removed while a fresh start runs leaves neither task behind', async (t) => {
+  const { threads, tool, team, manager } = await setup(t)
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  threads.finish('thread-1', 'done')
+  const create = threads.create
+  threads.create = async (options) => {
+    await manager.removeTeam(team.id)
+    return create(options)
+  }
+  await assert.rejects(tool('send', { child: 'A', message: 'b', fresh: true }), /team was removed/)
+  assert.deepEqual([...threads.threads.keys()].filter((id) => id !== team.leaderId), [])
+})

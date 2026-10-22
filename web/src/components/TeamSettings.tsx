@@ -428,7 +428,7 @@ export function TeamSettings() {
         <BypassSwitch config={config} onChange={save} />
         <Switch title="報告をまとめて渡す" note="リーダーの作業中に届いた報告を、次の 1 ターンでまとめて渡します。"
           checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />
-        <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成のツール（Claude の子は MCP サーバー）を、リーダーが必要とした子にだけ渡します。次に始めるチームから使われます。"
+        <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成のツール（Claude の子はすべての MCP サーバー）を、リーダーが必要とした子にだけ渡します。次に始めるチームから使われます。"
           checked={config.leanChildren === true} onChange={(value) => save({ leanChildren: value })} />
       </section>
       {apiSubagent && (

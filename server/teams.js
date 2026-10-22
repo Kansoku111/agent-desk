@@ -62,7 +62,7 @@ const RETRY_MS = 1000
  */
 export const RESUME_DELAY_MS = 60_000
 const RESUME_TEXT = '[Agent Desk] 一時的なエラーで作業が止まったため、自動で再開しました。止まったところから続けてください。'
-const TRANSIENT = /overloaded|\b(?:500|502|503|504|529)\b|internal server error|bad gateway|service unavailable|gateway time-?out|timed out|timeout|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|connection (?:error|reset|closed|refused|lost)|stream (?:did not complete|interrupted)|websocket closed/i
+const TRANSIENT = /overloaded|\b(?:500|502|503|504|529)\b|internal server error|bad gateway|service unavailable|gateway time-?out|timed out|timeout|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|connection (?:error|reset|closed|refused|lost)|stream (?:did not complete|interrupted|disconnected|ended)|websocket closed|\b52[0-4]\b|server_error|error occurred while processing|high demand|at capacity|premature close|other side closed|did not get a response|\bterminated\b/i
 /** Failures that would come back at once: limits, billing, auth, a request the service refuses. */
 const LASTING = /rate.?limit|usage limit|limit reached|quota|\b429\b|上限|credit|billing|insufficient|\b40[0-4]\b|auth|unauthori[sz]ed|forbidden|invalid|context|too (?:long|large|big)/i
 
@@ -623,14 +623,17 @@ export class TeamManager extends EventEmitter {
       }
     } catch (error) {
       child.taskId = previous
-      if (taskId) await Promise.resolve(this.#removeTask(child.kind, taskId)).catch(() => {})
+      if (taskId) await this.#removeTask(child.kind, taskId).catch(() => {})
+      // The team went meanwhile, and removeTeam did not see the old task while it had none.
+      if (previous && !this.teams.has(team.id)) await this.#removeTask(child.kind, previous).catch(() => {})
       throw error
     }
     // The conversation it replaces goes: the child is no longer found by it, so its removal leaves the child be.
-    if (previous) await Promise.resolve(this.#removeTask(child.kind, previous)).catch((error) => this.log(`team ${team.id}: removing ${child.name}'s old task:`, error.message))
+    if (previous) await this.#removeTask(child.kind, previous).catch((error) => this.log(`team ${team.id}: removing ${child.name}'s old task:`, error.message))
   }
 
-  #removeTask(kind, taskId) {
+  /** Async, so a removal that throws at once (a task already gone) is a rejection too. */
+  async #removeTask(kind, taskId) {
     return kind === 'thread' ? this.threads.remove(taskId) : this.agents.remove(taskId)
   }
 
@@ -662,14 +665,22 @@ export class TeamManager extends EventEmitter {
 
   /** The child starts over in a new conversation on the message: what it carried is dropped. */
   async #sendFresh(team, child, text) {
+    if (child.kind === 'thread' && this.threads.threads.get(child.taskId)?.pendingApproval) {
+      throw new Error(`子「${child.name}」は承認待ちです。approve で答えてから fresh で送ってください。`)
+    }
     if (this.#childBusy(child)) throw new Error(`子「${child.name}」は作業中です。fresh で送るのは、作業が終わってからにしてください。`)
     if (child.closed) this.#checkRoom(team)
-    for (const approval of [...this.approvals.values()]) {
-      if (approval.childId === child.id) this.#dropApproval(approval)
-    }
-    await this.#startTask(team, child, text)
+    // Set before the new turn starts: it reports as the leader's work however soon it ends.
+    const before = { closed: child.closed, awaiting: child.awaiting }
     child.closed = false
     child.awaiting = true
+    try {
+      await this.#startTask(team, child, text)
+    } catch (error) {
+      Object.assign(child, before)
+      throw error
+    }
+    this.#cancelResume(child)
     delete child.resumed
     child.pending = []
     child.followups = []
@@ -817,6 +828,7 @@ export class TeamManager extends EventEmitter {
 
   async #close(team, args) {
     const child = this.#child(team, args.child)
+    this.#cancelResume(child)
     child.closed = true
     child.awaiting = false
     child.pending = []
@@ -921,9 +933,7 @@ export class TeamManager extends EventEmitter {
     let stopped = 0
     for (const child of team.children) {
       // One waiting to go on after a passing failure stops here.
-      if (this.retries.has(`resume:${child.id}`)) {
-        clearTimeout(this.retries.get(`resume:${child.id}`))
-        this.retries.delete(`resume:${child.id}`)
+      if (this.#cancelResume(child)) {
         child.awaiting = false
         delete child.resumed
         this.#report(team, child, 'cancelled', '', { byUser: true })
@@ -1390,6 +1400,15 @@ export class TeamManager extends EventEmitter {
     return true
   }
 
+  /** Drops the child's waiting automatic resume; true when there was one. */
+  #cancelResume(child) {
+    const key = `resume:${child.id}`
+    if (!this.retries.has(key)) return false
+    clearTimeout(this.retries.get(key))
+    this.retries.delete(key)
+    return true
+  }
+
   /** A turn the leader hears of ends the automatic retry; an error after one says so. */
   #resumedNote(child, status) {
     const resumed = child.resumed
@@ -1408,6 +1427,7 @@ export class TeamManager extends EventEmitter {
     for (const approval of [...this.approvals.values()]) {
       if (approval.childId === child.id) this.#dropApproval(approval)
     }
+    this.#cancelResume(child)
     team.children = team.children.filter((entry) => entry !== child)
     team.queue = team.queue.filter((item) => item.childId !== child.id)
     void this.#save()
