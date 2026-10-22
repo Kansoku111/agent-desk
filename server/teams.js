@@ -71,11 +71,13 @@ export class TeamManager extends EventEmitter {
    * @param {() => string} options.apiUrl  where team-mcp.js calls (POST /api/team)
    */
   constructor({
-    file, dir, threads, terminals, agents, catalog, getSettings, apiUrl,
+    file, dir, threads, terminals, agents, catalog, getSettings, apiUrl, authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
     node = process.execPath, script = mcpScript, log = () => {}, now = Date.now,
   }) {
     super()
     this.file = file
+    /** The billing confirmations, kept apart from the teams so nothing that happens to a team can lose them. */
+    this.authFile = authFile
     this.dir = dir
     this.threads = threads
     this.terminals = terminals
@@ -126,7 +128,23 @@ export class TeamManager extends EventEmitter {
   async load() {
     const saved = await readJson(this.file, EMPTY_TEAMS)
     for (const team of restoreTeams(saved, this.getSettings)) this.teams.set(team.id, team)
+    const remembered = await readJson(this.authFile, { version: 1, accepted: [] })
+    this.claudeAuth.restore(remembered?.accepted)
+    // A team confirmed before the confirmation was shared still counts for every team.
+    const before = this.claudeAuth.accepted.length
+    for (const team of this.teams.values()) this.claudeAuth.adopt(team.claudeAuthConsent)
+    if (this.claudeAuth.accepted.length !== before) await this.#saveAuth()
     return this
+  }
+
+  /** Written at once, before the confirmation is acted on: a restart must find it. */
+  #saveAuth() {
+    return writeJson(this.authFile, { version: 1, accepted: this.claudeAuth.accepted })
+  }
+
+  async #confirmAuth(team, confirmation, existing, isCurrent) {
+    await this.claudeAuth.confirm(team, confirmation, existing, isCurrent)
+    await this.#saveAuth()
   }
 
   #save() {
@@ -361,7 +379,7 @@ export class TeamManager extends EventEmitter {
       id: randomUUID(), secret: randomBytes(24).toString('hex'), workspace: String(workspace ?? ''), leaderId: '',
       leaderKind: gpt ? 'thread' : 'terminal', config, createdAt: now, updatedAt: now, seq: 0, children: [], queue: [], asks: [],
     }
-    if (authConfirmation) await this.claudeAuth.confirm(team, authConfirmation, false)
+    if (authConfirmation) await this.#confirmAuth(team, authConfirmation, false)
     if (gpt) return this.#createGptLed(team, config)
     this.teams.set(team.id, team)
     let terminal
@@ -852,7 +870,7 @@ export class TeamManager extends EventEmitter {
   updateConfig(teamId, patch, authConfirmation) {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
-    if (authConfirmation) return this.claudeAuth.confirm(team, authConfirmation, true, () => this.teams.get(teamId) === team).then(() => this.updateConfig(teamId, patch))
+    if (authConfirmation) return this.#confirmAuth(team, authConfirmation, true, () => this.teams.get(teamId) === team).then(() => this.updateConfig(teamId, patch))
     const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren'].includes(key)))
     const before = this.#tierLines(this.config(team)).join('\n') + this.config(team).maxChildren
     const next = mergeTeamConfig(this.config(team), allowed)

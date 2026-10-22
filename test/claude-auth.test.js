@@ -171,9 +171,14 @@ for (const [authMethod, apiProvider] of [['claude.ai', 'firstParty'], ['api_key'
     await auth.confirm(team, { challenge: view.challenge })
     assert.equal(await auth.guard(team, {}), null)
     assert.equal((await auth.inspect('/work', team)).confirmed, true)
-    assert.equal(await auth.guard({ id: 'b', workspace: '/work' }, {}), AUTH_REQUIRED)
+    // The box is ticked once: another team or folder with the same auth mode needs no second tick.
+    assert.equal(await auth.guard({ id: 'b', workspace: '/other' }, {}), null)
+    assert.equal((await auth.inspect('/other', { id: 'c', workspace: '/other' })).confirmed, true)
     status = null
     assert.equal(await auth.guard(team, {}), AUTH_REQUIRED)
+    // A different mode is not covered by the earlier tick.
+    status = { loggedIn: true, authMethod: authMethod === 'claude.ai' ? 'api_key' : 'claude.ai', apiProvider: 'firstParty' }
+    assert.equal(await auth.guard({ id: 'b', workspace: '/other' }, {}), AUTH_REQUIRED)
     status = { loggedIn: false }
     assert.match(await auth.guard(team, {}), /ログインしていません/)
   })
@@ -220,4 +225,17 @@ test('confirmation rechecks auth and logged-out inspections cannot be approved',
   status = { loggedIn: false }
   assert.equal((await auth.inspect('/work', team)).challenge, null)
   assert.equal(team.claudeAuthConsent, undefined)
+})
+
+test('a confirmation survives a restart through restore, and only for its own auth mode', async () => {
+  const status = { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' }
+  const first = new TeamClaudeAuth({ detect: async () => status, find: () => 'fake' })
+  const team = { id: 'a', workspace: '/work' }
+  await first.confirm(team, { challenge: (await first.inspect('/work', team)).challenge })
+  const saved = JSON.parse(JSON.stringify(first.accepted))
+  const second = new TeamClaudeAuth({ detect: async () => status, find: () => 'fake' })
+  second.restore(saved)
+  assert.equal(await second.guard({ id: 'b', workspace: '/elsewhere' }, {}), null)
+  second.restore('garbage')
+  assert.equal(await second.guard({ id: 'b', workspace: '/elsewhere' }, {}), AUTH_REQUIRED)
 })

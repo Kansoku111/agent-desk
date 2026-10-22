@@ -254,6 +254,49 @@ test('team auth consent persists sanitized mode without changing providers and g
   assert.ok(await manager.guardClaudeLaunch({ ...context, record: { id: 'orphan' } }))
 })
 
+test('the billing confirmation is written at once, to its own file, and still holds after a restart with no team left', async (t) => {
+  const { manager, team, dir, threads, terminals, agents, workspace } = await setup(t)
+  const status = { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' }
+  manager.claudeAuth.find = () => 'fake'
+  manager.claudeAuth.detect = async () => status
+  const view = await manager.inspectClaudeAuth({ teamId: team.id })
+  await manager.updateConfig(team.id, {}, { challenge: view.challenge })
+  // On disk before anything else is saved, and not inside teams.json.
+  const file = path.join(dir, 'claude-auth-consent.json')
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).accepted.length, 1)
+  await manager.stop()
+  await fs.rm(path.join(dir, 'teams.json'))
+  const again = await new TeamManager({
+    file: path.join(dir, 'teams.json'), dir: path.join(dir, 'teams'), threads, terminals, agents, catalog: CATALOG,
+    getSettings: () => ({}), apiUrl: () => '',
+  }).load()
+  t.after(() => again.stop())
+  again.claudeAuth.find = () => 'fake'
+  again.claudeAuth.detect = async () => status
+  assert.equal(again.list().length, 0)
+  assert.equal((await again.inspectClaudeAuth({ workspace })).confirmed, true)
+  // A different auth mode is still asked.
+  again.claudeAuth.detect = async () => ({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' })
+  assert.equal((await again.inspectClaudeAuth({ workspace })).confirmed, false)
+})
+
+test('a team confirmed before the confirmation was shared is remembered for new teams', async (t) => {
+  const { manager, team, dir, threads, terminals, agents, workspace } = await setup(t)
+  team.claudeAuthConsent = { teamId: team.id, workspace, descriptor: { version: 1, mode: 'api', authMethod: 'api_key', apiProvider: 'firstParty' }, acknowledgeUnknown: false, confirmedAt: 1 }
+  await manager.updateConfig(team.id, {})
+  await manager.writes
+  await manager.stop()
+  const again = await new TeamManager({
+    file: path.join(dir, 'teams.json'), dir: path.join(dir, 'teams'), threads, terminals, agents, catalog: CATALOG,
+    getSettings: () => ({}), apiUrl: () => '',
+  }).load()
+  t.after(() => again.stop())
+  again.claudeAuth.find = () => 'fake'
+  again.claudeAuth.detect = async () => ({ loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' })
+  assert.equal((await again.inspectClaudeAuth({ workspace })).confirmed, true)
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir, 'claude-auth-consent.json'), 'utf8')).accepted.length, 1)
+})
+
 test('the leader starts with the team tools and instructions; other options come from the settings', async (t) => {
   const { terminals, leader, team, workspace } = await setup(t)
   const create = terminals.calls.find((call) => call[0] === 'create')[1]

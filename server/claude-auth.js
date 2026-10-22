@@ -1,4 +1,4 @@
-// Model-free Claude Code auth inspection and per-team, descriptor-bound consent.
+// Model-free Claude Code auth inspection and descriptor-bound consent, remembered once per auth mode.
 // This is a warning/confirmation boundary, not a guaranteed spending cap.
 import { randomUUID } from 'node:crypto'
 import { spawn as spawnProcess } from 'node:child_process'
@@ -63,13 +63,21 @@ export class TeamClaudeAuth {
   constructor({ detect = claudeAuthStatus, find = findClaude, now = Date.now } = {}) {
     Object.assign(this, { detect, find, now })
     this.challenges = new Map()
+    /** Auth modes the user confirmed once for every team: [{ descriptor, acknowledgeUnknown, confirmedAt }]. */
+    this.accepted = []
+  }
+  /** Replaces the remembered confirmations with what a save held. */
+  restore(saved) {
+    this.accepted = (Array.isArray(saved) ? saved : []).filter((item) => item?.descriptor && typeof item.descriptor === 'object')
   }
   context(workspace) { return { claude: this.find(), cwd: workspace, env: claudeAuthEnv() } }
   async descriptor(context) { try { return authDescriptor(await this.detect(context)) } catch { return authDescriptor(null) } }
+  /** A confirmation counts when it names this exact auth mode, whichever team or folder it was given for. */
   matches(team, descriptor) {
     const consent = team?.claudeAuthConsent
-    return Boolean(team) && consent?.teamId === team.id && consent?.workspace === path.resolve(team.workspace) && key(consent.descriptor) === key(descriptor)
-      && (descriptor.mode !== 'unknown' || consent.acknowledgeUnknown === true)
+    const same = (item) => key(item.descriptor) === key(descriptor) && (descriptor.mode !== 'unknown' || item.acknowledgeUnknown === true)
+    return this.accepted.some(same)
+      || (Boolean(team) && consent?.teamId === team.id && consent?.workspace === path.resolve(team.workspace) && same(consent))
   }
   async inspect(workspace, team = null) {
     const descriptor = await this.descriptor(this.context(workspace))
@@ -86,7 +94,16 @@ export class TeamClaudeAuth {
     this.challenges.delete(confirmation.challenge)
     const descriptor = await this.descriptor(this.context(team.workspace))
     if (!isCurrent() || key(descriptor) !== key(entry.descriptor) || descriptor.mode === 'logged-out') throw new Error(AUTH_REQUIRED)
-    team.claudeAuthConsent = { teamId: team.id, workspace: path.resolve(team.workspace), descriptor, acknowledgeUnknown: confirmation.acknowledgeUnknown === true, confirmedAt: this.now() }
+    const acknowledgeUnknown = confirmation.acknowledgeUnknown === true
+    team.claudeAuthConsent = { teamId: team.id, workspace: path.resolve(team.workspace), descriptor, acknowledgeUnknown, confirmedAt: this.now() }
+    // Remembered for later teams: the box is ticked once per auth mode, not once per team (TeamManager saves it).
+    this.adopt({ descriptor, acknowledgeUnknown, confirmedAt: this.now() })
+  }
+  /** Remembers a confirmation for every team (one per auth mode; the newest wins). */
+  adopt(consent) {
+    if (!consent?.descriptor || typeof consent.descriptor !== 'object') return
+    const { descriptor, acknowledgeUnknown = false, confirmedAt = this.now() } = consent
+    this.accepted = [...this.accepted.filter((item) => key(item.descriptor) !== key(descriptor)), { descriptor, acknowledgeUnknown: acknowledgeUnknown === true, confirmedAt }]
   }
   problem(team, descriptor) {
     if (descriptor.mode === 'logged-out') return authProblem({ loggedIn: false })

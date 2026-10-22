@@ -58,12 +58,12 @@ export function ClaudeAuthConsent({ workspace, teamId, onChange }: {
       {descriptor && descriptor.mode !== 'logged-out' && (
         <p className="team-warning">API・クラウド経由では利用者の契約先に課金されます。サブスクリプションでも追加利用の設定により課金される場合があります。課金先のアカウントや金額上限はこの確認では保証できません。並列実行・長い会話の費用と、契約先の利用上限を確認してください。</p>
       )}
-      {inspection?.confirmed ? <p>このチームでは、この認証方式を確認済みです。</p> : canConfirm && (
+      {inspection?.confirmed ? <p>この認証方式は確認済みです。同じ方式なら、ほかのチームでも再確認は要りません。</p> : canConfirm && (
         <label>
           <input type="checkbox" checked={accepted} onChange={(event) => accept(event.target.checked)} />{' '}
           {unknown
-            ? '課金方式を判別できず、API・クラウド料金が発生する可能性を理解し、このチームでの利用を許可します。'
-            : '表示された認証方式と課金の可能性を確認し、このチームでの利用を許可します。'}
+            ? '課金方式を判別できず、API・クラウド料金が発生する可能性を理解し、この認証方式でのチーム利用を許可します（同じ方式なら次回以降は確認しません）。'
+            : '表示された認証方式と課金の可能性を確認し、この認証方式でのチーム利用を許可します（同じ方式なら次回以降は確認しません）。'}
         </label>
       )}
       <p className="muted">起動のたびに認証方式を確認し、変わった場合は再確認が必要です。確認済みでも、同じ方式の別アカウントへの変更は検出できない場合があります。認証や請求先を変えたら再確認してください。実行方式を勝手に切り替えません。</p>
