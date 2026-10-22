@@ -67,6 +67,8 @@ function statusLabel(terminal: TerminalSummary) {
   if (terminal.state === 'stopped') return '停止中'
   if (terminal.activity === 'approval') return '承認待ち'
   if (terminal.activity === 'running') return '作業中'
+  // The turn is over, but agents it started go on: the app must not be closed or Claude Code started again.
+  if (terminal.background > 0) return `裏で作業中（${terminal.background}）`
   return '待機中'
 }
 
@@ -120,7 +122,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
           : <h1 className="thread-heading" onDoubleClick={() => setRenaming(true)} title={terminal.title}>{terminal.title}</h1>}
         <span className="header-chip" title={terminal.workspace}><FolderOpen size={13} />{workspaceLabel(terminal.workspace, myPc, names)}</span>
         <span className={`header-chip terminal-status ${running ? terminal.activity : terminal.state}`}>
-          {running && terminal.activity === 'running' && <Loader2 size={12} className="spin" />}
+          {running && (terminal.activity === 'running' || terminal.background > 0) && <Loader2 size={12} className="spin" />}
           {statusLabel(terminal)}
         </span>
       </div>

@@ -36,6 +36,8 @@ export interface TerminalSummary {
   state: 'running' | 'exited' | 'stopped'
   /** From Claude Code's hooks: working on a prompt, waiting for an approval, or idle. */
   activity: 'idle' | 'running' | 'approval'
+  /** Agents or commands that go on in the background after the turn ended; starting Claude Code again would end them. */
+  background: number
   exitCode: number | null
   /** Chosen in Agent Desk and passed as `claude --model` / `--effort`; null leaves Claude Code's own default. */
   model: string | null

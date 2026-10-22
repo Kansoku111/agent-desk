@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   Archive, ArchiveRestore, ArrowLeft, Folder, FolderOpen, FolderPlus, Loader2, Monitor, MoreHorizontal, PanelLeftClose, Pencil, Plus,
   CheckSquare, Copy, Search, Settings, SquarePen, Trash2, X,
@@ -31,6 +31,9 @@ function writeCollapsed(paths: string[]) {
     localStorage.setItem(COLLAPSED_KEY, JSON.stringify(paths))
   } catch {}
 }
+
+// The sidebar unmounts when closed, so its scroll position lives here to survive reopening.
+let taskTreeScroll = 0
 
 /** Opens the composer for a new task in one project (or My PC). */
 function newTaskIn(workspace: string) {
@@ -87,6 +90,7 @@ function TerminalStatus({ terminal }: { terminal: TerminalSummary }) {
   if (terminal.state === 'running' && terminal.activity === 'approval') return <span className="status-dot approval" title="承認待ち" />
   if (teamNeedsUser(team)) return <span className="status-dot approval" title="チームが確認を求めています" />
   if (terminal.state === 'running' && terminal.activity === 'running') return <Loader2 size={13} className="spin muted" aria-label="作業中" />
+  if (terminal.state === 'running' && terminal.background > 0) return <Loader2 size={13} className="spin muted" aria-label="裏で作業中" />
   if (team?.children.some((child) => child.state === 'running' || child.state === 'approval')) {
     return <Loader2 size={13} className="spin muted" aria-label="子が作業中" />
   }
@@ -541,6 +545,10 @@ export function Sidebar() {
   const anchor = useRef<string | null>(null)
   const [confirming, setConfirming] = useState<string[] | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const tree = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    if (tree.current) tree.current.scrollTop = taskTreeScroll
+  }, [])
 
   const needle = query.trim().toLowerCase()
   const groups = useMemo(() => {
@@ -717,7 +725,7 @@ export function Sidebar() {
           onClose={() => setConfirming(null)} onConfirm={() => void removeSelected(confirming)} />
       )}
 
-      <nav className={`task-tree ${selecting ? 'selecting' : ''}`}>
+      <nav ref={tree} className={`task-tree ${selecting ? 'selecting' : ''}`} onScroll={(event) => { taskTreeScroll = event.currentTarget.scrollTop }}>
         {groups.length === 0 && (
           <p className="empty-note">
             {needle ? '一致するタスクはありません' : archived ? 'アーカイブしたタスクはありません' : 'タスクはまだありません'}

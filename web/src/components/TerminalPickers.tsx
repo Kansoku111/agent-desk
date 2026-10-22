@@ -68,7 +68,11 @@ export function TerminalModelPicker({ terminal }: { terminal: TerminalSummary })
   const server = useStore((state) => state.server)
   const [draft, setDraft] = useState<Draft | null>(null)
   const models = claudeModels(server)
-  const busy = terminal.state === 'running' && terminal.activity !== 'idle' ? '作業中は変更できません' : null
+  const busy = terminal.state !== 'running'
+    ? null
+    : terminal.activity !== 'idle'
+      ? '作業中は変更できません'
+      : terminal.background > 0 ? '裏で作業中は変更できません' : null
   const efforts = claudeEfforts(server, terminal.model ?? terminal.modelInUse)
   // Nothing to step through while Claude Code is working.
   const modelWheel = useWheelSelect<HTMLSpanElement>(busy ? [] : ['', ...models.map((model) => model.id)], terminal.model ?? '',

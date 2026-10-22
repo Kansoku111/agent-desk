@@ -94,7 +94,8 @@ export function hookSettings(node = process.execPath, script = hookScript) {
   // Claude Code runs hooks with Git Bash on Windows; forward slashes keep the quoting simple.
   const slash = (file) => file.replace(/\\/g, '/')
   const command = { type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: true }
-  const events = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'PostModelSwitch']
+  // SubagentStart / SubagentStop: a turn ends (Stop) while its background agents go on working.
+  const events = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'PostModelSwitch', 'SubagentStart', 'SubagentStop']
   return { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [command] }]])) }
 }
 
@@ -114,6 +115,8 @@ export function teamHookSettings(node = process.execPath, script = hookScript) {
 /**
  * What a hook says about the task: the activity it moves to, its session, and
  * the model and reasoning level Claude Code is using (also after a `/model`).
+ * `background`: the work that goes on after the turn ended, which a restart
+ * of Claude Code would cut off (see {@link backgroundChange}).
  */
 export function hookEffect(input, activity) {
   const event = input?.hook_event_name
@@ -122,7 +125,31 @@ export function hookEffect(input, activity) {
   if (effort) effect.effort = effort
   if (event === 'SessionStart' && typeof input.model === 'string') effect.model = input.model
   if (event === 'PostModelSwitch' && typeof input.to_model === 'string') effect.model = input.to_model
+  const background = backgroundChange(input, event)
+  if (background) effect.background = background
   return effect
+}
+
+/** A background task's status once it is over; any other one counts as still working. */
+const TASK_OVER = new Set(['completed', 'failed', 'killed', 'stopped', 'cancelled', 'canceled', 'error'])
+
+/**
+ * Background work (agents, shell commands) outlives the turn that started it:
+ * the Stop hook of that turn lists what still runs (`background_tasks`), and
+ * SubagentStart / SubagentStop tell when an agent begins and ends in between.
+ * `running` is the whole list (Stop), `started` / `stopped` one agent's id.
+ */
+function backgroundChange(input, event) {
+  const id = typeof input?.agent_id === 'string' && input.agent_id ? input.agent_id : null
+  if (event === 'SubagentStart') return id ? { started: id } : null
+  if (event === 'SubagentStop') return id ? { stopped: id } : null
+  if ((event === 'Stop' || event === 'StopFailure') && Array.isArray(input.background_tasks)) {
+    const running = input.background_tasks
+      .filter((task) => task && typeof task.id === 'string' && !TASK_OVER.has(String(task.status ?? 'running').toLowerCase()))
+      .map((task) => task.id)
+    return { running }
+  }
+  return null
 }
 
 function hookActivity(input, event, activity) {

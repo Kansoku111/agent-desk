@@ -88,7 +88,9 @@ test('cleanTitle drops the spinner and Claude Code\'s default title', () => {
 
 test('hookSettings runs the hook script for each event, with forward slashes', () => {
   const settings = hookSettings('C:\\Program Files\\nodejs\\node.exe', 'F:\\app\\server\\claude-hook.js')
-  assert.deepEqual(Object.keys(settings.hooks), ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'PostModelSwitch'])
+  assert.deepEqual(Object.keys(settings.hooks), [
+    'SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'PostModelSwitch', 'SubagentStart', 'SubagentStop',
+  ])
   const [command] = settings.hooks.Stop[0].hooks
   assert.equal(command.command, '"C:/Program Files/nodejs/node.exe" "F:/app/server/claude-hook.js"')
   assert.equal(command.async, true)
@@ -277,6 +279,81 @@ test('the model is not changed while Claude Code works, and odd values are refus
   manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit' })
   await assert.rejects(manager.configure(terminal.id, {}, { model: 'opus' }), /作業中/)
   assert.equal(pty.spawned.length, 1)
+})
+
+test('hookEffect reads the background work a turn leaves behind', () => {
+  const task = (id, status = 'running', type = 'subagent') => ({ id, type, status, description: 'x' })
+  assert.deepEqual(hookEffect({ hook_event_name: 'SubagentStart', agent_id: 'a1' }, 'running').background, { started: 'a1' })
+  assert.deepEqual(hookEffect({ hook_event_name: 'SubagentStop', agent_id: 'a1' }, 'idle').background, { stopped: 'a1' })
+  // A Stop lists what still runs; what is over does not count, whatever kind of task it is.
+  const stop = hookEffect({ hook_event_name: 'Stop', background_tasks: [task('a1'), task('b2', 'completed'), task('c3', 'running', 'shell')] }, 'running')
+  assert.deepEqual(stop.background, { running: ['a1', 'c3'] })
+  assert.equal(stop.activity, 'idle')
+  // An older Claude Code sends no list: nothing is known, so nothing changes.
+  assert.equal(hookEffect({ hook_event_name: 'Stop' }, 'running').background, undefined)
+  assert.equal(hookEffect({ hook_event_name: 'SubagentStart' }, 'running').background, undefined)
+})
+
+test('a turn that ended with agents still working in the background keeps the task busy and its model fixed', async () => {
+  const { workspace, pty, manager, claudeHome } = await setup()
+  const terminal = await manager.create({ workspace })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  const transcript = path.join(claudeHome, 'projects', 'p', `${terminal.sessionId}.jsonl`)
+  await fs.mkdir(path.dirname(transcript), { recursive: true })
+  await fs.writeFile(transcript, '{}\n')
+  const hook = (event) => manager.hook(terminal.id, secret, event)
+  const summary = () => manager.summary(manager.records.get(terminal.id))
+  const changes = []
+  manager.on('terminal', (info) => changes.push(info.background))
+
+  hook({ hook_event_name: 'UserPromptSubmit' })
+  hook({ hook_event_name: 'SubagentStart', agent_id: 'a1', agent_type: 'general-purpose' })
+  hook({ hook_event_name: 'Stop', background_tasks: [{ id: 'a1', type: 'subagent', status: 'running' }] })
+  // The turn is over, yet the app must not be replaced, and Claude Code must not be started again.
+  assert.equal(summary().activity, 'idle')
+  assert.equal(summary().background, 1)
+  assert.equal(manager.busy, true)
+  await assert.rejects(manager.configure(terminal.id, {}, { model: 'opus' }), /裏で/)
+  assert.equal(pty.spawned.length, 1)
+  assert.equal(pty.spawned[0].killed, false)
+
+  hook({ hook_event_name: 'SubagentStop', agent_id: 'a1' })
+  assert.equal(summary().background, 0)
+  assert.equal(manager.busy, false)
+  // A Stop report that was sent before the agent ended can arrive after it: the agent stays ended.
+  hook({ hook_event_name: 'Stop', background_tasks: [{ id: 'a1', type: 'subagent', status: 'running' }] })
+  assert.equal(summary().background, 0)
+  assert.equal(manager.busy, false)
+  assert.deepEqual(changes.filter((count, index) => count !== changes[index - 1]), [0, 1, 0])
+
+  // A resumed agent keeps its id and counts again.
+  hook({ hook_event_name: 'SubagentStart', agent_id: 'a1' })
+  assert.equal(summary().background, 1)
+  hook({ hook_event_name: 'Stop', background_tasks: [] })
+  assert.equal(summary().background, 0)
+
+  // With nothing left, the model changes as before; the new process starts with no background work.
+  hook({ hook_event_name: 'SubagentStart', agent_id: 'a2' })
+  hook({ hook_event_name: 'SubagentStop', agent_id: 'a2' })
+  await manager.configure(terminal.id, {}, { model: 'opus' })
+  assert.equal(pty.spawned.length, 2)
+  assert.equal(manager.summary(manager.records.get(terminal.id)).background, 0)
+})
+
+test('background work that never reported its end stops counting after a while', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  manager.hook(terminal.id, secret, { hook_event_name: 'SubagentStart', agent_id: 'a1' })
+  assert.equal(manager.busy, true)
+  const realNow = Date.now
+  Date.now = () => realNow() + 7 * 60 * 60 * 1000
+  try {
+    assert.equal(manager.busy, false)
+    assert.equal(manager.summary(manager.records.get(terminal.id)).background, 0)
+  } finally {
+    Date.now = realNow
+  }
 })
 
 test('removing a task ends its process and forgets it', async () => {

@@ -37,6 +37,8 @@ const SEND_RETRY_MS = 1500
 const SEND_RETRIES = 2
 /** How long a Stop hook has to arrive after Claude Code says it is idle, before the task is taken as idle without it. */
 const IDLE_GRACE_MS = 2500
+/** Background work reported as running that never reported its end stops counting after this long. */
+const BACKGROUND_STALE_MS = 6 * 60 * 60 * 1000
 
 /** DEC private modes the serialized screen leaves out: mouse encodings, cursor visibility, focus reports. */
 const TRACKED_MODES = [25, 1004, 1005, 1006, 1015]
@@ -124,6 +126,8 @@ export class TerminalManager extends EventEmitter {
       // 'running': the process is up; 'exited': it ended (its last screen stays); 'stopped': none since the app started.
       state: live ? (live.alive ? 'running' : 'exited') : 'stopped',
       activity: live?.alive ? live.activity : 'idle',
+      // How many background agents or commands still work after the turn ended (a restart of Claude Code would cut them off).
+      background: live?.alive ? this.#background(live) : 0,
       exitCode: live?.exitCode ?? null,
       // Chosen in Agent Desk (null: Claude Code's default), and what Claude Code reports using.
       model: record.model ?? null,
@@ -139,13 +143,49 @@ export class TerminalManager extends EventEmitter {
     return [...this.records.values()].map((record) => this.summary(record)).sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  /** Whether Claude is working in any task (the app must not exit or be replaced then). */
+  /**
+   * Whether Claude is working in any task (the app must not exit or be replaced then).
+   * A turn that ended can leave background agents running: they die with the process.
+   */
   get busy() {
-    return this.starting.size > 0 || [...this.live.values()].some((live) => live.alive && live.activity === 'running')
+    return this.starting.size > 0
+      || [...this.live.values()].some((live) => live.alive && (live.activity === 'running' || this.#background(live) > 0))
+  }
+
+  /** The count of background work still going; a report that never came to an end is dropped after a while. */
+  #background(live) {
+    const cutoff = Date.now() - BACKGROUND_STALE_MS
+    for (const [id, since] of live.background) if (since < cutoff) live.background.delete(id)
+    return live.background.size
+  }
+
+  /** Applies what a hook says about background work (see hookEffect); true when the count changed. */
+  #trackBackground(live, change) {
+    const before = this.#background(live)
+    if (change.started) {
+      // A resumed agent keeps its id, so its start clears the mark of its earlier end.
+      live.ended.delete(change.started)
+      live.background.set(change.started, Date.now())
+    }
+    if (change.stopped) {
+      live.ended.add(change.stopped)
+      live.background.delete(change.stopped)
+    }
+    if (change.running) {
+      // The hook runs apart from Claude Code, so a Stop report can reach us after the end of an agent it still lists.
+      const now = Date.now()
+      live.background = new Map(change.running.filter((id) => !live.ended.has(id)).map((id) => [id, live.background.get(id) ?? now]))
+    }
+    return this.#background(live) !== before
   }
 
   #changed(record) {
     this.emit('terminal', this.summary(record))
+  }
+
+  /** Logs what happens to a task's process, with the time: the log is how a Claude Code that vanished is explained afterwards. */
+  #note(id, text) {
+    this.log(`${new Date().toISOString()} terminal ${id}: ${text}`)
   }
 
   /**
@@ -379,6 +419,8 @@ export class TerminalManager extends EventEmitter {
     const live = {
       proc, term, serialize, modes, secret, size, alive: true, activity: prompt ? 'running' : 'idle', exitCode: null, controller: null, sizes: new Map(),
       model: record.model, effort: record.effort, exited: null,
+      // Background agents and commands (id -> when seen) that go on after a turn ends, and the agents that have ended.
+      background: new Map(), ended: new Set(),
       // When it started, when Claude Code said its session started, and when someone last typed in it.
       startedAt: Date.now(), sessionAt: null, inputAt: 0,
       // Started on a prompt: working from the start, until its turn is seen.
@@ -393,6 +435,7 @@ export class TerminalManager extends EventEmitter {
       if (this.live.get(record.id) !== live) return
       live.alive = false
       live.exitCode = exitCode
+      this.#note(record.id, `Claude Code exited (code ${exitCode}${live.replacing ? ', being replaced' : ''})`)
       live.exited?.()
       // Restarted for a new model: the task is not shown as ended in between.
       if (!live.replacing) term.write('', () => this.#changed(record))
@@ -408,7 +451,7 @@ export class TerminalManager extends EventEmitter {
         }
       }, PROMPT_START_LIMIT_MS).unref?.()
     }
-    this.log(`claude ${resume ? 'resumed' : 'started'} in ${record.workspace} (${record.id})`)
+    this.log(`${new Date().toISOString()} claude ${resume ? 'resumed' : 'started'} in ${record.workspace} (${record.id})`)
   }
 
   #broadcast(id, frame) {
@@ -653,11 +696,14 @@ export class TerminalManager extends EventEmitter {
     if (next.effort !== null && !EFFORTS.includes(next.effort)) throw new Error('この推論レベルは指定できません')
     const live = this.live.get(id)
     if (live?.alive && live.activity !== 'idle') throw new Error('Claude Code が作業中です。終わってから変更してください')
+    // Starting Claude Code again ends the agents it still runs in the background.
+    if (live?.alive && this.#background(live) > 0) throw new Error('Claude Code の裏でサブエージェントなどが動いています。終わってから変更してください')
     record.model = next.model
     record.effort = next.effort
     this.defaults = { ...next }
     await this.#save()
     if (live?.alive) {
+      this.#note(id, 'ending Claude Code to start it again with a new model or level')
       live.replacing = true
       await new Promise((resolve) => {
         live.exited = resolve
@@ -675,7 +721,10 @@ export class TerminalManager extends EventEmitter {
     const pending = this.starting.get(id)
     if (pending) pending.cancelled = true
     const live = this.live.get(id)
-    if (live?.alive) live.proc.kill()
+    if (live?.alive) {
+      this.#note(id, `ending Claude Code on request (${this.#background(live)} in the background)`)
+      live.proc.kill()
+    }
     return this.summary(this.#record(id))
   }
 
@@ -695,7 +744,10 @@ export class TerminalManager extends EventEmitter {
     if (!this.records.has(id)) return { removed: false }
     const live = this.live.get(id)
     this.live.delete(id)
-    if (live?.alive) live.proc.kill()
+    if (live?.alive) {
+      this.#note(id, 'ending Claude Code: the task is removed')
+      live.proc.kill()
+    }
     live?.term.dispose()
     this.records.delete(id)
     this.subscribers.delete(id)
@@ -734,8 +786,9 @@ export class TerminalManager extends EventEmitter {
     const before = live.activity
     live.activity = effect.activity
     if (live.activity === 'running' && (before !== 'running' || event === 'UserPromptSubmit')) live.runningAt = Date.now()
+    const backgroundChanged = effect.background ? this.#trackBackground(live, effect.background) : false
     if (save) void this.#save()
-    if (save || reported || before !== live.activity) this.#changed(record)
+    if (save || reported || backgroundChanged || before !== live.activity) this.#changed(record)
     if (live.activity === 'approval' && before !== 'approval') this.emit('approval-needed', { terminalId: id, title: record.title })
     if (effect.finished && before !== 'idle') this.emit('turn-finished', { terminalId: id, title: record.title, failed: Boolean(effect.failed) })
     // A team reads the reply a turn ended with (Stop's last_assistant_message) and its errors.
@@ -746,8 +799,9 @@ export class TerminalManager extends EventEmitter {
   /** Ends every Claude Code process (the app is quitting); their tasks resume on the next start. */
   async shutdown() {
     for (const pending of this.starting.values()) pending.cancelled = true
-    for (const live of this.live.values()) {
+    for (const [id, live] of this.live) {
       if (!live.alive) continue
+      this.#note(id, `ending Claude Code: the app is quitting (${this.#background(live)} in the background)`)
       try {
         live.proc.kill()
       } catch {}
