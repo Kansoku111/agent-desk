@@ -9,6 +9,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, openExternal, request, setState, uploadAttachment, useRemote, useStore } from '../store'
+import { useDraft } from '../drafts'
 import type { Attachment, TerminalSummary } from '../types'
 import { copyText, workspaceLabel } from '../util'
 import { ConfirmDialog } from './Modal'
@@ -207,7 +208,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
   showKeys: boolean
   onSent: () => void
 }) {
-  const [text, setText] = useState('')
+  const [text, setText] = useDraft(`terminal:${terminalId}`)
   const file = useRef<HTMLInputElement>(null)
   const arrow = (code: string) => (term?.modes.applicationCursorKeysMode ? `\x1bO${code}` : `\x1b[${code}`)
   const keys: { label: ReactNode; title: string; data: () => string }[] = [

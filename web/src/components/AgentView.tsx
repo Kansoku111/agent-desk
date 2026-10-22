@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowDown, FolderOpen, Loader2, PanelLeftOpen, Send, Square } from 'lucide-react'
 import { act, isTouch, setState, teamChildOf, useRemote, useStore } from '../store'
+import { useDraft } from '../drafts'
 import { workspaceLabel } from '../util'
 import { BackToLeader, StateIcon, stateLabel } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
@@ -23,7 +24,7 @@ export function AgentView({ taskId }: { taskId: string }) {
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const [showJump, setShowJump] = useState(false)
-  const [text, setText] = useState('')
+  const [text, setText] = useDraft(`agent:${taskId}`)
   const [sending, setSending] = useState(false)
 
   useLayoutEffect(() => {
