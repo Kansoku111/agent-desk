@@ -19,8 +19,11 @@ export function reportMessage(team, item, labelOf) {
       '合格なら close、直してほしい点や追加の作業は send で同じ子に送ってください。'],
     error: [`${head} ${who}がエラーで止まりました${rest}${unasked}`, task, '---', item.text, '---',
       '続けるなら send で指示を送ってください（例: 「続けて」）。'],
-    cancelled: [`${head} ${who}の作業が途中で止められました（ユーザーが停止した可能性があります）${rest}`, task,
-      '続けるなら send で指示を送ってください。'],
+    cancelled: item.byUser
+      ? [`${head} ${who}の作業を、ユーザーが全停止で止めました${rest}`, task,
+        'ユーザーから指示があるまで、この子に続きの指示を送らないでください。']
+      : [`${head} ${who}の作業が途中で止められました（ユーザーが停止した可能性があります）${rest}`, task,
+        '続けるなら send で指示を送ってください。'],
     approval: [`${head} ${who}が承認待ちで止まっています${rest}`, task, `操作: ${item.text}`,
       '許可するなら approve（allow: true）、拒否するなら allow: false と理由を送ってください。あなたにも判断できないときは ask_user でユーザーに確認してください。'],
   }[item.kind] ?? [`${head} ${item.text}`]

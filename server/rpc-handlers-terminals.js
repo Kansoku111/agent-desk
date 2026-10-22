@@ -71,5 +71,6 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
     'team.childTurns': ({ taskId }) => ({ turns: agents.turns(String(taskId ?? '')) ?? [] }),
     'team.message': ({ teamId, childId, text }) => teams.messageChild(teamId, childId, text),
     'team.stopChild': ({ teamId, childId }) => teams.stopChild(teamId, childId),
+    'team.stopAll': ({ teamId }) => teams.stopAll(teamId),
   }
 }

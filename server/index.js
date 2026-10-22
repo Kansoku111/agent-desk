@@ -29,6 +29,7 @@ import { resetPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
 import { fetchChatGptUsage, normalizeCodexRateLimits } from './chatgpt-usage.js'
+import { mergeClaudeLimits, readSavedClaudeLimits } from './claude-limits.js'
 import { CodexAppServer } from './codex-app-server.js'
 import { accountModelAdditions, markRetired, retiredModels, withCodexModelLimits } from './codex-models.js'
 import { appPaths, projectRoot } from './paths.js'
@@ -314,6 +315,14 @@ await threads.load()
 // The Claude children run headless (claude -p), on the Claude subscription.
 const agents = await new ClaudeRunner({ dir: path.join(paths.home, 'team-agents'), log }).load()
 agents.on('turn', ({ id, turn }) => broadcast('agentTurn', { id, turn }))
+// The Claude subscription's limits, as the team's `claude -p` runs last reported them.
+const claudeLimitsFile = path.join(paths.home, 'claude-limits.json')
+let claudeLimits = readSavedClaudeLimits(await readJson(claudeLimitsFile, null).catch(() => null))
+agents.on('rateLimits', (reading) => {
+  claudeLimits = mergeClaudeLimits(claudeLimits, reading)
+  broadcast('claudeLimits', { limits: claudeLimits })
+  void writeJson(claudeLimitsFile, claudeLimits).catch((error) => log('claude limits:', error.message))
+})
 teams = await new TeamManager({
   file: path.join(paths.home, 'teams.json'),
   dir: path.join(paths.home, 'teams'),
@@ -549,6 +558,7 @@ async function fullState(client) {
     login: login.state,
     codexLogin: client?.remote ? { phase: 'idle' } : codexApp.login,
     chatgptUsage,
+    claudeLimits,
     usage: usageState(),
     openTargets: openTargets(),
     permissionModes: PERMISSION_MODES,

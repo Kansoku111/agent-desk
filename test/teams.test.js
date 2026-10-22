@@ -519,6 +519,55 @@ test('a Claude child that fails or is stopped tells the leader', async (t) => {
   assert.match(typed()[1], /子「C」.*の作業が途中で止められました/)
 })
 
+test('stopAll ends the turn of every working child, Claude or GPT, and leaves the idle ones and every conversation alone', async (t) => {
+  const { agents, threads, tool, team, manager } = await setup(t)
+  await tool('spawn', { title: 'claude job', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  await tool('spawn', { title: 'gpt job', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
+  await tool('spawn', { title: 'idle job', task: 'c', tier: 'low', provider: 'claude', name: 'I' })
+  const [claude, gpt, idle] = team.children
+  agents.finish(idle.taskId, 'done')
+  assert.equal(agents.running(claude.taskId), true)
+  assert.equal(threads.threads.get(gpt.taskId).status, 'running')
+
+  const { stopped } = await manager.stopAll(team.id)
+  assert.equal(stopped, 2)
+  assert.equal(agents.running(claude.taskId), false)
+  assert.deepEqual(threads.calls.filter((call) => call[0] === 'cancel'), [['cancel', gpt.taskId]])
+  assert.deepEqual(agents.calls.filter((call) => call[0] === 'stop'), [['stop', claude.taskId]])
+  assert.equal(team.children.some((child) => child.closed), false)
+  assert.equal(agents.calls.some((call) => call[0] === 'remove'), false)
+
+  // Nothing is working any more: a second press stops nothing.
+  agents.finish(idle.taskId, 'done')
+  threads.threads.get(gpt.taskId).status = 'idle'
+  assert.equal((await manager.stopAll(team.id)).stopped, 0)
+  await assert.rejects(() => manager.stopAll('no-such-team'), /チームが見つかりません/)
+})
+
+test('after stopAll the leader is told the user stopped the child and is not invited to go on; one child stopped alone keeps the old wording', async (t) => {
+  const { agents, threads, terminals, leader, tool, team, manager, typed } = await setup(t)
+  await tool('spawn', { title: 'claude job', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  await tool('spawn', { title: 'gpt job', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
+  terminals.set(leader, { activity: 'running' })
+  await manager.stopAll(team.id)
+  // The GPT child's turn ends as the thread manager reports a cancelled one.
+  const gpt = team.children[1]
+  threads.threads.get(gpt.taskId).status = 'idle'
+  threads.emit('turn-finished', { threadId: gpt.taskId, status: 'cancelled' })
+  assert.deepEqual(team.queue.map((item) => [item.kind, item.byUser]), [['cancelled', true], ['cancelled', true]])
+  terminals.set(leader, { activity: 'idle' })
+  const first = typed()[0]
+  assert.match(first, /ユーザーが全停止で止めました/)
+  assert.match(first, /ユーザーから指示があるまで、この子に続きの指示を送らないでください/)
+  assert.doesNotMatch(first, /続けるなら send/)
+
+  // The flag is spent with the turn: a later stop by itself reads as before.
+  await tool('send', { child: 'C', message: '続けて' })
+  manager.stopChild(team.id, team.children[0].id)
+  const later = team.queue.at(-1)
+  assert.deepEqual([later.childId, later.kind, later.byUser], [team.children[0].id, 'cancelled', undefined])
+})
+
 test('send reaches a child however it is: idle, busy, or closed', async (t) => {
   const { agents, threads, tool, team } = await setup(t)
   await tool('spawn', { title: 'claude job', task: 'a', tier: 'low', provider: 'claude', name: 'C' })

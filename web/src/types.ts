@@ -426,6 +426,7 @@ export interface AppState {
   login: LoginState
   codexLogin?: LoginState
   chatgptUsage: ChatGptUsage | null
+  claudeLimits: ClaudeLimits | null
   openTargets: { files: boolean; terminal: boolean }
   permissionModes: PermissionMode[]
   dshUpdate: DshUpdate
@@ -492,6 +493,13 @@ export type ChatGptUsage =
   | { status: 'ok'; plan: string | null; limitReached: boolean; windows: ChatGptUsageWindow[]; fetchedAt: number }
   | { status: 'signed-out' | 'expired' }
   | { status: 'error'; message: string }
+
+/** The Claude subscription's limits as the team's last `claude -p` run reported them. */
+export interface ClaudeLimits {
+  status: 'ok'
+  windows: ChatGptUsageWindow[]
+  fetchedAt: number
+}
 
 export interface Attachment extends ImageRef {
   previewUrl: string

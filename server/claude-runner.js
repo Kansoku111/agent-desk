@@ -13,6 +13,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import readline from 'node:readline'
+import { normalizeClaudeLimits } from './claude-limits.js'
 import { readJson, writeJson } from './json-file.js'
 import { API_KEY_ENV, INHERITED_MARKERS, findClaude, launchCommand } from './terminals.js'
 
@@ -261,6 +262,11 @@ export class ClaudeRunner extends EventEmitter {
     }
     if (event.type === 'result') {
       live.result = event
+      return
+    }
+    if (event.type === 'rate_limit_event') {
+      const limits = normalizeClaudeLimits(event.rate_limit_info, this.now())
+      if (limits) this.emit('rateLimits', limits)
       return
     }
     if (applyEvent(live.turn, event, this.now())) {

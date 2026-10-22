@@ -95,6 +95,8 @@ export class TeamManager extends EventEmitter {
     this.retries = new Map()
     /** GPT children whose turn was stopped for starting a Claude (API-billed) subagent. */
     this.apiStopped = new Set()
+    /** Children the user stopped with "全停止": the leader is told it was the user, and not to go on by itself. */
+    this.userStopped = new Set()
     this.writes = Promise.resolve()
 
     threads.on('thread', (thread) => this.#onThread(thread))
@@ -754,6 +756,29 @@ export class TeamManager extends EventEmitter {
   }
 
   /**
+   * The user stopped every working child at once. Each one's turn ends as with
+   * `stopChild` (a GPT child's too) and its conversation stays; none is closed.
+   */
+  async stopAll(teamId) {
+    const team = this.teams.get(teamId)
+    if (!team) throw new Error('チームが見つかりません')
+    let stopped = 0
+    for (const child of team.children) {
+      if (!child.taskId || !this.#childBusy(child)) continue
+      this.userStopped.add(child.id)
+      try {
+        if (child.kind === 'thread') await this.threads.cancel(child.taskId)
+        else this.agents.stop(child.taskId)
+      } catch (error) {
+        this.userStopped.delete(child.id)
+        throw error
+      }
+      stopped += 1
+    }
+    return { team: this.summary(team), stopped }
+  }
+
+  /**
    * The user changed a running team's settings in its panel: the children's
    * providers and tiers and how many may be open. Who leads stays (the leader
    * is its own task). The leader hears what it may use now.
@@ -1069,6 +1094,7 @@ export class TeamManager extends EventEmitter {
     if (!found.child) return this.#onLeaderFinished(found.team)
     const { team, child } = found
     const apiStopped = this.apiStopped.delete(child.id)
+    const byUser = this.userStopped.delete(child.id)
     if (this.#reportsTurn(child)) {
       const extra = child.awaiting ? {} : { unasked: true }
       child.awaiting = false
@@ -1081,7 +1107,7 @@ export class TeamManager extends EventEmitter {
           answer,
         ].filter(Boolean).join('\n\n'), extra)
       } else if (status === 'error') this.#report(team, child, 'error', [turn?.error?.message, answer].filter(Boolean).join('\n\n'), extra)
-      else if (status === 'cancelled') this.#report(team, child, 'cancelled', answer, extra)
+      else if (status === 'cancelled') this.#report(team, child, 'cancelled', answer, byUser ? { ...extra, byUser } : extra)
       else this.#report(team, child, 'report', answer, extra)
     }
     void this.#flushChild(team, child)
@@ -1126,6 +1152,7 @@ export class TeamManager extends EventEmitter {
     const found = this.#byTask(id)
     if (!found?.child) return
     const { team, child } = found
+    const byUser = this.userStopped.delete(child.id)
     if (this.#reportsTurn(child)) {
       const extra = child.awaiting ? {} : { unasked: true }
       child.awaiting = false
@@ -1133,7 +1160,7 @@ export class TeamManager extends EventEmitter {
       const denied = (denials ?? []).map((entry) => `- ${describeTool(entry?.tool_name, entry?.tool_input)}`)
       const note = denied.length ? `（承認が必要なため実行されなかった操作）\n${denied.join('\n')}` : ''
       if (status === 'error') this.#report(team, child, 'error', [error, text, note].filter(Boolean).join('\n\n'), extra)
-      else if (status === 'cancelled') this.#report(team, child, 'cancelled', text, extra)
+      else if (status === 'cancelled') this.#report(team, child, 'cancelled', text, byUser ? { ...extra, byUser } : extra)
       else this.#report(team, child, 'report', [text, note].filter(Boolean).join('\n\n'), extra)
     }
     void this.#flushChild(team, child)

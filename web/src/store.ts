@@ -399,6 +399,9 @@ function handleFrame(frame: any) {
     case 'chatgptUsage':
       updateServer({ chatgptUsage: frame.usage })
       break
+    case 'claudeLimits':
+      updateServer({ claudeLimits: frame.limits })
+      break
     case 'usage':
       updateServer({ usage: frame.usage })
       break

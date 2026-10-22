@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import {
-  ArrowLeft, CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Loader2, MessageCircleQuestion, Network, RefreshCw, ShieldAlert, SlidersHorizontal, Users, X, XCircle,
+  ArrowLeft, CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Users, X, XCircle,
 } from 'lucide-react'
 import { act, navigate, openTeamChild, setTeamPanel, useStore } from '../store'
 import type { AppState, TeamChild, TeamChildState, TeamSummary, TerminalSummary, ThreadSummary } from '../types'
-import { effortLabel } from '../util'
-import { Modal } from './Modal'
+import { effortLabel, relativeTime, resetLabel } from '../util'
+import { ChatGptLimits } from './ChatGptUsage'
+import { ConfirmDialog, Modal } from './Modal'
 import { TeamConfigDialog } from './TeamSettings'
 import { claudeModelName } from './TerminalPickers'
 
@@ -217,10 +218,63 @@ function ChildCard({ child }: { child: TeamChild }) {
   )
 }
 
+/**
+ * The Claude subscription's limits as the team's last Claude run reported them.
+ * Nothing refreshes them on its own: they update whenever a team's Claude works.
+ */
+function ClaudeLimitsCard() {
+  const limits = useStore((state) => state.server?.claudeLimits ?? null)
+  const now = Date.now()
+  if (!limits || limits.windows.length === 0) {
+    return (
+      <div className="limits team-limits">
+        <div className="limits-head"><span>Claude の利用上限</span></div>
+        <p className="fine-print">まだ取得していません。チームの Claude が1回動くと表示されます。</p>
+      </div>
+    )
+  }
+  return (
+    <div className="limits team-limits">
+      <div className="limits-head"><span>Claude の利用上限</span></div>
+      {limits.windows.map((window) => {
+        const reset = window.resetAt !== null && window.resetAt <= now
+        const left = Math.max(0, 100 - Math.round(window.usedPercent))
+        return (
+          <div key={window.seconds} className="limit-row">
+            <div className="limit-label">
+              <span>{window.label}</span>
+              <span className="limit-value">{reset ? 'リセット済み' : `残り ${left}%`}</span>
+            </div>
+            {!reset && (
+              <div className="limit-bar" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={left} aria-label={`${window.label}の残り`}>
+                <span className={left <= 20 ? 'low' : ''} style={{ width: `${left}%` }} />
+              </div>
+            )}
+            {window.resetAt !== null && !reset && <span className="limit-reset">{resetLabel(window.resetAt)}にリセット</span>}
+          </div>
+        )
+      })}
+      <span className="limit-reset">{relativeTime(limits.fetchedAt)}に取得 · チームの Claude が動くたびに更新</span>
+    </div>
+  )
+}
+
+/** Both subscriptions' limits, opened from the team panel's usage button. */
+function UsageDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title="使用量" onClose={onClose} width={440}>
+      <ClaudeLimitsCard />
+      <ChatGptLimits />
+    </Modal>
+  )
+}
+
 /** The right-hand panel beside a team's leader: its children, live, and what needs the user. */
 export function TeamPanel({ team }: { team: TeamSummary }) {
   const [diagram, setDiagram] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [usage, setUsage] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const running = team.children.filter((child) => isActive(child.state)).length
   const children = [...team.children].sort((a, b) => a.createdAt - b.createdAt)
   return (
@@ -244,12 +298,27 @@ export function TeamPanel({ team }: { team: TeamSummary }) {
               <SlidersHorizontal size={14} /> このチームの設定
             </button>
           </div>
+          <div className="team-panel-actions">
+            <button type="button" className="button team-diagram-button" onClick={() => setUsage(true)} title="Claude と GPT（Codex）の利用上限を見る">
+              <Gauge size={14} /> 使用量
+            </button>
+            <button type="button" className="button team-diagram-button" onClick={() => setStopping(true)} disabled={running === 0}
+              title={running === 0 ? '作業中の子はいません' : '作業中の子をすべて止める'}>
+              <Square size={13} /> 全停止
+            </button>
+          </div>
           <Notices team={team} />
           {children.map((child) => <ChildCard key={child.id} child={child} />)}
         </div>
       </aside>
       {diagram && <TeamDiagram team={team} onClose={() => setDiagram(false)} />}
       {editing && <TeamConfigDialog team={team} onClose={() => setEditing(false)} />}
+      {usage && <UsageDialog onClose={() => setUsage(false)} />}
+      {stopping && (
+        <ConfirmDialog title="作業中の子をすべて止めますか？" confirmLabel={`${running} 人を止める`} danger
+          body={`作業中の子 ${running} 人の作業を止めます。会話は残り、リーダーには止められたことが伝わります。あとから send で続きを頼めます。`}
+          onConfirm={() => void act('team.stopAll', { teamId: team.id })} onClose={() => setStopping(false)} />
+      )}
     </>
   )
 }

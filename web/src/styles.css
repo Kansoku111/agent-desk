@@ -4791,6 +4791,11 @@ button.team-node:disabled {
   gap: 6px;
 }
 
+.team-limits {
+  padding: 10px 0;
+  border-top: 0;
+}
+
 .team-panel-actions .team-diagram-button {
   flex: 1;
   min-width: 0;
