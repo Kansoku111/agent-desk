@@ -86,6 +86,28 @@ test('homePatch adds fixed-model subagent tools and tells the agent about them',
   const prompt = rows.find((row) => row.id === 'system-prompt').config
   assert.equal(prompt.personaPrefix, persona.personaPrefix)
   assert.ok(prompt.personaSuffix.startsWith(persona.personaSuffix))
-  assert.match(prompt.personaSuffix, /`subagent_claude` runs each child on Claude Haiku 5\.5 \(anthropic\/claude-haiku-5-5\)/)
-  assert.match(prompt.personaSuffix, /`subagent_gpt` runs each child on gpt-5\.5/)
+  assert.match(prompt.personaSuffix, /- `subagent_claude`: Claude Haiku 5\.5; /)
+  assert.match(prompt.personaSuffix, /- `subagent_gpt`: gpt-5\.5; /)
+})
+
+test('the subagent guidance sends each model family to its own pinned tool, in no more text than before', async () => {
+  const claude = { provider: 'anthropic', model: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' }
+  const gpt = { provider: 'openai-codex', model: 'gpt-6.1-sol', name: 'GPT-6.1-Sol' }
+  const guidance = (subagents) => {
+    const { personaSuffix } = YAML.parse(homePatch({ persona: { personaPrefix: '', personaSuffix: '' }, subagents }))
+      .find((row) => row.id === 'system-prompt').config
+    return personaSuffix.slice(0, personaSuffix.indexOf('Subagents do not get')).trim()
+  }
+
+  // Without this a GPT model other than the pinned one picks the plain `subagent`, which runs on itself.
+  const both = guidance([claude, gpt])
+  assert.match(both, /Delegate with your own family's tool \(`subagent_claude` for Claude, `subagent_gpt` for GPT\), else `subagent`/)
+  assert.match(both, /`subagent` and `subagent_fork` run on your own model; use `subagent_fork` only when the child must see this conversation/)
+  // The paragraph this one replaced was 510 characters for the same two tools.
+  assert.ok(both.length <= 510, `${both.length} characters`)
+
+  // A tool that is not pinned does not exist, so the model is not pointed at it.
+  const gptOnly = guidance([gpt])
+  assert.match(gptOnly, /\(`subagent_gpt` for GPT\)/)
+  assert.doesNotMatch(gptOnly, /subagent_claude/)
 })

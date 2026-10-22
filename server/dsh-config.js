@@ -66,8 +66,8 @@ export function contextOverrides(limits, models) {
  * always run children on the parent's model.
  */
 export const SUBAGENT_TOOLS = {
-  anthropic: { toolName: 'subagent_claude', billing: 'billed per token to the user\'s Anthropic API key' },
-  'openai-codex': { toolName: 'subagent_gpt', billing: 'covered by the user\'s ChatGPT subscription' },
+  anthropic: { toolName: 'subagent_claude', family: 'Claude', billing: 'billed per token to the user\'s Anthropic API key' },
+  'openai-codex': { toolName: 'subagent_gpt', family: 'GPT', billing: 'covered by the user\'s ChatGPT subscription' },
 }
 
 /**
@@ -96,16 +96,17 @@ export const INSTRUCTIONS_PLUGIN = new URL('./instructions-plugin.js', import.me
 /** Longest custom instructions the settings accept, in characters. */
 export const INSTRUCTIONS_MAX = 10_000
 
-/** The prompt paragraph that tells the agent which model each pinned tool runs. */
+/**
+ * The prompt paragraph that tells the agent which model each pinned tool runs.
+ * A model that sees `subagent` next to a pinned tool takes the plain one, which
+ * runs on its own model, so the paragraph steers it to its family's pinned tool.
+ */
 function subagentGuidance(subagents) {
-  const lines = subagents.map(({ provider, model, name }) => {
-    const tool = SUBAGENT_TOOLS[provider]
-    return `- \`${tool.toolName}\` runs each child on ${name || model} (${provider}/${model}); ${tool.billing}.`
-  })
+  const tools = subagents.map(({ provider, model, name }) => ({ ...SUBAGENT_TOOLS[provider], label: name || model }))
   return [
     'Subagents on a fixed model:',
-    ...lines,
-    '`subagent` and `subagent_fork` run children on your own model. Use a fixed-model tool when the user asks for that model, or when a different model family is worth a second opinion. They take the same arguments as `subagent`.',
+    ...tools.map(({ toolName, label, billing }) => `- \`${toolName}\`: ${label}; ${billing}.`),
+    `The user chose these. Delegate with your own family's tool (${tools.map(({ toolName, family }) => `\`${toolName}\` for ${family}`).join(', ')}), else \`subagent\`; use another family's only for a second opinion or when asked. \`subagent\` and \`subagent_fork\` run on your own model; use \`subagent_fork\` only when the child must see this conversation.`,
     'Subagents do not get this session\'s MCP tools (`mcp__…`: image generation, browser, desktop). Call those yourself; `mcp__imagegen__generate_image` already has GPT draw the image, so image requests need no subagent.',
   ].join('\n')
 }
