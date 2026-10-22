@@ -5,8 +5,11 @@
 // or the screen, and a message is handed over on stdin, not typed into a box.
 //
 // It is the same `claude` the user signed in to, so it runs on their Claude
-// subscription. The first event says where its credentials come from; a run
-// that would use an API key is stopped before it asks the model anything.
+// subscription. Before a turn starts, `claude auth status` (which asks no
+// model anything) says which sign-in it would use, and a run that would use an
+// API key or a cloud account does not start (claude-auth.js). The first event
+// of the run says it again as a last guard; it comes too late to be a promise,
+// because the request follows it within a few tens of milliseconds.
 import { spawn as spawnProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -85,18 +88,21 @@ export class ClaudeRunner extends EventEmitter {
    * @param {string} options.dir  one file per session: its settings and recent turns
    * @param {() => string|null} [options.findClaude]
    * @param {typeof spawnProcess} [options.spawn]
+   * @param {(context: { claude: string, cwd: string, env: object }) => Promise<string|null>} [options.preflight]
+   *   asked before each turn starts: a message when the run must not start, else null
    */
-  constructor({ dir, findClaude: find = () => findClaude(), spawn = spawnProcess, log = () => {}, now = Date.now, platform = process.platform }) {
+  constructor({ dir, findClaude: find = () => findClaude(), spawn = spawnProcess, preflight = null, log = () => {}, now = Date.now, platform = process.platform }) {
     super()
     this.dir = dir
     this.findClaude = find
     this.spawn = spawn
+    this.preflight = preflight
     this.log = log
     this.now = now
     this.platform = platform
     /** @type {Map<string, object>} sessions by id */
     this.records = new Map()
-    /** The running turn of a session: { proc, turn, stopping, apiKey, stderr, result, exited } */
+    /** The running turn of a session: { proc, turn, stopping, apiKey, refusal, stderr, result, exited } (proc is null until the preflight is through) */
     this.live = new Map()
     this.writes = new Map()
   }
@@ -208,20 +214,61 @@ export class ClaudeRunner extends EventEmitter {
     const env = { ...process.env }
     for (const name of [...INHERITED_MARKERS, ...API_KEY_ENV]) delete env[name]
     const command = launchCommand(claude, args)
+    const spawnOptions = { cwd: record.workspace, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }
+    const live = { proc: null, turn, stopping: false, apiKey: null, refusal: null, stderr: '', result: null }
+    live.exited = new Promise((resolve) => { live.markExited = resolve })
+
+    if (this.preflight) {
+      // The turn is working from now on; it starts once the sign-in has been checked.
+      this.live.set(id, live)
+      void this.#save(record)
+      this.emit('session', this.summary(record))
+      this.emit('turn', { id, turn })
+      void this.#startChecked(record, live, { claude, command, spawnOptions, text })
+      return this.summary(record)
+    }
+
     let proc
     try {
-      proc = this.spawn(command.file, command.args, { cwd: record.workspace, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+      proc = this.spawn(command.file, command.args, spawnOptions)
     } catch (error) {
       this.#finish(record, turn, { status: 'error', message: `Claude Code を起動できませんでした: ${error.message}` })
       throw error
     }
-    const live = { proc, turn, stopping: false, apiKey: null, stderr: '', result: null }
-    live.exited = new Promise((resolve) => { live.markExited = resolve })
     this.live.set(id, live)
     void this.#save(record)
     this.emit('session', this.summary(record))
     this.emit('turn', { id, turn })
+    this.#attach(record, live, proc, text)
+    return this.summary(record)
+  }
 
+  /** Checks which sign-in the run would use, then starts it (or ends the turn without starting it). */
+  async #startChecked(record, live, { claude, command, spawnOptions, text }) {
+    let refusal = null
+    try {
+      refusal = await this.preflight({ claude, cwd: spawnOptions.cwd, env: spawnOptions.env })
+    } catch (error) {
+      // An unreadable answer is not a reason to refuse; the first event of the run still checks.
+      this.log('claude runner: sign-in check failed:', error.message)
+    }
+    if (live.stopping || this.closing) return this.#onExit(record, live, null, null)
+    if (refusal) {
+      live.refusal = String(refusal)
+      return this.#onExit(record, live, null, null)
+    }
+    let proc
+    try {
+      proc = this.spawn(command.file, command.args, spawnOptions)
+    } catch (error) {
+      return this.#onExit(record, live, null, error)
+    }
+    this.#attach(record, live, proc, text)
+  }
+
+  /** Feeds the prompt to a started run and follows its output until it exits. */
+  #attach(record, live, proc, text) {
+    live.proc = proc
     proc.stdin?.on('error', () => {})
     proc.stdin?.end(String(text))
     proc.stderr?.setEncoding('utf8')
@@ -239,7 +286,6 @@ export class ClaudeRunner extends EventEmitter {
     }
     proc.on('error', (error) => end(null, error))
     proc.on('close', (code) => end(code))
-    return this.summary(record)
   }
 
   #onLine(record, live, line) {
@@ -279,6 +325,7 @@ export class ClaudeRunner extends EventEmitter {
     if (this.live.get(record.id) === live) this.live.delete(record.id)
     live.markExited()
     const { result } = live
+    if (live.refusal) return this.#finish(record, live.turn, { status: 'error', message: live.refusal })
     if (live.apiKey) {
       return this.#finish(record, live.turn, {
         status: 'error',
@@ -318,6 +365,8 @@ export class ClaudeRunner extends EventEmitter {
 
   #kill(live) {
     const { proc } = live
+    // Still being checked: nothing runs yet, and the check's end sees `stopping`.
+    if (!proc) return
     if (proc.exitCode !== null && proc.exitCode !== undefined) return
     if (this.platform === 'win32' && proc.pid) {
       // A .cmd shim runs under cmd.exe: end the whole tree.

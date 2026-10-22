@@ -20,10 +20,15 @@ export const INHERITED_MARKERS = [
 ]
 
 /**
- * Would make Claude Code bill an API key instead of the Claude subscription it
- * is signed in with. A team never uses the API, so its sessions go without them.
+ * Would make Claude Code bill an API key, or a cloud account (Bedrock, Vertex,
+ * Foundry), instead of the Claude subscription it is signed in with. A team's
+ * Claude Code sessions go without them. (A key in Claude Code's own settings
+ * is not an environment variable: claude-auth.js asks `claude auth status`.)
  */
-export const API_KEY_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']
+export const API_KEY_ENV = [
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'AWS_BEARER_TOKEN_BEDROCK',
+]
 
 /**
  * How long after Claude Code reports its session started its input box takes

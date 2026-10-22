@@ -29,6 +29,7 @@ import { resetPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
 import { fetchChatGptUsage, normalizeCodexRateLimits } from './chatgpt-usage.js'
+import { checkClaudeAuth } from './claude-auth.js'
 import { mergeClaudeLimits, readSavedClaudeLimits } from './claude-limits.js'
 import { CodexAppServer } from './codex-app-server.js'
 import { accountModelAdditions, markRetired, retiredModels, withCodexModelLimits } from './codex-models.js'
@@ -313,7 +314,7 @@ await threads.load()
 
 // Agent teams: a Claude Code leader hands work to GPT (dsh) and Claude Code children.
 // The Claude children run headless (claude -p), on the Claude subscription.
-const agents = await new ClaudeRunner({ dir: path.join(paths.home, 'team-agents'), log }).load()
+const agents = await new ClaudeRunner({ dir: path.join(paths.home, 'team-agents'), preflight: checkClaudeAuth, log }).load()
 agents.on('turn', ({ id, turn }) => broadcast('agentTurn', { id, turn }))
 // The Claude subscription's limits, as the team's `claude -p` runs last reported them.
 const claudeLimitsFile = path.join(paths.home, 'claude-limits.json')
