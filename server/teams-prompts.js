@@ -7,11 +7,12 @@ import { TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 export const PREFIX = '[Agent Desk チーム]'
 
 /** Each provider's models in the model list (catalog). */
-export const CATALOG_PROVIDER = { gpt: 'openai-codex', claude: 'anthropic', deepseek: 'deepseek-official' }
+export const CATALOG_PROVIDER = { gpt: 'openai-codex', claude: 'anthropic', claudeApi: 'anthropic', deepseek: 'deepseek-official' }
 /** How each provider's children run, as the leader reads it. */
 const PROVIDER_WHAT = {
   gpt: 'GPT on the user\'s ChatGPT subscription',
   claude: 'Claude Code on the user\'s Claude subscription',
+  claudeApi: 'Claude through the user\'s Anthropic API key, billed per token (or paid by their plan\'s monthly API credits)',
   deepseek: 'DeepSeek, billed per token to the user\'s DeepSeek API key (low cost)',
 }
 const CLAUDE_ALIASES = { opus: 'Opus（最新）', sonnet: 'Sonnet（最新）', haiku: 'Haiku（最新）', fable: 'Fable（最新）' }
@@ -45,7 +46,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false }) {
     ...(gpt
       ? [
         '',
-        'Hand the team\'s work to children with `spawn`, not to your own `subagent` tools: only children show in the user\'s team panel and report to you. Never call `subagent_claude`: it bills the user\'s Anthropic API key, which this team must not use.',
+        'Hand the team\'s work to children with `spawn`, not to your own `subagent` tools: only children show in the user\'s team panel and report to you. Never call `subagent_claude`: it bills the user\'s Anthropic API key outside the team\'s settings. If provider "claudeApi" is on, `spawn` a child with it instead.',
       ]
       : []),
     '',

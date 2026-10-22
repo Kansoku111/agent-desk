@@ -47,15 +47,15 @@ export interface TerminalSummary {
   team: { id: string; role: 'leader' | 'child'; childId?: string } | null
 }
 
-/** Who a team's children run on (DeepSeek: as a dsh task on the user's DeepSeek API key). */
-export type TeamProvider = 'gpt' | 'claude' | 'deepseek'
+/** Who a team's children run on (Claude (API) and DeepSeek: as a dsh task on the user's API key). */
+export type TeamProvider = 'gpt' | 'claude' | 'claudeApi' | 'deepseek'
 /** Who can lead a team. */
 export type TeamLeaderProvider = 'gpt' | 'claude'
 export type TeamTier = 'low' | 'mid'
 /** `removed`: the child's task was deleted on its own. */
 export type TeamChildState = 'running' | 'approval' | 'idle' | 'closed' | 'error' | 'stopped' | 'removed'
 
-/** One child agent of a team: a dsh task (GPT, DeepSeek) or headless Claude Code (Claude). */
+/** One child agent of a team: a dsh task (GPT, Claude (API), DeepSeek) or headless Claude Code (Claude). */
 export interface TeamChild {
   id: string
   name: string
@@ -122,6 +122,8 @@ export interface TeamSettings {
   leaderBypass: boolean
   gpt: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   claude: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
+  /** Older saves lack it (off). */
+  claudeApi?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   /** Older saves lack it (off). */
   deepseek?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   maxChildren: number

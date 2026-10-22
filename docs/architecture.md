@@ -27,3 +27,12 @@
 
 環境変数 `AGENT_DESK_HOME` で変更できます。中の `dsh-home` が dsh 専用のホームなので、普段使いの `~/.dsh` には触れません。
 API キーと公式 SIWC の登録・トークンは `dsh-home/.credentials.yaml` に保存されます。Codex app-serverの認証・設定・画像ターンは別の `codex-home` 内です。両方の資格情報を相互に転用しません。GPTモデルの能力は公式SIWCカタログから選択したフィールドだけを保存し、モデルが返すCodexのinstructions等をAgent Deskの指示として採用しません。
+
+## 読み取るデータと保存するデータ
+
+- **Claude のログイン情報（トークン）:** 読み取りません。保存も送信もしません。Claude Code のログインは Claude Code 自身が管理します。Agent Desk がチームの Claude を起動する前に呼ぶ `claude auth status` は、ログインの種類（サブスクリプションか API キーか）を答えるだけで、モデルには何も頼みません。その答えにはメールアドレスや組織名も含まれますが、Agent Desk が見るのはログインの種類だけで、残りは保存しません。
+- **Claude Code（CL）の会話:** 画面に表示し、再開するために、Claude Code が自分で保存した会話記録（`~/.claude/projects` の中）を読みます。この PC の中だけで扱い、書き換えません。
+- **チームの Claude の子:** 起動した `claude -p` の出力（返答・ツールの実行と結果・利用上限の情報）を読み、直近60ターンぶんを、データフォルダの `team-agents/` に保存します。
+- **Agent Desk 自身の通信先:** OpenAI（ChatGPT・Codex のサインインと利用）、DeepSeek と Anthropic の API（それぞれの API キーを登録して使うときや、キーの確認・料金の取得）です。Claude Code の通信は Claude Code 自身が行います。
+- **スマホから使う設定:** 有効にすると、会話の内容は Tailscale 経由で、あなたの端末に表示されます。
+- **保存先:** 上の表のデータフォルダだけです。リポジトリ（ソースコード）の中には保存しません。`AGENT_DESK_HOME` をリポジトリの中に向けた場合に備えて、`.gitignore` でデータフォルダの中身を除外しています。

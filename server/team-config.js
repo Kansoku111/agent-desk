@@ -5,14 +5,15 @@
 // here, so new models need no change to how the leader works.
 
 /**
- * Teams' children by provider: GPT and DeepSeek run as dsh tasks (on the
- * ChatGPT subscription, and on the user's DeepSeek API key), Claude as a Claude Code task.
+ * Teams' children by provider: GPT, Claude (API) and DeepSeek run as dsh tasks
+ * (on the ChatGPT subscription, and on the user's Anthropic and DeepSeek API
+ * keys), Claude as a Claude Code task.
  */
-export const TEAM_PROVIDERS = ['gpt', 'claude', 'deepseek']
+export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek']
 /** Who can lead: DeepSeek only works as a child. */
 export const LEADER_PROVIDERS = ['claude', 'gpt']
 export const TEAM_TIERS = ['low', 'mid']
-export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', deepseek: 'DeepSeek' }
+export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek' }
 export const MAX_CHILDREN_LIMIT = 12
 
 /** A Claude Code model alias (opus) or full name (claude-haiku-5-5), as `claude --model` takes it. */
@@ -34,6 +35,9 @@ export const TEAM_DEFAULTS = {
   // A tier that is not `enabled` is not offered to the leader.
   gpt: { enabled: true, low: { enabled: true, model: null, effort: 'medium' }, mid: { enabled: true, model: null, effort: 'high' } },
   claude: { enabled: true, low: { enabled: true, model: 'haiku', effort: null }, mid: { enabled: true, model: 'sonnet', effort: null } },
+  // Off until the user turns it on: Claude through their Anthropic API key, billed per token
+  // (or paid by the monthly API credits that Max and Team plans include).
+  claudeApi: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // Off until the user turns it on: it is billed per token to their DeepSeek API key.
   deepseek: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   maxChildren: 6,
@@ -53,6 +57,7 @@ export function teamConfig(saved) {
     leaderBypass: typeof value.leaderBypass === 'boolean' ? value.leaderBypass : TEAM_DEFAULTS.leaderBypass,
     gpt: provider('gpt'),
     claude: provider('claude'),
+    claudeApi: provider('claudeApi'),
     deepseek: provider('deepseek'),
     maxChildren: Number.isInteger(value.maxChildren) ? value.maxChildren : TEAM_DEFAULTS.maxChildren,
   }
@@ -115,7 +120,7 @@ export function mergeTeamConfig(current, patch) {
     if (!Number.isInteger(count) || count < 1 || count > MAX_CHILDREN_LIMIT) throw new Error(`子の上限は 1〜${MAX_CHILDREN_LIMIT} で指定してください`)
     next.maxChildren = count
   }
-  if (!TEAM_PROVIDERS.some((provider) => next[provider].enabled)) throw new Error('GPT・Claude・DeepSeek の少なくとも一つはオンにしてください')
+  if (!TEAM_PROVIDERS.some((provider) => next[provider].enabled)) throw new Error('GPT・Claude・Claude（API）・DeepSeek の少なくとも一つはオンにしてください')
   for (const provider of TEAM_PROVIDERS) {
     if (next[provider].enabled && !TEAM_TIERS.some((tier) => next[provider][tier].enabled)) {
       throw new Error(`${PROVIDER_NAMES[provider]} の低枠と中枠の少なくとも一方はオンにしてください`)

@@ -9,10 +9,12 @@ import { byNewest } from './Pickers'
 import { claudeEfforts, claudeModelName, claudeModels } from './TerminalPickers'
 
 const MAX_CHILDREN = 12
-const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'deepseek']
-const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', deepseek: 'DeepSeek' }
+const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek']
+const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek' }
+type DshProvider = 'gpt' | 'claudeApi' | 'deepseek'
 /** Each dsh provider's models in the model list. */
-const CATALOG_PROVIDER = { gpt: 'openai-codex', deepseek: 'deepseek-official' } as const
+const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official' } as const
+const OFF_PROVIDER = { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } }
 const TIERS: { tier: TeamTier; label: string; note: string }[] = [
   { tier: 'low', label: '低枠', note: '単純な作業、繰り返しの多い作業、量の多い作業' },
   { tier: 'mid', label: '中枠', note: '判断・設計・品質が要る作業' },
@@ -30,7 +32,8 @@ function fullConfig(saved: Config): Config {
     ...saved,
     leaderProvider: saved.leaderProvider ?? 'claude',
     gptLeader: saved.gptLeader ?? { model: null, effort: 'high' },
-    deepseek: saved.deepseek ?? { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
+    claudeApi: saved.claudeApi ?? OFF_PROVIDER,
+    deepseek: saved.deepseek ?? OFF_PROVIDER,
   }
 }
 
@@ -54,13 +57,13 @@ function applyPatch(config: Config, patch: Patch): Config {
   return next as unknown as Config
 }
 
-/** dsh models of a provider (GPT on the ChatGPT subscription, DeepSeek on its API key), newest first. */
-function dshModels(server: AppState, provider: 'gpt' | 'deepseek' = 'gpt') {
+/** dsh models of a provider (GPT on the ChatGPT subscription, Claude and DeepSeek on their API keys), newest first. */
+function dshModels(server: AppState, provider: DshProvider = 'gpt') {
   return server.catalog.models.filter((model) => model.provider === CATALOG_PROVIDER[provider] && isModelVisible(server, model)).sort(byNewest)
 }
 
 /** The reasoning levels of a dsh model, as the model list knows them. */
-function dshEfforts(server: AppState, id: string | null, provider: 'gpt' | 'deepseek' = 'gpt') {
+function dshEfforts(server: AppState, id: string | null, provider: DshProvider = 'gpt') {
   const known = id ? server.catalog.effortsByModel[JSON.stringify([CATALOG_PROVIDER[provider], id])] : undefined
   return pickableEfforts(known ?? server.catalog.fallbackEfforts).map((effort) => effort.value)
 }
@@ -144,6 +147,7 @@ function TierRow({ server, config, provider, tier, label, note, onChange }: {
 const PROVIDER_NOTE: Record<TeamProvider, string> = {
   gpt: 'dsh のタスクとして、ChatGPT サブスクリプションで動きます。',
   claude: '画面なしの Claude Code として、Claude Code にログインしているサブスクリプションで動きます。確認が要る操作は実行せず、報告でリーダーに伝えます。',
+  claudeApi: 'dsh のタスクとして、Anthropic の API キーで動きます（使った分だけ課金されます。Max・Team プランに付く毎月の API クレジットが使えます。Claude Code のサブスクリプションは使いません）。子としてだけ使えます。',
   deepseek: 'dsh のタスクとして、DeepSeek の API キーで動きます（使った分だけ DeepSeek に課金されます）。子としてだけ使えます。',
 }
 
@@ -151,7 +155,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
   const on = part(config, provider).enabled
   const othersOn = PROVIDERS.some((entry) => entry !== provider && part(config, entry).enabled)
   const signedOut = provider === 'gpt' && !server.accounts.chatgpt.signedIn
-  const noKey = provider === 'deepseek' && !server.accounts.deepseek.configured
+  const noKey = (provider === 'deepseek' && !server.accounts.deepseek.configured) || (provider === 'claudeApi' && !server.accounts.claude.configured)
   return (
     <section className={`account-card team-provider-card ${on ? '' : 'off'}`}>
       <div className="setting compact">
@@ -160,7 +164,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
           <p className="muted">
             {PROVIDER_NOTE[provider]}
             {signedOut && ' ChatGPT にサインインすると使えます（設定 → アカウント）。'}
-            {noKey && ' 設定 → アカウントで DeepSeek の API キーを登録すると使えます。'}
+            {noKey && ` 設定 → アカウントで ${provider === 'claudeApi' ? 'Anthropic' : 'DeepSeek'} の API キーを登録すると使えます。`}
           </p>
         </div>
         <label className="switch">
@@ -331,7 +335,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const change: Change = (patch) => setDraft((current) => (current ? applyPatch(current, patch) : current))
   const save = async () => {
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, patch: { gpt: draft.gpt, claude: draft.claude, deepseek: draft.deepseek, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, patch: { gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
   }
@@ -374,11 +378,11 @@ export function TeamSettings() {
               リーダーが作業を分けて子のエージェントに任せ、終わった子から順に届く報告を確認して、合格か手直しかを決めます。
             </p>
             <p className="muted">
-              リーダー（Claude Code / GPT）、同時に動かせる子の数、子に使う GPT・Claude・DeepSeek と枠（低・中）ごとのモデルは、TM を押したときに選びます。使わない枠はオフにできます。前回の選び方を覚えています。
+              リーダー（Claude Code / GPT）、同時に動かせる子の数、子に使う GPT・Claude・Claude（API）・DeepSeek と枠（低・中）ごとのモデルは、TM を押したときに選びます。使わない枠はオフにできます。前回の選び方を覚えています。
               動いているチームの子の枠と数は、チームのパネルの「このチームの設定」から変えられます。
             </p>
             <p className="muted">
-              リーダーが選ぶのは枠と GPT / Claude / DeepSeek だけで、モデル名は選びません。Claude の API は使いません。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
+              リーダーが選ぶのは枠と GPT / Claude / Claude（API） / DeepSeek だけで、モデル名は選びません。Claude Code の子はサブスクリプションで、Claude（API）の子は API キーで動きます（後者は初期設定ではオフです）。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
             </p>
           </div>
         </div>

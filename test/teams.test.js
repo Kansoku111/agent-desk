@@ -902,6 +902,28 @@ test('a DeepSeek child is a full-access dsh task on a DeepSeek model', async (t)
   await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'low' }), /"gpt" \/ "claude" \/ "deepseek"/)
 })
 
+test('a Claude (API) child is a full-access dsh task on an Anthropic model, not a Claude Code run; it is off until turned on', async (t) => {
+  assert.equal(teamConfig({}).claudeApi.enabled, false)
+  assert.equal(mergeTeamConfig(undefined, { claudeApi: { enabled: true, low: { model: 'claude-haiku-5-5' } } }).claudeApi.low.model, 'claude-haiku-5-5')
+  assert.throws(() => mergeTeamConfig(undefined, { claudeApi: { low: { enabled: false }, mid: { enabled: false }, enabled: true } }), /Claude（API）/)
+
+  const { threads, agents, tool, team, workspace, manager, terminals, leader } = await setup(t, {
+    claudeApi: { enabled: true, low: { enabled: true, model: 'claude-haiku-5-5', effort: null }, mid: { enabled: false, model: null, effort: null } },
+  })
+  const args = terminals.records.get(leader).launch.args
+  const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
+  assert.match(prompt, /provider "claudeApi" \(Claude through the user's Anthropic API key.*low = Claude Haiku 5\.5, mid = turned off/)
+  assert.match(await tool('spawn', { title: '要約', task: 'docs を要約', tier: 'low', provider: 'claudeApi', name: 'A' }), /子「A」を起動しました（Claude Haiku 5\.5・低）/)
+  const [, options] = threads.calls.find((call) => call[0] === 'create')
+  assert.deepEqual(options, {
+    workspace, model: '["anthropic","claude-haiku-5-5"]', effort: '', permissionMode: 'danger-full-access',
+    team: { id: team.id, childId: team.children[0].id },
+  })
+  assert.deepEqual([manager.summary(team).children[0].kind, manager.summary(team).children[0].provider], ['thread', 'claudeApi'])
+  assert.equal(agents.calls.some((call) => call[0] === 'create'), false)
+  await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'mid', provider: 'claudeApi' }), /Claude（API）の中枠はユーザーがオフ/)
+})
+
 test('a GPT leader is a dsh task whose session mounts the team tools with the leader instructions', async (t) => {
   const { threads, terminals, manager, team, leader, workspace } = await setup(t, { leaderProvider: 'gpt', gptLeader: { model: null, effort: 'high' } })
   assert.equal(team.leaderKind, 'thread')

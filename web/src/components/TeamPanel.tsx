@@ -19,7 +19,7 @@ const STATE_LABEL: Record<TeamChildState, string> = {
   stopped: '停止中',
   removed: '削除済み',
 }
-const PROVIDER_LABEL = { gpt: 'GPT', claude: 'Claude', deepseek: 'DeepSeek' }
+const PROVIDER_LABEL = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude API', deepseek: 'DeepSeek' }
 
 const isActive = (state: TeamChildState) => state === 'running' || state === 'approval'
 

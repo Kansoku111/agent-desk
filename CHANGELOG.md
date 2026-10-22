@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Agent teams: a "Claude (API)" child that runs as a dsh task on the user's Anthropic API key, so the monthly API credits of Max and Team plans can be used by a team. It is off by default and needs an Anthropic API key in Settings → Accounts.
+- Agent teams: before a Claude Code child starts, `claude auth status` (which asks no model anything) is checked. A run that would use an API key (environment, Claude Code settings or `apiKeyHelper`) or a cloud account (Bedrock, Vertex, Foundry) is not started, and the leader is told why.
+
+### Changed
+
+- The CLI's own `init` event is only a last guard: the first model request follows it within tens of milliseconds, so it cannot promise that nothing was requested. The docs no longer say it does.
+- The cloud-switch variables (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, `AWS_BEARER_TOKEN_BEDROCK`) are no longer passed to a team's Claude Code, like the API key variables.
+- docs/architecture.md now lists what Agent Desk reads and saves of Claude Code's data.
+
 ## [0.1.1] - 2026-10-22
 
 ### Added
