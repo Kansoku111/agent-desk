@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Agent teams: reports that arrive while the leader works now reach it together in its next turn, as one message with the next steps said once, instead of one turn per report. A message gathers at most 6,000 characters of reports; the rest follow. Settings → Agent teams → "報告をまとめて渡す" (on by default) turns it off.
+- Agent teams: the leader's `send` takes `fresh: true` to start a child over in a new conversation (its earlier one is removed), for work that needs little of what it carried. It is refused while the child works.
+- Agent teams: Settings → Agent teams → "子のツールを絞る" (off by default). Teams started with it on give children no browser, desktop or image-generation tools (a Claude child runs with `--strict-mcp-config`, so without MCP servers) unless the leader spawns them with `tools: true`.
+
 - Agent teams: a "Claude (API)" child runs as a dsh task on the user's Anthropic API key and is recommended for automatic team processing. It is off by default and needs a key in Settings → Accounts. Its runtime and history are separate from Claude Code. Credits, if any, depend on provider plan conditions; parallel or long-running work can incur substantial metered costs. Configure provider-console spending controls: Agent Desk does not enforce a hard USD cap.
 - Agent teams: start/settings inspect `claude auth status` without a model call and return only a sanitized authentication descriptor. The explicit billing confirmation is saved once per authentication mode for all teams (no tokens or account data), so it is not asked again for each new team. Authentication is rechecked before every Claude Code leader/child CLI launch or resume and every child turn. Changed modes require reconfirmation; unknown modes additionally require a separate explicit risk acknowledgement, and logged-out runs are blocked.
 - On a phone, a swipe right opens the task list and a swipe left closes it. It does not act inside text fields, over a dialog, while the page is pinch-zoomed, or on something that scrolls sideways and can still move that way.
@@ -18,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Agent teams: a child checks its work before it reports (tests, build, running it, or looking at the result), and its report says how it checked and what came out, between what it did and the paths it changed. The leader audits with that in hand.
 - Legal documentation now describes Anthropic's conditional allowance for an unmodified Claude Code binary using users' own subscription/API/cloud credentials, including Commercial Terms for product/service providers and no restriction of built-in authentication. Disclaimers and billing acknowledgements do not guarantee compliance or grant policy permission.
 - Agent teams: every kind of child (GPT, Claude Code, Claude (API), DeepSeek) is now off in a new install, so nothing runs, bills or signs in until the user turns it on in the team start dialog. The start button needs at least one on; a running team's settings keep one on too. Settings already saved are unchanged.
 - Team Claude Code leaders and children inherit normal authentication, including users' own API keys and cloud credentials, rather than subscription-only environment filtering or API/cloud rejection. Regular CL behavior is unchanged. Saved team choices, models, and histories remain intact; no automatic migration to API, enabling, or fallback is performed.

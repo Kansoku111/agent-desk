@@ -42,6 +42,7 @@ const TOOLS = [
         tier: { type: 'string', enum: ['low', 'mid'], description: 'low: simple, repetitive or high-volume work. mid: work that needs judgment, design or quality.' },
         provider: { type: 'string', enum: ['gpt', 'claude', 'claudeApi', 'deepseek'], description: 'gpt: GPT on the ChatGPT subscription. claude: Claude Code using its own user-confirmed subscription/API/cloud authentication. claudeApi: Claude through dsh on the user\'s Anthropic API key (metered billing; credits depend on their plan). deepseek: DeepSeek on the user\'s DeepSeek API key (billed per token). Use only the ones `status` lists as available; may be left out when only one is turned on.' },
         name: { type: 'string', description: 'Optional short unique name for the child (e.g. "A" or "効果音"). Default: 子1, 子2, ...' },
+        tools: { type: 'boolean', description: 'Only when your instructions say children start without the browser, desktop-control and image-generation tools: true gives this child those tools (a Claude child its MCP servers).' },
       },
       required: ['title', 'task', 'tier'],
     },
@@ -51,7 +52,11 @@ const TOOLS = [
     description: 'Send a message to a child: fixes after your audit, the next piece of work, or more work on the same scope later. The child keeps its context; a closed or stopped child resumes its conversation. Its report comes back to this conversation.',
     inputSchema: {
       type: 'object',
-      properties: { child, message: { type: 'string', description: 'What the child should do now.' } },
+      properties: {
+        child,
+        message: { type: 'string', description: 'What the child should do now. With `fresh`, the whole task, readable on its own.' },
+        fresh: { type: 'boolean', description: 'true: the child starts over in a new conversation (its earlier one is dropped), for work that needs little of it. Not while the child is working.' },
+      },
       required: ['child', 'message'],
     },
   },

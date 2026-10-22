@@ -53,7 +53,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
     },
   }, null, 2))
   const prompt = writeFile(dir, 'leader.md', withInstructions(leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models),
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: config.leanChildren,
   }), instructions))
   return {
     args: [
@@ -73,7 +73,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
  */
 export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl }) {
   const prompt = writeFile(dir, 'leader.md', leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: config.leanChildren,
   }))
   return {
     name: MCP_SERVER,
@@ -91,8 +91,12 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
 /**
  * The flags of every turn of a Claude child: no approvals (what would still
  * ask is denied, and the report lists it), no tools that wait for a person.
+ * A `lean` child has no MCP servers: their tools would be in every turn.
  */
-export function childTurnArgs({ child, dir, instructions = '' }) {
+export function childTurnArgs({ child, dir, instructions = '', lean = false }) {
   const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name), instructions))
-  return ['--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt]
+  return [
+    '--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt,
+    ...(lean ? ['--strict-mcp-config'] : []),
+  ]
 }

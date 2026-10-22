@@ -3,9 +3,10 @@
 // audits what they report. A GPT child is an ordinary dsh task on the ChatGPT
 // subscription; a Claude child is Claude Code run headless (claude-runner.js)
 // with the user's explicitly confirmed Claude Code auth mode. Reports reach the
-// leader one at a time, in the order the children finish, when it is idle (typed into
-// a Claude leader's terminal, sent to a GPT leader as a message): between
-// reports the leader sleeps and spends nothing.
+// leader in the order the children finish, when it is idle (typed into a Claude
+// leader's terminal, sent to a GPT leader as a message); those that waited
+// meanwhile go together, in one turn (batchReports). Between reports the leader
+// sleeps and spends nothing.
 //
 // Only a team's leader gets the MCP server (claude --mcp-config, or its dsh
 // session's MCP servers), so tasks outside a team carry no extra tools or
@@ -20,7 +21,7 @@ import { sameToken } from './remote.js'
 import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
 import { CATALOG_PROVIDER, childPrompt, clip, describeTool, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
-import { markOf, reportMessage } from './teams-report.js'
+import { markOf, reportsMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
 
@@ -34,6 +35,8 @@ export { childPrompt, describeTool, leaderPrompt, PREFIX } from './teams-prompts
  * short: Claude Code can take a minute or more to take in a long paste.
  */
 export const REPORT_PREVIEW = 1000
+/** How much waiting text one message to the leader may gather (batchReports); a longer paste is slow to take in. */
+const BATCH_CHARS = 6000
 const REPORT_KEEP = 40_000
 const REPORTS_KEPT = 6
 const ASKS_KEPT = 20
@@ -326,7 +329,19 @@ export class TeamManager extends EventEmitter {
 
   /** The flags of every turn of a Claude child: no approvals, no tools that wait for a person (teams-launch.js). */
   #agentArgs(team, child) {
-    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions() })
+    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions(), lean: this.#lean(team, child) })
+  }
+
+  /** A child without the browser, desktop and image tools (its MCP servers): the team keeps children lean and its spawn did not ask for them. */
+  #lean(team, child) {
+    return this.config(team).leanChildren && !child.tools
+  }
+
+  /** Whether a dsh task's session gets the browser, desktop and image tools (index.js mcpServersFor). */
+  toolsFor(thread) {
+    const team = thread.team?.childId ? this.teams.get(thread.team.id) : null
+    const child = team?.children.find((entry) => entry.id === thread.team.childId)
+    return !child || !this.#lean(team, child)
   }
 
   /**
@@ -544,38 +559,13 @@ export class TeamManager extends EventEmitter {
     const child = {
       id: randomUUID(), name: this.#childName(team, args.name), title, provider, tier, model, effort: effort ?? null,
       kind: provider === 'claude' ? 'agent' : 'thread', taskId: null, createdAt: now, updatedAt: now,
-      closed: false, awaiting: true, pending: [], followups: [], reports: [],
+      closed: false, awaiting: true, pending: [], followups: [], reports: [], ...(args.tools === true ? { tools: true } : {}),
     }
     team.children.push(child)
-    // The task's name in the lists; a leader that named the child after its job gets it once.
-    const taskTitle = child.name === title ? title : `${child.name}: ${title}`
     try {
-      if (child.kind === 'thread') {
-        const catalogProvider = CATALOG_PROVIDER[provider]
-        const value = this.catalog.data.models.find((entry) => entry.provider === catalogProvider && entry.id === model)?.value
-          ?? JSON.stringify([catalogProvider, model])
-        const thread = await this.threads.create({
-          workspace: team.workspace, model: value, effort: child.effort ?? '', permissionMode: 'danger-full-access',
-          team: { id: team.id, childId: child.id },
-        })
-        child.taskId = thread.id
-        if (!this.teams.has(team.id)) throw new Error('team was removed')
-        await this.threads.send(thread.id, { text: `${PREFIX}\n${childPrompt(child.name)}\n\n# Task: ${title}\n\n${task}` })
-        await this.threads.update(thread.id, { title: taskTitle })
-      } else {
-        const session = await this.agents.create({
-          workspace: team.workspace, model, effort: child.effort, args: this.#agentArgs(team, child),
-        })
-        child.taskId = session.id
-        if (!this.teams.has(team.id)) throw new Error('team was removed')
-        this.agents.run(session.id, `# Task from the team leader: ${title}\n\n${task}`)
-      }
+      await this.#startTask(team, child, task)
     } catch (error) {
       team.children = team.children.filter((entry) => entry !== child)
-      if (child.taskId) {
-        const removal = child.kind === 'thread' ? this.threads.remove(child.taskId) : this.agents.remove(child.taskId)
-        await Promise.resolve(removal).catch(() => {})
-      }
       this.#emit(team)
       throw error
     }
@@ -585,10 +575,53 @@ export class TeamManager extends EventEmitter {
     return `子「${child.name}」を起動しました（${this.#label(child)}）。終わると報告がこの会話に届きます。ほかに任せる作業がなければ、ターンを終えて待ってください。`
   }
 
+  /** Starts a new conversation for the child on its task; on failure the child keeps the task it had. */
+  async #startTask(team, child, task) {
+    const { title } = child
+    // The task's name in the lists; a leader that named the child after its job gets it once.
+    const taskTitle = child.name === title ? title : `${child.name}: ${title}`
+    const previous = child.taskId
+    child.taskId = null
+    let taskId = null
+    try {
+      if (child.kind === 'thread') {
+        const catalogProvider = CATALOG_PROVIDER[child.provider]
+        const value = this.catalog.data.models.find((entry) => entry.provider === catalogProvider && entry.id === child.model)?.value
+          ?? JSON.stringify([catalogProvider, child.model])
+        const thread = await this.threads.create({
+          workspace: team.workspace, model: value, effort: child.effort ?? '', permissionMode: 'danger-full-access',
+          team: { id: team.id, childId: child.id },
+        })
+        taskId = child.taskId = thread.id
+        if (!this.teams.has(team.id)) throw new Error('team was removed')
+        await this.threads.send(thread.id, { text: `${PREFIX}\n${childPrompt(child.name)}\n\n# Task: ${title}\n\n${task}` })
+        await this.threads.update(thread.id, { title: taskTitle })
+      } else {
+        const session = await this.agents.create({
+          workspace: team.workspace, model: child.model, effort: child.effort, args: this.#agentArgs(team, child),
+        })
+        taskId = child.taskId = session.id
+        if (!this.teams.has(team.id)) throw new Error('team was removed')
+        this.agents.run(session.id, `# Task from the team leader: ${title}\n\n${task}`)
+      }
+    } catch (error) {
+      child.taskId = previous
+      if (taskId) await Promise.resolve(this.#removeTask(child.kind, taskId)).catch(() => {})
+      throw error
+    }
+    // The conversation it replaces goes: the child is no longer found by it, so its removal leaves the child be.
+    if (previous) await Promise.resolve(this.#removeTask(child.kind, previous)).catch((error) => this.log(`team ${team.id}: removing ${child.name}'s old task:`, error.message))
+  }
+
+  #removeTask(kind, taskId) {
+    return kind === 'thread' ? this.threads.remove(taskId) : this.agents.remove(taskId)
+  }
+
   async #send(team, args) {
     const child = this.#child(team, args.child)
     const text = String(args.message ?? '').trim()
     if (!text) throw new Error('message（子に送る内容）を指定してください')
+    if (args.fresh === true) return this.#sendFresh(team, child, text)
     // A closed child takes a place again.
     const wasClosed = child.closed
     if (child.closed) this.#checkRoom(team)
@@ -607,6 +640,24 @@ export class TeamManager extends EventEmitter {
     await this.#save()
     this.#emit(team)
     return `子「${child.name}」に${how}。報告が届くまで、ターンを終えて待ってください。`
+  }
+
+  /** The child starts over in a new conversation on the message: what it carried is dropped. */
+  async #sendFresh(team, child, text) {
+    if (this.#childBusy(child)) throw new Error(`子「${child.name}」は作業中です。fresh で送るのは、作業が終わってからにしてください。`)
+    if (child.closed) this.#checkRoom(team)
+    for (const approval of [...this.approvals.values()]) {
+      if (approval.childId === child.id) this.#dropApproval(approval)
+    }
+    await this.#startTask(team, child, text)
+    child.closed = false
+    child.awaiting = true
+    child.pending = []
+    child.followups = []
+    child.updatedAt = this.now()
+    await this.#save()
+    this.#emit(team)
+    return `子「${child.name}」を新しい会話で始めました。報告が届くまで、ターンを終えて待ってください。`
   }
 
   async #toThread(child, body) {
@@ -918,8 +969,21 @@ export class TeamManager extends EventEmitter {
     this.#pump(team)
   }
 
-  #leaderMessage(team, item) {
-    return reportMessage(team, item, (child) => this.#label(child))
+  #leaderMessage(team, items) {
+    return reportsMessage(team, items, (child) => this.#label(child))
+  }
+
+  /** What goes to the leader next: the first item waiting, and with batchReports those after it that fit one message. */
+  #take(team) {
+    const items = [team.queue.shift()]
+    if (!teamConfig(this.getSettings()).batchReports) return items
+    let size = items[0].text?.length ?? 0
+    while (team.queue.length && size + (team.queue[0].text?.length ?? 0) <= BATCH_CHARS) {
+      const item = team.queue.shift()
+      size += item.text?.length ?? 0
+      items.push(item)
+    }
+    return items
   }
 
   #later(key, fn, ms) {
@@ -944,10 +1008,11 @@ export class TeamManager extends EventEmitter {
     if (status.starting) return this.#later(team.id, () => this.#pump(team), RETRY_MS)
     if (status.state === 'stopped') {
       // Not started since the app started: it resumes its conversation on the report.
-      const item = team.queue.shift()
-      const file = this.#writeFile(team, `report-${item.id}.md`, `${this.#leaderMessage(team, item)}\n`)
-      this.#deliver(team, item, () => this.terminals.restart(team.leaderId, null, undefined, {
-        prompt: `${PREFIX} #${markOf(item)} A message from your team arrived while this session was stopped. Read this file and act on it: ${file}`,
+      const items = this.#take(team)
+      const file = this.#writeFile(team, `report-${items[0].id}.md`, `${this.#leaderMessage(team, items)}\n`)
+      const marks = items.map((item) => `${PREFIX} #${markOf(item)}`).join(' ')
+      this.#deliver(team, items, () => this.terminals.restart(team.leaderId, null, undefined, {
+        prompt: `${marks} A message from your team arrived while this session was stopped. Read this file and act on it: ${file}`,
       }))
       return
     }
@@ -958,8 +1023,8 @@ export class TeamManager extends EventEmitter {
     if (!status.ready) return this.#later(team.id, () => this.#pump(team), RETRY_MS)
     const quiet = this.now() - status.inputAt
     if (quiet < TYPING_QUIET_MS) return this.#later(team.id, () => this.#pump(team), TYPING_QUIET_MS - quiet)
-    const item = team.queue.shift()
-    this.#deliver(team, item, () => this.terminals.sendMessage(team.leaderId, this.#leaderMessage(team, item)))
+    const items = this.#take(team)
+    this.#deliver(team, items, () => this.terminals.sendMessage(team.leaderId, this.#leaderMessage(team, items)))
   }
 
   /**
@@ -970,19 +1035,19 @@ export class TeamManager extends EventEmitter {
   #pumpThread(team) {
     const thread = this.threads.threads.get(team.leaderId)
     if (!thread || thread.status === 'running') return
-    const item = team.queue.shift()
-    const entry = { item, timer: null }
+    const items = this.#take(team)
+    const entry = { items, timer: null }
     this.delivering.set(team.id, entry)
     const done = () => {
       if (this.delivering.get(team.id) === entry) this.delivering.delete(team.id)
       void this.#save()
       this.#emit(team)
     }
-    this.threads.send(team.leaderId, { text: this.#leaderMessage(team, item) }).then(() => {
+    this.threads.send(team.leaderId, { text: this.#leaderMessage(team, items) }).then(() => {
       team.deliveryFailed = false
       done()
     }, (error) => {
-      team.queue.unshift(item)
+      team.queue.unshift(...items)
       team.deliveryFailed = true
       this.log(`team ${team.id}: could not hand the leader a report:`, error.message)
       done()
@@ -1016,21 +1081,21 @@ export class TeamManager extends EventEmitter {
   }
 
   /**
-   * Hands one report to the leader with `action`, then waits for the leader to
+   * Hands reports to the leader with `action`, then waits for the leader to
    * start on it; else presses Enter once more, waits longer (Claude Code can
    * take a minute or more to take in a long paste, and an Enter pressed
    * meanwhile waits for it), then gives the report back.
    * The delivery is marked first: the leader starting is not the user writing.
    */
-  async #deliver(team, item, action) {
-    const entry = { item, entered: false, timer: null, pasted: this.now() }
+  async #deliver(team, items, action) {
+    const entry = { items, entered: false, timer: null, pasted: this.now() }
     this.delivering.set(team.id, entry)
     try {
       const result = action()
       if (result?.then) await result
     } catch (error) {
       this.delivering.delete(team.id)
-      team.queue.unshift(item)
+      team.queue.unshift(...items)
       team.deliveryFailed = true
       void this.#save()
       this.#emit(team)
@@ -1051,7 +1116,7 @@ export class TeamManager extends EventEmitter {
         return
       }
       this.delivering.delete(team.id)
-      team.queue.unshift(item)
+      team.queue.unshift(...items)
       team.deliveryFailed = true
       this.log(`team ${team.id}: the leader did not take a report`)
       this.#emit(team)
@@ -1087,7 +1152,7 @@ export class TeamManager extends EventEmitter {
     // A prompt without team marks is the user's own: its answer to the questions the leader asked.
     if (!marks.length) this.userWrote(terminalId)
     const entry = this.delivering.get(team.id)
-    if (entry && marks.includes(markOf(entry.item))) this.#delivered(team)
+    if (entry?.items.some((item) => marks.includes(markOf(item)))) this.#delivered(team)
     const before = team.queue.length
     team.queue = team.queue.filter((item) => !marks.includes(markOf(item)))
     if (team.queue.length === before && !team.deliveryFailed) return

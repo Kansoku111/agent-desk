@@ -141,6 +141,10 @@ export interface TeamSettings {
   /** A GPT leader's model (null: the GPT "mid" tier's). */
   gptLeader: { model: string | null; effort: string | null }
   leaderBypass: boolean
+  /** Reports that wait while the leader works reach it in one message (older saves lack it: on). */
+  batchReports?: boolean
+  /** Children start without the browser, desktop and image tools unless the leader asks (older saves lack it: off). */
+  leanChildren?: boolean
   gpt: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   claude: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   /** Older saves lack it (off). */

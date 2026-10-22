@@ -276,6 +276,21 @@ function BypassSwitch({ config, onChange }: { config: Config; onChange: Change }
   )
 }
 
+function Switch({ title, note, checked, onChange }: { title: string; note: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <div className="setting compact">
+      <div>
+        <h3>{title}</h3>
+        <p className="muted">{note}</p>
+      </div>
+      <label className="switch">
+        <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} aria-label={title} />
+        <span />
+      </label>
+    </div>
+  )
+}
+
 /**
  * TM: starts a team in a folder with the choices made here. They start from
  * the last team's, and the next team starts from these.
@@ -389,6 +404,7 @@ export function TeamSettings() {
   const saved = server.settings.agentTeams
   if (!saved) return <div className="settings-section"><p className="muted">Agent Desk を起動し直すと使えます。</p></div>
   const config = fullConfig(saved)
+  const save: Change = (patch) => void act('settings.update', { patch: { agentTeams: patch } })
   const apiSubagent = server.settings.subagentModels?.anthropic
   return (
     <div className="settings-section">
@@ -409,7 +425,11 @@ export function TeamSettings() {
             </p>
           </div>
         </div>
-        <BypassSwitch config={config} onChange={(patch) => void act('settings.update', { patch: { agentTeams: patch } })} />
+        <BypassSwitch config={config} onChange={save} />
+        <Switch title="報告をまとめて渡す" note="リーダーの作業中に届いた報告を、次の 1 ターンでまとめて渡します。"
+          checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />
+        <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成のツール（Claude の子は MCP サーバー）を、リーダーが必要とした子にだけ渡します。次に始めるチームから使われます。"
+          checked={config.leanChildren === true} onChange={(value) => save({ leanChildren: value })} />
       </section>
       {apiSubagent && (
         <p className="team-warning">

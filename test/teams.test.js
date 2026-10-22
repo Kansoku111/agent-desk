@@ -373,8 +373,8 @@ test('a team runs with what was chosen when it started; the saved settings only 
   assert.match(typed().at(-1), /設定を変えました[\s\S]*mid = Claude Opus（最新）/)
 })
 
-test('reports reach the idle leader one at a time, in the order the children finished', async (t) => {
-  const { threads, terminals, tool, leader, typed } = await setup(t)
+test('with batchReports off, reports reach the idle leader one at a time, in the order the children finished', async (t) => {
+  const { threads, terminals, tool, leader, typed } = await setup(t, { batchReports: false })
   await tool('spawn', { title: 'first', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
   await tool('spawn', { title: 'second', task: 'b', tier: 'mid', provider: 'gpt', name: 'B' })
   // Both finish while the leader is still on its turn.
@@ -392,6 +392,50 @@ test('reports reach the idle leader one at a time, in the order the children fin
   terminals.set(leader, { activity: 'idle' })
   assert.equal(typed().length, 2)
   assert.match(typed()[1], /子「A」.*から報告が届きました\n/)
+})
+
+test('reports that waited while the leader worked reach it together, with the next steps once', async (t) => {
+  const { threads, terminals, tool, leader, typed, manager, team } = await setup(t)
+  await tool('spawn', { title: 'first', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  await tool('spawn', { title: 'second', task: 'b', tier: 'mid', provider: 'gpt', name: 'B' })
+  terminals.set(leader, { activity: 'running' })
+  threads.finish('thread-2', 'B の報告')
+  threads.finish('thread-1', 'A の報告')
+  terminals.set(leader, { activity: 'idle' })
+  assert.equal(typed().length, 1)
+  const [message] = typed()
+  assert.match(message, /^\[Agent Desk チーム\] 2 件がまとめて届きました。/)
+  assert.match(message, /#[0-9a-f]{8} 子「B」.*から報告が届きました\n業務: second\n---\nB の報告\n---\n\n\[Agent Desk チーム\] #[0-9a-f]{8} 子「A」/)
+  assert.equal(message.match(/合格なら close/g).length, 1)
+  assert.equal(team.queue.length, 0)
+  // Either mark tells the leader took it.
+  const marks = [...message.matchAll(/#([0-9a-f]{8})/g)].map((match) => match[1])
+  terminals.emit('hook', { terminalId: leader, input: { hook_event_name: 'UserPromptSubmit', team_marks: marks.slice(1) } })
+  assert.equal(manager.summary(team).delivery, 'idle')
+})
+
+test('a batch the leader could not be given goes back to the queue whole', async (t) => {
+  const { threads, terminals, tool, leader, typed, team } = await setup(t)
+  await tool('spawn', { title: 'first', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  await tool('spawn', { title: 'second', task: 'b', tier: 'low', provider: 'gpt', name: 'B' })
+  terminals.set(leader, { activity: 'running' })
+  threads.finish('thread-1', 'A の報告')
+  threads.finish('thread-2', 'B の報告')
+  terminals.sendMessage = () => { throw new Error('closed') }
+  terminals.set(leader, { activity: 'idle' })
+  assert.equal(typed().length, 0)
+  assert.deepEqual(team.queue.map((item) => item.text), ['A の報告', 'B の報告'])
+})
+
+test('a batch stops before it gets too long to paste', async (t) => {
+  const { threads, terminals, tool, leader, typed, team } = await setup(t)
+  for (const name of ['A', 'B', 'C', 'D', 'E', 'F']) await tool('spawn', { title: name, task: 'x', tier: 'low', provider: 'gpt', name })
+  terminals.set(leader, { activity: 'running' })
+  for (let index = 1; index <= 6; index += 1) threads.finish(`thread-${index}`, 'x'.repeat(2000))
+  terminals.set(leader, { activity: 'idle' })
+  // Each is shortened to REPORT_PREVIEW: five fit in one message, the sixth waits.
+  assert.match(typed()[0], /5 件がまとめて届きました（このあとに 1 件が待っています）/)
+  assert.equal(team.queue.length, 1)
 })
 
 test('a GPT child that starts a subagent anyway is stopped, and the leader hears why', async (t) => {
@@ -702,7 +746,7 @@ test('after stopAll the leader is told the user stopped the child and is not inv
   terminals.set(leader, { activity: 'idle' })
   const first = typed()[0]
   assert.match(first, /ユーザーが全停止で止めました/)
-  assert.match(first, /ユーザーから指示があるまで、この子に続きの指示を送らないでください/)
+  assert.match(first, /ユーザーから指示があるまで続きの指示を送らないでください/)
   assert.doesNotMatch(first, /続けるなら send/)
 
   // The flag is spent with the turn: a later stop by itself reads as before.
@@ -1118,8 +1162,8 @@ test('a GPT leader is a dsh task whose session mounts the team tools with the le
   assert.equal(manager.summary(team).leaderKind, 'thread')
 })
 
-test('a GPT leader gets each report as a message once its turn has ended', async (t) => {
-  const { threads, tool, leader, manager, team, sent } = await setup(t, { leaderProvider: 'gpt' })
+test('with batchReports off, a GPT leader gets each report as a message once its turn has ended', async (t) => {
+  const { threads, tool, leader, manager, team, sent } = await setup(t, { leaderProvider: 'gpt', batchReports: false })
   await tool('spawn', { title: 'first', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
   await tool('spawn', { title: 'second', task: 'b', tier: 'low', provider: 'gpt', name: 'B' })
   // The leader is on a turn of its own (it just spawned them).
@@ -1138,6 +1182,21 @@ test('a GPT leader gets each report as a message once its turn has ended', async
   await tick()
   assert.equal(sent().length, 2)
   assert.match(sent()[1], /子「A」/)
+})
+
+test('a GPT leader gets the reports that waited for its turn in one message', async (t) => {
+  const { threads, tool, leader, manager, team, sent } = await setup(t, { leaderProvider: 'gpt' })
+  await tool('spawn', { title: 'first', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  await tool('spawn', { title: 'second', task: 'b', tier: 'low', provider: 'gpt', name: 'B' })
+  threads.threads.get(leader).status = 'running'
+  threads.turns.get(leader).push({ id: 'l1', items: [], status: 'running' })
+  threads.finish('thread-3', 'B の報告')
+  threads.finish('thread-2', 'A の報告')
+  threads.finish(leader, 'spawned')
+  await tick()
+  assert.equal(sent().length, 1)
+  assert.match(sent()[0], /2 件がまとめて届きました[\s\S]*B の報告[\s\S]*A の報告/)
+  assert.equal(manager.summary(team).delivery, 'idle')
 })
 
 test('a GPT leader that starts a Claude (API-billed) subagent is stopped and told why', async (t) => {
@@ -1172,4 +1231,61 @@ test('a GPT leader needs a model', async (t) => {
   setSettings(mergeTeamConfig(TEAM_DEFAULTS, { leaderProvider: 'gpt', gpt: { enabled: true } }))
   await assert.rejects(manager.create({ workspace }), /GPT のリーダーのモデル/)
   assert.equal(manager.list().length, 1)
+})
+
+test('send with fresh starts the child over in a new conversation and drops the old one', async (t) => {
+  const { threads, agents, tool, team, manager } = await setup(t)
+  await tool('spawn', { title: 'docs', task: 'first task', tier: 'low', provider: 'gpt', name: 'G' })
+  await tool('spawn', { title: 'code', task: 'first task', tier: 'low', provider: 'claude', name: 'C' })
+  const [gpt, claude] = team.children
+  await assert.rejects(tool('send', { child: 'G', message: 'next', fresh: true }), /作業中です/)
+  threads.finish('thread-1', 'done')
+  agents.finish('agent-1', 'done')
+  await tool('close', { child: 'G' })
+
+  assert.match(await tool('send', { child: 'G', message: 'new task', fresh: true }), /新しい会話で始めました/)
+  assert.equal(gpt.taskId, 'thread-2')
+  assert.deepEqual(threads.calls.filter((call) => call[0] === 'create').at(-1)[1].team, { id: team.id, childId: gpt.id })
+  const first = threads.calls.filter((call) => call[0] === 'send' && call[1] === 'thread-2')[0][2]
+  assert.match(first, /you are the child agent "G"[\s\S]*# Task: docs\n\nnew task$/)
+  assert.ok(threads.calls.some((call) => call[0] === 'remove' && call[1] === 'thread-1'))
+  assert.deepEqual([gpt.closed, gpt.awaiting], [false, true])
+
+  await tool('send', { child: 'C', message: 'other task', fresh: true })
+  assert.equal(claude.taskId, 'agent-2')
+  assert.deepEqual(agents.calls.filter((call) => call[0] === 'run').at(-1), ['run', 'agent-2', '# Task from the team leader: code\n\nother task'])
+  assert.ok(agents.calls.some((call) => call[0] === 'remove' && call[1] === 'agent-1'))
+  // Both are still on the team, and report from their new conversations.
+  assert.equal(manager.summary(team).children.length, 2)
+  threads.finish('thread-2', 'fresh report')
+  assert.equal(gpt.reports.at(-1).text, 'fresh report')
+})
+
+test('lean children start without the extra tools unless spawn asks for them', async (t) => {
+  const { tool, team, manager, agents, terminals, leader } = await setup(t, { leanChildren: true })
+  const args = terminals.records.get(leader).launch.args
+  assert.match(await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8'), /`spawn` with `tools: true`/)
+  await tool('spawn', { title: 'a', task: 'x', tier: 'low', provider: 'claude', name: 'C1' })
+  await tool('spawn', { title: 'b', task: 'x', tier: 'low', provider: 'claude', name: 'C2', tools: true })
+  await tool('spawn', { title: 'c', task: 'x', tier: 'low', provider: 'gpt', name: 'G1' })
+  await tool('spawn', { title: 'd', task: 'x', tier: 'low', provider: 'gpt', name: 'G2', tools: true })
+  const created = agents.calls.filter((call) => call[0] === 'create').map((call) => call[1].args)
+  assert.deepEqual(created.map((list) => list.includes('--strict-mcp-config')), [true, false])
+  const [, , g1, g2] = team.children
+  assert.equal(manager.toolsFor({ id: g1.taskId, team: { id: team.id, childId: g1.id } }), false)
+  assert.equal(manager.toolsFor({ id: g2.taskId, team: { id: team.id, childId: g2.id } }), true)
+  assert.equal(manager.toolsFor({ id: 'plain' }), true)
+})
+
+test('children keep every tool by default, and report how they checked their work', async (t) => {
+  const { tool, team, manager, agents, terminals, leader } = await setup(t)
+  const args = terminals.records.get(leader).launch.args
+  assert.doesNotMatch(await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8'), /tools: true/)
+  await tool('spawn', { title: 'a', task: 'x', tier: 'low', provider: 'claude', name: 'C' })
+  await tool('spawn', { title: 'b', task: 'x', tier: 'low', provider: 'gpt', name: 'G' })
+  const childArgs = agents.calls.find((call) => call[0] === 'create')[1].args
+  assert.equal(childArgs.includes('--strict-mcp-config'), false)
+  assert.match(await fs.readFile(childArgs[childArgs.indexOf('--append-system-prompt-file') + 1], 'utf8'), /3\) how you checked it/)
+  const g = team.children[1]
+  assert.equal(manager.toolsFor({ id: g.taskId, team: { id: team.id, childId: g.id } }), true)
 })

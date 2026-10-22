@@ -45,7 +45,15 @@ export const TEAM_DEFAULTS = {
   // Billed per token to their DeepSeek API key.
   deepseek: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   maxChildren: 6,
+  // Reports that wait while the leader works reach it together, in one turn, instead of one turn each.
+  batchReports: true,
+  // Children start without the browser, desktop and image tools (a Claude child without its MCP
+  // servers) unless the leader's `spawn` asks for them: smaller tool lists on every turn.
+  leanChildren: false,
 }
+
+/** The switches of 設定 → エージェントチーム that are not a team's own choices. */
+const SWITCHES = ['leaderBypass', 'batchReports', 'leanChildren']
 
 /** The saved team settings with every field present (older saves lack newer fields). */
 export function teamConfig(saved) {
@@ -58,7 +66,7 @@ export function teamConfig(saved) {
     leaderProvider: LEADER_PROVIDERS.includes(value.leaderProvider) ? value.leaderProvider : TEAM_DEFAULTS.leaderProvider,
     leader: { ...TEAM_DEFAULTS.leader, ...value.leader },
     gptLeader: { ...TEAM_DEFAULTS.gptLeader, ...value.gptLeader },
-    leaderBypass: typeof value.leaderBypass === 'boolean' ? value.leaderBypass : TEAM_DEFAULTS.leaderBypass,
+    ...Object.fromEntries(SWITCHES.map((name) => [name, typeof value[name] === 'boolean' ? value[name] : TEAM_DEFAULTS[name]])),
     gpt: provider('gpt'),
     claude: provider('claude'),
     claudeApi: provider('claudeApi'),
@@ -97,9 +105,10 @@ export function mergeTeamConfig(current, patch) {
     if (Object.hasOwn(patch.gptLeader, 'model')) next.gptLeader.model = choice(patch.gptLeader.model, DSH_MODEL, 'GPT のリーダーのモデル')
     if (Object.hasOwn(patch.gptLeader, 'effort')) next.gptLeader.effort = choice(patch.gptLeader.effort, EFFORT, 'GPT のリーダーの推論レベル')
   }
-  if (Object.hasOwn(patch, 'leaderBypass')) {
-    if (typeof patch.leaderBypass !== 'boolean') throw new Error('agentTeams.leaderBypass は boolean で指定してください')
-    next.leaderBypass = patch.leaderBypass
+  for (const name of SWITCHES) {
+    if (!Object.hasOwn(patch, name)) continue
+    if (typeof patch[name] !== 'boolean') throw new Error(`agentTeams.${name} は boolean で指定してください`)
+    next[name] = patch[name]
   }
   for (const provider of TEAM_PROVIDERS) {
     if (!Object.hasOwn(patch, provider)) continue

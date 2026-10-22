@@ -13,11 +13,13 @@ export function createMcpServerList({ paths, getSettings, getTeams }) {
   /** MCP servers mounted into a task's session; ACP stdio servers need an absolute command. */
   function mcpServersFor(thread) {
     const servers = []
-    if (getSettings().browserTool) servers.push(chromeServer(thread))
-    if (getSettings().desktopTool && process.platform === 'win32') {
+    // A team's child the user keeps lean goes without them (teams.js toolsFor).
+    const tools = getTeams()?.toolsFor(thread) ?? true
+    if (tools && getSettings().browserTool) servers.push(chromeServer(thread))
+    if (tools && getSettings().desktopTool && process.platform === 'win32') {
       servers.push({ name: 'desktop', command: process.execPath, args: [desktopMcpScript], env: [] })
     }
-    if (getSettings().imageTool) {
+    if (tools && getSettings().imageTool) {
       servers.push({
         name: 'imagegen',
         command: process.execPath,

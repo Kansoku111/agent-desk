@@ -23,14 +23,14 @@ export function restoreTeams(saved, getSettings) {
   return teams
 }
 
-/** What to write: the teams, with a report that is being handed to the leader at the head of its queue. */
+/** What to write: the teams, with the reports being handed to the leader at the head of its queue. */
 export function saveSnapshot(teams, delivering) {
   return {
     version: 1,
     teams: [...teams].map(({ deliveryFailed: _failed, ...team }) => {
-      // A report being handed to the leader is saved at the head of the queue: if the app stops before the leader took it, it goes out again (marked).
-      const handing = delivering.get(team.id)?.item
-      return structuredClone(handing ? { ...team, queue: [{ ...handing, resent: true }, ...team.queue] } : team)
+      // Reports being handed to the leader are saved at the head of the queue: if the app stops before the leader took them, they go out again (marked).
+      const handing = delivering.get(team.id)?.items ?? []
+      return structuredClone(handing.length ? { ...team, queue: [...handing.map((item) => ({ ...item, resent: true })), ...team.queue] } : team)
     }),
   }
 }
