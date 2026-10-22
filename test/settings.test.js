@@ -519,7 +519,7 @@ test('agent team settings merge per field, validate everything and need no runti
     null, [], { leader: 'opus' }, { leader: { model: 'bad model' } }, { leaderBypass: 'yes' },
     { gpt: { enabled: 1 } }, { gpt: { low: { model: 'a b' } } }, { claude: { mid: { effort: 'HIGH!' } } },
     { maxChildren: 0 }, { maxChildren: 13 }, { maxChildren: 2.5 },
-    { gpt: { enabled: false }, claude: { enabled: false } },
+    { gpt: { enabled: true, low: { enabled: false }, mid: { enabled: false } } },
   ]) {
     const before = structuredClone(h.live)
     await assert.rejects(h.service.update({ theme: 'light', agentTeams: patch }))
@@ -529,5 +529,8 @@ test('agent team settings merge per field, validate everything and need no runti
   assert.equal(cleared.settings.agentTeams.gpt.low.model, null)
   const legacy = defaults()
   delete legacy.agentTeams
-  assert.equal(planSettingsUpdate(legacy, { agentTeams: { claude: { enabled: false } } }, 0).settings.agentTeams.gpt.enabled, true)
+  // Every kind of child starts off, and the saved settings may leave them all off (a team asks for one).
+  const fresh = planSettingsUpdate(legacy, { agentTeams: { claude: { low: { model: 'haiku' } } } }, 0).settings.agentTeams
+  assert.deepEqual(['gpt', 'claude', 'claudeApi', 'deepseek'].map((provider) => fresh[provider].enabled), [false, false, false, false])
+  assert.equal(planSettingsUpdate(legacy, { agentTeams: { claude: { enabled: true } } }, 0).settings.agentTeams.claude.enabled, true)
 })

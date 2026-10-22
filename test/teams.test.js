@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { DELIVERY_CHECK_MS, DELIVERY_GIVE_UP_MS, LEADER_SETTLE_MS, MCP_SERVER, PREFIX, REPORT_PREVIEW, TeamManager, TYPING_QUIET_MS, describeTool } from '../server/teams.js'
-import { mergeTeamConfig, teamConfig, TEAM_DEFAULTS } from '../server/team-config.js'
+import { assertChildrenOn, mergeTeamConfig, teamConfig, TEAM_DEFAULTS } from '../server/team-config.js'
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -190,6 +190,7 @@ async function setup(t, settings = {}) {
   const agents = fakeAgents()
   let saved = {
     ...structuredClone(TEAM_DEFAULTS),
+    claude: { ...structuredClone(TEAM_DEFAULTS.claude), enabled: true },
     gpt: { enabled: true, low: { model: 'gpt-6-luna', effort: 'medium' }, mid: { model: 'gpt-6.1-sol', effort: 'high' } },
     ...settings,
   }
@@ -860,17 +861,38 @@ test('team settings: defaults fill in, patches are checked', () => {
   assert.equal(next.leaderBypass, false)
   assert.throws(() => mergeTeamConfig(undefined, { maxChildren: 0 }), /1〜12/)
   assert.throws(() => mergeTeamConfig(undefined, { gpt: { low: { model: 'bad model' } } }), /GPT の低枠のモデル/)
-  assert.throws(() => mergeTeamConfig(undefined, { gpt: { enabled: false }, claude: { enabled: false } }), /少なくとも一つ/)
+  // Nothing is on until the user turns it on; a team asks for at least one.
+  for (const provider of ['gpt', 'claude', 'claudeApi', 'deepseek']) assert.equal(teamConfig({})[provider].enabled, false)
+  assert.equal(mergeTeamConfig(undefined, { gpt: { enabled: false } }).gpt.enabled, false)
+  assert.throws(() => assertChildrenOn(teamConfig({})), /少なくとも一つ/)
+  assert.doesNotThrow(() => assertChildrenOn(mergeTeamConfig(undefined, { claude: { enabled: true } })))
+  // What an older version saved as on stays on.
+  assert.equal(teamConfig({ gpt: { enabled: true } }).gpt.enabled, true)
   assert.throws(() => mergeTeamConfig(undefined, { leader: 'opus' }), /leader/)
   // A tier can be left out, but not both of a provider in use.
   assert.equal(mergeTeamConfig(undefined, { claude: { mid: { enabled: false } } }).claude.mid.enabled, false)
-  assert.throws(() => mergeTeamConfig(undefined, { claude: { low: { enabled: false }, mid: { enabled: false } } }), /Claude の低枠と中枠の少なくとも一方/)
+  assert.throws(() => mergeTeamConfig(undefined, { claude: { enabled: true, low: { enabled: false }, mid: { enabled: false } } }), /Claude の低枠と中枠の少なくとも一方/)
   assert.equal(mergeTeamConfig(undefined, { deepseek: { low: { enabled: false }, mid: { enabled: false } } }).deepseek.enabled, false)
   // DeepSeek is off until turned on, and only works as a child.
   assert.equal(teamConfig({}).deepseek.enabled, false)
   assert.equal(mergeTeamConfig(undefined, { deepseek: { enabled: true, low: { model: 'deepseek-v4-flash' } } }).deepseek.low.model, 'deepseek-v4-flash')
   assert.throws(() => mergeTeamConfig(undefined, { leaderProvider: 'deepseek' }), /リーダー/)
   assert.equal(teamConfig({ leaderProvider: 'deepseek' }).leaderProvider, 'claude')
+})
+
+test('a team starts only with a provider turned on, and cannot be left without one', async (t) => {
+  const { manager, workspace, team, setSettings } = await setup(t)
+  // Nothing is saved as on in a new install: the start dialog has to turn something on.
+  setSettings(teamConfig({}))
+  await assert.rejects(manager.create({ workspace }), /少なくとも一つ/)
+  assert.equal(manager.list().length, 1)
+  const started = await manager.create({ workspace, choices: { claude: { enabled: true } } })
+  assert.equal(started.team.config.claude.enabled, true)
+  assert.equal(started.team.config.gpt.enabled, false)
+  assert.equal(manager.list().length, 2)
+  // A running team keeps one on, whatever the panel sends.
+  assert.throws(() => manager.updateConfig(team.id, { gpt: { enabled: false }, claude: { enabled: false } }), /少なくとも一つ/)
+  assert.equal(manager.summary(team).config.gpt.enabled, true)
 })
 
 test('a tier the user turned off is not offered to the leader', async (t) => {
@@ -999,7 +1021,7 @@ test('a GPT leader\'s questions are answered when the user writes to it; deletin
 
 test('a GPT leader needs a model', async (t) => {
   const { manager, workspace, setSettings } = await setup(t)
-  setSettings(mergeTeamConfig(TEAM_DEFAULTS, { leaderProvider: 'gpt' }))
+  setSettings(mergeTeamConfig(TEAM_DEFAULTS, { leaderProvider: 'gpt', gpt: { enabled: true } }))
   await assert.rejects(manager.create({ workspace }), /GPT のリーダーのモデル/)
   assert.equal(manager.list().length, 1)
 })

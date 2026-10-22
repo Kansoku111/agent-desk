@@ -17,7 +17,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readJson, writeJson } from './json-file.js'
 import { sameToken } from './remote.js'
-import { mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
+import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
 import { CATALOG_PROVIDER, childPrompt, clip, describeTool, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { markOf, reportMessage } from './teams-report.js'
@@ -334,6 +334,7 @@ export class TeamManager extends EventEmitter {
    */
   async create({ workspace, size, choices = {} }) {
     const config = mergeTeamConfig(this.getSettings(), choices ?? {})
+    assertChildrenOn(config)
     const now = this.now()
     const gpt = config.leaderProvider === 'gpt'
     const team = {
@@ -788,7 +789,9 @@ export class TeamManager extends EventEmitter {
     if (!team) throw new Error('チームが見つかりません')
     const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren'].includes(key)))
     const before = this.#tierLines(this.config(team)).join('\n') + this.config(team).maxChildren
-    team.config = mergeTeamConfig(this.config(team), allowed)
+    const next = mergeTeamConfig(this.config(team), allowed)
+    assertChildrenOn(next)
+    team.config = next
     team.updatedAt = this.now()
     const config = this.config(team)
     if (this.#tierLines(config).join('\n') + config.maxChildren !== before) {

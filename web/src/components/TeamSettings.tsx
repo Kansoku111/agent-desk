@@ -26,6 +26,9 @@ type Change = (patch: Patch) => void
 
 const tierOn = (tier: { enabled?: boolean }) => tier.enabled !== false
 
+/** Every provider starts off; a team needs at least one on to hand work to. */
+const anyChildOn = (config: Config) => PROVIDERS.some((provider) => config[provider]?.enabled)
+
 /** The settings with every field (settings saved by an older version lack the GPT leader's and DeepSeek's). */
 function fullConfig(saved: Config): Config {
   return {
@@ -153,7 +156,6 @@ const PROVIDER_NOTE: Record<TeamProvider, string> = {
 
 function ProviderCard({ server, config, provider, onChange }: { server: AppState; config: Config; provider: TeamProvider; onChange: Change }) {
   const on = part(config, provider).enabled
-  const othersOn = PROVIDERS.some((entry) => entry !== provider && part(config, entry).enabled)
   const signedOut = provider === 'gpt' && !server.accounts.chatgpt.signedIn
   const noKey = (provider === 'deepseek' && !server.accounts.deepseek.configured) || (provider === 'claudeApi' && !server.accounts.claude.configured)
   return (
@@ -171,8 +173,8 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
           <input
             type="checkbox"
             checked={on}
-            // At least one provider stays on; DeepSeek needs its key first.
-            disabled={on ? !othersOn : noKey}
+            // The API providers need their key first.
+            disabled={!on && noKey}
             onChange={(event) => onChange({ [provider]: { enabled: event.target.checked } })}
             aria-label={`${PROVIDER_NAME[provider]} の子を使う`}
           />
@@ -299,6 +301,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
           <ChildCount config={draft} onChange={change} />
         </section>
         {PROVIDERS.map((provider) => <ProviderCard key={provider} server={server} config={draft} provider={provider} onChange={change} />)}
+        {!anyChildOn(draft) && <p className="team-warning">子に使うものを、少なくとも一つオンにしてください。オンにしたものだけが、リーダーから使えます。</p>}
         <button type="button" className={`link-button team-start-details ${details ? 'open' : ''}`} onClick={() => setDetails(!details)}>
           <ChevronRight size={13} /> 詳しい設定
         </button>
@@ -310,7 +313,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={close}>キャンセル</button>
-        <button type="button" className="button primary" disabled={starting} onClick={() => void start()}>始める</button>
+        <button type="button" className="button primary" disabled={starting || !anyChildOn(draft)} onClick={() => void start()}>始める</button>
       </div>
     </Modal>
   )
@@ -350,10 +353,11 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
           <ChildCount config={draft} onChange={change} />
         </section>
         {PROVIDERS.map((provider) => <ProviderCard key={provider} server={server} config={draft} provider={provider} onChange={change} />)}
+        {!anyChildOn(draft) && <p className="team-warning">子に使うものを、少なくとも一つオンにしてください。</p>}
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={onClose}>キャンセル</button>
-        <button type="button" className="button primary" disabled={saving} onClick={() => void save()}>保存</button>
+        <button type="button" className="button primary" disabled={saving || !anyChildOn(draft)} onClick={() => void save()}>保存</button>
       </div>
     </Modal>
   )
@@ -378,11 +382,11 @@ export function TeamSettings() {
               リーダーが作業を分けて子のエージェントに任せ、終わった子から順に届く報告を確認して、合格か手直しかを決めます。
             </p>
             <p className="muted">
-              リーダー（Claude Code / GPT）、同時に動かせる子の数、子に使う GPT・Claude・Claude（API）・DeepSeek と枠（低・中）ごとのモデルは、TM を押したときに選びます。使わない枠はオフにできます。前回の選び方を覚えています。
+              リーダー（Claude Code / GPT）、同時に動かせる子の数、子に使う GPT・Claude・Claude（API）・DeepSeek と枠（低・中）ごとのモデルは、TM を押したときに選びます。初期設定では子はすべてオフで、使うものだけをオンにします（オンにしたものの枠だけが画面に出ます）。前回の選び方を覚えています。
               動いているチームの子の枠と数は、チームのパネルの「このチームの設定」から変えられます。
             </p>
             <p className="muted">
-              リーダーが選ぶのは枠と GPT / Claude / Claude（API） / DeepSeek だけで、モデル名は選びません。Claude Code の子はサブスクリプションで、Claude（API）の子は API キーで動きます（後者は初期設定ではオフです）。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
+              リーダーが選ぶのは枠と GPT / Claude / Claude（API） / DeepSeek だけで、モデル名は選びません。Claude Code の子はサブスクリプションで、Claude（API）の子は API キーで動きます。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
             </p>
           </div>
         </div>

@@ -32,13 +32,17 @@ export const TEAM_DEFAULTS = {
   gptLeader: { model: null, effort: 'high' },
   // The leader runs with --permission-mode bypassPermissions (children always do).
   leaderBypass: true,
-  // A tier that is not `enabled` is not offered to the leader.
-  gpt: { enabled: true, low: { enabled: true, model: null, effort: 'medium' }, mid: { enabled: true, model: null, effort: 'high' } },
-  claude: { enabled: true, low: { enabled: true, model: 'haiku', effort: null }, mid: { enabled: true, model: 'sonnet', effort: null } },
-  // Off until the user turns it on: Claude through their Anthropic API key, billed per token
+  // Every provider is off until the user turns it on (a team starts with at least one on), so
+  // nothing runs, bills or signs in without a choice. A tier that is not `enabled` is not
+  // offered to the leader.
+  // GPT: the ChatGPT subscription.
+  gpt: { enabled: false, low: { enabled: true, model: null, effort: 'medium' }, mid: { enabled: true, model: null, effort: 'high' } },
+  // Claude Code on the user's Claude subscription.
+  claude: { enabled: false, low: { enabled: true, model: 'haiku', effort: null }, mid: { enabled: true, model: 'sonnet', effort: null } },
+  // Claude through their Anthropic API key, billed per token
   // (or paid by the monthly API credits that Max and Team plans include).
   claudeApi: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
-  // Off until the user turns it on: it is billed per token to their DeepSeek API key.
+  // Billed per token to their DeepSeek API key.
   deepseek: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   maxChildren: 6,
 }
@@ -71,7 +75,11 @@ function choice(value, pattern, name) {
   return value
 }
 
-/** Merges a settings patch into the team settings; throws on any invalid field. */
+/**
+ * Merges a settings patch into the team settings; throws on any invalid field.
+ * Every provider may be off here (the saved settings start that way); a team
+ * checks `assertChildrenOn` before it runs with them.
+ */
 export function mergeTeamConfig(current, patch) {
   if (!isRecord(patch)) throw new Error('agentTeams はオブジェクトで指定してください')
   const next = teamConfig(current)
@@ -120,11 +128,17 @@ export function mergeTeamConfig(current, patch) {
     if (!Number.isInteger(count) || count < 1 || count > MAX_CHILDREN_LIMIT) throw new Error(`子の上限は 1〜${MAX_CHILDREN_LIMIT} で指定してください`)
     next.maxChildren = count
   }
-  if (!TEAM_PROVIDERS.some((provider) => next[provider].enabled)) throw new Error('GPT・Claude・Claude（API）・DeepSeek の少なくとも一つはオンにしてください')
   for (const provider of TEAM_PROVIDERS) {
     if (next[provider].enabled && !TEAM_TIERS.some((tier) => next[provider][tier].enabled)) {
       throw new Error(`${PROVIDER_NAMES[provider]} の低枠と中枠の少なくとも一方はオンにしてください`)
     }
   }
   return next
+}
+
+/** A team needs a provider to hand work to: throws when the settings turn every one off. */
+export function assertChildrenOn(config) {
+  if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled)) {
+    throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek の少なくとも一つをオンにしてください')
+  }
 }
