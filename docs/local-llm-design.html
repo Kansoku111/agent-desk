@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Agent Desk — ローカルLLM 設計方針</title>
+<style>
+@page { size:A4; margin:0; }
+* { box-sizing:border-box; }
+body { margin:0; color:#182b37; background:#e9eef1; font-family:"Yu Gothic","Meiryo",sans-serif; font-size:10pt; line-height:1.75; }
+.page { width:210mm; height:297mm; padding:18mm 19mm 17mm; background:white; position:relative; break-after:page; overflow:hidden; }
+.page:last-child { break-after:auto; }
+.eyebrow { font-size:8.5pt; letter-spacing:.14em; color:#287a7d; font-weight:700; margin-bottom:7mm; }
+h1 { font-size:26pt; line-height:1.4; margin:0 0 5mm; letter-spacing:.01em; }
+h2 { font-size:19pt; margin:0 0 5mm; line-height:1.45; }
+h3 { font-size:11.5pt; margin:6mm 0 2mm; color:#176c70; }
+p { margin:0 0 3mm; }
+.lead { font-size:11.5pt; line-height:1.9; margin-bottom:6mm; }
+.box { background:#edf5f4; border-left:3px solid #277e7a; padding:4mm 5mm; margin:4mm 0; }
+.note { color:#516572; font-size:9pt; }
+.tags { display:flex; gap:2mm; margin:5mm 0; }
+.tags span { border:1px solid #c5d8d9; padding:1mm 3mm; border-radius:3mm; font-size:8pt; }
+table { width:100%; border-collapse:collapse; font-size:9.3pt; margin:3mm 0 4mm; line-height:1.65; }
+th { text-align:left; color:#37606b; background:#eff3f5; font-size:8.5pt; }
+th,td { padding:2.6mm 3mm; border-bottom:1px solid #dce5e9; vertical-align:top; }
+ul,ol { margin:2mm 0 4mm; padding-left:5mm; }
+li { margin:1.4mm 0; }
+.flow { text-align:center; background:#f3f6f8; padding:5mm; margin:4mm 0; font-size:10.5pt; line-height:1.9; }
+.arrow { color:#287a7d; font-size:12pt; }
+.columns { display:grid; grid-template-columns:1fr 1fr; gap:6mm; }
+.footer { position:absolute; bottom:10mm; left:19mm; right:19mm; display:flex; justify-content:space-between; border-top:1px solid #dce5e9; padding-top:3mm; color:#6c7c86; font-size:8pt; }
+.small { font-size:8.5pt; }
+code { font-family:Consolas,"Yu Gothic",monospace; font-size:.9em; overflow-wrap:anywhere; }
+strong { font-weight:700; }
+</style>
+</head>
+<body>
+<section class="page">
+<div class="eyebrow">AGENT DESK / DESIGN PROPOSAL</div>
+<h1>ローカルLLM<br>導入方針・設計</h1>
+<p class="lead">モデル系列に依存せず、外部の推論サーバーへ接続。<br>通常タスクからチームの子へ、段階的に対応する。</p>
+<div class="tags"><span>レビュー反映版</span><span>実装前の設計</span><span>全4ページ</span></div>
+<div class="box"><strong>設計上の決定</strong><br>既存 dsh の汎用接続を再利用する。初期のチーム構成は「クラウドのリーダー ＋ 権限を制限したローカルの子」。独自の推論エンジンやモデル管理機能は作らない。</div>
+<h3>ねらい</h3>
+<ul>
+<li>Ollama、LM Studio、llama.cpp、vLLM などの推論サーバーを利用可能にする。</li>
+<li>モデル名ではなく、API 互換性・能力・実行制限で扱う。</li>
+<li>既存の会話、権限管理、ツール、履歴、変更の巻き戻しを再利用する。</li>
+</ul>
+<h3>対応範囲</h3>
+<table>
+<tr><th style="width:25%">初期対応</th><td>OpenAI 互換 Chat Completions、接続先とモデルの登録、一覧取得／手入力、通常タスク、チームのローカルの子、共有推論キュー</td></tr>
+<tr><th>後続対応</th><td>ローカルのリーダー、チーム設定の全面汎用化、文章専用の子、同一 GPU のリソースグループ</td></tr>
+<tr><th>初期対象外</th><td>モデルのダウンロード、GPU 管理、推論サーバーの起動管理、ツール非対応モデルの専用チャット</td></tr>
+</table>
+<p class="note">「OpenAI 互換」は完全な互換性を意味しない。サーバーごとの設定と実機検証を行い、すべてのモデルの自律作業を保証するものにはしない。</p>
+<div class="footer"><span>方針概要 · GPT / Claude のコードレビューを反映</span><span>01 / 04</span></div>
+</section>
+<section class="page">
+<div class="eyebrow">ARCHITECTURE</div>
+<h2>接続とモデルを分離する</h2>
+<div class="flow">Agent Desk の画面・通常タスク・チーム<br><span class="arrow">↓</span><br>dsh ／ pi-ai の任意プロバイダー経路<br><span class="arrow">↓</span><br><strong>Agent Desk 内の推論ゲートウェイ</strong><br>共有キュー・接続先専用の認証・ストリーム中継<br><span class="arrow">↓</span><br>ユーザーが起動した推論サーバー → モデル</div>
+<p>通信方式は <code>openai-completions</code> を初期標準とする。既存 dsh の <code>providers</code> 設定へ任意の経路を追加し、独自 LLM アダプターは初期段階で作らない。</p>
+<table>
+<tr><th style="width:22%">設定単位</th><th>保持する情報</th></tr>
+<tr><td><strong>接続先</strong></td><td>安定した内部 ID、表示名、API 種別、URL、専用キー（任意）、互換性設定、タイムアウト、同時実行数</td></tr>
+<tr><td><strong>モデル</strong></td><td>接続先 ID、API に渡すモデル ID、表示名、有効コンテキスト長、最大出力、ツール・画像・推論設定の確認状態</td></tr>
+</table>
+<h3>API 差異を接続設定で吸収</h3>
+<p><code>store</code>、developer ロール、<code>max_tokens</code>、ストリームの使用量情報などは互換性設定で調整する。サーバー名はプリセットとして扱い、モデル名による分岐は避ける。</p>
+<p class="note">無認証サーバー向けにも、現行 pi-ai が要求するキー相当の指定を補完する。クラウド用の認証情報は流用しない。中継口はループバック限定・アプリ認証付きとし、任意 URL へ転送できる汎用プロキシにはしない。</p>
+<h3>モデル ID と設定反映</h3>
+<p>内部参照は <code>[provider, modelId]</code> のペアに統一。ローカル用の検証では <code>/</code> や <code>:</code> を許容し、制御文字と過大な長さを拒否する。モデル ID は原則として元のまま転送する。</p>
+<p class="note">設定変更の即時反映は未検証。実行中タスクを壊さない反映方式を優先し、必要なら安全なタイミングでランタイムを再起動する。</p>
+<div class="footer"><span>接続設計 · モデル一覧は取得と手入力を併用</span><span>02 / 04</span></div>
+</section>
+<section class="page">
+<div class="eyebrow">TEAMS &amp; EXECUTION</div>
+<h2>チーム連携と実行の安全性</h2>
+<h3>チームは小さく拡張してから汎用化</h3>
+<p>既存のチーム設定へ <code>local</code> 枠を追加し、低枠・中枠ごとに接続先とモデルを指定する。既存の設定・モデル選択・履歴を維持し、自動で有効化しない。後続段階で各枠を「実行方式 ＋ 接続先 ＋ モデル」の共通構造へ移行する。</p>
+<table>
+<tr><th style="width:24%">項目</th><th>初期方針</th></tr>
+<tr><td>リーダー</td><td>既存の GPT または Claude Code。ローカルのリーダーは後続対応。</td></tr>
+<tr><td>ローカルの子</td><td>ツール呼び出しの往復を確認したモデルを使用。リーダーへ結果を報告し、追加指示では同じ会話を再利用。</td></tr>
+<tr><td>権限</td><td>調査は読み取り専用、編集はワークスペース内書き込み。権限外の操作はリーダーへ承認を中継。フルアクセスは明示的に有効化。</td></tr>
+<tr><td>ツール</td><td>作業に必要なものへ限定。子からの再委任は既存どおり無効。能力テストは安全性の保証には使わない。</td></tr>
+</table>
+<h3>共有キューは「推論1回」単位</h3>
+<ul>
+<li>接続先の同時推論は初期値1。通常タスク・チーム・履歴要約で共有する。</li>
+<li>タスク全体では枠を確保しない。ツール実行や子の報告待ちには枠を保持しない。</li>
+<li>待機中のキャンセル、生成中の切断、エラー時の解放を一元管理する。</li>
+<li>待機時間と生成のタイムアウトを分ける。再試行による重複と待ち続ける要求を防ぐ。</li>
+</ul>
+<h3>コンテキスト長は実際の設定を基準にする</h3>
+<p>サーバーの一覧情報は初期候補とし、設定値を確認・修正できるようにする。<strong>最大出力に加え、指示・ツール定義・履歴が収まる余地を確保</strong>する。小さい容量ではツール削減と履歴圧縮を検証し、実測せずに固定の最小容量は断定しない。</p>
+<div class="box"><strong>混成チームのデータ経路</strong><br>クラウドのリーダーへローカルの子の報告が渡る。子の推論がローカルでも、チーム全体が外部送信なしになるわけではない。</div>
+<div class="footer"><span>チーム設計 · 子の数と同時推論数は別に管理</span><span>03 / 04</span></div>
+</section>
+<section class="page">
+<div class="eyebrow">DELIVERY &amp; VALIDATION</div>
+<h2>段階導入と完了条件</h2>
+<table>
+<tr><th style="width:12%">段階</th><th style="width:29%">実施内容</th><th>次へ進む条件</th></tr>
+<tr><td>0</td><td><strong>接続検証</strong></td><td>実機でツール往復、ストリーム、モデル ID、初回プロンプト量、履歴圧縮を確認。設定反映方式を決定。</td></tr>
+<tr><td>1</td><td><strong>通常タスク</strong></td><td>接続・モデル設定、一覧／手入力、動的カタログ、能力確認と選択可否、エラー表示が動く。既存経路も維持。</td></tr>
+<tr><td>2</td><td><strong>推論ゲートウェイ</strong></td><td>複数ランタイムでも並列上限を守る。待機・生成の中断、切断、再試行、要約で枠が漏れない。</td></tr>
+<tr><td>3</td><td><strong>チームの子</strong></td><td>クラウドのリーダーから起動・報告・再指示が可能。権限と承認、停止・再開、保存・復元を確認。</td></tr>
+<tr><td>4</td><td><strong>後続拡張</strong></td><td>外部モデル不使用モード、設定構造の汎用化、ローカルのリーダー等を個別に検証して導入。</td></tr>
+</table>
+<h3>主な変更箇所</h3>
+<p class="small"><code>dsh-config.js</code>：経路・設定生成 ／ <code>catalog.js</code>：動的プロバイダー<br><code>settings.js</code>・モデル関連 RPC：保存と検証 ／ ゲートウェイ：新規<br><code>team-config.js</code>・<code>teams.js</code>・<code>team-mcp.js</code>・<code>teams-prompts.js</code>：枠・起動・権限・指示 ／ Web UI：設定と選択</p>
+<h3>外部送信を止める範囲を明示する</h3>
+<p>外部モデル不使用モードは許可リスト方式とし、クラウドへの自動切替を禁止する。検索・画像生成・クラウドの子に加え、更新確認・使用量取得などの補助通信も対象を棚卸しする。</p>
+<p class="note">これは OS 全体の通信遮断ではない。シェル、Web 取得、MCP などの通信まで止める場合は、別途ファイアウォールやネットワーク分離が必要。「完全ローカル＝外部通信ゼロ」とは表記しない。</p>
+<h3>実装前に残る確認事項</h3>
+<ul class="small">
+<li>各推論サーバーの実互換性、能力情報と有効コンテキスト長の取得方法</li>
+<li>設定の再読み込み可否、モデル／役割ごとのツール制限方法</li>
+<li>Web UI のプロバイダー依存と、旧設定・既存タスクへの影響</li>
+</ul>
+<p class="note">レビュー根拠：現行の server 実装と同梱 dsh／pi-ai のコード調査。実サーバーでの互換性試験は未実施。本書は採用する設計方針であり、実装済み機能の説明ではない。</p>
+<div class="footer"><span>導入計画 · 初期ゴールは通常タスクと安全なチームの子</span><span>04 / 04</span></div>
+</section>
+</body>
+</html>
