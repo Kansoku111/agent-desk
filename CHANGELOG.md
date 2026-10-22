@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Agent teams: reports that arrive while the leader works now reach it together in its next turn, as one message with the next steps said once, instead of one turn per report. A message gathers at most 6,000 characters of reports; the rest follow. Settings → Agent teams → "報告をまとめて渡す" (on by default) turns it off.
 - Agent teams: the leader's `send` takes `fresh: true` to start a child over in a new conversation (its earlier one is removed), for work that needs little of what it carried. It is refused while the child works.
+- Agent teams: a child whose turn ends on a passing failure (the model's service overloaded or down, a lost connection) goes on by itself once, a minute later, before the leader hears of it. A second failure, or a lasting one (usage limits, billing, auth, a refused request), reaches the leader as before; "全停止" also stops a child waiting to go on.
 - Agent teams: Settings → Agent teams → "子のツールを絞る" (off by default). Teams started with it on give children no browser, desktop or image-generation tools (a Claude child runs with `--strict-mcp-config`, so without MCP servers) unless the leader spawns them with `tools: true`.
 
 - Agent teams: a "Claude (API)" child runs as a dsh task on the user's Anthropic API key and is recommended for automatic team processing. It is off by default and needs a key in Settings → Accounts. Its runtime and history are separate from Claude Code. Credits, if any, depend on provider plan conditions; parallel or long-running work can incur substantial metered costs. Configure provider-console spending controls: Agent Desk does not enforce a hard USD cap.
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Agent teams: GPT, Claude (API) and DeepSeek children get their standing instructions as a system prompt section (a dsh plugin in the children's layer) instead of their first message, so compaction no longer drops them. The first message names the child and gives its task.
 - Agent teams: a child checks its work before it reports (tests, build, running it, or looking at the result), and its report says how it checked and what came out, between what it did and the paths it changed. The leader audits with that in hand.
 - Legal documentation now describes Anthropic's conditional allowance for an unmodified Claude Code binary using users' own subscription/API/cloud credentials, including Commercial Terms for product/service providers and no restriction of built-in authentication. Disclaimers and billing acknowledgements do not guarantee compliance or grant policy permission.
 - Agent teams: every kind of child (GPT, Claude Code, Claude (API), DeepSeek) is now off in a new install, so nothing runs, bills or signs in until the user turns it on in the team start dialog. The start button needs at least one on; a running team's settings keep one on too. Settings already saved are unchanged.

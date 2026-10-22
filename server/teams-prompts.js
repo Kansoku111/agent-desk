@@ -57,10 +57,14 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
   ].join('\n')
 }
 
-/** A child's standing instructions (a Claude child's system prompt, a GPT child's first message). */
+/**
+ * A child's standing instructions: a Claude child's system prompt, with its
+ * name; without a name, the system prompt section every dsh child has
+ * (team-child-plugin.js), which learns its name from its first message.
+ */
 export function childPrompt(name) {
   return [
-    `# Agent Desk team: you are the child agent "${name}"`,
+    `# Agent Desk team: you are ${name ? `the child agent "${name}"` : 'a child agent'}`,
     '',
     'A leader agent gave you a task. Your replies go to that leader, not to a person.',
     '- Never stop to ask a question or wait for a confirmation: nobody would answer. Pick reasonable defaults yourself and mention them in your report.',
@@ -73,6 +77,11 @@ export function childPrompt(name) {
     '- Write in the language of your task.',
     '- The leader may send you more instructions later. Handle them the same way and report again.',
   ].join('\n')
+}
+
+/** The first message of a dsh child: who it is, and its task (its standing instructions are in its system prompt). */
+export function childTask(name, title, task) {
+  return `${PREFIX}\nYou are the child agent "${name}" of this Agent Desk team.\n\n# Task: ${title}\n\n${task}`
 }
 
 /** A tool call an approval is about, in one line. */

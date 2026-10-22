@@ -1,12 +1,26 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import YAML from 'yaml'
-import { homePatch, teamChildPatch } from '../server/dsh-config.js'
+import { homePatch, TEAM_CHILD_PLUGIN, teamChildPatch } from '../server/dsh-config.js'
+import { apply, SECTION_NAME } from '../server/team-child-plugin.js'
+import { childPrompt } from '../server/teams-prompts.js'
 import { RuntimePool, runtimeKey } from '../server/runtime.js'
 
-test('the team children\'s layer turns every subagent tool off', () => {
+test('the team children\'s layer turns every subagent tool off and gives the child instructions', () => {
   const rows = YAML.parse(teamChildPatch())
-  assert.deepEqual(rows, ['tool-subagent', 'tool-subagent-fork', 'tool-subagent-control', 'tool-subagent-list-agents'].map((id) => ({ id, disabled: true })))
+  assert.deepEqual(rows.slice(0, -1), ['tool-subagent', 'tool-subagent-fork', 'tool-subagent-control', 'tool-subagent-list-agents'].map((id) => ({ id, disabled: true })))
+  assert.deepEqual(rows.at(-1), { insert: [{ id: 'agent-desk-team-child', name: TEAM_CHILD_PLUGIN, config: { text: childPrompt() } }] })
+  assert.match(childPrompt(), /^# Agent Desk team: you are a child agent\n/)
+  assert.ok(TEAM_CHILD_PLUGIN.endsWith('/server/team-child-plugin.js'))
+})
+
+test('the child plugin adds its text as one literal section after the persona', () => {
+  const sections = []
+  const systemPrompt = { getSectionOrder: (name) => ({ DEPLOYMENT_PERSONA_SUFFIX: 10200 })[name], section: (section) => sections.push(section) }
+  apply({ systemPrompt }, { text: ' ' })
+  assert.equal(sections.length, 0)
+  apply({ systemPrompt }, { text: childPrompt() })
+  assert.deepEqual(sections, [{ name: SECTION_NAME, order: 10250, text: childPrompt(), interpolate: false }])
 })
 
 test('the layer also removes the fixed-model tools the home patch adds, with their prompt section', () => {

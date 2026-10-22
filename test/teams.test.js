@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { DELIVERY_CHECK_MS, DELIVERY_GIVE_UP_MS, LEADER_SETTLE_MS, MCP_SERVER, PREFIX, REPORT_PREVIEW, TeamManager, TYPING_QUIET_MS, describeTool } from '../server/teams.js'
+import { DELIVERY_CHECK_MS, DELIVERY_GIVE_UP_MS, LEADER_SETTLE_MS, MCP_SERVER, PREFIX, REPORT_PREVIEW, RESUME_DELAY_MS, TeamManager, TYPING_QUIET_MS, describeTool, transientError } from '../server/teams.js'
 import { assertChildrenOn, mergeTeamConfig, teamConfig, TEAM_DEFAULTS } from '../server/team-config.js'
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
@@ -323,7 +323,7 @@ test('a tool call needs the team\'s secret', async (t) => {
   await assert.rejects(manager.call('nope', team.secret, 'status', {}), (error) => error.status === 403)
 })
 
-test('a GPT child is a full-access dsh task that gets its role and task in one message', async (t) => {
+test('a GPT child is a full-access dsh task whose first message names it and gives its task', async (t) => {
   const { threads, tool, team, workspace } = await setup(t)
   const text = await tool('spawn', { title: '生き物 1〜50', task: 'models/1-50 を改善する', tier: 'low', provider: 'gpt', name: 'A' })
   assert.match(text, /子「A」を起動しました（GPT-6 Luna・低）/)
@@ -334,7 +334,9 @@ test('a GPT child is a full-access dsh task that gets its role and task in one m
   })
   const [, , message] = threads.calls.find((call) => call[0] === 'send')
   assert.ok(message.startsWith(PREFIX))
-  assert.match(message, /you are the child agent "A"/)
+  assert.match(message, /You are the child agent "A" of this Agent Desk team/)
+  // Its standing instructions are in its system prompt (team-child-plugin.js), not here.
+  assert.doesNotMatch(message, /Never stop to ask/)
   assert.match(message, /# Task: 生き物 1〜50\n\nmodels\/1-50 を改善する/)
   assert.deepEqual(threads.calls.find((call) => call[0] === 'update')[2], { title: 'A: 生き物 1〜50' })
 })
@@ -1247,7 +1249,7 @@ test('send with fresh starts the child over in a new conversation and drops the 
   assert.equal(gpt.taskId, 'thread-2')
   assert.deepEqual(threads.calls.filter((call) => call[0] === 'create').at(-1)[1].team, { id: team.id, childId: gpt.id })
   const first = threads.calls.filter((call) => call[0] === 'send' && call[1] === 'thread-2')[0][2]
-  assert.match(first, /you are the child agent "G"[\s\S]*# Task: docs\n\nnew task$/)
+  assert.match(first, /You are the child agent "G"[\s\S]*# Task: docs\n\nnew task$/)
   assert.ok(threads.calls.some((call) => call[0] === 'remove' && call[1] === 'thread-1'))
   assert.deepEqual([gpt.closed, gpt.awaiting], [false, true])
 
@@ -1288,4 +1290,76 @@ test('children keep every tool by default, and report how they checked their wor
   assert.match(await fs.readFile(childArgs[childArgs.indexOf('--append-system-prompt-file') + 1], 'utf8'), /3\) how you checked it/)
   const g = team.children[1]
   assert.equal(manager.toolsFor({ id: g.taskId, team: { id: team.id, childId: g.id } }), true)
+})
+
+/** A dsh child's turn that ended on an error with this message. */
+function failThread(threads, id, message) {
+  const thread = threads.threads.get(id)
+  thread.status = 'error'
+  const turn = threads.turns.get(id).at(-1)
+  Object.assign(turn, { status: 'error', error: { message } })
+  threads.emit('thread', { ...thread })
+  threads.emit('turn-finished', { threadId: id, title: thread.title, status: 'error' })
+}
+
+test('passing failures are told apart from ones that would come back at once', () => {
+  for (const message of ['API Error: 529 {"type":"overloaded_error"}', 'WebSocket closed 1006', 'fetch failed: ECONNRESET', '503 Service Unavailable', 'Request timed out']) {
+    assert.equal(transientError(message), true, message)
+  }
+  for (const message of ['利用上限に達しました。', '429 rate limit exceeded', '401 Unauthorized', 'prompt is too long: context window', 'Claude Code が終了しました（終了コード 1）', '', undefined]) {
+    assert.equal(transientError(message), false, message)
+  }
+})
+
+test('a child stopped by a passing failure goes on by itself once, and the leader hears only if that fails too', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { threads, terminals, tool, leader, typed } = await setup(t)
+  terminals.set(leader, { activity: 'idle' })
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  failThread(threads, 'thread-1', 'WebSocket closed 1006')
+  assert.equal(typed().length, 0)
+  t.mock.timers.tick(RESUME_DELAY_MS)
+  assert.match(threads.calls.at(-1)[2], /自動で再開しました/)
+  assert.equal(threads.calls.at(-1)[1], 'thread-1')
+  failThread(threads, 'thread-1', 'WebSocket closed 1006')
+  assert.equal(typed().length, 1)
+  assert.match(typed()[0], /自動で 1 回再開しましたが、また止まりました[\s\S]*WebSocket closed/)
+  // The leader's next work gets its own retry.
+  await tool('send', { child: 'A', message: '続けて' })
+  failThread(threads, 'thread-1', 'WebSocket closed 1006')
+  assert.equal(typed().length, 1)
+})
+
+test('a Claude child goes on after an overloaded service, and its report reads as usual', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { agents, terminals, tool, leader, typed } = await setup(t)
+  terminals.set(leader, { activity: 'idle' })
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  agents.finish('agent-1', '', 'error', { error: 'API Error: 529 Overloaded' })
+  assert.equal(typed().length, 0)
+  t.mock.timers.tick(RESUME_DELAY_MS)
+  assert.deepEqual(agents.calls.at(-1).slice(0, 2), ['run', 'agent-1'])
+  agents.finish('agent-1', 'できました')
+  assert.equal(typed().length, 1)
+  assert.match(typed()[0], /から報告が届きました[\s\S]*できました/)
+  assert.doesNotMatch(typed()[0], /自動で/)
+})
+
+test('a lasting failure reaches the leader at once, and stopping all also stops a child waiting to go on', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { threads, terminals, tool, leader, typed, manager, team } = await setup(t)
+  terminals.set(leader, { activity: 'running' })
+  await tool('spawn', { title: 'one', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  await tool('spawn', { title: 'two', task: 'b', tier: 'low', provider: 'gpt', name: 'B' })
+  failThread(threads, 'thread-1', '429 rate limit exceeded')
+  assert.deepEqual(team.queue.map((item) => item.kind), ['error'])
+  failThread(threads, 'thread-2', '503 Service Unavailable')
+  assert.equal(team.queue.length, 1)
+  assert.equal((await manager.stopAll(team.id)).stopped, 1)
+  assert.deepEqual(team.queue.map((item) => [item.kind, item.byUser]), [['error', undefined], ['cancelled', true]])
+  const sends = threads.calls.length
+  t.mock.timers.tick(RESUME_DELAY_MS)
+  assert.equal(threads.calls.length, sends)
+  terminals.set(leader, { activity: 'idle' })
+  assert.match(typed()[0], /rate limit[\s\S]*ユーザーが全停止で止めました/)
 })

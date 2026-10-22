@@ -20,7 +20,7 @@ import { readJson, writeJson } from './json-file.js'
 import { sameToken } from './remote.js'
 import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
-import { CATALOG_PROVIDER, childPrompt, clip, describeTool, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
+import { CATALOG_PROVIDER, childTask, clip, describeTool, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { markOf, reportsMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
@@ -55,6 +55,22 @@ export const APPROVAL_WAIT_MS = 840_000
  */
 export const LEADER_SETTLE_MS = 60_000
 const RETRY_MS = 1000
+/**
+ * A child whose turn ended on a passing failure (the model's service busy or
+ * down, the connection lost) goes on by itself once, this much later, before
+ * the leader hears of it. dsh and Claude Code have retried each request already.
+ */
+export const RESUME_DELAY_MS = 60_000
+const RESUME_TEXT = '[Agent Desk] 一時的なエラーで作業が止まったため、自動で再開しました。止まったところから続けてください。'
+const TRANSIENT = /overloaded|\b(?:500|502|503|504|529)\b|internal server error|bad gateway|service unavailable|gateway time-?out|timed out|timeout|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|connection (?:error|reset|closed|refused|lost)|stream (?:did not complete|interrupted)|websocket closed/i
+/** Failures that would come back at once: limits, billing, auth, a request the service refuses. */
+const LASTING = /rate.?limit|usage limit|limit reached|quota|\b429\b|上限|credit|billing|insufficient|\b40[0-4]\b|auth|unauthori[sz]ed|forbidden|invalid|context|too (?:long|large|big)/i
+
+/** Whether a turn's error is one that a later try may get past (RESUME_DELAY_MS). */
+export function transientError(message) {
+  const text = String(message ?? '')
+  return TRANSIENT.test(text) && !LASTING.test(text)
+}
 const providerList = (providers) => providers.map((provider) => `"${provider}"`).join(' / ')
 const TIER_LABEL = { low: '低', mid: '中' }
 const STATE_LABEL = {
@@ -167,6 +183,7 @@ export class TeamManager extends EventEmitter {
       for (const child of team.children) {
         if (!child.awaiting || child.closed || this.#childBusy(child)) continue
         child.awaiting = false
+        delete child.resumed
         this.#report(team, child, 'error', 'Agent Desk が再起動したため、作業が途中で止まりました。続けるなら send で「続けて」と送ってください（それまでの文脈は残っています）。')
       }
       this.#pump(team)
@@ -594,7 +611,7 @@ export class TeamManager extends EventEmitter {
         })
         taskId = child.taskId = thread.id
         if (!this.teams.has(team.id)) throw new Error('team was removed')
-        await this.threads.send(thread.id, { text: `${PREFIX}\n${childPrompt(child.name)}\n\n# Task: ${title}\n\n${task}` })
+        await this.threads.send(thread.id, { text: childTask(child.name, title, task) })
         await this.threads.update(thread.id, { title: taskTitle })
       } else {
         const session = await this.agents.create({
@@ -628,6 +645,7 @@ export class TeamManager extends EventEmitter {
     const body = `[リーダーから]\n${text}`
     child.closed = false
     child.awaiting = true
+    delete child.resumed
     child.updatedAt = this.now()
     let how
     try {
@@ -652,6 +670,7 @@ export class TeamManager extends EventEmitter {
     await this.#startTask(team, child, text)
     child.closed = false
     child.awaiting = true
+    delete child.resumed
     child.pending = []
     child.followups = []
     child.updatedAt = this.now()
@@ -901,6 +920,16 @@ export class TeamManager extends EventEmitter {
     if (!team) throw new Error('チームが見つかりません')
     let stopped = 0
     for (const child of team.children) {
+      // One waiting to go on after a passing failure stops here.
+      if (this.retries.has(`resume:${child.id}`)) {
+        clearTimeout(this.retries.get(`resume:${child.id}`))
+        this.retries.delete(`resume:${child.id}`)
+        child.awaiting = false
+        delete child.resumed
+        this.#report(team, child, 'cancelled', '', { byUser: true })
+        stopped += 1
+        continue
+      }
       if (!child.taskId || !this.#childBusy(child)) continue
       this.userStopped.add(child.id)
       try {
@@ -1257,9 +1286,11 @@ export class TeamManager extends EventEmitter {
     const apiStopped = this.apiStopped.delete(child.id)
     const byUser = this.userStopped.delete(child.id)
     if (this.#reportsTurn(child)) {
+      const turn = this.threads.turns.get(threadId)?.at(-1)
+      if (status === 'error' && !apiStopped && this.#resumeLater(team, child, turn?.error?.message)) return this.#emit(team)
       const extra = child.awaiting ? {} : { unasked: true }
       child.awaiting = false
-      const turn = this.threads.turns.get(threadId)?.at(-1)
+      const resumed = this.#resumedNote(child, status)
       const answer = turn?.items?.filter((item) => item.type === 'agent').at(-1)?.text ?? ''
       if (apiStopped) {
         this.#report(team, child, 'error', [
@@ -1267,7 +1298,7 @@ export class TeamManager extends EventEmitter {
             + 'send で自分で作業するよう指示するか、分けたい作業は別の子として spawn してください。',
           answer,
         ].filter(Boolean).join('\n\n'), extra)
-      } else if (status === 'error') this.#report(team, child, 'error', [turn?.error?.message, answer].filter(Boolean).join('\n\n'), extra)
+      } else if (status === 'error') this.#report(team, child, 'error', [resumed, turn?.error?.message, answer].filter(Boolean).join('\n\n'), extra)
       else if (status === 'cancelled') this.#report(team, child, 'cancelled', answer, byUser ? { ...extra, byUser } : extra)
       else this.#report(team, child, 'report', answer, extra)
     }
@@ -1315,17 +1346,55 @@ export class TeamManager extends EventEmitter {
     const { team, child } = found
     const byUser = this.userStopped.delete(child.id)
     if (this.#reportsTurn(child)) {
+      if (status === 'error' && this.#resumeLater(team, child, error)) return this.#emit(team)
       const extra = child.awaiting ? {} : { unasked: true }
       child.awaiting = false
+      const resumed = this.#resumedNote(child, status)
       // What would have asked for an approval was denied (nobody is there to answer): the leader decides what to do.
       const denied = (denials ?? []).map((entry) => `- ${describeTool(entry?.tool_name, entry?.tool_input)}`)
       const note = denied.length ? `（承認が必要なため実行されなかった操作）\n${denied.join('\n')}` : ''
-      if (status === 'error') this.#report(team, child, 'error', [error, text, note].filter(Boolean).join('\n\n'), extra)
+      if (status === 'error') this.#report(team, child, 'error', [resumed, error, text, note].filter(Boolean).join('\n\n'), extra)
       else if (status === 'cancelled') this.#report(team, child, 'cancelled', text, byUser ? { ...extra, byUser } : extra)
       else this.#report(team, child, 'report', [text, note].filter(Boolean).join('\n\n'), extra)
     }
     void this.#flushChild(team, child)
     this.#emit(team)
+  }
+
+  /**
+   * The leader's work stopped on a passing failure: the child goes on by itself
+   * once, after RESUME_DELAY_MS, and the leader hears nothing unless that fails
+   * too. False when this is not such a case (the caller reports it).
+   */
+  #resumeLater(team, child, message) {
+    if (!child.awaiting || child.resumed || child.pending.length || child.followups?.length || !transientError(message)) return false
+    child.resumed = true
+    this.log(`team ${team.id}: ${child.name} stopped on a passing error; going on in ${RESUME_DELAY_MS / 1000} s`)
+    this.#later(`resume:${child.id}`, () => {
+      // Closed, removed, sent something else or restarted meanwhile: that stands.
+      if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed || !child.awaiting || this.#childBusy(child)) return
+      const failed = (error) => {
+        child.awaiting = false
+        delete child.resumed
+        this.#report(team, child, 'error', `一時的なエラーのあと、自動で再開できませんでした: ${error.message}`)
+      }
+      try {
+        if (child.kind === 'thread') this.threads.send(child.taskId, { text: RESUME_TEXT }).catch(failed)
+        else this.agents.run(child.taskId, RESUME_TEXT)
+      } catch (error) {
+        failed(error)
+      }
+      this.#emit(team)
+    }, RESUME_DELAY_MS)
+    void this.#save()
+    return true
+  }
+
+  /** A turn the leader hears of ends the automatic retry; an error after one says so. */
+  #resumedNote(child, status) {
+    const resumed = child.resumed
+    delete child.resumed
+    return resumed && status === 'error' ? '（一時的なエラーのあと、Agent Desk が自動で 1 回再開しましたが、また止まりました）' : ''
   }
 
   #onTaskRemoved(taskId) {

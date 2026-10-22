@@ -8,6 +8,7 @@ import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { ANTHROPIC_REF } from './credentials.js'
 import { isModelId } from './model-catalog.js'
 import { SIWC_KEY_REF, SIWC_RESOURCE } from './siwc-client.js'
+import { childPrompt } from './teams-prompts.js'
 
 const WORKSPACE_ID = /^wrkspc_[A-Za-z0-9]+$/
 
@@ -92,6 +93,9 @@ const WEB_SEARCH_PROVIDER = 'agent-desk-chatgpt'
 
 /** The dsh plugin that adds the user's custom instructions to the system prompt. */
 export const INSTRUCTIONS_PLUGIN = new URL('./instructions-plugin.js', import.meta.url).href
+
+/** The dsh plugin that gives a team's child its standing instructions as a system prompt section. */
+export const TEAM_CHILD_PLUGIN = new URL('./team-child-plugin.js', import.meta.url).href
 
 /** Longest custom instructions the settings accept, in characters. */
 export const INSTRUCTIONS_MAX = 10_000
@@ -229,7 +233,9 @@ const BASE_SUBAGENT_TOOLS = ['tool-subagent', 'tool-subagent-fork', 'tool-subage
  * children: no subagent tools, so a child does its own work and the team's
  * size stays what the user set. Applied after {@link homePatch}, so it also
  * removes the fixed-model tools that patch adds, with their prompt section.
- * Same options as homePatch (`subagents`, `persona`).
+ * Same options as homePatch (`subagents`, `persona`). The child's standing
+ * instructions go in the system prompt ({@link TEAM_CHILD_PLUGIN}), where
+ * compaction leaves them be.
  */
 export function teamChildPatch({ subagents = [], persona = null } = {}) {
   const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
@@ -241,9 +247,10 @@ export function teamChildPatch({ subagents = [], persona = null } = {}) {
     const { personaPrefix = '', personaSuffix = '' } = persona ?? {}
     rows.push({ id: 'system-prompt', config: { personaPrefix, personaSuffix } })
   }
+  rows.push({ insert: [{ id: 'agent-desk-team-child', name: TEAM_CHILD_PLUGIN, config: { text: childPrompt() } }] })
   return `# Managed by Agent Desk: this file is rewritten on every start.
 # Applied after cordis.patch.yml in the runtimes of agent teams' children:
-# children have no subagent tools.
+# children have no subagent tools, and have their standing instructions.
 ${YAML.stringify(rows)}`
 }
 
