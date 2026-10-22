@@ -10,7 +10,8 @@ import { normalizeCodexRateLimits, fetchChatGptUsage } from '../server/chatgpt-u
 import { generateImage } from '../server/imagegen.js'
 const fake = fileURLToPath(new URL('./helpers/fake-codex-app-server.mjs', import.meta.url))
 async function setup(t, extra = {}) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-app-server-'))
+  // The client removes real paths; a short-name temp dir (C:\Users\RUNNER~1) would never match the mocks below.
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-app-server-')))
   const client = new CodexAppServer({
     home: path.join(dir, 'codex-home'),
     command: process.execPath,
