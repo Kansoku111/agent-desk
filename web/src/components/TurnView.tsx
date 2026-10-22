@@ -9,6 +9,7 @@ import { duration, fileChanges, formatTokens, formatTokensExact, formatUsd, summ
 import { CopyButton, Markdown } from './Markdown'
 import { FileRef } from './FileRef'
 import { RestoreControls } from './Restore'
+import { turnAnswer } from '../turn-answer'
 
 const ICONS: Record<ToolIcon, typeof Wrench> = {
   terminal: SquareTerminal,
@@ -334,12 +335,10 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
 }) {
   const running = turn.status === 'running'
   const [expanded, setExpanded] = useState(false)
-  const lastAgentIndex = turn.items.map((item) => item.type).lastIndexOf('agent')
   // When the turn ends with an answer, earlier steps fold into "worked for…".
-  const finalAnswer = !running && lastAgentIndex >= 0 && lastAgentIndex === turn.items.length - 1
-    ? turn.items[lastAgentIndex] as TextItem
-    : null
-  const steps = finalAnswer ? turn.items.slice(0, lastAgentIndex) : turn.items
+  const answer = running ? [] : turnAnswer(turn.items)
+  const finalAnswer = answer.length > 0
+  const steps = finalAnswer ? turn.items.filter((item) => !answer.includes(item as TextItem)) : turn.items
   const notices = steps.filter((item) => item.type === 'notice')
   // Notices have their own slot above the steps, including while the turn is running.
   const work = steps.filter((item) => item.type !== 'notice')
@@ -347,7 +346,7 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
   const pending = turn.items.filter((item): item is ToolItem => item.type === 'tool' && Boolean(item.permission))
   const toolCount = turn.items.filter((item) => item.type === 'tool').length
   const showSteps = running || !finalAnswer || expanded
-  const foldable = Boolean(finalAnswer) && work.length > 0
+  const foldable = finalAnswer && work.length > 0
   // Every finished turn shows how long it took, even with nothing to fold.
   const workedLabel = !running && turn.endedAt ? (
     <>
@@ -390,8 +389,10 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
 
       {finalAnswer && (
         <div className="answer">
-          <div className="agent-text"><Markdown text={finalAnswer.text} workspace={workspace} /></div>
-          <div className="answer-actions"><CopyButton text={finalAnswer.text} label="回答をコピー" /></div>
+          {answer.map((item) => (
+            <div key={item.id} className="agent-text"><Markdown text={item.text} workspace={workspace} /></div>
+          ))}
+          <div className="answer-actions"><CopyButton text={answer.map((item) => item.text).join('\n\n')} label="回答をコピー" /></div>
         </div>
       )}
 

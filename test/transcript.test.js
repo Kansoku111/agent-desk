@@ -110,12 +110,12 @@ test('carryoverText condenses earlier turns, newest kept within budget', async (
     status: 'done',
     user: { text },
     items: [
-      ...Array.from({ length: tools }, (_, i) => ({ type: 'tool', id: `c${i}` })),
       { type: 'agent', id: 'a', text: 'draft' },
+      ...Array.from({ length: tools }, (_, i) => ({ type: 'tool', id: `c${i}` })),
       { type: 'agent', id: 'b', text: answer },
     ],
   })
-  const text = carryoverText([mk('first question', 'first answer', 2), mk('second question', 'second answer')])
+  const text = carryoverText([mk('first question', 'first answer', 2), mk('second question', 'second answer', 1)])
   assert.match(text, /<previous_conversation>/)
   assert.ok(text.indexOf('first question') < text.indexOf('second question'), 'oldest first')
   assert.match(text, /Assistant: first answer/)
@@ -125,6 +125,22 @@ test('carryoverText condenses earlier turns, newest kept within budget', async (
   assert.match(small, /new/)
   assert.doesNotMatch(small, /User: old/)
   assert.equal(carryoverText([]), '')
+})
+
+test('carryoverText keeps every message written after the last tool call', async () => {
+  const { carryoverText } = await import('../server/threads.js')
+  const text = carryoverText([{
+    status: 'done',
+    user: { text: 'investigate' },
+    items: [
+      { type: 'agent', id: 'n', text: 'narration before tools' },
+      { type: 'tool', id: 'c1' },
+      { type: 'agent', id: 'a', text: 'the conclusion' },
+      { type: 'agent', id: 'b', text: 'a note on the conclusion' },
+    ],
+  }])
+  assert.match(text, /Assistant: the conclusion\n\na note on the conclusion/)
+  assert.doesNotMatch(text, /narration/)
 })
 
 test('nearestEffort keeps offered levels and moves missing ones to the closest', async () => {

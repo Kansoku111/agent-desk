@@ -41,7 +41,9 @@ export function carryoverText(turns, budget = 24_000) {
   const parts = []
   let used = 0
   for (const turn of [...turns].reverse()) {
-    const answer = turn.items.filter((item) => item.type === 'agent').at(-1)?.text ?? ''
+    // The reply is every message after the last tool call; earlier ones are narration.
+    const lastTool = turn.items.findLastIndex((item) => item.type === 'tool')
+    const answer = turn.items.slice(lastTool + 1).filter((item) => item.type === 'agent' && item.text).map((item) => item.text).join('\n\n')
     const tools = turn.items.filter((item) => item.type === 'tool').length
     const entry = [
       `User: ${clipText(turn.user?.text ?? '', 2000)}`,
