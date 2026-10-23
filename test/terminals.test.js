@@ -89,7 +89,7 @@ test('cleanTitle drops the spinner and Claude Code\'s default title', () => {
 test('hookSettings runs the hook script for each event, with forward slashes', () => {
   const settings = hookSettings('C:\\Program Files\\nodejs\\node.exe', 'F:\\app\\server\\claude-hook.js')
   assert.deepEqual(Object.keys(settings.hooks), [
-    'SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'PostModelSwitch', 'SubagentStart', 'SubagentStop',
+    'SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'StopFailure', 'PostModelSwitch', 'SubagentStart', 'SubagentStop',
   ])
   const [command] = settings.hooks.Stop[0].hooks
   assert.equal(command.command, '"C:/Program Files/nodejs/node.exe" "F:/app/server/claude-hook.js"')

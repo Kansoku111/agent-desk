@@ -52,6 +52,8 @@ const IDLE_GRACE_MS = 2500
 const BACKGROUND_STALE_MS = 6 * 60 * 60 * 1000
 
 /** DEC private modes the serialized screen leaves out: mouse encodings, cursor visibility, focus reports. */
+/** Bracketed paste's start and end, which a pasted message must not contain. */
+const PASTE_MARKERS = /\x1b\[20[01]~/g
 const TRACKED_MODES = [25, 1004, 1005, 1006, 1015]
 export class TerminalManager extends EventEmitter {
   /**
@@ -600,8 +602,9 @@ export class TerminalManager extends EventEmitter {
     if (!this.input(id, client, '\x1b')) return false
     const live = this.live.get(id)
     void (async () => {
-      for (let tries = 0; tries < 16 && this.live.get(id) === live && live.alive; tries++) {
-        await new Promise((resolve) => setTimeout(resolve, 400))
+      // Quickly at first; a long command can take a while to write that it was stopped.
+      for (let tries = 0; tries < 136 && this.live.get(id) === live && live.alive; tries++) {
+        await new Promise((resolve) => setTimeout(resolve, tries < 16 ? 400 : 2500))
         if (await this.settle(id, { quietMs: 0 }).catch(() => false)) return
       }
     })()
@@ -624,7 +627,8 @@ export class TerminalManager extends EventEmitter {
     const live = this.live.get(id)
     if (!live?.alive) throw new Error('Claude Code が動いていません')
     if (typeof text !== 'string') return
-    if (text) live.proc.write(live.term.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text)
+    // A paste marker inside the text would end the paste early and send the rest as typed keys.
+    if (text) live.proc.write(live.term.modes.bracketedPasteMode ? `\x1b[200~${text.replace(PASTE_MARKERS, '')}\x1b[201~` : text)
     // Enter right after a paste can be taken as part of it; Claude Code needs longer for a long paste or an image path.
     const wait = SEND_ENTER_MS + Math.min(text.length / 10, SEND_ENTER_MAX_MS)
     const enter = (retries) => {
@@ -754,6 +758,8 @@ export class TerminalManager extends EventEmitter {
     record.effort = next.effort
     this.defaults = { ...next }
     await this.#save()
+    // A message may have started a turn while the settings were being saved.
+    if (live?.alive && live.activity !== 'idle') throw new Error('Claude Code が作業中です。終わってから変更してください')
     if (live?.alive) {
       this.#note(id, 'ending Claude Code to start it again with a new model or level')
       live.replacing = true
@@ -762,7 +768,19 @@ export class TerminalManager extends EventEmitter {
         live.proc.kill()
         setTimeout(resolve, 5000)
       })
-      await this.restart(id, client, live.size)
+      // Still running, a second Claude Code would work on the same conversation; stopped meanwhile, it stays stopped.
+      if (live.alive || live.stopRequested) {
+        live.replacing = false
+        this.#changed(record)
+        if (live.alive) throw new Error('Claude Code を終了できませんでした。新しい設定は次に起動したときに使われます')
+        return this.summary(record)
+      }
+      try {
+        await this.restart(id, client, live.size)
+      } catch (error) {
+        this.#changed(record)
+        throw error
+      }
     } else {
       this.#changed(record)
     }
@@ -775,6 +793,7 @@ export class TerminalManager extends EventEmitter {
     const live = this.live.get(id)
     if (live?.alive) {
       this.#note(id, `ending Claude Code on request (${this.#background(live)} in the background)`)
+      live.stopRequested = true
       live.proc.kill()
     }
     return this.summary(this.#record(id))

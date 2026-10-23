@@ -95,11 +95,12 @@ export function hookSettings(node = process.execPath, script = hookScript, { den
   const slash = (file) => file.replace(/\\/g, '/')
   const command = { type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: true }
   // SubagentStart / SubagentStop: a turn ends (Stop) while its background agents go on working.
-  const events = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'PostModelSwitch', 'SubagentStart', 'SubagentStop']
+  // StopFailure: a turn that ended on an API error (rate limit, overload) runs no Stop.
+  const events = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'StopFailure', 'PostModelSwitch', 'SubagentStart', 'SubagentStop']
   // Lifecycle reports must finish before Claude can advance: an async Start can
   // arrive after Stop and resurrect an agent that has already finished (including
   // a resumed agent, which legitimately reuses its id).
-  const ordered = new Set(['SubagentStart', 'SubagentStop', 'Stop', 'Notification'])
+  const ordered = new Set(['SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'Notification'])
   const settings = { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [{ ...command, async: !ordered.has(event) }] }]])) }
   if (deniedAgents.length) settings.permissions = { deny: deniedAgents.map((name) => `Agent(${name})`) }
   return settings
@@ -140,14 +141,11 @@ export function unroutedAgents(claudeHome, env = process.env) {
 }
 
 /**
- * The settings of a team leader's Claude Code (teams.js). It also reports a
- * turn that ended in an error (StopFailure) and starts in bypass mode without
- * the warning dialog. (A team's children run headless: claude-runner.js.)
+ * The settings of a team leader's Claude Code (teams.js). It starts in bypass
+ * mode without the warning dialog. (A team's children run headless: claude-runner.js.)
  */
 export function teamHookSettings(node = process.execPath, script = hookScript, options = {}) {
   const settings = hookSettings(node, script, options)
-  const slash = (file) => file.replace(/\\/g, '/')
-  settings.hooks.StopFailure = [{ hooks: [{ type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: false }] }]
   settings.skipDangerousModePermissionPrompt = true
   return settings
 }
