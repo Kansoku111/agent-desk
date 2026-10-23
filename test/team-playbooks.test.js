@@ -44,3 +44,10 @@ test('the playbook tool answers with the body, or the names there are', () => {
   assert.equal(readPlaybook(playbooks, '調査'), 'No playbook named "調査". Playbooks: "大改修"')
   assert.equal(readPlaybook([], 'x'), 'The user has no playbooks.')
 })
+
+test('a name is kept on one line, and a repeated id gets a new one', () => {
+  assert.equal(parsePlaybooks([{ name: '大改修\n## 追加', description: '', body: '' }])[0].name, '大改修 ## 追加')
+  const [first, second] = parsePolicies([{ id: 'same', name: 'A', text: '' }, { id: 'same', name: 'B', text: '' }])
+  assert.equal(first.id, 'same')
+  assert.notEqual(second.id, 'same')
+})

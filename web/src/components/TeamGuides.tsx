@@ -12,7 +12,9 @@ type Field = { key: string; placeholder: string; max: number; multiline?: boolea
 
 /** An entry id the server keeps (ENTRY_ID); randomUUID is missing on a phone over plain http. */
 const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-const same = (a: Entry[], b: Entry[]) => JSON.stringify(a) === JSON.stringify(b)
+/** As the server saves it (team-playbooks.js): trimmed, a name on one line. */
+const asSaved = (key: string, value: unknown) => (typeof value !== 'string' ? value : (key === 'name' ? value.replace(/\s+/g, ' ') : value).trim())
+const same = (a: Entry[], b: Entry[]) => JSON.stringify(a, asSaved) === JSON.stringify(b, asSaved)
 
 /** A list of named texts, edited here and saved as one settings field. */
 function GuideList({ title, setting, saved, fields }: { title: string; setting: string; saved: Entry[]; fields: Field[] }) {

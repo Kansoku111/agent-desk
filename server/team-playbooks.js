@@ -24,18 +24,21 @@ function text(value, max, label, required = false) {
   return trimmed
 }
 
-/** Entries with a unique name and an id each; throws on anything invalid. */
+/** Entries with a unique name and id each; throws on anything invalid. */
 function entries(list, kind, fields) {
   if (!Array.isArray(list)) throw new Error(`${kind}は配列で指定してください`)
   if (list.length > ENTRIES_MAX) throw new Error(`${kind}は ${ENTRIES_MAX} 件までです`)
   const names = new Set()
+  const ids = new Set()
   return list.map((entry) => {
     if (!isRecord(entry)) throw new Error(`${kind}の項目はオブジェクトで指定してください`)
-    const name = text(entry.name ?? '', NAME_MAX, `${kind}の名前`, true)
+    // One line: the leader's instructions list names as one line each.
+    const name = text(typeof entry.name === 'string' ? entry.name.replace(/\s+/g, ' ') : entry.name ?? '', NAME_MAX, `${kind}の名前`, true)
     const key = name.toLowerCase()
     if (names.has(key)) throw new Error(`${kind}「${name}」が重複しています`)
     names.add(key)
-    const id = typeof entry.id === 'string' && ENTRY_ID.test(entry.id) ? entry.id : randomUUID()
+    const id = typeof entry.id === 'string' && ENTRY_ID.test(entry.id) && !ids.has(entry.id) ? entry.id : randomUUID()
+    ids.add(id)
     return { id, name, ...Object.fromEntries(fields.map(([field, max, label]) => [field, text(entry[field] ?? '', max, `「${name}」の${label}`)])) }
   })
 }

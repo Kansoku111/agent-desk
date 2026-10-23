@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { teamConfig } from '../server/team-config.js'
 import { leaderGuides } from '../server/team-playbooks.js'
-import { childTurnArgs, leaderLaunch } from '../server/teams-launch.js'
+import { childTurnArgs, leaderLaunch, leaderMcpServer } from '../server/teams-launch.js'
 
 const promptOf = (args) => fs.readFileSync(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
 const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agent-desk-launch-'))
@@ -54,4 +54,17 @@ test('a leader without policy or playbooks gets neither section nor the playbook
   assert.doesNotMatch(promptOf(args), /team_policy|Playbooks/)
   const mcp = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'))
   assert.equal(mcp.mcpServers['agent-team'].env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
+})
+
+test('a GPT leader gets the policy in its MCP instructions and the playbook tool with playbooks', () => {
+  const server = leaderMcpServer({
+    team: { id: 't', secret: 's', workspace: 'C:\w' }, config: teamConfig({}), models: [], dir: dir(),
+    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
+    guides: { policy: '節約する', playbooks: [{ name: '調査', description: '' }] },
+  })
+  const env = Object.fromEntries(server.env.map(({ name, value }) => [name, value]))
+  assert.equal(env.AGENT_DESK_TEAM_PLAYBOOKS, '1')
+  const prompt = fs.readFileSync(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8')
+  assert.match(prompt, /<team_policy>\n節約する\n<\/team_policy>/)
+  assert.match(prompt, /- "調査"$/m)
 })
