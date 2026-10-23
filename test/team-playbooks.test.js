@@ -23,6 +23,7 @@ test('a policy or playbook needs a unique name and stays within its limits', () 
 
 test('settings.update saves the policies and playbooks', () => {
   const { settings } = planSettingsUpdate(structuredClone(DEFAULT_SETTINGS), {
+    teamGuidesBase: { teamPolicies: [], teamPlaybooks: [] },
     teamPolicies: [{ id: 'p1', name: 'Claude中心', text: '設計は Claude' }],
     teamPlaybooks: [{ id: 'b1', name: '調査', description: '', body: '分け方' }],
   }, Date.now())

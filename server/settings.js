@@ -1,5 +1,6 @@
 // Settings updates have one commit point: validate the entire patch, persist a
 // candidate, publish it, then apply its effects. No application startup here.
+import { isDeepStrictEqual } from 'node:util'
 import { CONTEXT_CHOICES, CONTEXT_PROVIDERS, INSTRUCTIONS_MAX, SUBAGENT_TOOLS } from './dsh-config.js'
 import { UPDATE_CHANNELS } from './update-checks.js'
 import { FAST_PROVIDERS, recordFastPeriod } from './fast-mode.js'
@@ -151,8 +152,19 @@ export function planSettingsUpdate(current, patch, now) {
     next.agentTeams = mergeTeamConfig(current.agentTeams, patch.agentTeams)
   }
   // Read at a leader's next launch (a playbook, when the leader opens it); nothing restarts.
-  if (owns(patch, 'teamPolicies')) next.teamPolicies = parsePolicies(patch.teamPolicies)
-  if (owns(patch, 'teamPlaybooks')) next.teamPlaybooks = parsePlaybooks(patch.teamPlaybooks)
+  for (const [key, parse, label] of [
+    ['teamPolicies', parsePolicies, '方針'],
+    ['teamPlaybooks', parsePlaybooks, 'プレイブック'],
+  ]) {
+    if (!owns(patch, key)) continue
+    // Compare on the commit queue, not on receipt: another window's save may
+    // still be in flight. Require a base so older clients cannot bypass this.
+    const base = patch.teamGuidesBase?.[key]
+    if (!Array.isArray(base) || !isDeepStrictEqual(base, current[key] ?? [])) {
+      throw new Error(`${label}が別の画面で更新されたか、編集元を確認できません。編集内容を控え、「元に戻す」で最新の内容を読み直してください。`)
+    }
+    next[key] = parse(patch[key])
+  }
   if (owns(patch, 'fastMode')) {
     assertRecord(patch.fastMode, 'fastMode')
     next.fastMode = { ...DEFAULT_SETTINGS.fastMode, ...current.fastMode }

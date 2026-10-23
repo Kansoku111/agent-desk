@@ -22,11 +22,11 @@ function GuideList({ title, setting, saved, fields }: { title: string; setting: 
   const [base, setBase] = useState(saved)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Saved elsewhere (another window, a phone): follow it unless there are unsaved edits here.
-  // Nothing is edited while a save is on its way, so its own result is never taken for one.
-  if (!same(saved, base)) {
+  // Follow external saves only when clean, or when our own save is published.
+  // A dirty draft must keep its original base so a later save detects conflicts.
+  if (!same(saved, base) && (same(draft, base) || same(draft, saved))) {
     setBase(saved)
-    if (same(draft, base)) setDraft(saved)
+    setDraft(saved)
   }
   const dirty = !same(draft, saved)
   const invalid = draft.some((entry) => !entry.name.trim() || fields.some((field) => (entry[field.key] ?? '').length > field.max))
@@ -37,7 +37,7 @@ function GuideList({ title, setting, saved, fields }: { title: string; setting: 
     setSaving(true)
     setError(null)
     try {
-      await request('settings.update', { patch: { [setting]: draft } })
+      await request('settings.update', { patch: { [setting]: draft, teamGuidesBase: { [setting]: base } } })
       toast(`${title}を保存しました`, 'success')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -91,7 +91,7 @@ function GuideList({ title, setting, saved, fields }: { title: string; setting: 
         <div className="instructions-footer">
           <span />
           <div className="instructions-actions">
-            <button type="button" className="button" onClick={() => setDraft(saved)} disabled={saving}>元に戻す</button>
+            <button type="button" className="button" onClick={() => { setDraft(saved); setBase(saved); setError(null) }} disabled={saving}>元に戻す</button>
             <button type="button" className="button primary" onClick={() => void save()} disabled={invalid || saving}>
               {saving && <Loader2 size={14} className="spin" />} 保存
             </button>
