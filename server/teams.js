@@ -193,7 +193,14 @@ export class TeamManager extends EventEmitter {
    */
   start() {
     for (const team of this.teams.values()) {
-      for (const child of team.children) {
+      for (const child of [...team.children]) {
+        // The app stopped before the child's task was made: there is no conversation to go on with, so the child is dropped.
+        if (!child.taskId) {
+          if (child.awaiting && !child.closed) this.#report(team, child, 'error', 'Agent Desk が再起動したため、子の作業を始める前に止まりました。必要なら spawn で任せ直してください。')
+          team.children = team.children.filter((entry) => entry !== child)
+          void this.#save()
+          continue
+        }
         if (!child.awaiting || child.closed || this.#childBusy(child)) continue
         child.awaiting = false
         delete child.resumed
@@ -269,8 +276,8 @@ export class TeamManager extends EventEmitter {
   #childState(child) {
     if (!child.taskId) return 'running'
     if ([...this.approvals.values()].some((entry) => entry.childId === child.id)) return 'approval'
-    // Stopped on a passing failure, going on by itself shortly (#resumeLater).
-    if (this.retries.has(`resume:${child.id}`)) return 'resuming'
+    // Stopped on a passing failure, going on by itself shortly (#resumeLater); a turn the user or the leader started since is running.
+    if (this.retries.has(`resume:${child.id}`) && !this.#childBusy(child)) return 'resuming'
     if (child.kind === 'thread') {
       const thread = this.threads.threads.get(child.taskId)
       if (!thread) return 'removed'
@@ -499,12 +506,16 @@ export class TeamManager extends EventEmitter {
         this.log(`team ${teamId}: removing child ${child.name}:`, error.message)
       }
     }
-    if (team.leaderKind === 'thread') {
-      if (this.threads.threads.has(team.leaderId)) await this.threads.remove(team.leaderId)
-    } else if (this.terminals.records.has(team.leaderId)) await this.terminals.remove(team.leaderId)
-    fs.rmSync(path.join(this.dir, teamId), { recursive: true, force: true })
-    await this.#save()
-    this.emit('removed', { teamId })
+    try {
+      if (team.leaderKind === 'thread') {
+        if (this.threads.threads.has(team.leaderId)) await this.threads.remove(team.leaderId)
+      } else if (this.terminals.records.has(team.leaderId)) await this.terminals.remove(team.leaderId)
+    } finally {
+      // The team is gone from memory already: a failed leader removal still leaves it out of the saved teams and the lists.
+      fs.rmSync(path.join(this.dir, teamId), { recursive: true, force: true })
+      await this.#save()
+      this.emit('removed', { teamId })
+    }
     return { removed: true }
   }
 
@@ -753,6 +764,7 @@ export class TeamManager extends EventEmitter {
       try {
         await this.threads.send(child.taskId, { text })
       } catch (error) {
+        child.awaiting = false
         this.#report(team, child, 'error', `リーダーからの指示を渡せませんでした: ${error.message}`)
       }
     } else {
@@ -958,8 +970,8 @@ export class TeamManager extends EventEmitter {
     if (!team) throw new Error('チームが見つかりません')
     let stopped = 0
     for (const child of team.children) {
-      // One waiting to go on after a passing failure stops here.
-      if (this.#cancelResume(child)) {
+      // One waiting to go on after a passing failure stops here, unless a turn runs now: that one is stopped below.
+      if (this.#cancelResume(child) && !this.#childBusy(child)) {
         child.awaiting = false
         delete child.resumed
         this.#report(team, child, 'cancelled', '', { byUser: true })
@@ -1338,6 +1350,10 @@ export class TeamManager extends EventEmitter {
     const { team, child } = found
     const apiStopped = this.apiStopped.delete(child.id)
     const byUser = this.userStopped.delete(child.id)
+    // A task being removed reports nothing: its removal takes the child away.
+    if (this.threads.removing.has(threadId)) return
+    // Cut off by the app's shutdown: the child stays awaiting, so the restart (start) reports it as cut off.
+    if (status === 'cancelled' && this.threads.stopping) return
     if (this.#reportsTurn(child)) {
       const turn = this.threads.turns.get(threadId)?.at(-1)
       if (status === 'error' && !apiStopped && this.#resumeLater(team, child, turn?.error?.message)) return this.#emit(team)
@@ -1398,6 +1414,8 @@ export class TeamManager extends EventEmitter {
     if (!found?.child) return
     const { team, child } = found
     const byUser = this.userStopped.delete(child.id)
+    // A session being removed reports nothing: its record is dropped before its turn ends (claude-runner remove).
+    if (!this.agents.get(id)) return
     if (this.#reportsTurn(child)) {
       if (status === 'error' && this.#resumeLater(team, child, error)) return this.#emit(team)
       const extra = child.awaiting ? {} : { unasked: true }
@@ -1425,7 +1443,12 @@ export class TeamManager extends EventEmitter {
     this.log(`team ${team.id}: ${child.name} stopped on a passing error; going on in ${RESUME_DELAY_MS / 1000} s`)
     this.#later(`resume:${child.id}`, () => {
       // Closed, removed, sent something else or restarted meanwhile: that stands.
-      if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed || !child.awaiting || this.#childBusy(child)) return
+      if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed || !child.awaiting) return
+      // A turn running now is the child's own: it is no automatic resume, so a later passing failure gets one.
+      if (this.#childBusy(child)) {
+        delete child.resumed
+        return
+      }
       const failed = (error) => {
         child.awaiting = false
         delete child.resumed

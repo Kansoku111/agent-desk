@@ -17,6 +17,7 @@ function fakeThreads() {
     turns: new Map(),
     calls: [],
     permissions: [],
+    removing: new Map(),
     async create(options) {
       const thread = { id: `thread-${threads.threads.size + 1}`, title: '新しいタスク', status: 'idle', pendingApproval: false, ...options }
       threads.threads.set(thread.id, thread)
@@ -1521,4 +1522,117 @@ test('a Claude child may leave a long command in the background; a dsh child is 
   assert.doesNotMatch(prompt, /Wait for every command to finish/)
   const { childPrompt } = await import('../server/teams-prompts.js')
   assert.match(childPrompt(), /Wait for every command to finish/)
+})
+
+test('stopping all stops a child that a turn of its own runs while it waits after a passing failure', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { agents, terminals, tool, leader, manager, team } = await setup(t)
+  terminals.set(leader, { activity: 'running' })
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  agents.finish('agent-1', '', 'error', { error: 'API Error: 529 Overloaded' })
+  manager.messageChild(team.id, team.children[0].id, 'ユーザーの追加指示')
+  assert.equal(manager.summary(team).children[0].state, 'running')
+  assert.equal((await manager.stopAll(team.id)).stopped, 1)
+  assert.equal(agents.running('agent-1'), false)
+  assert.deepEqual(team.queue.map((item) => [item.kind, item.byUser]), [['cancelled', true]])
+  const runs = agents.calls.filter((call) => call[0] === 'run').length
+  t.mock.timers.tick(RESUME_DELAY_MS)
+  assert.equal(agents.calls.filter((call) => call[0] === 'run').length, runs)
+})
+
+test('a task being removed reports no turn that ends with its removal', async (t) => {
+  const { threads, agents, terminals, tool, leader, typed, team } = await setup(t)
+  terminals.set(leader, { activity: 'idle' })
+  await tool('spawn', { title: 'g', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
+  await tool('spawn', { title: 'c', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  // As threads.remove: the running turn is cancelled first (turn-finished), then the task goes (removed).
+  threads.remove = async (id) => {
+    threads.removing.set(id, Promise.resolve())
+    threads.finish(id, '', 'cancelled')
+    threads.threads.delete(id)
+    threads.emit('removed', { threadId: id })
+    threads.removing.delete(id)
+  }
+  await threads.remove('thread-1')
+  // As claude-runner remove: the record goes first, then the session's turn ends (finished).
+  agents.sessions.delete('agent-1')
+  agents.emit('finished', { id: 'agent-1', status: 'cancelled', text: '', error: null, denials: [] })
+  agents.emit('removed', { id: 'agent-1' })
+  assert.equal(team.children.length, 0)
+  assert.deepEqual(typed(), [])
+})
+
+test('a GPT child whose waiting instruction did not go is no longer awaiting, so a restart reports nothing', async (t) => {
+  const { threads, terminals, tool, leader, manager, team } = await setup(t)
+  terminals.set(leader, { activity: 'idle' })
+  await tool('spawn', { title: 'g', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
+  await tool('send', { child: 'G', message: '追加の指示' })
+  const send = threads.send
+  threads.send = async () => {
+    throw new Error('ChatGPT のモデルを使うには、設定から ChatGPT にサインインしてください。')
+  }
+  threads.finish('thread-1', '途中まで')
+  threads.send = send
+  await tick()
+  assert.equal(team.children[0].awaiting, false)
+  // The report of the failed instruction waits behind the report just handed to the leader.
+  assert.deepEqual(team.queue.map((item) => item.kind), ['error'])
+  manager.start()
+  assert.deepEqual(team.queue.map((item) => item.kind), ['error'])
+})
+
+test('removing a team whose leader will not go still saves the team out and says so', async (t) => {
+  const { terminals, tool, manager, team, dir } = await setup(t)
+  await tool('spawn', { title: 'c', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  const removed = []
+  manager.on('removed', ({ teamId }) => removed.push(teamId))
+  const remove = terminals.remove
+  terminals.remove = async () => {
+    throw new Error('disk busy')
+  }
+  await assert.rejects(() => manager.removeTeam(team.id), /disk busy/)
+  terminals.remove = remove
+  assert.equal(manager.teams.size, 0)
+  assert.deepEqual(removed, [team.id])
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'teams.json'), 'utf8'))
+  assert.deepEqual(saved.teams, [])
+})
+
+test('a turn the app shutdown cut off is not reported; the restart reports it as cut off', async (t) => {
+  const { threads, terminals, tool, leader, typed, manager, team } = await setup(t)
+  terminals.set(leader, { activity: 'idle' })
+  await tool('spawn', { title: 'g', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
+  // As threads.shutdown: the app is stopping, and the running turn ends cancelled.
+  threads.stopping = true
+  threads.finish('thread-1', '途中まで', 'cancelled')
+  assert.deepEqual(typed(), [])
+  assert.equal(team.children[0].awaiting, true)
+  manager.start()
+  assert.match(typed().at(-1), /再起動したため、作業が途中で止まりました/)
+})
+
+test('a passing failure in a turn the user started gets the automatic resume once that turn is over', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { agents, terminals, tool, leader, manager, team } = await setup(t)
+  terminals.set(leader, { activity: 'running' })
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  agents.finish('agent-1', '', 'error', { error: 'API Error: 529 Overloaded' })
+  manager.messageChild(team.id, team.children[0].id, 'ユーザーの追加指示')
+  // The wait ends while the user's turn runs: it is no automatic resume, so the next passing failure gets one.
+  t.mock.timers.tick(RESUME_DELAY_MS)
+  agents.finish('agent-1', '', 'error', { error: 'API Error: 529 Overloaded' })
+  t.mock.timers.tick(RESUME_DELAY_MS)
+  assert.equal(agents.calls.at(-1)[0], 'run')
+  assert.match(agents.calls.at(-1)[2], /自動で再開しました/)
+})
+
+test('a child whose task was not made when the app stopped is dropped, and the leader is told', async (t) => {
+  const { terminals, tool, leader, typed, manager, team } = await setup(t)
+  terminals.set(leader, { activity: 'idle' })
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  // A saved team whose child's task was being made: no task is saved for it.
+  team.children[0].taskId = null
+  manager.start()
+  assert.deepEqual(team.children, [])
+  assert.match(typed().at(-1), /子の作業を始める前に止まりました/)
 })
