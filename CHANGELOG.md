@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Settings → About → "更新" checks dsh, the bundled Codex and Claude Code for newer releases in one place, next to the model list sync. dsh and Codex offer "指示をコピー", which copies an instruction for an AI agent working in the repository (versions, repository, release notes; the steps live in [docs/updating.md](docs/updating.md)); it only shows when Agent Desk runs from a git checkout. Claude Code offers "更新", which runs `claude update`.
 - Local LLM: Settings → Accounts → "ローカル LLM" connects an OpenAI-compatible model server (Ollama, LM Studio, vLLM, llama.cpp) by its URL (e.g. `http://localhost:11434/v1`), with an optional API key. Its models are read from `/models` when it connects and kept in the settings, so they stay in the model picker while the server is off; "再読み込み" reads them again. They run as dsh tasks without images or reasoning levels, with a 32K window unless the server reports one. Agent teams can use them as children ("ローカル LLM", child only, off by default).
 - Agent teams: reports that arrive while the leader works now reach it together in its next turn, as one message with the next steps said once, instead of one turn per report. A message gathers at most 6,000 characters of reports; the rest follow. Settings → Agent teams → "報告をまとめて渡す" (on by default) turns it off.
 - Agent teams: the leader's `send` takes `fresh: true` to start a child over in a new conversation (its earlier one is removed), for work that needs little of what it carried. It is refused while the child works.
@@ -25,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Agent Desk no longer installs dsh releases itself: the install, verification, rollback and recovery steps (and "自動で更新する") are gone, and so is the execution lock they needed. The update check remains.
 - Agent teams: GPT, Claude (API) and DeepSeek children get their standing instructions as a system prompt section (a dsh plugin in the children's layer) instead of their first message, so compaction no longer drops them. The first message names the child and gives its task.
 - Agent teams: a child checks its work before it reports (tests, build, running it, or looking at the result), and its report says how it checked and what came out, between what it did and the paths it changed. The leader audits with that in hand.
 - Legal documentation now describes Anthropic's conditional allowance for an unmodified Claude Code binary using users' own subscription/API/cloud credentials, including Commercial Terms for product/service providers and no restriction of built-in authentication. Disclaimers and billing acknowledgements do not guarantee compliance or grant policy permission.

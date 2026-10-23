@@ -13,4 +13,4 @@ npm run build      # 画面のビルド（npm start 時は必要なら自動で�
 
 主な責務は、設定の検証・保存順序が `server/settings.js`、更新互換性が `server/dsh-compatibility.js`、タスクの受領記録とライフサイクルが `server/threads.js`、ブラウザの送信待ちが `web/src/outbox.ts`、接続ごとのリクエスト管理が `web/src/rpc-client.ts` に分かれています。送信の回帰テストは実モデルを呼ばず、更新の回帰テストも実際の npm 更新を行いません。`test/server-recovery.test.js` は一時データフォルダで復旧待ちのサーバーを起動し、エンジンを起動せずに RPC の接続を確認します。
 
-`scripts/probe-acp.mjs` は、dsh の ACP 応答を直接確かめるための診断用スクリプトです。`scripts/check-dsh.mjs` は、更新時に使う動作確認スクリプトです。手動でも実行できます（`node scripts/check-dsh.mjs`）。
+`scripts/probe-acp.mjs` は、dsh の ACP 応答を直接確かめるための診断用スクリプトです。`scripts/check-dsh.mjs` は、dsh を更新したあとの動作確認スクリプトです（`node scripts/check-dsh.mjs`、[dsh と Codex の更新](updating.md) を参照）。

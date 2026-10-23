@@ -3,7 +3,7 @@
 import { CUSTOM_MODEL_PROVIDERS, isModelId, templateModels } from './model-catalog.js'
 
 /** Handlers for models and updates; index.js merges them into the request table. */
-export function createModelHandlers({ getSettings, saveSettings, broadcast, threads, catalog, catalogState, updater, modelUpdater, modelUpdateState, updateModelCatalog, refreshCodexModels, assertNotUpdating }) {
+export function createModelHandlers({ getSettings, saveSettings, broadcast, threads, catalog, catalogState, updates, modelUpdater, modelUpdateState, updateModelCatalog, refreshCodexModels }) {
   return {
     'models.templates': async () => ({ templates: await templateModels(), custom: getSettings().customModels }),
 
@@ -35,10 +35,8 @@ export function createModelHandlers({ getSettings, saveSettings, broadcast, thre
       return { settings: getSettings(), busy: threads.busy }
     },
 
-    'dshUpdate.check': async () => ({ update: await updater.check() }),
-    'dshUpdate.apply': async ({ version }) => ({ update: await updater.apply(version) }),
-    'dshUpdate.cancel': () => ({ update: updater.cancel() }),
-    'dshUpdate.recover': async () => ({ update: await updater.retryRecovery() }),
+    'updates.check': async () => ({ updates: await updates.check() }),
+    'updates.updateClaude': async () => ({ updates: await updates.updateClaude() }),
 
     'modelUpdate.check': async () => {
       // The ChatGPT account's own list first (the authoritative one), then pi-ai's newest release.
@@ -48,7 +46,6 @@ export function createModelHandlers({ getSettings, saveSettings, broadcast, thre
     },
 
     'catalog.refresh': async () => {
-      assertNotUpdating()
       catalog.data.models = []
       await threads.warmCatalog()
       return { catalog: catalogState() }

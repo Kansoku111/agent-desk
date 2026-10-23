@@ -21,7 +21,6 @@ function outboxFor(manager, initial = {}, requestOverride) {
     request: (type, params) => requestOverride ? requestOverride(type, params, request) : request(type, params),
     thread: (id) => manager.threads.get(id),
     ready: () => true,
-    blocked: () => false,
     report: () => {},
   })
   return { outbox, saved: () => saved }

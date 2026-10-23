@@ -75,7 +75,7 @@ async function serveStatic(res, pathname) {
 }
 
 /** Builds the request handler; the managers and state come from index.js. */
-export function createRequestHandler({ appVersion, codeStamp, busy, updater, countClients, paths, terminals, teams, shutdown, log = (...args) => console.error(...args) }) {
+export function createRequestHandler({ appVersion, codeStamp, busy, countClients, paths, terminals, teams, shutdown, log = (...args) => console.error(...args) }) {
   /** Serves one request on either listener; `ctx` says which (see localContext and RemoteAccess.context). */
   async function handleRequest(req, res, ctx) {
     try {
@@ -88,9 +88,8 @@ export function createRequestHandler({ appVersion, codeStamp, busy, updater, cou
       }
       const authorized = sameToken(url.searchParams.get('t'), ctx.token)
       if (url.pathname === '/api/ping' && !ctx.remote) {
-        // While dsh is being replaced, a launcher must not swap this server out.
         const status = {
-          app: 'agent-desk', version: appVersion, codeStamp, busy: busy() || updater.locked,
+          app: 'agent-desk', version: appVersion, codeStamp, busy: busy(),
           clients: countClients(false), remoteClients: countClients(true),
         }
         return send(res, 200, JSON.stringify(status), 'application/json')
@@ -98,7 +97,7 @@ export function createRequestHandler({ appVersion, codeStamp, busy, updater, cou
       if (url.pathname === '/api/quit' && !ctx.remote) {
         // A newer launcher asks this instance to make way; never while agents work.
         if (req.method !== 'POST' || !authorized) return send(res, 403, 'forbidden')
-        if (busy() || updater.locked) return send(res, 409, 'busy')
+        if (busy()) return send(res, 409, 'busy')
         send(res, 200, 'bye')
         setImmediate(() => void shutdown(0))
         return

@@ -335,7 +335,6 @@ export interface Settings {
   /** Fast mode per provider; applies to the models in `AppState.fastModels`. */
   fastMode: Record<FastProvider, boolean>
   dshUpdateChannel: UpdateChannel
-  dshAutoUpdate: boolean
   /** New Claude and GPT models come from the newest pi-ai release by themselves. */
   modelAutoUpdate: boolean
   /** Phones on the same tailnet may use the app. */
@@ -378,26 +377,24 @@ export type RemoteAccessState =
 /** npm dist-tags of dsh, from the most to the least stable. */
 export type UpdateChannel = 'latest' | 'next' | 'alpha'
 
-export interface DshUpdate {
-  phase: 'idle' | 'checking' | 'available' | 'waiting' | 'installing' | 'verifying' | 'rolling-back' | 'restarting' | 'recovery-required'
+interface ReleaseItem {
   installed: string
   available: string | null
-  /** The version being (or waiting to be) installed. */
-  target: string | null
-  checkedAt: number | null
   error: string | null
-  /** Versions whose install was rolled back, with the reason. */
-  failed: Record<string, string>
-  lastResult: { ok: boolean; from: string; to: string; at: number; error?: string; recovered?: boolean } | null
-  /** Pending compensations; execution stays blocked until both finish durably. */
-  recovery: {
-    from: string | null
-    version: string | null
-    stage: string
-    packages: boolean
-    home: boolean
-    errors: Record<string, string>
-  } | null
+  /** What to hand an AI agent to do the update; null without an offer or a source checkout. */
+  prompt: string | null
+}
+
+/** Newer releases of dsh, the bundled Codex and Claude Code. */
+export interface Updates {
+  checking: boolean
+  checkedAt: number | null
+  /** Agent Desk runs from a git checkout (an agent can change its code). */
+  source: boolean
+  dsh: ReleaseItem
+  codex: ReleaseItem
+  /** `installed` is null when Claude Code is not installed. */
+  claude: { installed: string | null; available: string | null; error: string | null; updating: boolean }
 }
 
 export interface AddedModel {
@@ -462,7 +459,7 @@ export interface AppState {
   claudeLimits: ClaudeLimits | null
   openTargets: { files: boolean; terminal: boolean }
   permissionModes: PermissionMode[]
-  dshUpdate: DshUpdate
+  updates: Updates
   modelUpdate: ModelUpdate
   usage: UsageState
   remoteAccess: RemoteAccessState

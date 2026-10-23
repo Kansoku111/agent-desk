@@ -2,7 +2,6 @@
 // Agent Desk server: serves the UI, owns the dsh ACP runtimes, and talks to
 // the UI over one authenticated WebSocket. Binds to 127.0.0.1, plus this PC's
 // Tailscale addresses when remote access (phones) is turned on.
-import { spawn } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -17,7 +16,7 @@ import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret,
 } from './credentials.js'
 import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeTeamChildPatch } from './dsh-config.js'
-import { DshUpdater } from './dsh-update.js'
+import { UpdateChecker } from './update-checks.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
 import { createSettingsService, DEFAULT_SETTINGS, migrateSettings } from './settings.js'
 import { localLlmSettings, localRoute } from './local-llm.js'
@@ -32,7 +31,7 @@ import { ClaudeCost } from './claude-cost.js'
 import { fetchChatGptUsage, normalizeCodexRateLimits } from './chatgpt-usage.js'
 import { AUTH_REQUIRED } from './claude-auth.js'
 import { mergeClaudeLimits, readSavedClaudeLimits } from './claude-limits.js'
-import { CodexAppServer } from './codex-app-server.js'
+import { CODEX_VERSION, CodexAppServer } from './codex-app-server.js'
 import { accountModelAdditions, markRetired, retiredModels, withCodexModelLimits } from './codex-models.js'
 import { appPaths, projectRoot } from './paths.js'
 import { PERMISSION_MODES, RuntimePool } from './runtime.js'
@@ -163,26 +162,13 @@ async function accounts() {
   }
 }
 
-// Read the update barrier before touching the engine's home or model catalogs.
-// These callbacks run only after the rest of bootstrap has constructed the pool.
-const updater = await new DshUpdater({
+// Newer releases of dsh, the bundled Codex and Claude Code (設定 → 情報).
+const updates = new UpdateChecker({
   root: projectRoot,
-  home: paths.home,
-  dshHome: paths.dshHome,
-  installed: DSH_VERSION,
-  getSettings: () => ({ channel: settings.dshUpdateChannel, auto: settings.dshAutoUpdate }),
-  isBusy: busy,
-  lock: async () => {
-    login.cancel()
-    await pool.pause()
-  },
-  unlock: () => {
-    pool.resume()
-    broadcast('runtime', { runtime: pool.status() })
-  },
-  restart: restartServer,
-  log: (...parts) => log('dsh update:', ...parts),
-}).load()
+  installed: { dsh: DSH_VERSION, codex: CODEX_VERSION },
+  getChannel: () => settings.dshUpdateChannel,
+  log: (...parts) => log('update check:', ...parts),
+})
 
 // What the ChatGPT backend says about each Codex model: its default and maximum
 // window, fast mode, and which models the account offers (cached from its model list).
@@ -196,7 +182,6 @@ const modelUpdater = await new ModelCatalogUpdater({
   root: projectRoot,
   home: paths.home,
   enabled: () => settings.modelAutoUpdate !== false,
-  isBlocked: () => updater.blocking,
   onCatalog: () => updateModelCatalog().then(() => {}),
   log: (...parts) => log('model update:', ...parts),
 }).load()
@@ -216,7 +201,6 @@ const modelUpdateState = () => ({
 /** The catalog as the UI gets it: models the account's list no longer has are marked `retired`. */
 const catalogState = (snapshot = catalog.snapshot()) => markRetired(snapshot, codexLimits.availability, settings.modelAutoUpdate !== false)
 async function syncModelCatalog() {
-  if (updater.blocking) return { changed: false, added: [], models: [], skipped: [], warnings: [] }
   let result
   try {
     const fromAccount = settings.modelAutoUpdate !== false ? accountModelAdditions(codexLimits.availability) : []
@@ -232,7 +216,7 @@ async function syncModelCatalog() {
 }
 // Bump `learn` when the catalog learns something new, so caches refresh once.
 const catalogSignature = async (result) => JSON.stringify({
-  dsh: updater.state.installed, added: [...result.added].sort(), learn: 'official-siwc',
+  dsh: DSH_VERSION, added: [...result.added].sort(), learn: 'official-siwc',
   definitions: createHash('sha256').update(JSON.stringify(configuredModels)).digest('hex'),
   // Native DeepSeek discovery returns no models until its key is present.
   deepseek: (await accounts()).deepseek.configured,
@@ -254,7 +238,6 @@ async function modelLimits() {
 
 /** Rewrites the dsh home patch (and the team children's layer) from the settings; true when it changed. */
 async function applyHomePatch() {
-  if (updater.blocking) return false
   const subagents = Object.keys(SUBAGENT_TOOLS)
     .filter((provider) => settings.subagentModels?.[provider])
     .map((provider) => {
@@ -289,7 +272,6 @@ await applyFastMode()
 
 /** Refresh after startup or sign-in; keep running tasks intact until they finish. */
 async function refreshCodexModels() {
-  if (updater.blocking) return
   try {
     const changed = await codexLimits.refresh(credentials)
     // The result of the check (also "signed out") shows in settings.
@@ -310,7 +292,6 @@ const pool = new RuntimePool({
   onUpdate: (sessionId, update) => threads.onUpdate(sessionId, update),
   onPermission: (params) => threads.onPermission(params),
 })
-if (updater.blocking) await pool.pause()
 threads = new ThreadManager({
   paths,
   pool,
@@ -423,9 +404,7 @@ teams.on('ask', ({ leaderId, leaderKind, text }) => broadcast('notify', { kind: 
 teams.on('stuck', ({ leaderId, leaderKind, title }) => broadcast('notify', { kind: 'approval-needed', terminal: leaderKind !== 'thread', threadId: leaderId, title }))
 terminals.on('turn-finished', () => {
   if (restartPending) void restartRuntimesWhenIdle()
-  updater.onIdle()
 })
-agents.on('finished', () => updater.onIdle())
 
 // The ChatGPT subscription's remaining allowance (5-hour / weekly windows).
 let chatgptUsage = null
@@ -437,7 +416,6 @@ codexApp.on('login', state => {
 codexApp.on('account', () => { void accounts().then(next => broadcast('accounts', { accounts: next })) })
 codexApp.on('rateLimits', body => { chatgptUsage = normalizeCodexRateLimits(body); broadcast('chatgptUsage', { usage: chatgptUsage }) })
 async function refreshChatGptUsage() {
-  if (updater.blocking) return chatgptUsage
   chatgptUsage = await fetchChatGptUsage(codexApp)
   broadcast('chatgptUsage', { usage: chatgptUsage })
   return chatgptUsage
@@ -513,12 +491,9 @@ async function updateModelCatalog({ deferRuntimeEffects = false } = {}) {
 }
 threads.on('turn-finished', () => {
   if (restartPending) void restartRuntimesWhenIdle()
-  updater.onIdle()
 })
-updater.on('state', (state) => broadcast('dshUpdate', { update: state }))
+updates.on('state', (state) => broadcast('updates', { updates: state }))
 modelUpdater.on('state', () => broadcast('modelUpdate', { modelUpdate: modelUpdateState() }))
-// Reinstalling the previous release can bring back pi-ai catalogs without Agent Desk's additions.
-updater.on('rolled-back', () => void updateModelCatalog().catch((error) => log('model catalog:', error.message)))
 
 async function setAnthropicWorkspace(workspaceId) {
   settings.anthropicWorkspaceId = workspaceId
@@ -556,7 +531,7 @@ const broadcastRemote = () => broadcast('remoteAccess', { remoteAccess: remoteSt
 async function fullState(client) {
   return {
     app: {
-      version: APP_VERSION, dshVersion: updater.state.installed, platform: process.platform, dataDir: paths.home, myPc: paths.myPc, uiBuild: UI_BUILD,
+      version: APP_VERSION, dshVersion: DSH_VERSION, platform: process.platform, dataDir: paths.home, myPc: paths.myPc, uiBuild: UI_BUILD,
       remote: Boolean(client?.remote),
     },
     settings,
@@ -574,7 +549,7 @@ async function fullState(client) {
     usage: usageState(),
     openTargets: openTargets(),
     permissionModes: PERMISSION_MODES,
-    dshUpdate: updater.snapshot(),
+    updates: updates.snapshot(),
     modelUpdate: modelUpdateState(),
     remoteAccess: remoteState(client),
   }
@@ -582,10 +557,6 @@ async function fullState(client) {
 
 // ------------------------------------------------------------------ requests
 
-function assertNotUpdating() {
-  if (updater.state.phase === 'recovery-required') throw new Error('dsh の復旧が必要です。設定 → 情報から「復旧を再試行」を実行してください。')
-  if (updater.blocking) throw new Error('dsh を更新しています。完了してからもう一度送信してください。')
-}
 
 const settingsService = createSettingsService({
   getSettings: () => settings,
@@ -598,13 +569,13 @@ const settingsService = createSettingsService({
   applyFastMode,
   updateModelCatalog: () => updateModelCatalog({ deferRuntimeEffects: true }),
   restartRuntimesWhenIdle,
-  checkDshUpdate: () => updater.check(),
+  onChannelChange: () => updates.channelChanged(),
   checkModelUpdate: () => modelUpdater.check(),
   onBackgroundError: (error) => log('settings update check:', error.message),
 })
 
 const handlers = {
-  ...createThreadHandlers({ paths, threads, teams, subagents, getSettings, saveSettings, broadcast, assertNotUpdating }),
+  ...createThreadHandlers({ paths, threads, teams, subagents, getSettings, saveSettings, broadcast }),
   ...createWorkspaceHandlers({ paths, getSettings, saveSettings, broadcast }),
   ...createAccountHandlers({
     appVersion: APP_VERSION, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost,
@@ -612,8 +583,8 @@ const handlers = {
     updateSettings: (patch) => settingsService.update(patch),
   }),
   ...createModelHandlers({
-    getSettings, saveSettings, broadcast, threads, catalog, catalogState, updater, modelUpdater, modelUpdateState,
-    updateModelCatalog, refreshCodexModels, assertNotUpdating,
+    getSettings, saveSettings, broadcast, threads, catalog, catalogState, updates, modelUpdater, modelUpdateState,
+    updateModelCatalog, refreshCodexModels,
   }),
   ...createTerminalHandlers({ paths, getSettings, saveSettings, broadcast, terminals, teams, agents }),
 
@@ -651,15 +622,6 @@ const handlers = {
   },
 }
 
-// Do not modify credentials or installed catalog files during backup/recovery.
-for (const type of [
-  'account.setKey', 'account.removeKey', 'account.setWorkspace', 'chatgpt.login', 'chatgpt.code',
-  'chatgpt.logout', 'usage.setAdminKey', 'usage.removeAdminKey', 'models.addCustom', 'models.removeCustom',
-]) {
-  const handler = handlers[type]
-  handlers[type] = (...args) => { assertNotUpdating(); return handler(...args) }
-}
-
 // Legacy project/account handlers also mutate settings. They share the same
 // commit queue as settings.update, so publishing a validated candidate cannot
 // overwrite a project or default selected while its disk write was in flight.
@@ -685,7 +647,7 @@ function localContext() {
 }
 
 const handleRequest = createRequestHandler({
-  appVersion: APP_VERSION, codeStamp: CODE_STAMP, busy, updater, countClients, paths, terminals, teams, shutdown,
+  appVersion: APP_VERSION, codeStamp: CODE_STAMP, busy, countClients, paths, terminals, teams, shutdown,
 })
 
 const server = http.createServer((req, res) => void handleRequest(req, res, localContext()))
@@ -728,7 +690,7 @@ function scheduleIdleExit() {
   clearTimeout(idleTimer)
   idleTimer = setTimeout(() => {
     if (KEEP_ALIVE || settings.remoteAccess || countClients(false) > 0) return
-    if (busy() || (updater.locked && updater.state.phase !== 'recovery-required')) return scheduleIdleExit()
+    if (busy()) return scheduleIdleExit()
     log('all windows closed; shutting down')
     void shutdown(0)
   }, 30_000)
@@ -736,38 +698,13 @@ function scheduleIdleExit() {
 
 // ------------------------------------------------------------------ lifecycle
 
-/**
- * Starts the server again from the code on disk (after a dsh update). The new
- * process takes over this one's port and token the way a launcher does, so
- * open windows reconnect by themselves. False when there is no need: in dev
- * mode, or with no window open and remote access off (the next launch runs
- * the new code anyway).
- */
-async function restartServer() {
-  if (DEV || (countClients(false) === 0 && !KEEP_ALIVE && !settings.remoteAccess)) return false
-  const out = fs.openSync(path.join(paths.home, 'launcher.log'), 'a')
-  try {
-    const child = spawn(process.execPath, [path.join(projectRoot, 'server', 'index.js'), ...args], {
-      cwd: projectRoot,
-      detached: true,
-      windowsHide: true,
-      stdio: ['ignore', out, out],
-    })
-    child.unref()
-    log(`restarting with the new dsh (pid ${child.pid})`)
-  } finally {
-    fs.closeSync(out)
-  }
-  return true
-}
-
 let shuttingDown = false
 let codexModelsTimer = null
 async function shutdown(code = 0) {
   if (shuttingDown) return
   shuttingDown = true
   login.cancel()
-  updater.stop()
+  updates.stop()
   modelUpdater.stop()
   clearInterval(codexModelsTimer)
   // Request cancellation first, then close the transports as well. A stalled
@@ -814,7 +751,7 @@ codexModelsTimer = setInterval(() => void refreshCodexModels(), 6 * 60 * 60 * 10
 codexModelsTimer.unref()
 
 // Boot the default runtime early and learn the model list in the background.
-if (!updater.blocking) threads.warmCatalog().catch((error) => log('model catalog warm-up failed:', error.message.split('\n')[0]))
+threads.warmCatalog().catch((error) => log('model catalog warm-up failed:', error.message.split('\n')[0]))
 
-updater.start()
+updates.start()
 modelUpdater.start()

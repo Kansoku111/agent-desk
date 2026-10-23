@@ -3372,11 +3372,51 @@ select:focus {
   }
 }
 
-/* ---------------------------------------------------------------- dsh updates */
+/* ---------------------------------------------------------------- updates */
 
-.badge.update {
-  background: var(--amber-bg);
-  color: var(--amber);
+.update-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px 12px;
+  font-size: 13px;
+}
+
+.update-row {
+  display: contents;
+}
+
+.update-name {
+  grid-column: 1;
+  font-weight: 600;
+}
+
+.update-versions {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.update-channel {
+  grid-column: 3;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.update-action {
+  grid-column: 4;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.update-row .form-error {
+  grid-column: 1 / -1;
+  margin: -6px 0 0;
+}
+
+.update-ok {
+  color: var(--green);
 }
 
 .update-dot {

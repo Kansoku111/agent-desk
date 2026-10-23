@@ -89,7 +89,7 @@ npm start
 - [スマホから使う](docs/remote.md): Tailscale 経由での接続
 - [使用量の表示](docs/usage.md): 概算料金と Claude の請求額
 - [変更を戻す](docs/restore.md): ワークスペースの巻き戻し
-- [dsh のアップデート](docs/dsh-update.md): dsh の更新と復旧
+- [dsh と Codex の更新](docs/updating.md): 更新の確認と、AI に任せる更新の手順
 - [仕組みとデータの保存場所](docs/architecture.md): 構成と保存先
 - [既知の制約](docs/known-issues.md): 現在の制約
 - [開発](docs/development.md): 開発コマンドと主なファイルの役割

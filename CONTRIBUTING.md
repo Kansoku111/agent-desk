@@ -33,7 +33,7 @@ npm run build      # 画面のビルド
 
 - テストは `test/` にあり、Node.js の組み込みテストランナー（`node --test`）で動きます。ファイル名は `*.test.js` です。
 - 変更したら `npm test` を実行し、すべてのテストが通ることを確認してください。既存のテストを壊したまま PR を出さないでください。
-- `steer-patch.test.js`、`retry-patch.test.js`、`goal-patch.test.js` などの `*-patch.test.js` は、dsh 本体の更新で独自フックが合わなくなると失敗します。失敗したときは dsh の版との互換性を確認してください（[dsh のアップデート](docs/dsh-update.md) を参照）。
+- `steer-patch.test.js`、`retry-patch.test.js`、`goal-patch.test.js` などの `*-patch.test.js` は、dsh 本体の更新で独自フックが合わなくなると失敗します。失敗したときは dsh の版との互換性を確認してください（[dsh と Codex の更新](docs/updating.md) を参照）。
 - 画面（`web/`）を変えたときは、`npm run typecheck` と `npm run build` も通してください。
 
 ## プルリクエストの流れ

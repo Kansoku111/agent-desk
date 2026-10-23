@@ -1,6 +1,6 @@
 // Formatting helpers and the Codex-style one-line summaries of tool calls.
 import { diffLines } from 'diff'
-import type { DshUpdate, PermissionMode, ToolItem, Turn } from './types'
+import type { PermissionMode, ToolItem, Turn } from './types'
 
 export function basename(target: string | null | undefined) {
   if (!target) return ''
@@ -94,23 +94,6 @@ const EFFORT_LABELS: Record<string, string> = {
   high: '高',
   xhigh: '最高',
   max: '最大',
-}
-
-export const UPDATE_PHASE_LABEL: Record<DshUpdate['phase'], string> = {
-  idle: '',
-  checking: '更新を確認しています',
-  available: '更新できます',
-  waiting: '作業中のタスクが終わるのを待っています',
-  installing: 'dsh をインストールしています',
-  verifying: '新しい dsh の動作を確認しています',
-  'rolling-back': '元のバージョンに戻しています',
-  'recovery-required': 'dsh の復旧が必要です（実行を停止中）',
-  restarting: 'アプリを再起動しています',
-}
-
-/** True while dsh is being replaced and no message can be sent. */
-export function updateRunning(update: DshUpdate) {
-  return update.phase === 'installing' || update.phase === 'verifying' || update.phase === 'rolling-back' || update.phase === 'restarting' || update.phase === 'recovery-required'
 }
 
 export function effortLabel(value: string, fallback?: string) {

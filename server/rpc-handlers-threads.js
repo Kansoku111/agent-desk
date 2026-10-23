@@ -6,7 +6,7 @@ import path from 'node:path'
 import { IMAGE_TYPES, isImageFile, isOtherFile, MAX_ATTACHMENT_BYTES, otherFileId } from './attachments.js'
 
 /** Handlers for thread tasks; index.js merges them into the request table. */
-export function createThreadHandlers({ paths, threads, teams, subagents, getSettings, saveSettings, broadcast, assertNotUpdating }) {
+export function createThreadHandlers({ paths, threads, teams, subagents, getSettings, saveSettings, broadcast }) {
 
   async function saveImages(images) {
     const saved = []
@@ -27,7 +27,6 @@ export function createThreadHandlers({ paths, threads, teams, subagents, getSett
     },
 
     'thread.create': async ({ workspace, model, effort, permissionMode, text, images }) => {
-      assertNotUpdating()
       const thread = await threads.create({ workspace, model, effort, permissionMode })
       try {
         await threads.send(thread.id, { text: text ?? '', images: await saveImages(images) })
@@ -48,13 +47,11 @@ export function createThreadHandlers({ paths, threads, teams, subagents, getSett
     'thread.messageStatus': ({ threadId, messageId }) => threads.messageStatus(threadId, messageId),
 
     'thread.send': async ({ threadId, text, images, messageId }) => {
-      assertNotUpdating()
       teams.userWrote(threadId)
       return threads.send(threadId, { text: text ?? '', images: await saveImages(images), messageId })
     },
 
     'thread.steer': async ({ threadId, text, images, messageId }) => {
-      assertNotUpdating()
       teams.userWrote(threadId)
       return threads.steer(threadId, { text: text ?? '', images: await saveImages(images), messageId })
     },

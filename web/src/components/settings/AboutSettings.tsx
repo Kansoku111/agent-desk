@@ -1,134 +1,115 @@
 import { useState } from 'react'
-import { CheckCircle2, Download, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
+import { Check, Copy, Download, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import { act, openExternal, toast, useStore } from '../../store'
-import type { DshUpdate, PermissionMode, UpdateChannel } from '../../types'
-import { PERMISSION_INFO, UPDATE_PHASE_LABEL, updateRunning } from '../../util'
+import type { PermissionMode, UpdateChannel, Updates } from '../../types'
+import { copyText, PERMISSION_INFO } from '../../util'
 import { dateTime } from './shared'
 
-const UPDATE_CHANNELS: { value: UpdateChannel; label: string }[] = [
-  { value: 'latest', label: '標準（latest）' },
-  { value: 'next', label: '次期リリース候補（next）' },
-  { value: 'alpha', label: 'アルファ版（alpha）' },
-]
+const UPDATE_CHANNELS: UpdateChannel[] = ['latest', 'next', 'alpha']
+/** How long a newly added model shows in the updates card. */
+const RECENT_MODELS_MS = 7 * 24 * 60 * 60 * 1000
 
-/** Checking for and installing dsh releases. */
-function DshUpdateCard({ update }: { update: DshUpdate }) {
-  const settings = useStore((state) => state.server?.settings)
-  const dataDir = useStore((state) => state.server?.app.dataDir)
-  const [checking, setChecking] = useState(false)
-  const [recovering, setRecovering] = useState(false)
-  if (!settings) return null
-  const running = updateRunning(update)
-  const recoveryRequired = update.phase === 'recovery-required'
-  const recover = async () => {
-    setRecovering(true)
+function Versions({ installed, available }: { installed: string | null; available: string | null }) {
+  return (
+    <span className="update-versions">
+      <code>{installed ?? '—'}</code>
+      {available && <> → <code>{available}</code></>}
+    </span>
+  )
+}
+
+function Latest() {
+  return <Check size={15} className="update-ok" aria-label="最新" />
+}
+
+function CopyPrompt({ prompt }: { prompt: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
     try {
-      await act('dshUpdate.recover')
-    } finally {
-      setRecovering(false)
+      await copyText(prompt)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      toast('コピーできませんでした', 'error')
     }
   }
-  const failedReason = update.available ? update.failed[update.available] : undefined
-  const result = update.lastResult
+  return (
+    <button type="button" className="button" onClick={() => void copy()} title={prompt}>
+      {copied ? <Check size={14} /> : <Copy size={14} />} 指示をコピー
+    </button>
+  )
+}
+
+/** dsh, the bundled Codex, Claude Code and the model list: one place to see what is new. */
+function UpdatesCard({ updates }: { updates: Updates }) {
+  const channel = useStore((state) => state.server?.settings.dshUpdateChannel)
+  const models = useStore((state) => state.server?.modelUpdate)
+  const [checking, setChecking] = useState(false)
+  const busy = checking || updates.checking || models?.phase === 'checking'
+  const recent = models?.lastAdded && Date.now() - models.lastAdded.at < RECENT_MODELS_MS ? models.lastAdded : null
+  const { dsh, codex, claude } = updates
 
   const check = async () => {
     setChecking(true)
-    const response = await act<{ update: DshUpdate }>('dshUpdate.check')
+    await Promise.all([act('updates.check'), act('modelUpdate.check')])
     setChecking(false)
-    if (response?.update.phase === 'idle' && !response.update.error) toast(`dsh ${response.update.installed} は最新です`, 'success')
   }
-  const save = (patch: Record<string, unknown>) => void act('settings.update', { patch })
 
   return (
     <section className="account-card">
       <div className="account-head">
-        <div>
-          <h3>dsh のアップデート</h3>
-          <p className="muted">
-            新しいリリースを数時間ごとに確認します。更新では、作業中のタスクが終わるのを待ってから dsh を入れ替え、
-            必須の互換性と起動・モデル選択を確かめたうえで切り替えます。失敗時は元に戻し、復旧が完了しなければ実行を停止します。
-          </p>
-        </div>
-        {update.phase === 'available' && <span className="badge update">新しい版</span>}
-        {update.phase === 'idle' && update.checkedAt && !update.error && <span className="badge success"><CheckCircle2 size={12} /> 最新</span>}
+        <h3>更新</h3>
+        <button type="button" className="icon-button small" disabled={busy} onClick={() => void check()} aria-label="今すぐ確認">
+          {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+        </button>
       </div>
-
-      <div className="account-row">
-        <span>
-          <code>{update.installed}</code>
-          {update.available && <> → <code>{update.available}</code></>}
-        </span>
-        {update.phase === 'available' && update.available && (
-          <button type="button" className="button primary" onClick={() => void act('dshUpdate.apply', { version: update.available })}>
-            <Download size={14} /> {failedReason ? 'もう一度試す' : '更新する'}
-          </button>
+      <div className="update-list">
+        <div className="update-row">
+          <span className="update-name">dsh</span>
+          <Versions installed={dsh.installed} available={dsh.available} />
+          <select
+            className="update-channel"
+            value={channel}
+            onChange={(event) => void act('settings.update', { patch: { dshUpdateChannel: event.target.value } })}
+            aria-label="dsh の更新チャネル"
+          >
+            {UPDATE_CHANNELS.map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+          <span className="update-action">{dsh.prompt ? <CopyPrompt prompt={dsh.prompt} /> : !dsh.available && updates.checkedAt && !dsh.error && <Latest />}</span>
+          {dsh.error && <p className="form-error">{dsh.error}</p>}
+        </div>
+        <div className="update-row">
+          <span className="update-name">Codex</span>
+          <Versions installed={codex.installed} available={codex.available} />
+          <span className="update-action">{codex.prompt ? <CopyPrompt prompt={codex.prompt} /> : !codex.available && updates.checkedAt && !codex.error && <Latest />}</span>
+          {codex.error && <p className="form-error">{codex.error}</p>}
+        </div>
+        {(claude.installed || claude.error) && (
+          <div className="update-row">
+            <span className="update-name">Claude Code</span>
+            <Versions installed={claude.installed} available={claude.available} />
+            <span className="update-action">
+              {claude.available
+                ? (
+                  <button type="button" className="button" disabled={claude.updating} onClick={() => void act('updates.updateClaude')}>
+                    {claude.updating ? <Loader2 size={14} className="spin" /> : <Download size={14} />} 更新
+                  </button>
+                )
+                : !claude.error && <Latest />}
+            </span>
+            {claude.error && <p className="form-error">{claude.error}</p>}
+          </div>
         )}
-        {update.phase === 'waiting' && (
-          <button type="button" className="button" onClick={() => void act('dshUpdate.cancel')}>更新を取りやめる</button>
+        {models && (models.checkedAt || models.error) && (
+          <div className="update-row">
+            <span className="update-name">モデル</span>
+            <span className="update-versions">{recent ? recent.models.map((model) => model.name).join('、') : ''}</span>
+            <span className="update-action">{!models.error && models.checkedAt && <Latest />}</span>
+            {models.error && <p className="form-error">{models.error}</p>}
+          </div>
         )}
-        {(update.phase === 'idle' || update.phase === 'checking') && (
-          <button type="button" className="button" disabled={checking || update.phase === 'checking'} onClick={() => void check()}>
-            {checking || update.phase === 'checking' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} 今すぐ確認
-          </button>
-        )}
       </div>
-
-      {((running && !recoveryRequired) || update.phase === 'waiting') && (
-        <p className="login-status">
-          <Loader2 size={14} className="spin" /> {UPDATE_PHASE_LABEL[update.phase]}…
-          {update.phase === 'waiting' && ' 終わりしだい更新を始めます。'}
-        </p>
-      )}
-      {failedReason && update.phase === 'available' && (
-        <p className="form-warning">このバージョンは以前、更新に失敗して元に戻しました（{failedReason}）。</p>
-      )}
-      {update.error && <p className="form-error">{update.error}</p>}
-      {recoveryRequired && (
-        <div role="alert">
-          <p className="form-warning">{UPDATE_PHASE_LABEL[update.phase]}。アプリを開き直しても解除されません。</p>
-          <ol className="fine-print">
-            <li>下記のバックアップは削除しないでください。ネットワークとディスクの空き容量・書き込み権限を確認してください。</li>
-            <li>「復旧を再試行」で保存済みの package.json / package-lock.json から npm ci を実行し、未復旧の dsh データを戻します。</li>
-            <li>両方の復旧と状態保存が成功した場合だけ、タスクの実行を再開します。繰り返し失敗する場合は表示されたエラーを解消してから再試行してください。</li>
-            <li>アプリ自体が起動できない場合の手順は、バックアップ内の <code>RECOVERY.md</code> に保存されています。状態記録を削除して停止を解除しないでください。</li>
-          </ol>
-          {update.recovery && <p className="fine-print">パッケージ: {update.recovery.packages ? '復旧待ち' : '復旧済み'} / データ: {update.recovery.home ? '復旧待ち' : '復旧済み'}</p>}
-          <button type="button" className="button primary" disabled={recovering} onClick={() => void recover()}>
-            <RefreshCw size={14} className={recovering ? 'spin' : undefined} /> 復旧を再試行
-          </button>
-        </div>
-      )}
-
-      <div className="setting compact">
-        <div>
-          <h3>更新チャネル</h3>
-          <p className="muted">dsh の npm 配布タグです。latest 以外は試験的なリリースで、動作が不安定なことがあります。</p>
-        </div>
-        <select
-          value={settings.dshUpdateChannel}
-          disabled={running}
-          onChange={(event) => save({ dshUpdateChannel: event.target.value })}
-          aria-label="dsh の更新チャネル"
-        >
-          {UPDATE_CHANNELS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-        </select>
-      </div>
-      <div className="setting compact">
-        <div>
-          <h3>自動で更新する</h3>
-          <p className="muted">新しいリリースを見つけたら、確認なしで更新します。更新に失敗したバージョンは自動では入れ直しません。</p>
-        </div>
-        <label className="switch">
-          <input type="checkbox" checked={settings.dshAutoUpdate} onChange={(event) => save({ dshAutoUpdate: event.target.checked })} />
-          <span />
-        </label>
-      </div>
-
-      <p className="fine-print">
-        {update.checkedAt ? `最終確認: ${dateTime(update.checkedAt)}。` : ''}
-        {result?.ok ? `前回の更新: ${result.from} → ${result.to}（${dateTime(result.at)}）。` : ''}
-        更新前の package.json と dsh のデータは <code>{`${dataDir}${dataDir?.includes('\\') ? '\\' : '/'}dsh-update-backup`}</code> に保存されます。
-      </p>
+      {updates.checkedAt && <p className="fine-print">{dateTime(updates.checkedAt)}</p>}
     </section>
   )
 }
@@ -139,10 +120,9 @@ export function AboutSettings() {
   const states: Record<string, string> = { stopped: '停止', starting: '起動中', ready: '稼働中', failed: '失敗' }
   return (
     <div className="settings-section">
-      {server.dshUpdate && <DshUpdateCard update={server.dshUpdate} />}
+      {server.updates && <UpdatesCard updates={server.updates} />}
       <dl className="about">
         <dt>Agent Desk</dt><dd>{server.app.version}</dd>
-        <dt>DeepSeek Harness (dsh)</dt><dd>{server.app.dshVersion}</dd>
         <dt>データフォルダ</dt><dd><code>{server.app.dataDir}</code></dd>
         {(Object.keys(server.runtime) as PermissionMode[]).map((mode) => (
           <div key={mode} className="about-row">

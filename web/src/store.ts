@@ -1,7 +1,7 @@
 // App state plus the WebSocket connection to the Agent Desk server.
 import { useSyncExternalStore } from 'react'
 import type {
-  AppState, Attachment, ClaudeAuthConfirmation, DshUpdate, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
+  AppState, Attachment, ClaudeAuthConfirmation, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
 } from './types'
 import { Outbox, readQueues, type QueuedMessage } from './outbox'
 import { RpcClient } from './rpc-client'
@@ -319,7 +319,6 @@ function handleFrame(frame: any) {
       flushQueues()
       if (route.view === 'thread') void loadThread(route.id)
       if (route.view === 'agent') void loadAgentTurns(route.id)
-      announceUpdateResult(server.dshUpdate)
       announceNewModels(server.modelUpdate)
       for (const listener of helloListeners) listener()
       break
@@ -414,20 +413,9 @@ function handleFrame(frame: any) {
     case 'remoteAccess':
       updateServer({ remoteAccess: frame.remoteAccess })
       break
-    case 'dshUpdate': {
-      const previous = state.server?.dshUpdate
-      const update = frame.update as DshUpdate
-      updateServer({ dshUpdate: update, ...(state.server ? { app: { ...state.server.app, dshVersion: update.installed } } : {}) })
-      const auto = state.server?.settings.dshAutoUpdate
-      if (update.phase === 'available' && update.available && update.available !== previous?.available && !auto && !update.failed[update.available]) {
-        toast(`dsh ${update.available} が公開されています。設定 → 情報 から更新できます`, 'info')
-      }
-      if (update.phase === 'restarting' && previous?.phase !== 'restarting') toast(`dsh ${update.installed} の確認が済みました。アプリを再起動します…`, 'success')
-      announceUpdateResult(update)
-      // A follow-up refused during the update goes once it is over (a restart sends it after `hello`).
-      if (previous?.phase !== update.phase) flushQueues()
+    case 'updates':
+      updateServer({ updates: frame.updates })
       break
-    }
     case 'modelUpdate':
       updateServer({ modelUpdate: frame.modelUpdate })
       announceNewModels(frame.modelUpdate)
@@ -448,29 +436,6 @@ function handleFrame(frame: any) {
       notify(frame)
       break
   }
-}
-
-/** Reports the outcome of an update once per page (a restart reloads the connection, not the page). */
-const UPDATE_SEEN_KEY = 'agent-desk-update-seen'
-function announceUpdateResult(update: DshUpdate | undefined) {
-  const result = update?.lastResult
-  if (!result || Date.now() - result.at > 10 * 60 * 1000) return
-  // Success is announced after the restart, when the new dsh is the one running.
-  if (result.ok && update?.phase === 'restarting') return
-  const recoveryNeeded = update?.phase === 'recovery-required' || result.recovered === false
-  // Recovery completion reuses the failure timestamp, but is a different outcome.
-  const marker = `${result.at}:${recoveryNeeded ? 'blocked' : 'settled'}`
-  let seen: string | null = null
-  try {
-    seen = sessionStorage.getItem(UPDATE_SEEN_KEY)
-  } catch {}
-  if (seen === marker) return
-  try {
-    sessionStorage.setItem(UPDATE_SEEN_KEY, marker)
-  } catch {}
-  if (recoveryNeeded) toast('dsh の復旧が完了していないため実行を停止しています。設定 → 情報から復旧を再試行してください', 'error')
-  else if (result.ok) toast(`dsh を ${result.from} から ${result.to} に更新しました`, 'success')
-  else toast(`dsh ${result.to} の更新に失敗したため、${result.from} のまま使います`, 'error')
 }
 
 /** Tells about newly added models once per browser, also when they arrived while no window was open. */
@@ -678,8 +643,6 @@ export async function startThread(text: string, images: Attachment[]) {
   return true
 }
 
-const UPDATING_PHASES = new Set<DshUpdate['phase']>(['installing', 'verifying', 'rolling-back', 'restarting', 'recovery-required'])
-
 const outbox = new Outbox({
   initial: state.queued,
   persist: (queued) => {
@@ -691,7 +654,6 @@ const outbox = new Outbox({
   request: (type, params) => rpc.request(type, params, 30_000),
   thread: (id) => state.server?.threads.find((thread) => thread.id === id),
   ready: () => state.connection === 'open',
-  blocked: () => Boolean(state.server?.dshUpdate && UPDATING_PHASES.has(state.server.dshUpdate.phase)),
   report: (message) => toast(message, 'error'),
 })
 

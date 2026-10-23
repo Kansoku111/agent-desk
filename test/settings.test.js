@@ -44,7 +44,7 @@ function harness(initial = {}, hooks = {}) {
       return hooks.home ? hooks.home(live) : true
     },
     restartRuntimesWhenIdle: async () => { events.push('restart'); await hooks.restart?.(live) },
-    checkDshUpdate: () => { events.push('dsh-check'); return hooks.dshCheck?.() },
+    onChannelChange: () => { events.push('channel') },
     checkModelUpdate: () => { events.push('model-check'); return hooks.modelCheck?.() },
     onBackgroundError: (error) => { events.push(`background-error:${error.message}`) },
     now: hooks.now ?? (() => 1234),
@@ -59,7 +59,7 @@ test('mixed valid/invalid patches have no persistence, publication or effects', 
     { subagentModels: { anthropic: 'claude-opus-5' }, customInstructions: 5 },
     { fastMode: { anthropic: true }, modelAutoUpdate: 'false' },
     { browserTool: false, defaultPermissionMode: 'invalid' },
-    { dshAutoUpdate: true, defaultModel: {} },
+    { notifications: true, defaultModel: {} },
   ]
   for (const patch of patches) {
     const h = harness()
@@ -147,10 +147,9 @@ test('compound changes save, publish, patch and restart once, after persistence'
     desktopTool: true,
     imageTool: false,
     modelAutoUpdate: true,
-    dshAutoUpdate: true,
     dshUpdateChannel: 'next',
   })
-  assert.deepEqual(h.events, ['save', 'publish', 'fast', 'catalog', 'home', 'restart', 'dsh-check', 'model-check'])
+  assert.deepEqual(h.events, ['save', 'publish', 'fast', 'catalog', 'home', 'restart', 'channel', 'model-check'])
   assert.strictEqual(result.settings, h.live)
   assert.strictEqual(result.settings, h.writes[0])
   assert.equal(h.published.length, 1)
@@ -297,7 +296,7 @@ test('a failed queued request does not drop a following valid update', async () 
 })
 
 test('boolean settings and provider toggles reject coercion', async () => {
-  const keys = ['notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'checkpoints', 'dshAutoUpdate', 'modelAutoUpdate']
+  const keys = ['notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'checkpoints', 'modelAutoUpdate']
   for (const key of keys) {
     for (const value of ['false', 0, 1, null, undefined, {}, []]) {
       const h = harness()
@@ -392,7 +391,7 @@ test('fast mode records opening and closing exactly once without restarting runt
 
 test('unchanged toggles avoid checks/restarts and home patch content controls restarting', async () => {
   const h = harness({}, { home: () => false })
-  await h.service.update({ browserTool: true, modelAutoUpdate: true, dshAutoUpdate: false, dshUpdateChannel: 'latest', customInstructions: '' })
+  await h.service.update({ browserTool: true, modelAutoUpdate: true, dshUpdateChannel: 'latest', customInstructions: '' })
   assert.deepEqual(h.events, ['save', 'publish', 'home'])
   await h.service.update({ theme: 'light', notifications: false, checkpoints: false })
   assert.deepEqual(h.events.slice(3), ['save', 'publish'])
@@ -495,15 +494,14 @@ test('model visibility save failures leave all choices unchanged', async () => {
 
 test('background checks do not block later updates and failures are reported', async () => {
   const check = deferred()
-  const h = harness({}, {
-    dshCheck: () => check.promise,
-    modelCheck: () => Promise.reject(new Error('offline')),
-  })
-  await h.service.update({ dshAutoUpdate: true, modelAutoUpdate: false })
+  const h = harness({}, { modelCheck: () => check.promise.then(() => { throw new Error('offline') }) })
+  await h.service.update({ modelAutoUpdate: false })
   await h.service.update({ modelAutoUpdate: true })
-  assert.ok(h.events.includes('background-error:offline'))
-  assert.equal(h.live.modelAutoUpdate, true)
+  await h.service.update({ notifications: false })
+  assert.equal(h.live.notifications, false)
   check.resolve()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.ok(h.events.includes('background-error:offline'))
 })
 
 test('agent team settings merge per field, validate everything and need no runtime effects', async () => {

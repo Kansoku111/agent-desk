@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import WebSocket from 'ws'
 
@@ -15,31 +15,37 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 test('simultaneous cold starts and dev launch share one writer; deleted tasks stay deleted', { timeout: 30_000 }, async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-single-instance-'))
   const children = []
-  let ws
+  let ws, info
   t.after(async () => {
     ws?.terminate()
+    // Quit the surviving server the normal way, so it stops the Codex app-server it started.
+    if (info) await fetch(`http://127.0.0.1:${info.port}/api/quit?t=${info.token}`, { method: 'POST', signal: AbortSignal.timeout(2000) }).catch(() => {})
     await Promise.all(children.map(async (child) => {
       if (child.exitCode !== null || child.signalCode !== null) return
       const exited = once(child, 'exit')
-      child.kill()
+      const fallback = setTimeout(() => child.kill(), 5000)
       await exited
+      clearTimeout(fallback)
     }))
     assert.equal(path.dirname(home), os.tmpdir())
     assert.ok(path.basename(home).startsWith('agent-desk-single-instance-'))
     await fs.rm(home, { recursive: true, force: true })
   })
-  // Block provider calls, runtime startup and package updates in the fixture.
-  await fs.writeFile(path.join(home, 'dsh-update.json'), JSON.stringify({
-    phase: 'recovery-required', installed: '0.2.0-rc.2',
-    recovery: { from: '0.2.0-rc.2', version: '0.2.1', stage: 'verify', packages: true, home: false, errors: { packages: 'fixture' } },
-  }))
+  // No provider requests or npm lookups from the fixture; the instances still reach each other.
+  const hook = path.join(home, 'offline-fetch.mjs')
+  await fs.writeFile(hook, `const local = globalThis.fetch
+globalThis.fetch = async (url, init) => {
+  if (new URL(String(url)).hostname === '127.0.0.1') return local(url, init)
+  throw new Error('offline single-instance test')
+}`)
+  await fs.writeFile(path.join(home, 'settings.json'), JSON.stringify({ modelAutoUpdate: false }))
   const threadId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
   await fs.writeFile(path.join(home, 'threads.json'), JSON.stringify({ version: 1, threads: [{
     id: threadId, title: 'delete fixture', workspace: home, model: null,
     permissionMode: 'read-only', sessionId: null, createdAt: 0, updatedAt: 1,
   }] }))
   const launch = (...extra) => {
-    const child = spawn(process.execPath, ['server/index.js', '--no-open', '--port', '0', ...extra], {
+    const child = spawn(process.execPath, ['--import', pathToFileURL(hook).href, 'server/index.js', '--no-open', '--port', '0', ...extra], {
       cwd: root, env: { ...process.env, AGENT_DESK_HOME: home }, windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -50,7 +56,6 @@ test('simultaneous cold starts and dev launch share one writer; deleted tasks st
     return child
   }
   for (let i = 0; i < 3; i++) launch()
-  let info
   for (let attempt = 0; attempt < 300; attempt++) {
     try { info = JSON.parse(await fs.readFile(path.join(home, 'server.json'), 'utf8')) } catch {}
     if (info && children.filter((child) => child.exitCode === 0).length === 2) break

@@ -1,8 +1,8 @@
 // Checks that the installed dsh works the way Agent Desk uses it: the model
 // catalog additions apply, `dsh --profile acp` boots with the app's dsh home,
-// opens a session that lists models and accepts a model choice. The updater
-// runs this in a fresh process right after installing a dsh release, so the
-// new packages are the ones loaded here. Prints one JSON line; exit code 1 on
+// opens a session that lists models and accepts a model choice. Run it in a
+// fresh process after installing a dsh release (docs/updating.md), so the new
+// packages are the ones loaded here. Prints one JSON line; exit code 1 on
 // failure.
 import { createRequire } from 'node:module'
 import { appPaths } from '../server/paths.js'

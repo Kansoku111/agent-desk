@@ -21,7 +21,6 @@ type Options = {
   request(type: string, params: Record<string, unknown>): Promise<unknown>
   thread(id: string): Thread | undefined
   ready(): boolean
-  blocked(): boolean
   report(message: string): void
   newId?: () => string
 }
@@ -187,7 +186,7 @@ export class Outbox {
     return { threadId, messageId: message.id, text: message.text, images: message.images.map(({ file, mimeType, name }) => ({ file, mimeType, name })) }
   }
 
-  private canConnect() { return this.options.ready() && !this.options.blocked() }
+  private canConnect() { return this.options.ready() }
   private find(threadId: string, id: string) { return this.queues[threadId]?.find((message) => message.id === id) }
   private errorText(error: unknown) { return error instanceof Error ? error.message : String(error) }
   private acknowledge(threadId: string, id: string) { this.change(threadId, (queue) => queue.filter((message) => message.id !== id)) }

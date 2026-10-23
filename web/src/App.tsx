@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import { AlertTriangle, CheckCircle2, Info, Loader2, WifiOff } from 'lucide-react'
-import { UPDATE_PHASE_LABEL, updateRunning } from './util'
 import { Home } from './components/Home'
 import { SettingsDialog } from './components/Settings'
 import { ProjectDialog } from './components/ProjectDialog'
@@ -72,7 +71,6 @@ export function App() {
   const settingsOpen = useStore((state) => state.settingsOpen)
   const projectDialog = useStore((state) => state.projectDialog)
   const teamStart = useStore((state) => state.teamStart)
-  const update = useStore((state) => state.server?.dshUpdate)
   const title = useStore((state) => {
     const { route } = state
     if (route.view === 'thread') return state.server?.threads.find((thread) => thread.id === route.id)?.title
@@ -130,11 +128,6 @@ export function App() {
         {connection === 'closed' && (
           <div className="banner">
             <WifiOff size={14} /> {remoteHost ? 'PC との接続が切れました。再接続しています…' : 'サーバーとの接続が切れました。再接続しています…'}
-          </div>
-        )}
-        {connection === 'open' && update && updateRunning(update) && (
-          <div className="banner">
-            <Loader2 size={14} className="spin" /> {UPDATE_PHASE_LABEL[update.phase]}（dsh {update.target ?? update.installed}）。完了するまで新しいメッセージは送れません。
           </div>
         )}
         {route.view === 'thread' ? <ThreadView threadId={route.id} />

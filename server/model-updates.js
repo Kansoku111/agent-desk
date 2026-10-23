@@ -18,7 +18,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import extras from './catalog-extras.json' with { type: 'json' }
 import { GPT_PROVIDER, siwcCatalog } from './siwc-route.js'
-import { compareVersions, isVersion, runNpm } from './dsh-update.js'
+import { compareVersions, isVersion, runNpm } from './update-checks.js'
 import { readJson, writeJson } from './json-file.js'
 import { BUNDLED_SOURCE, CUSTOM_MODEL_PROVIDERS, isModelId, shippedCatalog } from './model-catalog.js'
 
@@ -163,15 +163,14 @@ export class ModelCatalogUpdater extends EventEmitter {
    * @param {string} options.root          project folder (where npm runs)
    * @param {string} options.home          Agent Desk data folder
    * @param {() => boolean} options.enabled  whether to check by itself and use what it fetched
-   * @param {() => boolean} options.isBlocked  true while dsh is being replaced
    * @param {() => Promise<void>} options.onCatalog  applies newly fetched definitions
    */
   constructor({
-    root, home, enabled, isBlocked = () => false, onCatalog,
+    root, home, enabled, onCatalog,
     npm = runNpm, lookup = lookupLatest, download = downloadTarball, shipped = shippedCatalog, log = () => {},
   }) {
     super()
-    Object.assign(this, { root, enabled, isBlocked, onCatalog, npm, lookup, download, shipped, log })
+    Object.assign(this, { root, enabled, onCatalog, npm, lookup, download, shipped, log })
     this.file = path.join(home, 'model-updates.json')
     /** @type {{ source: string, fetchedAt: number, providers: object } | null} */
     this.catalog = null
@@ -227,8 +226,6 @@ export class ModelCatalogUpdater extends EventEmitter {
   /** Looks for a newer pi-ai release and keeps the models it adds. */
   async check() {
     if (this.state.phase === 'checking') return this.snapshot()
-    // dsh's update reinstalls packages; the restart after it syncs the catalog anyway.
-    if (this.isBlocked()) return this.snapshot()
     this.#set({ phase: 'checking', error: null })
     try {
       const release = await this.lookup({ cwd: this.root, npm: this.npm })

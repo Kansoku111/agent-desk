@@ -532,8 +532,8 @@ export function Sidebar() {
   const colors = useStore((state) => state.server?.settings.projectColors)
   const accounts = useStore((state) => state.server?.accounts)
   const updateOffered = useStore((state) => {
-    const update = state.server?.dshUpdate
-    return update?.phase === 'available' || update?.phase === 'waiting' ? update.available : null
+    const updates = state.server?.updates
+    return Boolean(updates && (updates.dsh.available || updates.codex.available || updates.claude.available))
   })
   const route = useStore((state) => state.route)
   const draftWorkspace = useStore((state) => state.draft.workspace)
@@ -756,7 +756,7 @@ export function Sidebar() {
         >
           <Settings size={15} />
           <span>設定</span>
-          {updateOffered && <span className="update-dot" title={`dsh ${updateOffered} に更新できます`} aria-label="dsh の更新があります" />}
+          {updateOffered && <span className="update-dot" aria-label="更新があります" />}
           <span className="account-summary">{connected.length ? connected.join(' · ') : '未接続'}</span>
         </button>
       </div>

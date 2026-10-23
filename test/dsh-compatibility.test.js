@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { verifyInstall } from '../server/dsh-update.js'
 import { composeCompatibilityPatches, runtimeHookArgs } from '../server/dsh-compatibility.js'
 import { patchAcpSource } from '../server/steer-patch.js'
 import { patchGoalSource } from '../server/goal-patch.js'
@@ -13,6 +13,26 @@ import { patchMcpTimeoutSource } from '../server/mcp-timeout-patch.js'
 import { patchRetrySource } from '../server/retry-patch.js'
 
 const project = fileURLToPath(new URL('../', import.meta.url))
+
+/** Runs scripts/check-dsh.mjs in a fresh process, as docs/updating.md has it run after a dsh update. */
+function verifyInstall({ root, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(root, 'scripts', 'check-dsh.mjs')], { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk })
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk })
+    const timer = setTimeout(() => child.kill(), timeoutMs)
+    child.on('error', reject)
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      let report = null
+      try { report = JSON.parse(stdout.trim().split('\n').at(-1)) } catch {}
+      if (code === 0 && report?.ok && report.compatibility?.ok === true) return resolve(report)
+      reject(new Error(report?.error ?? `check-dsh exited with ${code}\n${stderr.trim().slice(-1500)}`))
+    })
+  })
+}
 const require = createRequire(import.meta.url)
 
 async function fixture(t) {

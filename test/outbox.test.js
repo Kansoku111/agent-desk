@@ -12,14 +12,13 @@ const deferred = () => {
 }
 
 function fixture(options = {}) {
-  const state = { status: 'idle', ready: true, blocked: false, saved: '{}', reports: [], calls: [], ids: [ID, NEXT_ID] }
+  const state = { status: 'idle', ready: true, saved: '{}', reports: [], calls: [], ids: [ID, NEXT_ID] }
   const outbox = new Outbox({
     initial: options.initial ?? {},
     persist: (queues) => { state.saved = JSON.stringify(queues) },
     changed: () => {},
     thread: () => ({ status: state.status }),
     ready: () => state.ready,
-    blocked: () => state.blocked,
     report: (message) => state.reports.push(message),
     newId: () => state.ids.shift(),
     request: async (type, params) => {
@@ -136,12 +135,9 @@ test('steering rejection after admission checks the durable receipt', async () =
   assert.equal(outbox.snapshot().task[0].phase, 'uncertain')
 })
 
-test('queues do not send while disconnected, blocked for recovery, or running', async () => {
+test('queues do not send while disconnected or running', async () => {
   const { outbox, state } = fixture()
   outbox.enqueue('task', 'hello', [])
-  state.blocked = true
-  await outbox.flush('task')
-  state.blocked = false
   state.ready = false
   await outbox.flush('task')
   state.ready = true

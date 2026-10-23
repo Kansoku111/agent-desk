@@ -1,7 +1,7 @@
 // Settings updates have one commit point: validate the entire patch, persist a
 // candidate, publish it, then apply its effects. No application startup here.
 import { CONTEXT_CHOICES, CONTEXT_PROVIDERS, INSTRUCTIONS_MAX, SUBAGENT_TOOLS } from './dsh-config.js'
-import { UPDATE_CHANNELS } from './dsh-update.js'
+import { UPDATE_CHANNELS } from './update-checks.js'
 import { FAST_PROVIDERS, recordFastPeriod } from './fast-mode.js'
 import { isLocalModelId, normalizeBaseUrl } from './local-llm.js'
 import { isModelId } from './model-catalog.js'
@@ -47,7 +47,6 @@ export const DEFAULT_SETTINGS = {
   fastMode: { 'openai-codex': false, anthropic: false },
   fastModePeriods: { anthropic: [] },
   dshUpdateChannel: 'latest',
-  dshAutoUpdate: false,
   modelAutoUpdate: true,
   remoteAccess: false,
   customInstructions: '',
@@ -59,7 +58,7 @@ export const DEFAULT_SETTINGS = {
 
 const BOOLEAN_SETTINGS = [
   'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool',
-  'checkpoints', 'dshAutoUpdate', 'modelAutoUpdate',
+  'checkpoints', 'modelAutoUpdate',
 ]
 const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool']
 const ENUM_SETTINGS = {
@@ -88,7 +87,7 @@ function assertBoolean(value, name) {
 export function planSettingsUpdate(current, patch, now) {
   assertRecord(patch, 'patch')
   const next = { ...current }
-  const effects = { homePatch: false, fastMode: false, modelCatalog: false, restart: false, dshCheck: false, modelCheck: false }
+  const effects = { homePatch: false, fastMode: false, modelCatalog: false, restart: false, channel: false, modelCheck: false }
 
   if (owns(patch, 'modelVisibility')) {
     assertRecord(patch.modelVisibility, 'modelVisibility')
@@ -185,7 +184,7 @@ export function planSettingsUpdate(current, patch, now) {
   }
 
   effects.restart = TOOL_SETTINGS.some((key) => next[key] !== current[key])
-  effects.dshCheck = next.dshUpdateChannel !== current.dshUpdateChannel || next.dshAutoUpdate !== current.dshAutoUpdate
+  effects.channel = next.dshUpdateChannel !== current.dshUpdateChannel
   effects.modelCatalog = (next.modelAutoUpdate !== false) !== (current.modelAutoUpdate !== false)
   effects.homePatch ||= effects.modelCatalog
   effects.modelCheck = effects.modelCatalog && next.modelAutoUpdate !== false
@@ -209,7 +208,7 @@ export function createSettingsService({
   getSettings, saveSettings, publishSettings,
   applyHomePatch = () => false, applyFastMode = () => {},
   updateModelCatalog = () => ({ restartRequired: false }), restartRuntimesWhenIdle = () => {},
-  checkDshUpdate = () => {}, checkModelUpdate = () => {}, onBackgroundError = () => {}, now = Date.now,
+  onChannelChange = () => {}, checkModelUpdate = () => {}, onBackgroundError = () => {}, now = Date.now,
 }) {
   let pending = Promise.resolve()
   // Other settings mutators must read and change live state inside this work,
@@ -251,7 +250,7 @@ export function createSettingsService({
         if (restart) await restartRuntimesWhenIdle()
         // These checks retain their background behavior. A later network fetch
         // may legitimately require another catalog refresh after this commit.
-        if (effects.dshCheck) launch(checkDshUpdate)
+        if (effects.channel) onChannelChange()
         if (effects.modelCheck) launch(checkModelUpdate)
         return { settings: saved }
       })
