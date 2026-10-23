@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url'
 const RUNNABLE = new Set([
   '.exe', '.com', '.bat', '.cmd', '.ps1', '.psm1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.msi', '.msp',
   '.scr', '.hta', '.lnk', '.url', '.pif', '.cpl', '.jar', '.reg', '.app', '.command', '.sh', '.appref-ms',
+  // Scripts an installed interpreter runs when opened, and installers or system handlers.
+  '.py', '.pyw', '.pyz', '.pyzw', '.rb', '.rbw', '.pl', '.php', '.ahk', '.au3', '.ws', '.psd1', '.ps1xml',
+  '.msix', '.msixbundle', '.appx', '.appxbundle', '.application', '.xbap', '.gadget', '.inf', '.msc', '.mst',
+  '.scf', '.settingcontent-ms', '.diagcab', '.library-ms', '.search-ms',
 ])
 
 export const IMAGE_TYPES = {
