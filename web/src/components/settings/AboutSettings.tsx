@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Check, Copy, Download, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import { act, openExternal, toast, useStore } from '../../store'
 import type { PermissionMode, UpdateChannel, Updates } from '../../types'
@@ -9,11 +9,12 @@ const UPDATE_CHANNELS: UpdateChannel[] = ['latest', 'next', 'alpha']
 /** How long a newly added model shows in the updates card. */
 const RECENT_MODELS_MS = 7 * 24 * 60 * 60 * 1000
 
-function Versions({ installed, available }: { installed: string | null; available: string | null }) {
+function Versions({ installed, available, children }: { installed: string | null; available: string | null; children?: ReactNode }) {
   return (
     <span className="update-versions">
       <code>{installed ?? '—'}</code>
-      {available && <> → <code>{available}</code></>}
+      {available && <code>→ {available}</code>}
+      {children}
     </span>
   )
 }
@@ -66,15 +67,16 @@ function UpdatesCard({ updates }: { updates: Updates }) {
       <div className="update-list">
         <div className="update-row">
           <span className="update-name">dsh</span>
-          <Versions installed={dsh.installed} available={dsh.available} />
-          <select
-            className="update-channel"
-            value={channel}
-            onChange={(event) => void act('settings.update', { patch: { dshUpdateChannel: event.target.value } })}
-            aria-label="dsh の更新チャネル"
-          >
-            {UPDATE_CHANNELS.map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
+          <Versions installed={dsh.installed} available={dsh.available}>
+            <select
+              className="update-channel"
+              value={channel}
+              onChange={(event) => void act('settings.update', { patch: { dshUpdateChannel: event.target.value } })}
+              aria-label="dsh の更新チャネル"
+            >
+              {UPDATE_CHANNELS.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </Versions>
           <span className="update-action">{dsh.prompt ? <CopyPrompt prompt={dsh.prompt} /> : !dsh.available && updates.checkedAt && !dsh.error && <Latest />}</span>
           {dsh.error && <p className="form-error">{dsh.error}</p>}
         </div>

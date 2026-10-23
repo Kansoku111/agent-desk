@@ -3376,7 +3376,7 @@ select:focus {
 
 .update-list {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) auto auto;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px 12px;
   font-size: 13px;
@@ -3393,19 +3393,25 @@ select:focus {
 
 .update-versions {
   grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
   min-width: 0;
-  overflow-wrap: anywhere;
   color: var(--text-muted);
 }
 
+.update-versions code {
+  white-space: nowrap;
+}
+
 .update-channel {
-  grid-column: 3;
   padding: 2px 4px;
   font-size: 12px;
 }
 
 .update-action {
-  grid-column: 4;
+  grid-column: 3;
   display: flex;
   justify-content: flex-end;
 }
