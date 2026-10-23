@@ -8,36 +8,21 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs/promises'
 import { Readable, Writable } from 'node:stream'
 import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
+import { dshEnv } from './dsh-env.js'
 import { dshBin } from './paths.js'
 import { STEERED_META, STEER_META } from './steer-patch.js'
 
 // Runtime and update validation must compose the same hooks in the same order.
 import { runtimeHookArgs } from './dsh-compatibility.js'
 
+export { dshEnv }
+
 export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access']
 
 /** The runtime a thread's session runs in: its mode's, or the team children's of that mode. */
 export const runtimeKey = (thread) => (thread.team?.childId ? `team:${thread.permissionMode}` : thread.permissionMode)
 
-// Keys the app manages in the credential store. The launch environment would
-// otherwise win over the store and silently ignore keys saved in Settings.
-const MANAGED_ENV = ['ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'DSH_HOME', 'DSH_PERMISSION_MODE']
-
 const STDERR_TAIL = 16_000
-
-/** The environment every dsh process Agent Desk starts runs with. */
-export function dshEnv(paths, mode, base = process.env) {
-  const env = { ...base }
-  for (const name of MANAGED_ENV) delete env[name]
-  return Object.assign(env, {
-    DSH_HOME: paths.dshHome,
-    DSH_PERMISSION_MODE: mode,
-    DSH_TELEMETRY_MODE: 'DISABLED',
-    AGENT_DESK_FAST_MODE: paths.fastMode,
-    AGENT_DESK_SIWC_CREDENTIALS: paths.credentials,
-    AGENT_DESK_SIWC_MANAGED: 'managed-by-agent-desk-siwc-hook',
-  })
-}
 
 export class AcpRuntime extends EventEmitter {
   /**

@@ -8,7 +8,6 @@ import { EventEmitter } from 'node:events'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import QRCode from 'qrcode'
 import { allowFirewall, firewallState } from './firewall.js'
 import { readJson, writeJson } from './json-file.js'
 
@@ -325,7 +324,8 @@ export class RemoteAccess extends EventEmitter {
     const url = this.url()
     if (url === this.qrFor) return false
     this.qrFor = url
-    this.qrSvg = url ? await QRCode.toString(url, { type: 'svg', margin: 2, errorCorrectionLevel: 'M' }) : null
+    // Loaded when the first link needs a code, not at startup.
+    this.qrSvg = url ? await (await import('qrcode')).default.toString(url, { type: 'svg', margin: 2, errorCorrectionLevel: 'M' }) : null
     return true
   }
 

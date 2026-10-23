@@ -243,11 +243,15 @@ export class ClaudeTranscripts {
     try {
       const { size } = await handle.stat()
       if (size < entry.conversation.offset) entry.conversation.reset()
-      const buffer = Buffer.allocUnsafe(CHUNK)
+      // Allocated only when the file has grown, and no larger than what is left to read.
+      let buffer = null
       while (entry.conversation.offset < size) {
-        const { bytesRead } = await handle.read(buffer, 0, Math.min(CHUNK, size - entry.conversation.offset), entry.conversation.offset)
+        const length = Math.min(CHUNK, size - entry.conversation.offset)
+        buffer ??= Buffer.allocUnsafe(length)
+        const { bytesRead } = await handle.read(buffer, 0, Math.min(length, buffer.length), entry.conversation.offset)
         if (!bytesRead) break
-        entry.conversation.feed(Buffer.from(buffer.subarray(0, bytesRead)))
+        // feed() parses its lines before returning and keeps only a copy of the unfinished tail.
+        entry.conversation.feed(buffer.subarray(0, bytesRead))
       }
     } finally {
       await handle.close()

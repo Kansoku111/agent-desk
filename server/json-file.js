@@ -18,9 +18,15 @@ export async function readJson(file, fallback, { recoverCorrupt = true } = {}) {
   }
 }
 
-export async function writeJson(file, value, mode = 0o600) {
+const serialize = (value) => `${JSON.stringify(value, null, 2)}\n`
+
+async function writeText(file, text, mode = 0o600) {
   await fs.mkdir(path.dirname(file), { recursive: true })
-  await writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`, { mode })
+  await writeFileAtomic(file, text, { mode })
+}
+
+export async function writeJson(file, value, mode = 0o600) {
+  await writeText(file, serialize(value), mode)
 }
 
 /**
@@ -34,9 +40,10 @@ export function debouncedWriter(file, delayMs = 250) {
   let latest = chain
   const enqueue = (value) => {
     // Snapshot now, not when preceding writes finish: callers may roll back an
-    // unsuccessful admission or keep streaming into the same transcript.
-    const snapshot = structuredClone(value)
-    latest = chain.then(() => writeJson(file, snapshot))
+    // unsuccessful admission or keep streaming into the same transcript. The
+    // text is the snapshot: it is what would be written, without a copy of the value.
+    const snapshot = serialize(value)
+    latest = chain.then(() => writeText(file, snapshot))
     chain = latest.catch(() => {}) // A failed write must not poison later writes.
     return latest
   }

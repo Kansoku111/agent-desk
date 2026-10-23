@@ -2,7 +2,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
-import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { SIWC_RECORD } from './credentials.js'
 import { explainSiwcUsage } from './siwc-usage-error.js'
 export const SIWC_ISSUER = 'https://auth.openai.com'
@@ -58,6 +57,8 @@ export async function verifySiwcIdToken(idToken, clientId, {
   previous,
   keySet
 } = {}) {
+  // Loaded on first use, not at startup.
+  const { createRemoteJWKSet, jwtVerify } = await import('jose')
   jwks ??= createRemoteJWKSet(new URL(`${SIWC_ISSUER}/.well-known/jwks.json`))
   const {
     payload

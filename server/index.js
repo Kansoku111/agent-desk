@@ -347,10 +347,11 @@ const followSubagents = (threadId) => {
 const clients = new Map()
 const countClients = (remote) => [...clients.values()].filter((client) => client.remote === remote).length
 function broadcast(event, payload, { localOnly = false } = {}) {
-  const frame = JSON.stringify({ event, ...payload })
+  // Serialized for the first socket that gets it: nobody listening costs nothing.
+  let frame
   for (const [socket, client] of clients) {
     if (localOnly && client.remote) continue
-    if (socket.readyState === socket.OPEN) socket.send(frame)
+    if (socket.readyState === socket.OPEN) socket.send(frame ??= JSON.stringify({ event, ...payload }))
   }
 }
 

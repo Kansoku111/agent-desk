@@ -14,7 +14,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import { runtimeHookArgs } from './dsh-compatibility.js'
 import { appPaths, dshBin } from './paths.js'
-import { dshEnv } from './runtime.js'
+import { dshEnv } from './dsh-env.js'
 
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
 const STDERR_TAIL = 4000

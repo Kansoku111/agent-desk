@@ -134,8 +134,10 @@ export function openFile(file, how) {
 export async function gitInfo(dir) {
   try {
     const options = { cwd: dir, windowsHide: true, timeout: 4000 }
-    const { stdout: branch } = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], options)
-    const { stdout: status } = await run('git', ['status', '--porcelain'], options)
+    const [{ stdout: branch }, { stdout: status }] = await Promise.all([
+      run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], options),
+      run('git', ['status', '--porcelain'], options),
+    ])
     return { branch: branch.trim(), changes: status.split('\n').filter(Boolean).length }
   } catch {
     return null
