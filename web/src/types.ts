@@ -38,6 +38,8 @@ export interface TerminalSummary {
   activity: 'idle' | 'running' | 'approval'
   /** Agents or commands that go on in the background after the turn ended; starting Claude Code again would end them. */
   background: number
+  /** What each of them is (a command or its description, an agent type) and since when it runs. */
+  backgroundWork?: { label: string; since: number }[]
   exitCode: number | null
   /** Chosen in Agent Desk and passed as `claude --model` / `--effort`; null leaves Claude Code's own default. */
   model: string | null

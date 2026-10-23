@@ -322,11 +322,11 @@ test('the model is not changed while Claude Code works, and odd values are refus
 
 test('hookEffect reads the background work a turn leaves behind', () => {
   const task = (id, status = 'running', type = 'subagent') => ({ id, type, status, description: 'x' })
-  assert.deepEqual(hookEffect({ hook_event_name: 'SubagentStart', agent_id: 'a1' }, 'running').background, { started: 'a1' })
+  assert.deepEqual(hookEffect({ hook_event_name: 'SubagentStart', agent_id: 'a1', agent_type: 'Explore' }, 'running').background, { started: 'a1', label: 'Explore' })
   assert.deepEqual(hookEffect({ hook_event_name: 'SubagentStop', agent_id: 'a1' }, 'idle').background, { stopped: 'a1' })
   // Registry ids for subagents are not lifecycle agent ids; do not count them twice.
   const stop = hookEffect({ hook_event_name: 'Stop', background_tasks: [task('a1'), task('b2', 'completed'), task('c3', 'running', 'shell')] }, 'running')
-  assert.deepEqual(stop.background, { running: ['c3'] })
+  assert.deepEqual(stop.background, { running: [{ id: 'c3', label: 'x' }] })
   assert.equal(stop.activity, 'idle')
   // An older Claude Code sends no list: nothing is known, so nothing changes.
   assert.equal(hookEffect({ hook_event_name: 'Stop' }, 'running').background, undefined)
@@ -419,7 +419,40 @@ test('only supported workers with an explicit active status count in registry sn
     { id: 'mcp', type: 'MCP task', status: 'running' },
   ]
   assert.deepEqual(hookEffect({ hook_event_name: 'Stop', background_tasks: tasks }, 'running').background,
-    { running: ['shell', 'mcp'] })
+    { running: [{ id: 'shell', label: 'shell' }, { id: 'mcp', label: 'MCP task' }] })
+})
+
+test('the task lists what runs in the background, keeping when each one started', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  const hook = (event) => manager.hook(terminal.id, secret, event)
+  const work = () => manager.summary(manager.records.get(terminal.id)).backgroundWork
+  const changes = []
+  manager.on('terminal', (info) => changes.push(info.backgroundWork.map((entry) => entry.label)))
+  const realNow = Date.now
+  let now = realNow()
+  Date.now = () => now
+  try {
+    hook({ hook_event_name: 'SubagentStart', agent_id: 'a1', agent_type: 'Explore' })
+    hook({ hook_event_name: 'Stop', background_tasks: [{ id: 's1', type: 'shell', status: 'running', description: '', command: 'npm test' }] })
+    const started = now
+    assert.deepEqual(work(), [{ label: 'Explore', since: started }, { label: 'npm test', since: started }])
+    now += 60_000
+    hook({ hook_event_name: 'Stop', background_tasks: [
+      { id: 's1', type: 'shell', status: 'running', command: 'npm test' },
+      { id: 'w1', type: 'workflow', status: 'running', name: 'review' },
+    ] })
+    assert.deepEqual(work().map((entry) => entry.since), [started, started, now])
+    // One task ending as another starts keeps the count, yet the list changed.
+    hook({ hook_event_name: 'Stop', background_tasks: [
+      { id: 's1', type: 'shell', status: 'running', command: 'npm test' },
+      { id: 'm1', type: 'MCP task', status: 'running', server: 'gpt', tool: 'ask' },
+    ] })
+    assert.deepEqual(changes.at(-1), ['Explore', 'npm test', 'gpt ask'])
+  } finally {
+    Date.now = realNow
+  }
 })
 
 test('idle notification repairs missed agent completion but never clears shell work', async () => {

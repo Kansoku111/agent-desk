@@ -4053,6 +4053,53 @@ select:focus {
   color: var(--text);
 }
 
+.background-work {
+  position: relative;
+  flex: none;
+}
+
+button.terminal-status {
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+button.terminal-status:hover,
+button.terminal-status.active {
+  border-color: var(--text-subtle);
+  color: var(--text);
+}
+
+.background-work-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.background-work-list li {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.background-work-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-work-time {
+  flex: none;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
 .terminal-status.approval {
   border-color: var(--amber);
   color: var(--amber);

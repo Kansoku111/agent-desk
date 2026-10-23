@@ -18,6 +18,7 @@ import { BackToLeader, TeamPanel, TeamToggle, useLedTeam } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
 import { TerminalChat, useConversation } from './TerminalChat'
 import { TerminalModelPicker } from './TerminalPickers'
+import { Elapsed } from './TurnView'
 
 type Size = { cols: number; rows: number }
 
@@ -72,6 +73,41 @@ function statusLabel(terminal: TerminalSummary) {
   return '待機中'
 }
 
+/** The task's state; while background work goes on, it opens a list of what runs and for how long. */
+function StatusChip({ terminal }: { terminal: TerminalSummary }) {
+  const running = terminal.state === 'running'
+  const className = `header-chip terminal-status ${running ? terminal.activity : terminal.state}`
+  const content = (
+    <>
+      {running && (terminal.activity === 'running' || terminal.background > 0) && <Loader2 size={12} className="spin" />}
+      {statusLabel(terminal)}
+    </>
+  )
+  const work = terminal.backgroundWork ?? []
+  if (!running || terminal.activity !== 'idle' || !work.length) return <span className={className}>{content}</span>
+  return (
+    <Dropdown
+      placement="bottom"
+      width={320}
+      className="background-work"
+      trigger={({ toggle, open }) => (
+        <button type="button" className={`${className} ${open ? 'active' : ''}`} aria-expanded={open} onClick={toggle}>{content}</button>
+      )}
+    >
+      {() => (
+        <ul className="background-work-list">
+          {[...work].sort((a, b) => a.since - b.since).map((entry, index) => (
+            <li key={index}>
+              <span className="background-work-label" title={entry.label}>{entry.label}</span>
+              <span className="background-work-time"><Elapsed since={entry.since} /></span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Dropdown>
+  )
+}
+
 function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSummary; mode: Mode; onMode: (mode: Mode) => void; onRestart: () => void }) {
   const sidebarOpen = useStore((state) => state.sidebarOpen)
   const myPc = useStore((state) => state.server?.app.myPc)
@@ -121,10 +157,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
           )
           : <h1 className="thread-heading" onDoubleClick={() => setRenaming(true)} title={terminal.title}>{terminal.title}</h1>}
         <span className="header-chip" title={terminal.workspace}><FolderOpen size={13} />{workspaceLabel(terminal.workspace, myPc, names)}</span>
-        <span className={`header-chip terminal-status ${running ? terminal.activity : terminal.state}`}>
-          {running && (terminal.activity === 'running' || terminal.background > 0) && <Loader2 size={12} className="spin" />}
-          {statusLabel(terminal)}
-        </span>
+        <StatusChip terminal={terminal} />
       </div>
       <div className="header-right">
         {leads && <TeamToggle team={team} />}

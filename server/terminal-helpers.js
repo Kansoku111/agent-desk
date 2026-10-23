@@ -184,7 +184,10 @@ const TASK_ACTIVE = new Set(['running', 'pending', 'queued', 'in_progress'])
 function backgroundChange(input, event) {
   const id = typeof input?.agent_id === 'string' && input.agent_id ? input.agent_id : null
   const change = {}
-  if (event === 'SubagentStart' && id) change.started = id
+  if (event === 'SubagentStart' && id) {
+    change.started = id
+    change.label = typeof input.agent_type === 'string' ? input.agent_type.slice(0, LABEL_MAX) : ''
+  }
   if (event === 'SubagentStop' && id) change.stopped = id
   // Claude documents idle_prompt as suppressed while any background agent runs.
   // This repairs a missed agent completion, without making claims about shells.
@@ -194,9 +197,18 @@ function backgroundChange(input, event) {
       // Agents have reliable start/stop events; registry ids cannot complete them.
       .filter((task) => task && BACKGROUND_WORKERS.has(task.type) && typeof task.id === 'string' && task.id
         && TASK_ACTIVE.has(String(task.status ?? '').toLowerCase()))
-      .map((task) => task.id)
+      .map((task) => ({ id: task.id, label: taskLabel(task) }))
   }
   return Object.keys(change).length ? change : null
+}
+
+const LABEL_MAX = 300
+
+/** What the user sees for a background task: what it was started for, else what it runs. */
+function taskLabel(task) {
+  const text = [task.description, task.command, task.name, [task.server, task.tool].filter(Boolean).join(' ')]
+    .find((value) => typeof value === 'string' && value.trim())
+  return (text ?? task.type).trim().slice(0, LABEL_MAX)
 }
 
 function hookActivity(input, event, activity) {

@@ -136,6 +136,8 @@ export class TerminalManager extends EventEmitter {
       activity: live?.alive ? live.activity : 'idle',
       // How many background agents or commands still work after the turn ended (a restart of Claude Code would cut them off).
       background: live?.alive ? this.#background(live) : 0,
+      // What each of them is (a command, an agent type) and since when.
+      backgroundWork: live?.alive ? [...live.background.values()].map(({ label, since }) => ({ label, since })) : [],
       exitCode: live?.exitCode ?? null,
       // Chosen in Agent Desk (null: Claude Code's default), and what Claude Code reports using.
       model: record.model ?? null,
@@ -163,19 +165,21 @@ export class TerminalManager extends EventEmitter {
   /** The count of background work still going; a report that never came to an end is dropped after a while. */
   #background(live) {
     const cutoff = Date.now() - BACKGROUND_STALE_MS
-    for (const [id, since] of live.background) if (since < cutoff) live.background.delete(id)
+    for (const [id, { seen }] of live.background) if (seen < cutoff) live.background.delete(id)
     return live.background.size
   }
 
-  /** Applies what a hook says about background work (see hookEffect); true when the count changed. */
+  /** Applies what a hook says about background work (see hookEffect); true when what runs changed. */
   #trackBackground(live, change) {
-    const before = this.#background(live)
+    const ids = () => (this.#background(live), [...live.background.keys()].join('\n'))
+    const before = ids()
     if (change.agentsIdle) {
       for (const id of live.background.keys()) if (id.startsWith('agent:')) live.background.delete(id)
     }
     if (change.started) {
       // Ordered lifecycle hooks allow a resumed agent to reuse its id.
-      live.background.set(`agent:${change.started}`, Date.now())
+      const now = Date.now()
+      live.background.set(`agent:${change.started}`, { label: change.label, since: now, seen: now })
     }
     if (change.stopped) {
       live.background.delete(`agent:${change.stopped}`)
@@ -184,10 +188,13 @@ export class TerminalManager extends EventEmitter {
       // Registry snapshots describe non-agent tasks only. Never replace the
       // lifecycle agents with a parent's snapshot (or assume task ids are agent ids).
       const now = Date.now()
-      for (const id of live.background.keys()) if (id.startsWith('task:')) live.background.delete(id)
-      for (const id of change.running) live.background.set(`task:${id}`, now)
+      const known = new Map([...live.background].filter(([id]) => id.startsWith('task:')))
+      for (const id of known.keys()) live.background.delete(id)
+      for (const { id, label } of change.running) {
+        live.background.set(`task:${id}`, { label, since: known.get(`task:${id}`)?.since ?? now, seen: now })
+      }
     }
-    return this.#background(live) !== before
+    return ids() !== before
   }
 
   #changed(record) {
