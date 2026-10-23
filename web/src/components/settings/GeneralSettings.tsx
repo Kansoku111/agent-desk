@@ -30,7 +30,7 @@ export function GeneralSettings() {
       <div className="setting">
         <div>
           <h3>デスクトップ通知</h3>
-          <p className="muted">ウィンドウが裏にあるとき、作業の完了や承認待ちを通知します。</p>
+          <p className="muted">完了と承認待ちを通知します。</p>
         </div>
         <label className="switch">
           <input
@@ -48,10 +48,7 @@ export function GeneralSettings() {
       <div className="setting">
         <div>
           <h3>ブラウザ操作（Chrome）</h3>
-          <p className="muted">
-            エージェントが Chrome を操作できるようにします（ページを開く、読む、クリック、入力、スクリーンショット）。
-            Agent Desk 専用のプロファイルで起動するので、普段の Chrome とは別にサインイン状態が保存されます。
-          </p>
+          <p className="muted">専用プロファイルの Chrome をエージェントが操作します。</p>
         </div>
         <label className="switch">
           <input type="checkbox" checked={settings.browserTool} onChange={(event) => update({ browserTool: event.target.checked })} />
@@ -62,7 +59,7 @@ export function GeneralSettings() {
         <div className="setting">
           <div>
             <h3>ブラウザを表示しない</h3>
-            <p className="muted">オンにすると Chrome をウィンドウなし（ヘッドレス）で動かします。オフなら操作の様子を見られます。</p>
+            <p className="muted">ヘッドレスで動かします。</p>
           </div>
           <label className="switch">
             <input type="checkbox" checked={settings.browserHeadless} onChange={(event) => update({ browserHeadless: event.target.checked })} />
@@ -74,10 +71,7 @@ export function GeneralSettings() {
         <div className="setting">
           <div>
             <h3>デスクトップ操作</h3>
-            <p className="muted">
-              エージェントが画面のスクリーンショットを撮り、マウスとキーボードで PC 上のアプリを操作できるようにします。
-              権限モードに関係なく、承認なしで実際の画面を操作します。使うときだけオンにしてください。
-            </p>
+            <p className="muted">承認なしで実際の画面を操作します。使うときだけオンに。</p>
           </div>
           <label className="switch">
             <input type="checkbox" checked={settings.desktopTool} onChange={(event) => update({ desktopTool: event.target.checked })} />
@@ -88,10 +82,7 @@ export function GeneralSettings() {
       <div className="setting">
         <div>
           <h3>画像生成</h3>
-          <p className="muted">
-            エージェントが画像を作れるようにします。描くのは ChatGPT サブスクリプションの GPT で、Claude のタスクからも使えます。
-            画像はワークスペースの generated-images フォルダに保存されます。ChatGPT の利用上限を使い、Claude の API 料金はかかりません。
-          </p>
+          <p className="muted">ChatGPT の利用枠で描き、generated-images に保存します。</p>
         </div>
         <label className="switch">
           <input type="checkbox" checked={settings.imageTool} onChange={(event) => update({ imageTool: event.target.checked })} />
@@ -101,10 +92,7 @@ export function GeneralSettings() {
       <div className="setting">
         <div>
           <h3>変更を戻せるようにする</h3>
-          <p className="muted">
-            リクエストを送る前と作業のあとにワークスペースのファイルを保存し、「このリクエストの前に戻す」で元に戻せるようにします。
-            保存先はデータフォルダで、Git が必要です。.gitignore で除外したファイル、node_modules などの依存パッケージ、50MB を超えるファイルは対象外です。
-          </p>
+          <p className="muted">リクエストごとにファイルを保存します。Git が必要で、.gitignore 対象と 50MB 超は除きます。</p>
         </div>
         <label className="switch">
           <input type="checkbox" checked={settings.checkpoints} onChange={(event) => update({ checkpoints: event.target.checked })} />

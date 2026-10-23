@@ -174,10 +174,7 @@ export function RemotePanel() {
     return (
       <div className="settings-section">
         <p className="notice"><CheckCircle2 size={14} />このスマホは Tailscale 経由で PC の Agent Desk に接続しています。</p>
-        <p className="fine-print">
-          スマホからの接続の設定（オン・オフ、新しいリンク）は PC で変更します。
-          フォルダーの選択ダイアログ、エクスプローラーやターミナルで開く操作、ChatGPT のサインインも PC で行ってください。
-        </p>
+        <p className="fine-print">この設定とサインインは PC で変更します。</p>
       </div>
     )
   }
@@ -192,10 +189,7 @@ export function RemotePanel() {
       <div className="setting">
         <div>
           <h3>スマホから使う（Tailscale）</h3>
-          <p className="muted">
-            同じ Tailscale ネットワークにつないだスマホのブラウザから、タスクの確認、メッセージの送信、承認ができます。
-            家の Wi-Fi やインターネットには公開しません。
-          </p>
+          <p className="muted">Tailscale ネットワーク内だけに公開します。</p>
         </div>
         <label className="switch">
           <input type="checkbox" checked={state.enabled} disabled={busy} onChange={(event) => void toggle(event.target.checked)} />
@@ -212,10 +206,8 @@ export function RemotePanel() {
       )}
 
       <ul className="fine-print remote-notes">
-        <li>使うときは、PC で Agent Desk が起動している必要があります。オンの間はウィンドウを閉じても、Agent Desk はバックグラウンドで動き続けます。</li>
-        <li>スマホでも Tailscale アプリの接続をオンにしておく必要があります。</li>
-        <li>リンクを知っていれば、この PC でエージェントを操作できます。他人に教えないでください。漏れたときは「新しいリンクを作る」で古いリンクを無効にできます。</li>
-        <li>スマホのブラウザで「ホーム画面に追加」すると、アプリのように開けます。</li>
+        <li>オンの間はウィンドウを閉じても裏で動き続けます。</li>
+        <li>リンクを知っている人は操作できます。漏れたら「新しいリンクを作る」で無効にできます。</li>
       </ul>
     </div>
   )

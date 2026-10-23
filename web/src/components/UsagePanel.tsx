@@ -118,13 +118,12 @@ const COST_PROBLEM: Partial<Record<ClaudeCostState['status'], string>> = {
 function ClaudeCostCard({ claude, loading, onRefresh }: { claude: ClaudeCostState; loading: boolean; onRefresh: () => void }) {
   const admin = useStore((state) => state.server?.accounts.claudeAdmin) ?? { configured: false, masked: null }
   const summary = claude.summary
-  const usingApiKey = claude.source === 'api' && claude.status === 'ok'
   return (
     <section className="account-card">
       <div className="account-head">
         <div>
           <h3>Claude の請求額</h3>
-          <p className="muted">Anthropic の Usage &amp; Cost API から取得した実際の金額です。Claude Console の「Cost」と同じ数字で、Agent Desk 以外での利用も含みます。</p>
+          <p className="muted">Agent Desk 以外の利用も含む実際の金額</p>
         </div>
         {claude.status === 'ok' && <span className="badge success"><CheckCircle2 size={12} /> 取得済み</span>}
       </div>
@@ -169,9 +168,7 @@ function ClaudeCostCard({ claude, loading, onRefresh }: { claude: ClaudeCostStat
       )}
       {claude.status === 'needs-admin' && (
         <p className="muted">
-          登録済みの API キーでは組織の請求額を読めません。請求額を表示するには、Claude Console で
-          <strong> Admin API キー</strong>（sk-ant-admin…）を作成して登録してください。
-          Admin API キーは組織の管理者だけが作成でき、個人アカウントでは使えません。
+          請求額の表示には<strong> Admin API キー</strong>（sk-ant-admin…）が必要です。
         </p>
       )}
       {COST_PROBLEM[claude.status] && (
@@ -185,8 +182,7 @@ function ClaudeCostCard({ claude, loading, onRefresh }: { claude: ClaudeCostStat
 
       <div className="usage-foot">
         <p className="fine-print">
-          日付は UTC 基準です。利用から反映まで数分かかります。
-          {usingApiKey && 'Claude の API キー（ワークスペースを限定しない個人キー）で取得しています。'}
+          UTC 基準。
           {claude.fetchedAt ? ` 最終取得: ${fetchedLabel(claude.fetchedAt)}。` : ''}
         </p>
         <span className="usage-foot-actions">
@@ -213,7 +209,7 @@ function LocalUsageCard({ local }: { local: LocalUsage }) {
       <div className="account-head">
         <div>
           <h3>Agent Desk での使用量（概算）</h3>
-          <p className="muted">すべてのタスクの応答を dsh のログから集計し、Claude と DeepSeek の API 料金を見積もります。</p>
+          <p className="muted">dsh のログから見積もった API 料金</p>
         </div>
       </div>
 
@@ -266,8 +262,7 @@ function LocalUsageCard({ local }: { local: LocalUsage }) {
           </table>
         )}
       <p className="fine-print">
-        入力にはキャッシュの読み書きを含みます。概算は実際の請求額と少しずれることがあります。
-        ChatGPT のサブスクリプションは定額のため、料金は表示しません（—）。
+        入力はキャッシュの読み書きを含みます。
       </p>
     </section>
   )

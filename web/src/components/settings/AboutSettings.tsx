@@ -132,10 +132,7 @@ export function AboutSettings() {
           </div>
         ))}
       </dl>
-      <p className="fine-print">
-        エージェントの実行は DeepSeek Harness（MIT ライセンス、developer preview）が担います。
-        サンドボックスと承認はリスクを減らしますが、完全な隔離は保証されません。重要なリポジトリはブランチやバックアップを用意して使ってください。
-      </p>
+      <p className="fine-print">サンドボックスは完全な隔離ではありません。重要なリポジトリはバックアップを。</p>
       <button type="button" className="link-button" onClick={() => openExternal('https://github.com/deepseek-ai/deepseek-harness')}>
         <ExternalLink size={12} /> DeepSeek Harness のリポジトリ
       </button>

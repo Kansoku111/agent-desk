@@ -37,10 +37,7 @@ export function PersonalizeSettings() {
         <div className="account-head">
           <div>
             <h3>カスタム指示</h3>
-            <p className="muted">
-              ここに書いた指示を、エージェントはすべてのタスクで作業の前に読みます。
-              口調、回答の言語、コーディングの方針、毎回守ってほしいルールなどを書いておけます。
-            </p>
+            <p className="muted">すべてのタスクとサブエージェントが作業前に読みます。</p>
           </div>
           {saved.trim() && <span className="badge success"><CheckCircle2 size={12} /> 有効</span>}
         </div>
@@ -75,10 +72,7 @@ export function PersonalizeSettings() {
           </div>
         </div>
         {error && <p className="form-error">{error}</p>}
-        <p className="fine-print">
-          保存すると、作業中のものを含むすべてのタスクで、次のメッセージから使われます（作業中のタスクがあるときは、その作業が終わってから反映します）。Claude Code のタスクは、起動し直したときから使われます。
-          サブエージェントにも同じ指示が渡ります。会話の中での依頼と食い違うときは、会話の依頼を優先します。
-        </p>
+        <p className="fine-print">次のメッセージから反映（Claude Code は再起動後）。会話での依頼が優先です。</p>
       </section>
     </div>
   )

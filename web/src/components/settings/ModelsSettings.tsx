@@ -23,20 +23,17 @@ function ContextSizes({ contextOptions }: { contextOptions: number[] }) {
     {
       provider: 'openai-codex',
       label: 'ChatGPT',
-      note: '既定値は公式 SIWC のモデル一覧に追従します（GPT-6.1 Sol は 500K、GPT-5.5 は 272K）。最大値もモデルごとに異なります。広げると利用上限の減りが早くなることがあります。',
+      note: '広げると利用枠の減りが早くなります。',
       top: '最大（モデルごと）',
     },
-    { provider: 'anthropic', label: 'Claude', note: '最新モデルは既定で最大 1M。小さくすると API 料金を抑えられます。', top: '1M まで' },
+    { provider: 'anthropic', label: 'Claude', note: '小さくすると API 料金を抑えられます。', top: '1M まで' },
   ]
   return (
     <section className="account-card">
       <div className="account-head">
         <div>
           <h3>コンテキストサイズ</h3>
-          <p className="muted">
-            会話をどこまで覚えておくかの上限です。上限の 8 割に近づくと、古いやり取りを自動で要約して続けます。
-            小さくすると 1 回あたりの入力トークンが減ります。各モデルが対応する最大値より大きくはなりません。
-          </p>
+          <p className="muted">8 割に近づくと古いやり取りを要約します。</p>
         </div>
       </div>
       {rows.map(({ provider, label, note, top }) => (
@@ -59,7 +56,6 @@ function ContextSizes({ contextOptions }: { contextOptions: number[] }) {
           </select>
         </div>
       ))}
-      <p className="fine-print">変更は、作業中のタスクが終わったあとの次のメッセージから反映されます。</p>
     </section>
   )
 }
@@ -72,12 +68,12 @@ function FastMode() {
     {
       provider: 'anthropic',
       label: 'Claude',
-      note: '出力が最大 2.5 倍速くなります。料金は通常の 2 倍です（Opus 5.5 は入力 $8・出力 $40 / 100 万トークン）。Claude API の研究プレビューで、通常とは別のレート制限がかかります。',
+      note: '最大 2.5 倍速、料金は 2 倍。',
     },
     {
       provider: 'openai-codex',
       label: 'ChatGPT',
-      note: '公式 SIWC 経路では GPT の高速モードを利用できません（priority は反映されません）。Claude の高速モードは引き続き利用できます。',
+      note: '公式経路では使えません。',
     },
   ]
   return (
@@ -85,10 +81,6 @@ function FastMode() {
       <div className="account-head">
         <div>
           <h3>高速モード</h3>
-          <p className="muted">
-            同じモデルを高速に動かします。対応するモデルを選んでいるときは、入力欄の「高速」からも切り替えられます。
-            オンにすると、その種類のすべてのタスクに、次のリクエストから反映します。
-          </p>
         </div>
       </div>
       {rows.map(({ provider, label, note }) => {
@@ -102,11 +94,7 @@ function FastMode() {
             <div>
               <h3>{label}</h3>
               <p className="muted">{note}</p>
-              <p className="muted">
-                {models.length
-                  ? `対応モデル: ${models.map((model) => model.name).join('、')}`
-                  : provider === 'openai-codex' ? 'この経路では利用不可' : '対応モデルがモデル一覧にありません。'}
-              </p>
+              {models.length > 0 && <p className="muted">{models.map((model) => model.name).join('、')}</p>}
             </div>
             <label className="switch">
               <input
@@ -121,7 +109,6 @@ function FastMode() {
           </div>
         )
       })}
-      <p className="fine-print">Claude は切り替えた直後のリクエストでプロンプトキャッシュが効かず、入力がキャッシュなしの料金になります。</p>
     </section>
   )
 }
@@ -167,7 +154,6 @@ function Subagents() {
           </div>
         )
       })}
-      <p className="fine-print">変更は、作業中のタスクが終わったあとの次のメッセージから反映されます。</p>
     </section>
   )
 }
@@ -208,7 +194,6 @@ function ModelVisibility() {
       </button>
       {open && (
         <>
-          <p className="fine-print">「提供終了の可能性」があるモデルは、既定で非表示です。チェックを入れると表示できます。チェックを外したモデルは、入力欄のモデル選択から消えます。既存のタスクで使用中のモデルは変わりません。</p>
           {providers.map((provider) => {
             const models = [...groups.get(provider)!].sort(byNewest)
             return (
@@ -286,17 +271,13 @@ function ModelUpdateCard() {
       <div className="account-head">
         <div>
           <h3>モデル一覧を本家と同期</h3>
-          <p className="muted">
-            GPT は、ChatGPT のサーバーが返す「このアカウントで使えるモデル」の一覧に合わせます。新しいモデルは追加し、提供が終わったモデルには印を付けて後ろに回します。
-            Claude など足りないモデルは、dsh が使うモデル定義（pi-ai）の最新リリースから追加します。どちらも数時間ごとに確認し、作業中のタスクがあれば終わってから反映します。
-          </p>
+          <p className="muted">GPT はアカウントの一覧に、Claude などは pi-ai の最新版に合わせます。</p>
         </div>
       </div>
 
       <div className="setting compact">
         <div>
           <h3>自動で同期する</h3>
-          <p className="muted">オフにすると確認をやめ、自動で取り込んだモデルは一覧から外れ、提供終了の印も消えます（同梱のモデルは残ります）。</p>
         </div>
         <label className="switch">
           <input
@@ -333,10 +314,7 @@ function ModelUpdateCard() {
         </div>
       )}
       {retired.length > 0 && (
-        <p className="muted">
-          ChatGPT の一覧にないモデル（提供終了の可能性）: {retired.map((model) => model.name).join('、')}。
-          モデル選択では後ろに回し、新しいタスクの初期値にも選びません。使っているタスクはそのまま開けます。
-        </p>
+        <p className="muted">提供終了の可能性: {retired.map((model) => model.name).join('、')}</p>
       )}
 
       {update.models.length > 0 && (
@@ -355,7 +333,6 @@ function ModelUpdateCard() {
       <p className="fine-print">
         {update.checkedAt ? `最終確認: ${dateTime(update.checkedAt)}。` : ''}
         {update.lastAdded ? `前回追加: ${update.lastAdded.models.map((model) => model.name).join('、')}（${dateTime(update.lastAdded.at)}）。` : ''}
-        上の一覧は、インストールされている dsh に入っていないため Agent Desk が追加しているモデルです。
       </p>
     </section>
   )

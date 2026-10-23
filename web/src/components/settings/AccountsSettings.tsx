@@ -57,7 +57,7 @@ function ClaudeWorkspace({ current, choices, onDone }: {
       {error && <p className="form-error">{error}</p>}
       {!choices?.length && (
         <p className="fine-print">
-          ワークスペース ID は Claude Console の「Settings → Workspaces」の ID 列で確認できます（既定のワークスペースも含みます）。
+          Claude Console の Settings → Workspaces で確認できます。
         </p>
       )}
     </div>
@@ -174,7 +174,7 @@ function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hin
           {{
             checking: '接続を確認しています…',
             valid: '✓ このキーで Claude を使えます。',
-            'needs-workspace': 'このキーはワークスペースを限定しない個人キーです。下の「ワークスペース」で、使うワークスペースの ID を設定してください。',
+            'needs-workspace': 'このキーにはワークスペースの指定が必要です。',
             'workspace-invalid': '設定したワークスペース ID が見つからないか、このキーで使う権限がありません。',
             invalid: 'このキーは認証に失敗しました。新しいキーを登録してください。',
             unreachable: 'Anthropic に接続できませんでした。ネットワークを確認してください。',
@@ -232,7 +232,7 @@ function LocalLlmCard() {
       <div className="account-head">
         <div>
           <h3>ローカル LLM（任意）</h3>
-          <p className="muted">Ollama・LM Studio・vLLM など、OpenAI 互換のサーバーのモデルを使います。</p>
+          <p className="muted">Ollama・LM Studio などの OpenAI 互換サーバー</p>
         </div>
         {account?.configured && <span className="badge success"><CheckCircle2 size={12} /> 接続済み</span>}
       </div>
@@ -274,15 +274,14 @@ export function AccountsSettings() {
       <ApiKeyCard
         provider="anthropic"
         title="Claude"
-        description="Anthropic の API キーで Claude モデルを使います（従量課金）。"
+        description="API キー（従量課金）"
         consoleUrl="https://platform.claude.com/settings/keys"
         placeholder="sk-ant-api…"
-        hint="Claude Console でキーを作成したときに一度だけ表示される「sk-ant-api…」で始まる文字列を貼り付けます。"
       />
       <ApiKeyCard
         provider="deepseek"
         title="DeepSeek（任意）"
-        description="DeepSeek の API キーで DeepSeek モデルも使えます。"
+        description="API キー（従量課金）"
         consoleUrl="https://platform.deepseek.com/api_keys"
         placeholder="sk-…"
       />

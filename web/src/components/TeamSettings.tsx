@@ -152,11 +152,11 @@ function TierRow({ server, config, provider, tier, label, note, onChange }: {
 }
 
 const PROVIDER_NOTE: Record<TeamProvider, string> = {
-  gpt: 'dsh のタスクとして、ChatGPT サブスクリプションで動きます。',
-  claude: '画面なしの Claude Code です。Claude Code 自身の認証（サブスクリプション・API キー・クラウド）を使い、起動前に課金方式を確認します。Agent Desk に登録した API キーとは別です。',
-  claudeApi: 'チームの自動処理に推奨。dsh から Anthropic API を使い、使った分だけ課金されます。Claude Code やそのサブスクリプションとは別の実行方式で、設定・ツール・会話の履歴も異なります。子としてだけ使えます。',
-  deepseek: 'dsh のタスクとして、DeepSeek の API キーで動きます（使った分だけ DeepSeek に課金されます）。子としてだけ使えます。',
-  local: 'dsh のタスクとして、自分のモデルサーバーで動きます（課金なし）。他より遅く弱いため、小さく明確な作業向けです。子としてだけ使えます。',
+  gpt: 'ChatGPT サブスクリプション',
+  claude: 'Claude Code 自身の認証と課金',
+  claudeApi: 'Anthropic API（従量課金）',
+  deepseek: 'DeepSeek API（従量課金）',
+  local: '課金なし。小さく明確な作業向け',
 }
 
 function ProviderCard({ server, config, provider, onChange }: { server: AppState; config: Config; provider: TeamProvider; onChange: Change }) {
@@ -168,11 +168,11 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
     <section className={`account-card team-provider-card ${on ? '' : 'off'}`}>
       <div className="setting compact">
         <div>
-          <h3>{PROVIDER_NAME[provider]} の子{provider === 'claudeApi' && <span className="muted">（自動処理に推奨）</span>}</h3>
+          <h3>{PROVIDER_NAME[provider]} の子</h3>
           <p className="muted">
             {PROVIDER_NOTE[provider]}
-            {signedOut && ' ChatGPT にサインインすると使えます（設定 → アカウント）。'}
-            {noKey && (provider === 'local' ? ' 設定 → アカウントでサーバーの URL を登録すると使えます。' : ` 設定 → アカウントで ${provider === 'claudeApi' ? 'Anthropic' : 'DeepSeek'} の API キーを登録すると使えます。`)}
+            {signedOut && ' · 要サインイン'}
+            {noKey && (provider === 'local' ? ' · 要 URL 登録' : ' · 要 API キー')}
           </p>
         </div>
         <label className="switch">
@@ -188,7 +188,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
         </label>
       </div>
       {on && provider === 'claudeApi' && (
-        <p className="team-warning">API の従量課金を有効にしています。並列数や長い会話で費用が増えます。開始前に Claude Console の利用上限・通知を確認してください。この画面の設定は金額上限ではなく、サブスクからの自動切替もしません。</p>
+        <p className="team-warning">並列数や長い会話で費用が増えます。Claude Console の利用上限を確認してください。</p>
       )}
       {on && TIERS.map((entry) => <TierRow key={entry.tier} server={server} config={config} provider={provider} onChange={onChange} {...entry} />)}
     </section>
@@ -205,10 +205,8 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
         <div>
           <h3>リーダー</h3>
           <p className="muted">
-            {gptLeads
-              ? 'GPT（dsh のタスク）がリーダーになり、ChatGPT サブスクリプションで動きます。Claude の上限を使わずにチームを回せます。'
-              : 'Claude Code がリーダーになります。Claude Code 自身の認証を使い、サブスクリプション・API キー・クラウドの課金方式を起動前に確認します。'}
-            {gptLeads && !server.accounts.chatgpt.signedIn && ' ChatGPT にサインインすると使えます（設定 → アカウント）。'}
+            {gptLeads ? PROVIDER_NOTE.gpt : PROVIDER_NOTE.claude}
+            {gptLeads && !server.accounts.chatgpt.signedIn && ' · 要サインイン'}
           </p>
         </div>
         <select value={config.leaderProvider} onChange={(event) => onChange({ leaderProvider: event.target.value })} aria-label="リーダー">
@@ -219,7 +217,7 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
       <div className="setting compact team-tier-row">
         <div>
           <h3>リーダーのモデル</h3>
-          <p className="muted">{gptLeads ? '「未設定」のときは GPT の中枠のモデルを使います。' : 'Claude Code で動きます。'}</p>
+          {gptLeads && <p className="muted">未設定なら中枠のモデル</p>}
         </div>
         {gptLeads
           ? (
@@ -280,7 +278,7 @@ function BypassSwitch({ config, onChange }: { config: Config; onChange: Change }
     <div className="setting compact">
       <div>
         <h3>リーダーも承認なしで動かす</h3>
-        <p className="muted">オフにすると、リーダーがファイルを変えたりコマンドを実行したりする前に、あなたに確認します（GPT のリーダーは「ワークスペース」の権限で動きます）。子はいつも承認なしで動きます。</p>
+        <p className="muted">子は常に承認なしで動きます。</p>
       </div>
       <label className="switch">
         <input type="checkbox" checked={config.leaderBypass} onChange={(event) => onChange({ leaderBypass: event.target.checked })}
@@ -428,29 +426,20 @@ export function TeamSettings() {
           <div>
             <h3>エージェントチーム</h3>
             <p className="muted">
-              サイドバーの <span className="cl-mark tm-mark inline">TM</span> でチームを始めます。リーダーに計画や指示を伝えると、
-              リーダーが作業を分けて子のエージェントに任せ、終わった子から順に届く報告を確認して、合格か手直しかを決めます。
-            </p>
-            <p className="muted">
-              リーダー（Claude Code / GPT）、同時に動かせる子の数、子に使う GPT・Claude・Claude（API）・DeepSeek・ローカル LLM と枠（低・中）ごとのモデルは、TM を押したときに選びます。初期設定では子はすべてオフで、使うものだけをオンにします（オンにしたものの枠だけが画面に出ます）。前回の選び方を覚えています。
-              動いているチームの子の枠と数は、チームのパネルの「このチームの設定」から変えられます。
-            </p>
-            <p className="muted">
-              リーダーが選ぶのは枠と GPT / Claude / Claude（API） / DeepSeek / ローカル LLM だけで、モデル名は選びません。Claude Code の子は Claude Code 自身の認証と課金方式で、Claude（API）の子は Agent Desk に登録した API キーで動きます。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
+              サイドバーの <span className="cl-mark tm-mark inline">TM</span> で始め、構成もそこで選びます。
             </p>
           </div>
         </div>
         <BypassSwitch config={config} onChange={save} />
-        <Switch title="報告をまとめて渡す" note="リーダーの作業中に届いた報告を、次の 1 ターンでまとめて渡します。"
+        <Switch title="報告をまとめて渡す" note="作業中に届いた報告を次のターンでまとめます。"
           checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />
-        <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成のツール（Claude の子はすべての MCP サーバー）を、リーダーが必要とした子にだけ渡します。次に始めるチームから使われます。"
+        <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成は必要な子にだけ渡します。"
           checked={config.leanChildren === true} onChange={(value) => save({ leanChildren: value })} />
       </section>
       <TeamGuides policies={server.settings.teamPolicies ?? []} playbooks={server.settings.teamPlaybooks ?? []} />
       {apiSubagent && (
         <p className="team-warning">
-          「モデル」の「サブエージェント」で Claude（API の従量課金）が選ばれています。チームの GPT の子やリーダーがそれを使い始めると Agent Desk が止めますが、
-          使わないなら「使わない」にしておくと確実です。
+          サブエージェントに Claude（API の従量課金）が選ばれています。
           <button type="button" className="link-button" onClick={() => setState({ settingsOpen: 'models' })}>モデルの設定を開く</button>
         </p>
       )}
