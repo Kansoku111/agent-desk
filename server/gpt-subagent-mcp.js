@@ -81,7 +81,13 @@ function send(message) {
 }
 
 async function handle(message) {
-  const { id, method, params } = message
+  const validObject = message !== null && typeof message === 'object' && !Array.isArray(message)
+  const id = validObject ? message.id : undefined
+  if (!validObject || typeof message.method !== 'string') {
+    if (id !== undefined) send({ id, error: { code: -32600, message: 'Invalid Request' } })
+    return
+  }
+  const { method, params } = message
   if (method === 'notifications/cancelled') return running.get(params?.requestId)?.kill()
   if (id === undefined) return
   try {
@@ -121,7 +127,10 @@ readline.createInterface({ input: process.stdin, crlfDelay: Infinity }).on('line
   } catch {
     return send({ id: null, error: { code: -32700, message: 'Parse error' } })
   }
-  void handle(message)
+  void handle(message).catch(error => {
+    const id = message !== null && typeof message === 'object' && !Array.isArray(message) ? message.id : undefined
+    if (id !== undefined) send({ id, error: { code: -32603, message: error?.message ?? String(error) } })
+  })
 }).on('close', () => {
   for (const child of running.values()) child.kill()
   process.exit(0)

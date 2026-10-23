@@ -47,6 +47,50 @@ async function login(client, method) {
   await done
   return client.account()
 }
+test('stop during Codex prepare prevents the pending start from spawning', async t => {
+  let spawns = 0
+  const { client } = await setup(t, {
+    spawn: () => {
+      spawns++
+      throw new Error('unexpected spawn')
+    }
+  })
+  const originalMkdir = fs.mkdir
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  let entered
+  const preparing = new Promise(resolve => { entered = resolve })
+  fs.mkdir = async (target, ...args) => {
+    if (path.resolve(String(target)) === path.resolve(client.cwd)) {
+      entered()
+      await gate
+    }
+    return originalMkdir.call(fs, target, ...args)
+  }
+  try {
+    const starting = client.start()
+    await preparing
+    await client.stop()
+    release()
+    await assert.rejects(starting, /stopped during startup/)
+    assert.equal(spawns, 0)
+  } finally {
+    release()
+    fs.mkdir = originalMkdir
+  }
+})
+test('raw requests do not leave pending entries when transport is missing or write throws', async t => {
+  const { client } = await setup(t)
+  await assert.rejects(client.rawRequest('account/read'), /transport closed/)
+  assert.equal(client.pending.size, 0)
+  client.child = { stdin: { write() { throw new Error('sync write failure') } } }
+  try {
+    await assert.rejects(client.rawRequest('account/read'), /transport write failed/)
+    assert.equal(client.pending.size, 0)
+  } finally {
+    client.child = null
+  }
+})
 test('bundled binary is pinned/local and environment cannot inherit another Codex/API identity', () => {
   assert.match(bundledCodex(), /node_modules.*codex.*vendor/)
   assert.deepEqual(codexEnvironment('/dedicated', {

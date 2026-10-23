@@ -76,6 +76,7 @@ export class CodexAppServer extends EventEmitter {
     this.openUrl = openUrl
     this.child = null
     this.starting = null
+    this.startGeneration = 0
     this.pending = new Map()
     this.nextId = 0
     this.busy = 0
@@ -105,15 +106,18 @@ export class CodexAppServer extends EventEmitter {
   start() {
     if (this.stopping) return this.stopping.then(() => this.start())
     if (this.starting) return this.starting
-    this.starting = this.startProcess().catch(async error => {
-      await this.stop()
+    const generation = this.startGeneration
+    this.starting = this.startProcess(generation).catch(async error => {
+      if (generation === this.startGeneration) await this.stop()
       throw error
     })
     return this.starting
   }
-  async startProcess() {
+  async startProcess(generation) {
     await this.prepare()
+    if (generation !== this.startGeneration) throw new Error('Codex app-server stopped during startup')
     await fs.mkdir(this.runtimeHome, { recursive: true, mode: 0o700 })
+    if (generation !== this.startGeneration) throw new Error('Codex app-server stopped during startup')
     // Image threads are ephemeral; keep their diagnostic DB/logs ephemeral too.
     const args = this.args ?? [
       '-c', `sqlite_home=${JSON.stringify(this.runtimeHome)}`,
@@ -192,29 +196,39 @@ export class CodexAppServer extends EventEmitter {
     }) + '\n')
   }
   rawRequest(method, params = {}) {
+    const child = this.child
+    if (!child?.stdin) return Promise.reject(new Error('Codex transport closed'))
     return new Promise((resolve, reject) => {
       const id = ++this.nextId
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new Error(`Codex ${method} timed out`))
       }, 30000)
+      const cleanup = () => {
+        clearTimeout(timer)
+        this.pending.delete(id)
+      }
       this.pending.set(id, {
         resolve,
         reject,
         timer,
         method
       })
-      this.child.stdin.write(JSON.stringify({
-        id,
-        method,
-        params
-      }) + '\n', error => {
-        if (error) {
-          clearTimeout(timer)
-          this.pending.delete(id)
-          reject(new Error('Codex transport write failed'))
-        }
-      })
+      try {
+        child.stdin.write(JSON.stringify({
+          id,
+          method,
+          params
+        }) + '\n', error => {
+          if (error) {
+            cleanup()
+            reject(new Error('Codex transport write failed'))
+          }
+        })
+      } catch {
+        cleanup()
+        reject(new Error('Codex transport write failed'))
+      }
     })
   }
   async use(work) {
@@ -533,6 +547,7 @@ For references, edit/follow the attached local images. Call the tool exactly onc
   }
 
   stop() {
+    this.startGeneration++
     this.stopping ??= this.stopProcess().finally(() => {
       this.stopping = null
     })
