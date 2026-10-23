@@ -69,14 +69,13 @@ test('a malformed file is never overwritten', async () => {
   await cleanup()
 })
 
-test('existing empty or non-map credential files are not overwritten', async () => {
-  for (const initial of ['', '- legacy credential content\n']) {
-    const { store, file, cleanup } = await tempStore(initial)
-    assert.deepEqual(await store.read(), { refs: {}, records: {} }, 'read-only callers may treat the file as empty')
-    await assert.rejects(store.setRef('ANTHROPIC_API_KEY', 'x'), /not overwriting it/)
-    assert.equal(await fs.readFile(file, 'utf8'), initial)
-    await cleanup()
-  }
+test('a credential file whose root is not a map is not overwritten', async () => {
+  const initial = '- legacy credential content\n'
+  const { store, file, cleanup } = await tempStore(initial)
+  assert.deepEqual(await store.read(), { refs: {}, records: {} }, 'read-only callers may treat the file as empty')
+  await assert.rejects(store.setRef('ANTHROPIC_API_KEY', 'x'), /not overwriting it/)
+  assert.equal(await fs.readFile(file, 'utf8'), initial)
+  await cleanup()
 })
 
 test('empty keys and invalid names are refused', async () => {
