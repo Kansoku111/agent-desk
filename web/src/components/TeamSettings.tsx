@@ -431,7 +431,7 @@ export function TeamSettings() {
           </div>
         </div>
         <BypassSwitch config={config} onChange={save} />
-        <Switch title="報告をまとめて渡す" note="作業中に届いた報告を次のターンでまとめます。"
+        <Switch title="報告をまとめて渡す" note="近い時間に届いた報告を1ターンにまとめます。"
           checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />
         <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成は必要な子にだけ渡します。"
           checked={config.leanChildren === true} onChange={(value) => save({ leanChildren: value })} />

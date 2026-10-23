@@ -5,7 +5,8 @@
 // with the user's explicitly confirmed Claude Code auth mode. Reports reach the
 // leader in the order the children finish, when it is idle (typed into a Claude
 // leader's terminal, sent to a GPT leader as a message); those that waited
-// meanwhile go together, in one turn (batchReports). Between reports the leader
+// meanwhile go together, in one turn (batchReports), and while other children
+// still work a report waits a little for theirs. Between reports the leader
 // sleeps and spends nothing.
 //
 // Only a team's leader gets the MCP server (claude --mcp-config, or its dsh
@@ -38,6 +39,13 @@ export { childPrompt, describeTool, leaderPrompt, PREFIX } from './teams-prompts
 export const REPORT_PREVIEW = 1000
 /** How much waiting text one message to the leader may gather (batchReports); a longer paste is slow to take in. */
 const BATCH_CHARS = 6000
+/**
+ * While other children still work, how long the oldest waiting report holds
+ * for theirs (batchReports). Children finish tens of seconds apart and a
+ * leader's turn on a report takes about as long, so without it each report
+ * went alone.
+ */
+export const REPORT_GATHER_MS = 30_000
 const REPORT_KEEP = 40_000
 const REPORTS_KEPT = 6
 const ASKS_KEPT = 20
@@ -95,7 +103,7 @@ export class TeamManager extends EventEmitter {
    */
   constructor({
     file, dir, threads, terminals, agents, catalog, getSettings, apiUrl, instructions = () => '', guides = () => ({ policies: [], playbooks: [] }), authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
-    node = process.execPath, script = mcpScript, log = () => {}, now = Date.now,
+    node = process.execPath, script = mcpScript, log = () => {}, now = Date.now, gatherMs = REPORT_GATHER_MS,
   }) {
     super()
     this.file = file
@@ -114,6 +122,7 @@ export class TeamManager extends EventEmitter {
     this.script = script
     this.log = log
     this.now = now
+    this.gatherMs = gatherMs
     this.claudeAuth = new TeamClaudeAuth()
     /** @type {Map<string, object>} saved teams by id */
     this.teams = new Map()
@@ -1045,6 +1054,18 @@ export class TeamManager extends EventEmitter {
     return items
   }
 
+  /** How much longer the waiting reports hold for those of children still working (REPORT_GATHER_MS); 0: they go now. */
+  #gatherWait(team) {
+    if (!this.gatherMs || !teamConfig(this.getSettings()).batchReports) return 0
+    // A child held up on an approval, or word from Agent Desk itself, goes at once.
+    if (team.queue.some((item) => item.kind === 'approval' || !item.childId)) return 0
+    if (team.queue.reduce((size, item) => size + (item.text?.length ?? 0), 0) >= BATCH_CHARS) return 0
+    const working = team.children.some((child) => !child.closed && child.awaiting && !team.queue.some((item) => item.childId === child.id))
+    if (!working) return 0
+    const oldest = Math.min(...team.queue.map((item) => item.at))
+    return Math.max(0, oldest + this.gatherMs - this.now())
+  }
+
   #later(key, fn, ms) {
     clearTimeout(this.retries.get(key))
     this.retries.set(key, setTimeout(() => {
@@ -1059,6 +1080,8 @@ export class TeamManager extends EventEmitter {
     // An approval decided (in the panel) while it waited needs no message any more.
     team.queue = team.queue.filter((item) => item.kind !== 'approval' || this.approvals.has(item.approvalId))
     if (!team.queue.length) return
+    const gather = this.#gatherWait(team)
+    if (gather > 0) return this.#later(`gather:${team.id}`, () => this.#pump(team), gather)
     if (team.leaderKind === 'thread') return this.#pumpThread(team)
     const status = this.terminals.status(team.leaderId)
     if (!status) return

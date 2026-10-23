@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { DELIVERY_CHECK_MS, DELIVERY_GIVE_UP_MS, LEADER_SETTLE_MS, MCP_SERVER, PREFIX, REPORT_PREVIEW, RESUME_DELAY_MS, TeamManager, TYPING_QUIET_MS, describeTool, transientError } from '../server/teams.js'
+import { DELIVERY_CHECK_MS, DELIVERY_GIVE_UP_MS, LEADER_SETTLE_MS, MCP_SERVER, PREFIX, REPORT_PREVIEW, REPORT_GATHER_MS, RESUME_DELAY_MS, TeamManager, TYPING_QUIET_MS, describeTool, transientError } from '../server/teams.js'
 import { assertChildrenOn, mergeTeamConfig, teamConfig, TEAM_DEFAULTS } from '../server/team-config.js'
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
@@ -187,7 +187,7 @@ const CATALOG = {
   },
 }
 
-async function setup(t, settings = {}) {
+async function setup(t, settings = {}, options = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-teams-'))
   const workspace = path.join(dir, 'project')
   await fs.mkdir(workspace)
@@ -212,6 +212,9 @@ async function setup(t, settings = {}) {
     apiUrl: () => 'http://127.0.0.1:47130/api/team',
     node: 'C:\\node.exe',
     script: 'C:\\agent-desk\\server\\team-mcp.js',
+    // Reports go as soon as the leader can take them, unless a test is about gathering them.
+    gatherMs: 0,
+    ...options,
   }).load()
   holder.manager = manager
   t.after(() => manager.stop())
@@ -438,6 +441,44 @@ test('a batch stops before it gets too long to paste', async (t) => {
   // Each is shortened to REPORT_PREVIEW: five fit in one message, the sixth waits.
   assert.match(typed()[0], /5 件がまとめて届きました（このあとに 1 件が待っています）/)
   assert.equal(team.queue.length, 1)
+})
+
+test('while other children still work, a report waits a little for theirs and they go together', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let clock = 1_000_000
+  const wait = (ms) => { clock += ms; t.mock.timers.tick(ms) }
+  const { threads, tool, typed, team } = await setup(t, {}, { gatherMs: REPORT_GATHER_MS, now: () => clock })
+  for (const name of ['A', 'B', 'C']) await tool('spawn', { title: name, task: 'x', tier: 'low', provider: 'gpt', name })
+  threads.finish('thread-1', 'A の報告')
+  wait(10_000)
+  threads.finish('thread-2', 'B の報告')
+  assert.equal(typed().length, 0)
+  // Counted from the oldest: C is still working, but A has waited long enough.
+  wait(REPORT_GATHER_MS - 10_000)
+  assert.equal(typed().length, 1)
+  assert.match(typed()[0], /^\[Agent Desk チーム\] 2 件がまとめて届きました。[\s\S]*A の報告[\s\S]*B の報告/)
+  assert.equal(team.queue.length, 0)
+})
+
+test('the last child working does not wait, and neither does an approval', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const clock = 1_000_000
+  const { threads, tool, typed, leader, terminals } = await setup(t, {}, { gatherMs: REPORT_GATHER_MS, now: () => clock })
+  for (const name of ['A', 'B']) await tool('spawn', { title: name, task: 'x', tier: 'low', provider: 'gpt', name })
+  threads.finish('thread-1', 'A の報告')
+  assert.equal(typed().length, 0)
+  threads.finish('thread-2', 'B の報告')
+  assert.equal(typed().length, 1)
+  assert.match(typed()[0], /2 件がまとめて届きました/)
+  terminals.set(leader, { activity: 'running' })
+  terminals.set(leader, { activity: 'idle' })
+  // C works, but a child held up on an approval does not wait for it.
+  await tool('send', { child: 'A', message: 'もう一度' })
+  await tool('spawn', { title: 'C', task: 'x', tier: 'low', provider: 'gpt', name: 'C' })
+  threads.permissions.push({ threadId: 'thread-1', requestId: 'req-1', name: 'shell', input: { command: 'ls' }, options: [] })
+  threads.emit('approval-needed', { threadId: 'thread-1' })
+  assert.equal(typed().length, 2)
+  assert.match(typed()[1], /承認待ち/)
 })
 
 test('a GPT child that starts a subagent anyway is stopped, and the leader hears why', async (t) => {
