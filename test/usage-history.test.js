@@ -97,6 +97,56 @@ test('UsageHistory caches per log, rescans changed logs and keeps removed ones',
   await fs.rm(home, { recursive: true, force: true })
 })
 
+test('UsageHistory retries all logs after a failed repricing read', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-history-'))
+  const originalOpen = fs.open
+  try {
+    const dshHome = path.join(home, 'dsh-home')
+    const logFile = (session) => path.join(dshHome, 'sessions', '--work--', session, 'session.v4.jsonl.zstd')
+    const write = async (session, event) => {
+      await fs.mkdir(path.dirname(logFile(session)), { recursive: true })
+      await fs.writeFile(logFile(session), log([event]))
+    }
+    const now = at('2026-10-09T12:00:00')
+    const call = () => message(now - 1000, 'anthropic', 'model', { inputTokens: 1_000_000, outputTokens: 0 })
+    const rates = (input) => new Map([['anthropic/model', { input, output: 0, cacheRead: 0, cacheWrite: 0 }]])
+    await write('one', call())
+    await write('two', call())
+
+    let currentRates = rates(2)
+    const history = new UsageHistory({
+      dshHome,
+      file: path.join(home, 'usage-history.json'),
+      pricing: async () => currentRates,
+      now: () => now,
+    })
+    const first = await history.refresh()
+    assert.equal(first.all.cost, 4)
+    const previousSignature = history.cache.pricing
+    currentRates = rates(4)
+
+    let failOnce = true
+    fs.open = async (...args) => {
+      if (failOnce && args[0] === logFile('one')) {
+        failOnce = false
+        throw new Error('temporary read failure')
+      }
+      return originalOpen(...args)
+    }
+    const partial = await history.refresh()
+    assert.equal(partial.all.cost, 6)
+    assert.equal(history.cache.pricing, previousSignature)
+    fs.open = originalOpen
+
+    const retried = await history.refresh()
+    assert.equal(retried.all.cost, 8)
+    assert.notEqual(history.cache.pricing, previousSignature)
+  } finally {
+    fs.open = originalOpen
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
 test('UsageHistory adds only the frames appended since the last scan and gets what a full read gets', async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-history-'))
   const dshHome = path.join(home, 'dsh-home')

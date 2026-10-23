@@ -257,6 +257,7 @@ export class UsageHistory extends EventEmitter {
     const signature = pricingSignature(pricing)
     const repriced = this.cache.pricing !== signature
     let changed = repriced
+    let failed = false
     for (const log of await this.#logs()) {
       const cached = this.cache.files[log.key]
       if (!repriced && cached?.size === log.size && cached?.mtimeMs === log.mtimeMs) continue
@@ -264,12 +265,13 @@ export class UsageHistory extends EventEmitter {
       try {
         entry = await this.#sum(log, repriced ? null : cached, pricing)
       } catch {
+        failed = true
         continue
       }
       this.cache.files[log.key] = entry
       changed = true
     }
-    this.cache.pricing = signature
+    if (!failed) this.cache.pricing = signature
     if (changed) await writeJson(this.file, this.cache).catch(() => {})
     this.summary = summarizeHistory(this.cache.files, this.now())
     this.emit('summary', this.summary)

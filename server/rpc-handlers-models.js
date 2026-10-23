@@ -15,8 +15,14 @@ export function createModelHandlers({ threads, catalog, catalogState, updates, m
     },
 
     'catalog.refresh': async () => {
+      const models = catalog.data.models
       catalog.data.models = []
-      await threads.warmCatalog()
+      try {
+        await threads.warmCatalog()
+      } catch (error) {
+        catalog.data.models = models
+        throw error
+      }
       return { catalog: catalogState() }
     },
   }
