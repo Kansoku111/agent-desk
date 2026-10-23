@@ -90,7 +90,7 @@ export function cleanTitle(raw) {
  * a constant scroll step per wheel event: Claude Code speeds up a quick run of
  * them, which makes a finger swipe on the phone jump instead of follow.
  */
-export function hookSettings(node = process.execPath, script = hookScript) {
+export function hookSettings(node = process.execPath, script = hookScript, { deniedAgents = [] } = {}) {
   // Claude Code runs hooks with Git Bash on Windows; forward slashes keep the quoting simple.
   const slash = (file) => file.replace(/\\/g, '/')
   const command = { type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: true }
@@ -100,7 +100,43 @@ export function hookSettings(node = process.execPath, script = hookScript) {
   // arrive after Stop and resurrect an agent that has already finished (including
   // a resumed agent, which legitimately reuses its id).
   const ordered = new Set(['SubagentStart', 'SubagentStop', 'Stop', 'Notification'])
-  return { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [{ ...command, async: !ordered.has(event) }] }]])) }
+  const settings = { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [{ ...command, async: !ordered.has(event) }] }]])) }
+  if (deniedAgents.length) settings.permissions = { deny: deniedAgents.map((name) => `Agent(${name})`) }
+  return settings
+}
+
+/** The model an opencodex-generated agent names; only its proxy knows it. */
+const PROXY_ROUTED_MODEL = /^claude-ocx-/i
+
+/**
+ * The user's agents (`<claudeHome>/agents/*.md`) whose model only a proxy
+ * routes, such as opencodex's `ocx-gpt-…`. Without ANTHROPIC_BASE_URL the
+ * model never reaches GPT: Claude Code runs the agent on whatever model the
+ * call names (often Haiku), while its description promises GPT.
+ */
+export function unroutedAgents(claudeHome, env = process.env) {
+  if (env.ANTHROPIC_BASE_URL) return []
+  const dir = path.join(claudeHome, 'agents')
+  let files = []
+  try {
+    files = fs.readdirSync(dir).filter((name) => name.endsWith('.md'))
+  } catch {
+    return []
+  }
+  const names = []
+  for (const file of files) {
+    let text = ''
+    try {
+      text = fs.readFileSync(path.join(dir, file), 'utf8')
+    } catch {
+      continue
+    }
+    const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? ''
+    const field = (key) => new RegExp(`^${key}:\\s*["']?([^"'\\r\\n]+?)["']?\\s*$`, 'm').exec(front)?.[1]
+    const name = field('name')
+    if (name && PROXY_ROUTED_MODEL.test(field('model') ?? '')) names.push(name)
+  }
+  return names.sort()
 }
 
 /**
@@ -108,8 +144,8 @@ export function hookSettings(node = process.execPath, script = hookScript) {
  * turn that ended in an error (StopFailure) and starts in bypass mode without
  * the warning dialog. (A team's children run headless: claude-runner.js.)
  */
-export function teamHookSettings(node = process.execPath, script = hookScript) {
-  const settings = hookSettings(node, script)
+export function teamHookSettings(node = process.execPath, script = hookScript, options = {}) {
+  const settings = hookSettings(node, script, options)
   const slash = (file) => file.replace(/\\/g, '/')
   settings.hooks.StopFailure = [{ hooks: [{ type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: false }] }]
   settings.skipDangerousModePermissionPrompt = true

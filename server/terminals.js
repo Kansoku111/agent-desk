@@ -17,11 +17,11 @@ import { sameToken } from './remote.js'
 import {
   API_KEY_ENV, DEFAULT_TITLE, DIALOG_RULE, EFFORTS, INHERITED_MARKERS, READY_DELAY_MS, READY_FALLBACK_MS, isFile,
   REDRAW_DELAY_MS, clampSize, cleanTitle, findClaude, hookEffect, hookSettings, launchCommand, parseDialog,
-  teamHookSettings,
+  teamHookSettings, unroutedAgents,
 } from './terminal-helpers.js'
 export {
   API_KEY_ENV, DEFAULT_TITLE, EFFORTS, INHERITED_MARKERS, READY_DELAY_MS, READY_FALLBACK_MS, REDRAW_DELAY_MS,
-  cleanTitle, findClaude, hookEffect, hookSettings, launchCommand, parseDialog, teamHookSettings,
+  cleanTitle, findClaude, hookEffect, hookSettings, launchCommand, parseDialog, teamHookSettings, unroutedAgents,
 } from './terminal-helpers.js'
 
 const require = createRequire(import.meta.url)
@@ -364,6 +364,11 @@ export class TerminalManager extends EventEmitter {
     const standing = record.team ? '' : instructionsSection(this.instructions())
     // Written at each start, so a resume picks up what the settings say now.
     if (standing) fs.writeFileSync(this.instructionsFile, standing, { encoding: 'utf8', mode: 0o600 })
+    const env = checked?.env ?? { ...process.env }
+    // The user's agents can change between starts (opencodex rewrites its own).
+    const deniedAgents = unroutedAgents(this.claudeHome, env)
+    const settings = extra ? teamHookSettings(undefined, undefined, { deniedAgents }) : hookSettings(undefined, undefined, { deniedAgents })
+    fs.writeFileSync(extra ? this.teamSettingsFile : this.settingsFile, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 })
     const command = launchCommand(claude, [
       ...(resume ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
       // Flags apply to this session only; `/model` typed in Claude Code would change the user's default everywhere.
@@ -377,7 +382,6 @@ export class TerminalManager extends EventEmitter {
       ...(prompt ? [prompt] : []),
     ])
     const secret = randomBytes(18).toString('hex')
-    const env = checked?.env ?? { ...process.env }
     for (const name of INHERITED_MARKERS) delete env[name]
     Object.assign(env, {
       TERM: 'xterm-256color',

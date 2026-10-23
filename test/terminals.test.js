@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   API_KEY_ENV, DEFAULT_TITLE, REDRAW_DELAY_MS, TerminalManager, cleanTitle, findClaude, hookEffect, hookSettings, launchCommand,
-  parseDialog, teamHookSettings,
+  parseDialog, teamHookSettings, unroutedAgents,
 } from '../server/terminals.js'
 
 /** A stand-in for node-pty that records what the manager does with each process. */
@@ -96,6 +96,23 @@ test('hookSettings runs the hook script for each event, with forward slashes', (
   assert.equal(command.async, false)
   for (const event of ['SubagentStart', 'SubagentStop', 'Notification']) assert.equal(settings.hooks[event][0].hooks[0].async, false)
   assert.equal(settings.hooks.PostToolUse[0].hooks[0].async, true)
+})
+
+test('a task cannot start the user\'s agents whose model only a proxy routes', async () => {
+  const { workspace, claudeHome, pty, manager, dir } = await setup()
+  const agents = path.join(claudeHome, 'agents')
+  await fs.mkdir(agents, { recursive: true })
+  await fs.writeFile(path.join(agents, 'ocx-gpt-5-5.md'), '---\nname: "ocx-gpt-5-5"\ndescription: "gpt-5.5"\nmodel: "claude-ocx-native--gpt-5.5"\n---\n\nbody\n')
+  await fs.writeFile(path.join(agents, 'reviewer.md'), '---\nname: reviewer\nmodel: sonnet\n---\n')
+  await manager.create({ workspace })
+  await settle()
+  assert.equal(pty.spawned.length, 1)
+  const settings = JSON.parse(await fs.readFile(path.join(dir, 'claude-terminal-settings.json'), 'utf8'))
+  assert.deepEqual(settings.permissions, { deny: ['Agent(ocx-gpt-5-5)'] })
+  assert.ok(settings.hooks.Stop)
+  // Behind a proxy (ANTHROPIC_BASE_URL) the route can work, so they stay.
+  assert.deepEqual(unroutedAgents(claudeHome, { ANTHROPIC_BASE_URL: 'http://localhost:10100' }), [])
+  assert.deepEqual(unroutedAgents(path.join(dir, 'missing'), {}), [])
 })
 
 test('hookEffect follows a turn: prompt, approval, tool, stop', () => {
