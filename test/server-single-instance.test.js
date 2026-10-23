@@ -1,6 +1,6 @@
 // Concurrent launches must never become independent writers of the same index.
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -11,6 +11,11 @@ import WebSocket from 'ws'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+// On Windows child.kill() ends only the node process; its Codex child keeps the database files open.
+const killTree = (child) => new Promise((resolve) => {
+  if (process.platform !== 'win32') return resolve(child.kill())
+  execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => resolve())
+})
 
 test('simultaneous cold starts and dev launch share one writer; deleted tasks stay deleted', { timeout: 30_000 }, async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-single-instance-'))
@@ -23,13 +28,13 @@ test('simultaneous cold starts and dev launch share one writer; deleted tasks st
     await Promise.all(children.map(async (child) => {
       if (child.exitCode !== null || child.signalCode !== null) return
       const exited = once(child, 'exit')
-      const fallback = setTimeout(() => child.kill(), 5000)
+      const fallback = setTimeout(() => void killTree(child), 5000)
       await exited
       clearTimeout(fallback)
     }))
     assert.equal(path.dirname(home), os.tmpdir())
     assert.ok(path.basename(home).startsWith('agent-desk-single-instance-'))
-    await fs.rm(home, { recursive: true, force: true })
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
   // No provider requests or npm lookups from the fixture; the instances still reach each other.
   const hook = path.join(home, 'offline-fetch.mjs')

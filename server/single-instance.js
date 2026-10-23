@@ -1,6 +1,7 @@
 // The launch-time check on this data folder (see index.js): one instance per
 // folder, replacing an idle instance that runs older code or waiting for a busy one.
 import fs from 'node:fs'
+import http from 'node:http'
 import path from 'node:path'
 import { tryAcquireDataLock } from './data-lock.js'
 import { readJson } from './json-file.js'
@@ -24,11 +25,29 @@ export async function claimDataFolder({ paths, serverInfoFile, codeStamp, openWi
     }
   }
 
+  /** Whether the instance on this port accepts the token: after a crash, the port may belong to another data folder's instance. */
+  async function accepts(port, token) {
+    try {
+      return await new Promise((resolve, reject) => {
+        // No keep-alive: an open pooled connection makes process.exit trip a libuv assertion on Windows.
+        const request = http.get({ host: '127.0.0.1', port, path: `/api/auth?t=${encodeURIComponent(token)}`, agent: false, timeout: 1500 }, (response) => {
+          response.resume()
+          response.on('end', () => resolve(response.statusCode === 200))
+        })
+        request.on('timeout', () => request.destroy(new Error('no answer')))
+        request.on('error', reject)
+      })
+    } catch {
+      return false
+    }
+  }
+
   async function existingInstance() {
     const info = await readJson(serverInfoFile, null)
     if (!info?.port || !info?.token) return null
     const status = await ping(info.port)
-    return status ? { ...info, status } : null
+    if (!status || !(await accepts(info.port, info.token))) return null
+    return { ...info, status }
   }
 
   /** Asks an idle instance to exit and waits until it has; false when it is busy. */

@@ -32,14 +32,16 @@ export class AcpRuntime extends EventEmitter {
    * @param {string[]} [options.patches]   extra layers (`dsh --patch`)
    * @param {(sessionId: string, update: object) => void} options.onUpdate
    * @param {(params: object) => Promise<object>} options.onPermission
+   * @param {number} [options.startTimeoutMs]  how long dsh may take to start (tests shorten it)
    */
-  constructor({ mode, paths, patches = [], onUpdate, onPermission }) {
+  constructor({ mode, paths, patches = [], onUpdate, onPermission, startTimeoutMs = 90_000 }) {
     super()
     this.mode = mode
     this.paths = paths
     this.patches = patches
     this.onUpdate = onUpdate
     this.onPermission = onPermission
+    this.startTimeoutMs = startTimeoutMs
     this.state = 'stopped'
     this.child = null
     this.conn = null
@@ -76,6 +78,8 @@ export class AcpRuntime extends EventEmitter {
       this.stderr = (this.stderr + chunk).slice(-STDERR_TAIL)
     })
     child.on('exit', (code, signal) => {
+      // A child killed after a stalled start can exit after the next start spawned: the state is the new child's.
+      if (this.child !== child) return
       const wasReady = this.state === 'ready'
       this.state = 'stopped'
       this.conn = null
@@ -100,7 +104,7 @@ export class AcpRuntime extends EventEmitter {
       child.once('exit', (code) => reject(new Error(`dsh exited during startup (code ${code})\n${this.stderr.slice(-2000)}`)))
     })
     const timeout = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(`dsh did not finish starting within 90s\n${this.stderr.slice(-2000)}`)), 90_000).unref()
+      setTimeout(() => reject(new Error(`dsh did not finish starting within ${Math.round(this.startTimeoutMs / 1000)}s\n${this.stderr.slice(-2000)}`)), this.startTimeoutMs).unref()
     })
     const init = await Promise.race([
       this.conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} }),

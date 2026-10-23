@@ -609,8 +609,10 @@ const handlers = {
   'settings.update': ({ patch }) => settingsService.update(patch),
 
   'remote.set': async ({ enabled }) => {
-    settings.remoteAccess = Boolean(enabled)
-    await saveSettings()
+    // Saved from a copy: when the write fails, the live settings and the listener stay as they were.
+    const candidate = { ...settings, remoteAccess: Boolean(enabled) }
+    await saveSettings(candidate)
+    settings.remoteAccess = candidate.remoteAccess
     broadcast('settings', { settings })
     if (settings.remoteAccess) {
       await remote.start()

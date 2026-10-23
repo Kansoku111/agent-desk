@@ -172,8 +172,10 @@ export class RemoteAccess extends EventEmitter {
 
   /** A new token; links and devices that used the old one stop working. */
   async rotate() {
-    this.token = randomBytes(24).toString('hex')
-    await writeJson(this.file, { token: this.token })
+    const token = randomBytes(24).toString('hex')
+    // Saved before it replaces the token in use: a failed save must not revoke the old link or leave an unsaved one.
+    await writeJson(this.file, { token })
+    this.token = token
     this.emit('token')
     await this.#updateQr()
     this.emit('state', this.snapshot())
@@ -181,6 +183,8 @@ export class RemoteAccess extends EventEmitter {
 
   /** Asks Tailscale (and the firewall) again: after it was installed or signed in, or a phone joined. */
   async recheck() {
+    // A refresh already running may have read Tailscale before the change: let it finish, then read again.
+    await this.refreshing
     this.statusKey = null
     this.firewallFor = null
     await this.refresh()

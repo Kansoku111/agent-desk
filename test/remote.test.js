@@ -237,6 +237,60 @@ test('RemoteAccess retries Tailscale status after a null response', async () => 
   }
 })
 
+test('RemoteAccess keeps the token in use when the new one cannot be saved', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-remote-'))
+  const noop = () => {}
+  const remote = await new RemoteAccess({
+    file: path.join(dir, 'remote.json'), onRequest: noop, onUpgrade: noop, firewall,
+    interfaces: () => ({}), status: async () => null,
+  }).load()
+  try {
+    await remote.rotate()
+    const before = remote.token
+    let revoked = 0
+    remote.on('token', () => {
+      revoked += 1
+    })
+    // A file where the token's folder should be: the save fails.
+    await fs.writeFile(path.join(dir, 'blocker'), 'x')
+    remote.file = path.join(dir, 'blocker', 'remote.json')
+    await assert.rejects(remote.rotate())
+    assert.equal(remote.token, before)
+    assert.equal(revoked, 0)
+    assert.equal(JSON.parse(await fs.readFile(path.join(dir, 'remote.json'), 'utf8')).token, before)
+  } finally {
+    await remote.close()
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  }
+})
+
+test('RemoteAccess recheck asks Tailscale again while a refresh is still waiting for it', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-remote-'))
+  const noop = () => {}
+  let installed = false
+  const remote = await new RemoteAccess({
+    file: path.join(dir, 'remote.json'), onRequest: noop, onUpgrade: noop, firewall,
+    interfaces: () => ({}),
+    status: async () => {
+      const before = installed
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      return before ? { running: false, ips: [], dnsName: null } : null
+    },
+  }).load()
+  try {
+    const starting = remote.start()
+    // The start's refresh is waiting for the Tailscale CLI, which is installed meanwhile.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    installed = true
+    await remote.recheck()
+    assert.equal(remote.snapshot().phase, 'stopped')
+    await starting
+  } finally {
+    await remote.close()
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  }
+})
+
 test('RemoteAccess contains rejected HTTP and upgrade callbacks', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-remote-'))
   const port = await freePort()
