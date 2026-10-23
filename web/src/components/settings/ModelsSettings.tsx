@@ -1,15 +1,9 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react'
-import { act, toast, useStore } from '../../store'
-import type { FastProvider, ModelUpdate } from '../../types'
+import { ChevronDown, ChevronUp } from 'lucide-react'
+import { act, useStore } from '../../store'
+import type { FastProvider } from '../../types'
 import { byNewest, providerReady } from '../Pickers'
 import { isModelVisible } from '../../model-selection'
-import { dateTime } from './shared'
-
-const MODEL_PROVIDERS = [
-  { id: 'openai-codex', label: 'ChatGPT' },
-  { id: 'anthropic', label: 'Claude' },
-]
 
 function contextLabel(tokens: number) {
   return tokens >= 1_000_000 ? `${tokens / 1_000_000}M` : `${Math.round(tokens / 1000)}K`
@@ -237,103 +231,6 @@ export function ModelsSettings({ contextOptions }: { contextOptions: number[] })
       <FastMode />
       <ContextSizes contextOptions={contextOptions} />
       <Subagents />
-      <ModelUpdateCard />
     </div>
-  )
-}
-
-const MODEL_SOURCES = { fetched: '自動取得', bundled: '同梱', account: 'ChatGPT アカウントの一覧' }
-
-/** New models from the ChatGPT account's list and the newest pi-ai release, and the ones Agent Desk adds now. */
-function ModelUpdateCard() {
-  const update = useStore((state) => state.server?.modelUpdate)
-  const enabled = useStore((state) => state.server?.settings.modelAutoUpdate) !== false
-  const signedIn = useStore((state) => state.server?.accounts.chatgpt.signedIn)
-  const [checking, setChecking] = useState(false)
-  if (!update) return null
-  const busy = checking || update.phase === 'checking'
-  const account = update.account
-  const retired = enabled ? account?.retired ?? [] : []
-
-  const check = async () => {
-    setChecking(true)
-    const response = await act<{ modelUpdate: ModelUpdate }>('modelUpdate.check')
-    setChecking(false)
-    const result = response?.modelUpdate
-    if (!result || result.error) return
-    const accountError = signedIn && result.account?.status === 'error'
-    if (accountError) toast('ChatGPT のモデル一覧を読み込めませんでした。あとでもう一度お試しください', 'error')
-    else if (result.lastAdded?.at === update.lastAdded?.at) toast('モデルの一覧は最新です', 'success')
-  }
-
-  return (
-    <section className="account-card">
-      <div className="account-head">
-        <div>
-          <h3>モデル一覧を本家と同期</h3>
-          <p className="muted">GPT はアカウントの一覧に、Claude などは pi-ai の最新版に合わせます。</p>
-        </div>
-      </div>
-
-      <div className="setting compact">
-        <div>
-          <h3>自動で同期する</h3>
-        </div>
-        <label className="switch">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(event) => void act('settings.update', { patch: { modelAutoUpdate: event.target.checked } })}
-            aria-label="新しいモデルを自動で追加"
-          />
-          <span />
-        </label>
-      </div>
-
-      <div className="account-row">
-        <span>
-          モデル定義: {update.source ? <code>pi-ai {update.source}</code> : '同梱のもの'}
-          {update.latest && update.source && update.latest !== update.source && <> （最新: <code>{update.latest}</code>）</>}
-        </span>
-        <button type="button" className="button" disabled={busy} onClick={() => void check()}>
-          {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} 今すぐ確認
-        </button>
-      </div>
-      {update.error && <p className="form-error">{update.error}</p>}
-
-      {enabled && (
-        <div className="account-row">
-          <span>
-            ChatGPT アカウントの一覧:{' '}
-            {!signedIn || account?.status === 'signed-out'
-              ? 'ChatGPT にサインインすると照合できます'
-              : account?.status === 'error'
-                ? '読み込めませんでした（前回の結果を使っています）'
-                : account?.checkedAt ? `照合済み（${dateTime(account.checkedAt)}）` : '確認中…'}
-          </span>
-        </div>
-      )}
-      {retired.length > 0 && (
-        <p className="muted">提供終了の可能性: {retired.map((model) => model.name).join('、')}</p>
-      )}
-
-      {update.models.length > 0 && (
-        <ul className="custom-models">
-          {update.models.map((model) => (
-            <li key={`${model.provider}/${model.id}`}>
-              <div>
-                <span>{model.name}</span>
-                <code>{MODEL_PROVIDERS.find((item) => item.id === model.provider)?.label} · {model.id} · {MODEL_SOURCES[model.source]}</code>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <p className="fine-print">
-        {update.checkedAt ? `最終確認: ${dateTime(update.checkedAt)}。` : ''}
-        {update.lastAdded ? `前回追加: ${update.lastAdded.models.map((model) => model.name).join('、')}（${dateTime(update.lastAdded.at)}）。` : ''}
-      </p>
-    </section>
   )
 }

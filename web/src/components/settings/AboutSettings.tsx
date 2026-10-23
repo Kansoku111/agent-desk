@@ -45,6 +45,8 @@ function CopyPrompt({ prompt }: { prompt: string }) {
 function UpdatesCard({ updates }: { updates: Updates }) {
   const channel = useStore((state) => state.server?.settings.dshUpdateChannel)
   const models = useStore((state) => state.server?.modelUpdate)
+  const autoSync = useStore((state) => state.server?.settings.modelAutoUpdate) !== false
+  const signedIn = useStore((state) => state.server?.accounts.chatgpt.signedIn)
   const [checking, setChecking] = useState(false)
   const busy = checking || updates.checking || models?.phase === 'checking'
   const recent = models?.lastAdded && Date.now() - models.lastAdded.at < RECENT_MODELS_MS ? models.lastAdded : null
@@ -52,8 +54,11 @@ function UpdatesCard({ updates }: { updates: Updates }) {
 
   const check = async () => {
     setChecking(true)
-    await Promise.all([act('updates.check'), act('modelUpdate.check')])
-    setChecking(false)
+    try {
+      await Promise.all([act('updates.check'), act('modelUpdate.check')])
+    } finally {
+      setChecking(false)
+    }
   }
 
   return (
@@ -102,15 +107,75 @@ function UpdatesCard({ updates }: { updates: Updates }) {
             {claude.error && <p className="form-error">{claude.error}</p>}
           </div>
         )}
-        {models && (models.checkedAt || models.error) && (
+        {models && (
           <div className="update-row">
             <span className="update-name">モデル</span>
-            <span className="update-versions">{recent ? recent.models.map((model) => model.name).join('、') : ''}</span>
-            <span className="update-action">{!models.error && models.checkedAt && <Latest />}</span>
+            <span className="update-versions">
+              {models.phase === 'checking' ? '確認中…' : recent ? recent.models.map((model) => model.name).join('、') : models.checkedAt ? '' : '未確認'}
+            </span>
+            <span className="update-action">{!busy && !models.error && models.account?.status !== 'error' && models.checkedAt && <Latest />}</span>
             {models.error && <p className="form-error">{models.error}</p>}
+            {autoSync && signedIn && models.account?.status === 'error' && (
+              <p className="form-error">ChatGPT のモデル一覧を読み込めませんでした（前回の結果を使っています）</p>
+            )}
           </div>
         )}
       </div>
+      {models && (
+        <>
+          <div className="setting compact">
+            <div>
+              <h3>モデル一覧を自動で同期する</h3>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={autoSync}
+                onChange={(event) => void act('settings.update', { patch: { modelAutoUpdate: event.target.checked } })}
+                aria-label="モデル一覧を自動で同期する"
+              />
+              <span />
+            </label>
+          </div>
+          <details className="model-sync-details">
+            <summary>同期の詳細</summary>
+            <p className="muted">GPT はアカウントの一覧に、Claude などは pi-ai の最新版に合わせます。</p>
+            <p className="muted">
+              モデル定義: {models.source ? <code>pi-ai {models.source}</code> : '同梱のもの'}
+              {models.latest && models.source && models.latest !== models.source && <> （最新: <code>{models.latest}</code>）</>}
+            </p>
+            {autoSync && (
+              <p className="muted">
+                ChatGPT アカウントの一覧:{' '}
+                {!signedIn || models.account?.status === 'signed-out'
+                  ? 'ChatGPT にサインインすると照合できます'
+                  : models.account?.status === 'error'
+                    ? '読み込めませんでした（前回の結果を使っています）'
+                    : models.account?.checkedAt ? `照合済み（${dateTime(models.account.checkedAt)}）` : '未確認'}
+              </p>
+            )}
+            {autoSync && models.account?.retired.length > 0 && (
+              <p className="muted">提供終了の可能性: {models.account.retired.map((model) => model.name).join('、')}</p>
+            )}
+            {models.models.length > 0 && (
+              <ul className="custom-models">
+                {models.models.map((model) => (
+                  <li key={`${model.provider}/${model.id}`}>
+                    <div>
+                      <span>{model.name}</span>
+                      <code>{model.provider} · {model.id} · {({ fetched: '自動取得', bundled: '同梱', account: 'ChatGPT アカウントの一覧' })[model.source]}</code>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="fine-print">
+              {models.checkedAt ? `モデルの最終確認: ${dateTime(models.checkedAt)}。` : ''}
+              {models.lastAdded ? `前回追加: ${models.lastAdded.models.map((model) => model.name).join('、')}（${dateTime(models.lastAdded.at)}）。` : ''}
+            </p>
+          </details>
+        </>
+      )}
       {updates.checkedAt && <p className="fine-print">{dateTime(updates.checkedAt)}</p>}
     </section>
   )
