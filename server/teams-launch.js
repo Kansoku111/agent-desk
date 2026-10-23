@@ -92,11 +92,13 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
  * The flags of every turn of a Claude child: no approvals (what would still
  * ask is denied, and the report lists it), no tools that wait for a person.
  * A `lean` child has no MCP servers: their tools would be in every turn.
+ * Any other child gets Claude in Chrome, which `-p` leaves out without `--chrome`
+ * (and `--strict-mcp-config` keeps when it is asked for).
  */
 export function childTurnArgs({ child, dir, instructions = '', lean = false }) {
   const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name, { background: true }), instructions))
   return [
     '--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt,
-    ...(lean ? ['--strict-mcp-config'] : []),
+    ...(lean ? ['--strict-mcp-config', '--no-chrome'] : ['--chrome']),
   ]
 }

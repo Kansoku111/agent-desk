@@ -589,8 +589,8 @@ test('a Claude child is headless Claude Code in bypass mode that starts on its t
   assert.equal(options.workspace, workspace)
   assert.equal(options.model, 'sonnet')
   assert.deepEqual(options.args.slice(0, 4), ['--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion,EnterPlanMode,ExitPlanMode,Task,Agent,Workflow,SendMessage,ListAgents,RemoteTrigger,CronCreate,ScheduleWakeup'])
-  assert.match(await fs.readFile(options.args.at(-1), 'utf8'), /You have no subagent tools/)
-  assert.match(await fs.readFile(options.args.at(-1), 'utf8'), /you are the child agent "S"/)
+  assert.match(await fs.readFile(options.args[options.args.indexOf('--append-system-prompt-file') + 1], 'utf8'), /You have no subagent tools/)
+  assert.match(await fs.readFile(options.args[options.args.indexOf('--append-system-prompt-file') + 1], 'utf8'), /you are the child agent "S"/)
   assert.deepEqual(agents.calls.find((call) => call[0] === 'run'), ['run', child.taskId, '# Task from the team leader: 効果音\n\nsfx を作る'])
   // No terminal of its own: the leader is the team's only one.
   assert.equal(terminals.calls.filter((call) => call[0] === 'create').length, 1)
@@ -1273,6 +1273,8 @@ test('lean children start without the extra tools unless spawn asks for them', a
   await tool('spawn', { title: 'd', task: 'x', tier: 'low', provider: 'gpt', name: 'G2', tools: true })
   const created = agents.calls.filter((call) => call[0] === 'create').map((call) => call[1].args)
   assert.deepEqual(created.map((list) => list.includes('--strict-mcp-config')), [true, false])
+  assert.deepEqual(created.map((list) => list.includes('--chrome')), [false, true])
+  assert.equal(created[0].includes('--no-chrome'), true)
   const [, , g1, g2] = team.children
   assert.equal(manager.toolsFor({ id: g1.taskId, team: { id: team.id, childId: g1.id } }), false)
   assert.equal(manager.toolsFor({ id: g2.taskId, team: { id: team.id, childId: g2.id } }), true)
@@ -1287,6 +1289,7 @@ test('children keep every tool by default, and report how they checked their wor
   await tool('spawn', { title: 'b', task: 'x', tier: 'low', provider: 'gpt', name: 'G' })
   const childArgs = agents.calls.find((call) => call[0] === 'create')[1].args
   assert.equal(childArgs.includes('--strict-mcp-config'), false)
+  assert.equal(childArgs.includes('--chrome'), true)
   assert.match(await fs.readFile(childArgs[childArgs.indexOf('--append-system-prompt-file') + 1], 'utf8'), /3\) how you checked it/)
   const g = team.children[1]
   assert.equal(manager.toolsFor({ id: g.taskId, team: { id: team.id, childId: g.id } }), true)
