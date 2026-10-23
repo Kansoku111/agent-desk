@@ -131,30 +131,25 @@ function Subagents() {
   const server = useStore((state) => state.server)
   if (!server) return null
   const chosen = server.settings.subagentModels ?? { 'openai-codex': null, anthropic: null }
-  const rows: { provider: keyof typeof chosen; label: string; tool: string; note: string }[] = [
-    { provider: 'anthropic', label: 'Claude', tool: 'subagent_claude', note: 'API の従量課金です。GPT のタスクから呼んでも Claude の料金がかかります。' },
-    { provider: 'openai-codex', label: 'ChatGPT', tool: 'subagent_gpt', note: 'ChatGPT サブスクリプションの利用上限を使います。' },
+  const rows: { provider: keyof typeof chosen; label: string; note: string }[] = [
+    { provider: 'anthropic', label: 'Claude', note: 'GPT のタスクから。API の従量課金です。' },
+    { provider: 'openai-codex', label: 'ChatGPT', note: 'すべてのタスクから。ChatGPT サブスクリプションの範囲です。' },
   ]
   return (
     <section className="account-card">
       <div className="account-head">
         <div>
           <h3>サブエージェント</h3>
-          <p className="muted">
-            通常のサブエージェント（<code>subagent</code>）は、いつもタスクと同じモデルで動きます。ここでモデルを選ぶと、そのモデルで動くサブエージェントのツールが加わります。
-            エージェントは、自分と同じ系統のツールを優先して使います（例: GPT-6 Astra のタスクは <code>subagent_gpt</code> で、ここで選んだ GPT に任せます）。
-            別の系統のツールは、GPT のタスクから Claude に、Claude のタスクから GPT に任せるときに使われます。「Claude のサブエージェントで調べて」のように頼んでください。
-          </p>
         </div>
       </div>
-      {rows.map(({ provider, label, tool, note }) => {
+      {rows.map(({ provider, label, note }) => {
         const models = server.catalog.models.filter((model) => model.provider === provider).sort(byNewest)
         const ready = providerReady(server, provider)
         const value = chosen[provider] ?? ''
         return (
           <div key={provider} className="setting compact">
             <div>
-              <h3>{label} <code>{tool}</code></h3>
+              <h3>{label}</h3>
               <p className="muted">{ready ? note : `${label} のアカウントを接続すると選べます。`}</p>
             </div>
             <select
