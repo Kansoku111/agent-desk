@@ -5,11 +5,11 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { Checkpoints, MAX_FILE_BYTES } from '../server/checkpoints.js'
 
-async function setup() {
+async function setup(maxFileBytes = MAX_FILE_BYTES) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-checkpoints-'))
   const workspace = path.join(base, 'work')
   await fs.mkdir(workspace)
-  const checkpoints = new Checkpoints({ root: path.join(base, 'checkpoints') })
+  const checkpoints = new Checkpoints({ root: path.join(base, 'checkpoints'), maxFileBytes })
   const write = async (file, text) => {
     await fs.mkdir(path.dirname(path.join(workspace, file)), { recursive: true })
     await fs.writeFile(path.join(workspace, file), text)
@@ -75,6 +75,36 @@ test('ignored and large files are left alone', async (t) => {
   assert.equal(await read('secret.env'), 'two')
   assert.equal(await read('node_modules/pkg/index.js'), 'installed')
   assert.equal((await fs.stat(big)).size, MAX_FILE_BYTES + 1)
+})
+
+test('oversized tracked files leave the index and stay untouched by restore', async (t) => {
+  const { base, workspace, checkpoints, write, read } = await setup(4)
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('large.bin', 'A')
+  const { commit: before } = await checkpoints.snapshot(workspace, 'task/before')
+  await write('large.bin', 'B')
+  await checkpoints.snapshot(workspace, 'task/middle')
+  await write('large.bin', 'large')
+  const { commit: after } = await checkpoints.snapshot(workspace, 'task/large')
+
+  assert.deepEqual(await checkpoints.changes(workspace, before, after), [{ path: 'large.bin', status: 'D' }])
+  assert.deepEqual(await checkpoints.preview(workspace, before), [])
+  const result = await checkpoints.restore(workspace, before)
+  assert.deepEqual(result.restored, [])
+  assert.deepEqual(result.removed, [])
+  assert.equal(await read('large.bin'), 'large')
+})
+
+test('restore removes files whose names start with two dots', async (t) => {
+  const { base, workspace, checkpoints, write, exists } = await setup()
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  const { commit: before } = await checkpoints.snapshot(workspace, 'task/before')
+  await write('..notes.txt', 'created after the checkpoint')
+
+  const result = await checkpoints.restore(workspace, before)
+  assert.deepEqual(result.removed, ['..notes.txt'])
+  assert.equal(result.error, null)
+  assert.equal(await exists('..notes.txt'), false)
 })
 
 test('changes lists what a turn did, and forget drops kept snapshots', async (t) => {

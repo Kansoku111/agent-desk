@@ -132,8 +132,12 @@ function send(message) {
 }
 
 async function handle(message) {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return
   const { id, method, params } = message
   if (id === undefined) return // notifications: initialized, cancelled
+  if (message.jsonrpc !== '2.0' || typeof method !== 'string' || !(typeof id === 'string' || Number.isInteger(id))) {
+    return send({ id: id ?? null, error: { code: -32600, message: 'Invalid Request' } })
+  }
   try {
     if (method === 'initialize') {
       const requested = params?.protocolVersion
@@ -173,7 +177,12 @@ readline.createInterface({ input: process.stdin, crlfDelay: Infinity }).on('line
   } catch {
     return send({ id: null, error: { code: -32700, message: 'Parse error' } })
   }
-  const run = handle(message).finally(() => pending.delete(run))
+  const run = handle(message)
+    .catch((error) => send({
+      id: message && typeof message === 'object' && !Array.isArray(message) ? message.id ?? null : null,
+      error: { code: -32603, message: error.message },
+    }))
+    .finally(() => pending.delete(run))
   pending.add(run)
 }).on('close', () => {
   // The process ends by itself once the calls in flight are answered: process.exit with a

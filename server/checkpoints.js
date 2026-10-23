@@ -43,8 +43,9 @@ const ATTRIBUTES = '* -text -eol -filter -ident -working-tree-encoding\n'
 
 export class Checkpoints {
   /** @param {{ root: string }} options  root: the folder that holds one repository per workspace */
-  constructor({ root }) {
+  constructor({ root, maxFileBytes = MAX_FILE_BYTES }) {
     this.root = root
+    this.maxFileBytes = maxFileBytes
     this.repos = new Map()
   }
 
@@ -73,7 +74,8 @@ export class Checkpoints {
     const repo = await this.#repo(workspace)
     return this.#exclusive(repo, async () => {
       const { commit } = await this.#snapshot(repo, null)
-      return (await this.#diff(repo, target, commit)).map(({ path: file, status }) => ({ path: file, action: actionOf(status) }))
+      const entries = await withoutLargeCurrentFiles(repo, await this.#diff(repo, target, commit))
+      return entries.map(({ path: file, status }) => ({ path: file, action: actionOf(status) }))
     })
   }
 
@@ -88,7 +90,7 @@ export class Checkpoints {
     const repo = await this.#repo(workspace)
     return this.#exclusive(repo, async () => {
       const { commit: undo } = await this.#snapshot(repo, undoRef)
-      const entries = await this.#diff(repo, target, undo)
+      const entries = await withoutLargeCurrentFiles(repo, await this.#diff(repo, target, undo))
       const restored = entries.filter((entry) => entry.status !== 'A').map((entry) => entry.path)
       const removed = entries.filter((entry) => entry.status === 'A').map((entry) => entry.path)
       const problems = []
@@ -146,6 +148,7 @@ export class Checkpoints {
     if (!repo) {
       repo = {
         workspace: resolved,
+        maxFileBytes: this.maxFileBytes,
         gitDir: path.join(this.root, id),
         emptyConfig: path.join(this.root, 'empty.gitconfig'),
         queue: Promise.resolve(),
@@ -198,6 +201,12 @@ export class Checkpoints {
     let warning = null
     try {
       const large = await largeFiles(repo)
+      if (large.length) {
+        await git(repo, ['rm', '--cached', '--force', '--quiet', '--ignore-unmatch', '--pathspec-from-file=-', '--pathspec-file-nul'], {
+          input: nulJoin(large),
+          literal: true,
+        })
+      }
       const pathspecs = ['.', ...large.map((file) => `:(exclude,literal)${file}`)]
       try {
         await git(repo, ['add', '--all', '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'], { input: nulJoin(pathspecs) })
@@ -247,18 +256,28 @@ async function largeFiles(repo) {
   const large = []
   for (let start = 0; start < files.length; start += 256) {
     await Promise.all(files.slice(start, start + 256).map(async (file) => {
-      const stat = await fs.stat(path.join(repo.workspace, file)).catch(() => null)
-      if (stat && stat.size > MAX_FILE_BYTES) large.push(file)
+      const stat = await fs.lstat(path.join(repo.workspace, file)).catch(() => null)
+      if (stat?.isFile() && stat.size > repo.maxFileBytes) large.push(file)
     }))
   }
   return large
+}
+
+/** Snapshot changes to files that are currently too large are never applied. */
+async function withoutLargeCurrentFiles(repo, entries) {
+  const large = await Promise.all(entries.map(async ({ path: file }) => {
+    const stat = await fs.lstat(path.join(repo.workspace, file)).catch(() => null)
+    return stat?.isFile() && stat.size > repo.maxFileBytes
+  }))
+  return entries.filter((_entry, index) => !large[index])
 }
 
 /** The absolute path of a workspace-relative file, or null if it would leave the workspace. */
 function inside(workspace, file) {
   const full = path.resolve(workspace, file)
   const relative = path.relative(workspace, full)
-  return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? full : null
+  const outside = relative === '..' || relative.startsWith(`..${path.sep}`)
+  return relative && !outside && !path.isAbsolute(relative) ? full : null
 }
 
 /** Removes folders a restore emptied, up to (not including) the workspace. */

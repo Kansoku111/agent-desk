@@ -54,6 +54,23 @@ test('LogTail returns each event once as the log grows', async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
+test('LogTail rereads a same-size replaced log', async (t) => {
+  const dir = await tempHome()
+  t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  const file = path.join(dir, 'session.v4.jsonl.zstd')
+  const tail = new LogTail(file)
+  const first = frame({ type: 'one', seq: 0, time: 1 })
+  const second = frame({ type: 'two', seq: 0, time: 1 })
+  assert.equal(first.length, second.length)
+
+  await fs.writeFile(file, first)
+  assert.deepEqual((await tail.read()).map((entry) => entry.type), ['one'])
+  const previous = await fs.stat(file)
+  await fs.writeFile(file, second)
+  await fs.utimes(file, new Date(previous.atimeMs), new Date(previous.mtimeMs + 2000))
+  assert.deepEqual((await tail.read()).map((entry) => entry.type), ['two'])
+})
+
 test('LogTail with a line filter parses only the lines asked for and still returns each event once', async () => {
   const dir = await tempHome()
   const file = path.join(dir, 'session.v4.jsonl.zstd')
@@ -117,6 +134,17 @@ test('foldChild skips the history a fork was seeded with', () => {
   foldChild(child, event('assistant/message', { message: { id: 'new', content: [{ type: 'text', text: 'own work' }] } }))
   assert.deepEqual(child.items.map((item) => item.text), ['own work'])
   assert.equal(child.model, 'gpt-6.1-sol')
+})
+
+test('SubagentTracker evicts expired idle trees when polling stops', async (t) => {
+  const tracker = new SubagentTracker({ dshHome: 'unused', pollMs: 10 })
+  t.after(() => tracker.stop())
+  tracker.follow('old-thread', 'session', false)
+  tracker.trees.get('old-thread').usedAt = 0
+
+  for (let waited = 0; tracker.timer && waited < 1000; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(tracker.trees.has('old-thread'), false)
+  assert.equal(tracker.timer, null)
 })
 
 test('SubagentTracker finds a session\'s children, links their calls and reports changes', async () => {

@@ -155,6 +155,8 @@ export class LogTail {
     this.size = -1
     this.lastSeq = -1
     this.header = null
+    this.ino = null
+    this.mtimeMs = null
   }
 
   /** Events added since the last read; [] while the file is missing or unchanged. */
@@ -165,9 +167,11 @@ export class LogTail {
     } catch {
       return []
     }
-    if (stat.size === this.size) return []
+    const sameSizeRewrite = stat.size === this.size && this.size >= 0
+      && (stat.ino !== this.ino || stat.mtimeMs !== this.mtimeMs)
+    if (stat.size === this.size && !sameSizeRewrite) return []
     // dsh rewrote the log (recovery); read it again from the start.
-    if (stat.size < this.size) this.#reset()
+    if (stat.size < this.size || sameSizeRewrite) this.#reset()
     let buffer
     const handle = await fs.open(this.file, 'r')
     try {
@@ -178,6 +182,8 @@ export class LogTail {
       await handle.close()
     }
     this.size = this.offset + buffer.length
+    this.ino = stat.ino
+    this.mtimeMs = stat.mtimeMs
     const { events, consumed } = await decodeFrames(buffer, { keep: this.keep })
     this.offset += consumed
     const fresh = []
@@ -452,7 +458,8 @@ export class SubagentTracker extends EventEmitter {
       const busy = [...tree.nodes.values()].some((node) => node.child && ['starting', 'running'].includes(node.child.status))
       if (busy && tree.watchUntil !== Infinity && this.isLive(tree.sessionId)) tree.watchUntil = now + GRACE_MS
     }
-    if (!watching) this.stop()
+    this.#evict()
+    if (!watching && !this.trees.size) this.stop()
   }
 
   #evict() {

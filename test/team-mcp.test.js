@@ -43,8 +43,18 @@ function startMcp(url, env = {}) {
     waiting.set(id, resolve)
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
   })
+  const raw = (message) => new Promise((resolve) => {
+    const requestId = message && typeof message === 'object' && !Array.isArray(message) ? message.id : undefined
+    if (requestId !== undefined) waiting.set(requestId, resolve)
+    child.stdin.write(`${JSON.stringify(message)}\n`)
+    if (requestId === undefined) resolve(null)
+  })
+  child.on('exit', () => {
+    for (const resolve of waiting.values()) resolve(null)
+    waiting.clear()
+  })
   const exited = new Promise((resolve) => child.on('exit', resolve))
-  return { request, close: () => { child.stdin.end(); return exited } }
+  return { request, raw, close: () => { child.stdin.end(); return exited } }
 }
 
 test('the team MCP server lists its tools and forwards calls with the team secret', async () => {
@@ -77,6 +87,20 @@ test('the team MCP server lists its tools and forwards calls with the team secre
   } finally {
     await mcp.close()
     desk.close()
+  }
+})
+
+test('invalid MCP JSON values do not crash and requests with ids get Invalid Request', async () => {
+  const mcp = startMcp('http://127.0.0.1:9/api/team')
+  try {
+    for (const message of [null, [], 7]) await mcp.raw(message)
+    assert.deepEqual((await mcp.request('ping', {})).result, {})
+
+    const invalid = await mcp.raw({ jsonrpc: '2.0', id: 50 })
+    assert.deepEqual(invalid.error, { code: -32600, message: 'Invalid Request' })
+    assert.deepEqual((await mcp.request('ping', {})).result, {})
+  } finally {
+    await mcp.close()
   }
 })
 
