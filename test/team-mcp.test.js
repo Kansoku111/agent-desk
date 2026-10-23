@@ -105,3 +105,19 @@ test('a GPT leader\'s MCP server gives the leader instructions as its own', asyn
     await mcp.close()
   }
 })
+
+test('the playbook tool is listed only when the user has playbooks', async () => {
+  const desk = await fakeDesk((call) => [200, { ok: true, text: `# Playbook: ${call.args.name}` }])
+  const mcp = startMcp(desk.url, { AGENT_DESK_TEAM_PLAYBOOKS: '1' })
+  try {
+    await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } })
+    const listed = await mcp.request('tools/list', {})
+    assert.equal(listed.result.tools.at(-1).name, 'playbook')
+    const read = await mcp.request('tools/call', { name: 'playbook', arguments: { name: '改修' } })
+    assert.equal(read.result.content[0].text, '# Playbook: 改修')
+    assert.deepEqual(desk.calls[0], { teamId: 'team-1', secret: 's3cret', tool: 'playbook', args: { name: '改修' } })
+  } finally {
+    await mcp.close()
+    desk.close()
+  }
+})

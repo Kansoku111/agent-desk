@@ -7,6 +7,7 @@ import { isLocalModelId, normalizeBaseUrl } from './local-llm.js'
 import { isModelId } from './model-catalog.js'
 import { PERMISSION_MODES } from './runtime.js'
 import { mergeTeamConfig, TEAM_DEFAULTS } from './team-config.js'
+import { parsePlaybooks, parsePolicies } from './team-playbooks.js'
 
 // Idempotent startup migration: GPT fast is not offered by the official SIWC route.
 export function migrateSettings(saved = {}) {
@@ -53,6 +54,9 @@ export const DEFAULT_SETTINGS = {
   localLlm: { baseURL: null, models: [] },
   // 設定 → エージェントチーム (see team-config.js).
   agentTeams: structuredClone(TEAM_DEFAULTS),
+  // What team leaders read (see team-playbooks.js): a team's chosen policy, and the playbooks by name.
+  teamPolicies: [],
+  teamPlaybooks: [],
 }
 
 const BOOLEAN_SETTINGS = [
@@ -146,6 +150,9 @@ export function planSettingsUpdate(current, patch, now) {
     // Read at a team's next launch or child; nothing restarts.
     next.agentTeams = mergeTeamConfig(current.agentTeams, patch.agentTeams)
   }
+  // Read at a leader's next launch (a playbook, when the leader opens it); nothing restarts.
+  if (owns(patch, 'teamPolicies')) next.teamPolicies = parsePolicies(patch.teamPolicies)
+  if (owns(patch, 'teamPlaybooks')) next.teamPlaybooks = parsePlaybooks(patch.teamPlaybooks)
   if (owns(patch, 'fastMode')) {
     assertRecord(patch.fastMode, 'fastMode')
     next.fastMode = { ...DEFAULT_SETTINGS.fastMode, ...current.fastMode }

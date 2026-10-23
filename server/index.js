@@ -325,6 +325,7 @@ teams = await new TeamManager({
   getSettings: () => settings.agentTeams,
   apiUrl: () => `http://127.0.0.1:${server.address().port}/api/team`,
   instructions: () => settings.customInstructions,
+  guides: () => ({ policies: settings.teamPolicies, playbooks: settings.teamPlaybooks }),
   log,
 }).load()
 

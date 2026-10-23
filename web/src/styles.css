@@ -4899,3 +4899,40 @@ button.team-node:disabled {
 .team-start-details.open svg {
   transform: rotate(90deg);
 }
+
+/* 設定 → エージェントチーム: the policies and playbooks. */
+.team-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.team-guide-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.team-guide-head input {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.team-guide-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.team-guide-field .form-error,
+.team-guide-field .fine-print {
+  margin: 0;
+  align-self: flex-end;
+}
+
+.team-guide-text {
+  min-height: 110px;
+}

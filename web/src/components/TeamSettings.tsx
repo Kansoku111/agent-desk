@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { act, setState, startTeam, useStore } from '../store'
-import type { AppState, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
+import type { AppState, TeamPolicy, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
 import { isModelVisible } from '../model-selection'
 import { effortLabel, pickableEfforts, workspaceLabel } from '../util'
 import { Modal } from './Modal'
 import { byNewest } from './Pickers'
 import { claudeEfforts, claudeModelName, claudeModels } from './TerminalPickers'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
+import { TeamGuides } from './TeamGuides'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 
 const MAX_CHILDREN = 12
@@ -194,8 +195,9 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
   )
 }
 
-/** Who leads, on which model. */
+/** Who leads, on which model, and with which of the user's policies. */
 function LeaderSection({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
+  const policies: TeamPolicy[] = server.settings.teamPolicies ?? []
   const gptLeads = config.leaderProvider === 'gpt'
   return (
     <section className="account-card">
@@ -245,6 +247,16 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
             />
           )}
       </div>
+      {policies.length > 0 && (
+        <div className="setting compact">
+          <div><h3>方針</h3></div>
+          <select value={policies.some((policy) => policy.id === config.policy) ? config.policy! : ''}
+            onChange={(event) => onChange({ policy: event.target.value || null })} aria-label="方針">
+            <option value="">なし</option>
+            {policies.map((policy) => <option key={policy.id} value={policy.id}>{policy.name}</option>)}
+          </select>
+        </div>
+      )}
     </section>
   )
 }
@@ -434,6 +446,7 @@ export function TeamSettings() {
         <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成のツール（Claude の子はすべての MCP サーバー）を、リーダーが必要とした子にだけ渡します。次に始めるチームから使われます。"
           checked={config.leanChildren === true} onChange={(value) => save({ leanChildren: value })} />
       </section>
+      <TeamGuides policies={server.settings.teamPolicies ?? []} playbooks={server.settings.teamPlaybooks ?? []} />
       {apiSubagent && (
         <p className="team-warning">
           「モデル」の「サブエージェント」で Claude（API の従量課金）が選ばれています。チームの GPT の子やリーダーがそれを使い始めると Agent Desk が止めますが、

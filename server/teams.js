@@ -21,6 +21,7 @@ import { sameToken } from './remote.js'
 import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
 import { CATALOG_PROVIDER, childTask, clip, describeTool, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
+import { leaderGuides, readPlaybook } from './team-playbooks.js'
 import { markOf, reportsMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
@@ -90,9 +91,10 @@ export class TeamManager extends EventEmitter {
    * @param {() => object} options.getSettings  the saved `agentTeams` settings: the values a new team starts from
    * @param {() => string} options.apiUrl  where team-mcp.js calls (POST /api/team)
    * @param {() => string} [options.instructions]  the user's custom instructions, added to a Claude leader's and child's prompt
+   * @param {() => { policies: object[], playbooks: object[] }} [options.guides]  the user's policies and playbooks for leaders (team-playbooks.js)
    */
   constructor({
-    file, dir, threads, terminals, agents, catalog, getSettings, apiUrl, instructions = () => '', authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
+    file, dir, threads, terminals, agents, catalog, getSettings, apiUrl, instructions = () => '', guides = () => ({ policies: [], playbooks: [] }), authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
     node = process.execPath, script = mcpScript, log = () => {}, now = Date.now,
   }) {
     super()
@@ -107,6 +109,7 @@ export class TeamManager extends EventEmitter {
     this.getSettings = getSettings
     this.apiUrl = apiUrl
     this.instructions = instructions
+    this.guides = guides
     this.node = node
     this.script = script
     this.log = log
@@ -343,7 +346,7 @@ export class TeamManager extends EventEmitter {
     if (!team || record.team.role !== 'leader') return null
     return leaderLaunch({
       team, config: this.config(team), models: this.catalog.data.models, dir: this.#teamDir(team),
-      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(),
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(), guides: this.#guides(team),
     })
   }
 
@@ -374,8 +377,13 @@ export class TeamManager extends EventEmitter {
     if (!team) return null
     return leaderMcpServer({
       team, config: this.config(team), models: this.catalog.data.models, dir: this.#teamDir(team),
-      node: this.node, script: this.script, apiUrl: this.apiUrl(),
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), guides: this.#guides(team),
     })
+  }
+
+  /** The team's policy and the playbooks, as its leader reads them at launch. */
+  #guides(team) {
+    return leaderGuides({ ...this.guides(), policy: this.config(team).policy })
   }
 
   /** The providers and tiers the leader may use, for its instructions and `status`. */
@@ -510,6 +518,8 @@ export class TeamManager extends EventEmitter {
       case 'approve': return this.#approve(team, input)
       case 'ask_user': return this.#askUser(team, input)
       case 'close': return this.#close(team, input)
+      // Read when called: a playbook changed since the leader started is read as it is now.
+      case 'playbook': return readPlaybook(this.guides().playbooks, input.name)
       default: throw new Error(`unknown tool: ${tool}`)
     }
   }

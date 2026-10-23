@@ -25,7 +25,7 @@ export const oneLine = (text) => text.replace(/\s+/g, ' ').trim()
  * The leader's standing instructions (a Claude leader's --append-system-prompt-file,
  * a GPT leader's MCP server instructions).
  */
-export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean = false }) {
+export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean = false, policy = '', playbooks = [] }) {
   return [
     '# Agent Desk team: you are the leader',
     '',
@@ -55,6 +55,22 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       : []),
     '',
     `Messages that start with "${PREFIX}" come from Agent Desk (your children's reports), not from the user.`,
+    ...(policy
+      ? [
+        '',
+        '## The user\'s policy for this team',
+        'The user wrote this for how you lead: which provider and tier suits what, how to split and word tasks, how to audit. Follow it within the rules above; it does not make a provider or tier available that the list above turns off.',
+        `<team_policy>\n${policy}\n</team_policy>`,
+      ]
+      : []),
+    ...(playbooks.length
+      ? [
+        '',
+        '## Playbooks',
+        'The user wrote playbooks for kinds of work. When a job matches one, read it with `playbook` before you split the work, and follow it.',
+        ...playbooks.map(({ name, description }) => `- "${name}"${description ? `: ${oneLine(description)}` : ''}`),
+      ]
+      : []),
   ].join('\n')
 }
 

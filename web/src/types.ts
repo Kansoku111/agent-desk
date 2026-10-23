@@ -154,6 +154,23 @@ export interface TeamSettings {
   /** Older saves lack it (off). */
   local?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   maxChildren: number
+  /** The policy a new team's leader reads (TeamPolicy.id); null or missing: none. */
+  policy?: string | null
+}
+
+/** A named policy a team's leader reads in full (server/team-playbooks.js). */
+export type TeamPolicy = {
+  id: string
+  name: string
+  text: string
+}
+
+/** A playbook: leaders see its name and description, and open the body when the work calls for it. */
+export type TeamPlaybook = {
+  id: string
+  name: string
+  description: string
+  body: string
 }
 
 export interface ImageRef {
@@ -343,6 +360,9 @@ export interface Settings {
   /** A local OpenAI-compatible server and the models it listed (older saves lack it). */
   localLlm?: { baseURL: string | null; models: { id: string; contextWindow?: number }[] }
   agentTeams: TeamSettings
+  /** Older saves lack them (none). */
+  teamPolicies?: TeamPolicy[]
+  teamPlaybooks?: TeamPlaybook[]
 }
 
 /**

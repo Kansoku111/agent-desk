@@ -21,6 +21,9 @@ const CHILD_DISALLOWED = [
   'Task', 'Agent', 'Workflow', 'SendMessage', 'ListAgents', 'RemoteTrigger', 'CronCreate', 'ScheduleWakeup',
 ].join(',')
 
+/** A leader without the user's policy or playbooks (team-playbooks.js leaderGuides). */
+const NO_GUIDES = { policy: '', playbooks: [] }
+
 /** Writes a file a Claude Code reads (its MCP config, its instructions). */
 function writeFile(dir, name, text) {
   fs.mkdirSync(dir, { recursive: true })
@@ -41,19 +44,22 @@ ${section}` : prompt
  * The flags a team leader's Claude Code starts with (TerminalManager's
  * `launch`). The files are written each time: the server's port may have changed.
  */
-export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, instructions = '' }) {
+export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, instructions = '', guides = NO_GUIDES }) {
   const mcp = writeFile(dir, 'mcp.json', JSON.stringify({
     mcpServers: {
       [MCP_SERVER]: {
         type: 'stdio',
         command: node,
         args: [script],
-        env: { AGENT_DESK_TEAM_URL: apiUrl, AGENT_DESK_TEAM_ID: team.id, AGENT_DESK_TEAM_SECRET: team.secret },
+        env: {
+          AGENT_DESK_TEAM_URL: apiUrl, AGENT_DESK_TEAM_ID: team.id, AGENT_DESK_TEAM_SECRET: team.secret,
+          ...(guides.playbooks.length ? { AGENT_DESK_TEAM_PLAYBOOKS: '1' } : {}),
+        },
       },
     },
   }, null, 2))
   const prompt = writeFile(dir, 'leader.md', withInstructions(leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: config.leanChildren,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: config.leanChildren, ...guides,
   }), instructions))
   return {
     args: [
@@ -71,9 +77,9 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
  * the team's tools, with its instructions as the server's own. Written each
  * time a session starts: the server's port may have changed.
  */
-export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl }) {
+export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl, guides = NO_GUIDES }) {
   const prompt = writeFile(dir, 'leader.md', leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: config.leanChildren,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: config.leanChildren, ...guides,
   }))
   return {
     name: MCP_SERVER,
@@ -84,6 +90,7 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
       { name: 'AGENT_DESK_TEAM_ID', value: team.id },
       { name: 'AGENT_DESK_TEAM_SECRET', value: team.secret },
       { name: 'AGENT_DESK_TEAM_INSTRUCTIONS', value: prompt },
+      ...(guides.playbooks.length ? [{ name: 'AGENT_DESK_TEAM_PLAYBOOKS', value: '1' }] : []),
     ],
   }
 }
