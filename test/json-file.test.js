@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { debouncedWriter, writeJson } from '../server/json-file.js'
+import { debouncedWriter, readJson, UnmovableFileError, writeJson } from '../server/json-file.js'
 
 test('a debounced write holds the value as it was when the write was queued', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'json-file-'))
@@ -58,4 +58,16 @@ test('a background write that fails is retried with its value once the obstacle 
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
   assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), { receipt: 'accepted' })
+})
+
+test('a corrupt file that cannot be moved aside is not replaced by defaults, and is not overwritten', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'json-file-corrupt-'))
+  t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  const file = path.join(dir, 'settings.json')
+  await fs.writeFile(file, '{"workspaces": ["/work"]')
+  t.mock.method(fs, 'rename', async () => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) })
+  await assert.rejects(readJson(file, { workspaces: [] }), UnmovableFileError)
+  await assert.rejects(writeJson(file, { workspaces: [] }), /not overwriting it/)
+  assert.equal(await fs.readFile(file, 'utf8'), '{"workspaces": ["/work"]')
+  assert.deepEqual(await fs.readdir(dir), ['settings.json'])
 })

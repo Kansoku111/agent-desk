@@ -8,7 +8,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import YAML from 'yaml'
-import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
+import { writeText } from './json-file.js'
 
 // Legacy grant retained ONLY to detect users who need official sign-in again.
 export const CODEX_RECORD = 'llm-pi-ai/openai-codex'
@@ -68,7 +69,7 @@ export class CredentialStore {
       const items = doc.contents.items
       const index = items.findIndex((pair) => (YAML.isScalar(pair.key) ? pair.key.value : pair.key) === 'version')
       if (index > 0) items.unshift(...items.splice(index, 1))
-      await writeFileAtomic(this.file, doc.toString({ lineWidth: 0 }), { mode: 0o600 })
+      await writeText(this.file, doc.toString({ lineWidth: 0 }), 0o600)
     }, { waitMs: 15_000 })
   }
 

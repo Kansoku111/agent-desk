@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import YAML from 'yaml'
-import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import { writeText } from './json-file.js'
 import { ANTHROPIC_REF } from './credentials.js'
 import { LOCAL_PROVIDER } from './local-llm.js'
 import { isModelId } from './model-catalog.js'
@@ -309,6 +309,6 @@ async function writePatch(file, next) {
     current = await fs.readFile(file, 'utf8')
   } catch {}
   if (current === next) return false
-  await writeFileAtomic(file, next, { mode: 0o600 })
+  await writeText(file, next, 0o600)
   return true
 }

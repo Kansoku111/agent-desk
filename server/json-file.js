@@ -4,6 +4,13 @@ import { randomBytes } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+// Corrupt files that could not be moved aside. Writing them again would replace
+// the only copy, so this process refuses to write them.
+const unmovable = new Set()
+
+/** A corrupt file that could not be moved aside; its content is still on disk. */
+export class UnmovableFileError extends Error {}
+
 export async function readJson(file, fallback, { recoverCorrupt = true } = {}) {
   try {
     return JSON.parse(await fs.readFile(file, 'utf8'))
@@ -11,7 +18,15 @@ export async function readJson(file, fallback, { recoverCorrupt = true } = {}) {
     if (error.code === 'ENOENT') return structuredClone(fallback)
     if (recoverCorrupt && error instanceof SyntaxError) {
       // Keep the broken file for inspection instead of silently discarding it.
-      await fs.rename(file, `${file}.corrupt-${Date.now()}`).catch(() => {})
+      // Without a kept copy the fallback must not be used: a later save would replace the file.
+      const key = path.resolve(file)
+      try {
+        await fs.rename(file, `${file}.corrupt-${Date.now()}`)
+      } catch (renameError) {
+        unmovable.add(key)
+        throw new UnmovableFileError(`${file} is not valid JSON and could not be moved aside: ${renameError.message}`, { cause: error })
+      }
+      unmovable.delete(key)
       return structuredClone(fallback)
     }
     throw error
@@ -41,7 +56,8 @@ async function replaceFile(from, to) {
  * before the rename, so a crash leaves the old file or the new one, not an
  * empty file under the old name.
  */
-async function writeText(file, text, mode = 0o600) {
+export async function writeText(file, text, mode = 0o600) {
+  if (unmovable.has(path.resolve(file))) throw new Error(`${file} could not be read and was not moved aside; not overwriting it`)
   await fs.mkdir(path.dirname(file), { recursive: true })
   const temp = `${file}.${randomBytes(6).toString('hex')}.tmp`
   try {

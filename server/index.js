@@ -21,7 +21,7 @@ import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
 import { createSettingsService, DEFAULT_SETTINGS, migrateSettings } from './settings.js'
 import { localLlmSettings, localRoute } from './local-llm.js'
 import { teamConfig } from './team-config.js'
-import { readJson, writeJson } from './json-file.js'
+import { readJson, UnmovableFileError, writeJson } from './json-file.js'
 import { catalogModelLimits, configuredModelCatalog } from './model-catalog.js'
 import { SiwcModelCatalog } from './siwc-models.js'
 import { ModelCatalogUpdater } from './model-updates.js'
@@ -91,7 +91,18 @@ const { takeover, releaseDataLock } = await claimDataFolder({ paths, serverInfoF
 
 await fsp.mkdir(paths.threadsDir, { recursive: true })
 await fsp.mkdir(paths.attachmentsDir, { recursive: true })
-let settings = migrateSettings(await readJson(paths.settings, {}))
+let settingsKept = false
+let settings
+try {
+  settings = migrateSettings(await readJson(paths.settings, {}))
+} catch (error) {
+  // Only a corrupt file that could not be kept is tolerated: it stays where it is, this launch runs on defaults,
+  // and json-file.js refuses to save over it. Any other read error still stops the launch.
+  if (!(error instanceof UnmovableFileError)) throw error
+  log(error.message)
+  settingsKept = true
+  settings = migrateSettings({})
+}
 // Saved by an older version, the team settings lack newer fields (the GPT leader's).
 settings.agentTeams = teamConfig(settings.agentTeams)
 let settingsWrites = Promise.resolve()
@@ -109,7 +120,7 @@ const saveSettings = (candidate = settings) => {
   settingsWrites = operation.catch(() => {})
   return operation
 }
-if (assignProjectColors(settings.projectColors ?? {}, [paths.myPc, ...settings.workspaces])) await saveSettings()
+if (!settingsKept && assignProjectColors(settings.projectColors ?? {}, [paths.myPc, ...settings.workspaces])) await saveSettings()
 // The provider default ('') is no longer offered; medium is the default level.
 if (!settings.defaultEffort) settings.defaultEffort = 'medium'
 await fsp.mkdir(paths.myPc, { recursive: true })
