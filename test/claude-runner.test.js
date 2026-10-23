@@ -8,6 +8,10 @@ import { test } from 'node:test'
 import { ClaudeRunner, applyEvent } from '../server/claude-runner.js'
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
+/** Waits for the report of an ended run, which comes a few event-loop turns after the exit. */
+const reported = async (finished) => {
+  for (let tries = 0; tries < 200 && !finished.length; tries++) await new Promise((resolve) => setTimeout(resolve, 5))
+}
 
 /** `claude -p` as a process: it reads its prompt on stdin and writes the events the test gives it. */
 function fakeSpawn() {
@@ -344,7 +348,7 @@ test('an answer given while a background command runs is not the end: Claude Cod
   await tick()
   assert.equal(proc.stdin.writableEnded, true)
   proc.end(0)
-  await new Promise((resolve) => setTimeout(resolve, 10))
+  await reported(finished)
   assert.equal(finished.length, 1)
   assert.equal(finished[0].text, '集計しました')
   assert.equal(finished[0].denials.length, 1)
@@ -365,7 +369,7 @@ test('a background command that ends without a turn of its own ends the turn aft
   await new Promise((resolve) => setTimeout(resolve, 40))
   assert.equal(proc.stdin.writableEnded, true)
   proc.end(0)
-  await new Promise((resolve) => setTimeout(resolve, 10))
+  await reported(finished)
   assert.equal(finished[0].text, 'started the build')
 })
 
@@ -380,7 +384,7 @@ test('a background command that outlasts the wait is left, and the report says s
   await new Promise((resolve) => setTimeout(resolve, 40))
   assert.equal(proc.stdin.writableEnded, true)
   proc.end(0)
-  await new Promise((resolve) => setTimeout(resolve, 10))
+  await reported(finished)
   assert.match(finished[0].text, /^server is up\n\n（バックグラウンドの作業が 0 分たっても終わらなかったため、待つのをやめました。止まった作業: npx vite）$/)
 })
 

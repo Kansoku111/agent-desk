@@ -359,7 +359,7 @@ export class ClaudeRunner extends EventEmitter {
 
   /** What runs in the background changed (`background_tasks_changed` lists all of it). */
   #onBackground(live, tasks) {
-    live.background = new Map((Array.isArray(tasks) ? tasks : []).map((task) => [task.task_id, String(task.description ?? task.task_type ?? '')]))
+    live.background = new Map((Array.isArray(tasks) ? tasks : []).filter((task) => task && typeof task === 'object').map((task) => [task.task_id, String(task.description ?? task.task_type ?? '')]))
     if (live.background.size || !live.answered) return
     // The last one ended after the answer: Claude Code goes on by itself; if it does not, the turn is over.
     clearTimeout(live.backgroundCap)
@@ -399,11 +399,13 @@ export class ClaudeRunner extends EventEmitter {
     } catch {
       return
     }
+    if (!event || typeof event !== 'object') return
     if (event.type === 'system' && event.subtype === 'init') {
       record.started = true
       record.modelInUse = event.model ?? record.modelInUse
-      // A turn of its own started (a background command ended): its answer is awaited again.
+      // A turn of its own started (a background command ended, or it took a message): its answer is awaited again.
       live.answered = false
+      clearTimeout(live.grace)
       clearTimeout(live.wake)
       clearTimeout(live.backgroundCap)
       return
@@ -450,7 +452,8 @@ export class ClaudeRunner extends EventEmitter {
       steer.taken = true
       live.turn.items.push({ type: 'notice', id: uuid, level: 'warning', text: `作業中に送ったメッセージは Claude Code に届きませんでした: ${clip(steer.text, 200)}` })
     }
-    const { result } = live
+    // An answer from before a later turn that then crashed is not what the run ended with.
+    const result = live.answered || code === 0 ? live.result : null
     if (live.refusal) return this.#finish(record, live.turn, { status: 'error', message: live.refusal })
     // The app is closing: the turn is saved as cut off, and nobody hears of it until the next start.
     if (this.closing) return this.#finish(record, live.turn, { status: 'error', message: CUT_OFF, quiet: true })
