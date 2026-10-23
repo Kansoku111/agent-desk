@@ -156,6 +156,8 @@ test('a task starts claude with its session id and the hooks, without a parent C
     assert.deepEqual(proc.size, { cols: 90, rows: 20 })
     assert.equal(proc.options.env.CLAUDECODE, undefined)
     assert.equal(proc.options.env.AGENT_DESK_TERMINAL_ID, terminal.id)
+    // A request stuck on a stale connection is sent again well before Claude Code's own 180 s.
+    assert.equal(proc.options.env.CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS, '30000')
     assert.equal(terminal.title, DEFAULT_TITLE)
     assert.equal(terminal.state, 'running')
     const saved = JSON.parse(await fs.readFile(path.join(dir, 'terminals.json'), 'utf8'))

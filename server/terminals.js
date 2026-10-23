@@ -39,6 +39,13 @@ const SEND_ENTER_MS = 150
 const SEND_ENTER_MAX_MS = 1500
 const SEND_RETRY_MS = 1500
 const SEND_RETRIES = 2
+/**
+ * How long Claude Code waits for the API's response headers before it sends
+ * the request again (its own default is 180 s). A request sent on a connection
+ * that went stale while the task sat idle gets no answer at all, and the
+ * user's first message after a pause looked lost.
+ */
+const FIRST_BYTE_TIMEOUT_MS = '30000'
 /** How long a Stop hook has to arrive after Claude Code says it is idle, before the task is taken as idle without it. */
 const IDLE_GRACE_MS = 2500
 /** Background work reported as running that never reported its end stops counting after this long. */
@@ -423,6 +430,7 @@ export class TerminalManager extends EventEmitter {
     Object.assign(env, {
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
+      CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS: env.CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS || FIRST_BYTE_TIMEOUT_MS,
       AGENT_DESK_TERMINAL_HOOK: this.hookUrl(),
       AGENT_DESK_TERMINAL_ID: record.id,
       AGENT_DESK_TERMINAL_SECRET: secret,
