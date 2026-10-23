@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import YAML from 'yaml'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { ANTHROPIC_REF } from './credentials.js'
+import { LOCAL_PROVIDER } from './local-llm.js'
 import { isModelId } from './model-catalog.js'
 import { SIWC_KEY_REF, SIWC_RESOURCE } from './siwc-client.js'
 import { childPrompt } from './teams-prompts.js'
@@ -150,10 +151,12 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  *   credential file; web_search keeps DeepSeek's search without it.
  * @param {string} [options.instructions] - the user's custom instructions,
  *   added to every system prompt by {@link INSTRUCTIONS_PLUGIN}.
+ * @param {object | null} [options.localRoute] - the local server's route
+ *   (local-llm.js `localRoute`), or null when none is set up.
  */
 export function homePatch({
   anthropicWorkspaceId = null, modelOverrides = {}, catalogModels = {},
-  subagents = [], persona = null, webSearch = null, instructions = '',
+  subagents = [], persona = null, webSearch = null, instructions = '', localRoute = null,
 } = {}) {
   // dsh's default (5 tries, 10 s at most) gives up within about 15 s, shorter
   // than the minute-long upstream hiccups ChatGPT's backend has.
@@ -187,7 +190,7 @@ export function homePatch({
       ?? null
   }
   const rows = [
-    { id: 'llm-pi-ai', config: { providers: { 'openai-codex': codex, anthropic } } },
+    { id: 'llm-pi-ai', config: { providers: { 'openai-codex': codex, anthropic, ...(localRoute ? { [LOCAL_PROVIDER]: localRoute } : {}) } } },
     // The model pickers prefer the same one (web/src/components/Pickers.tsx).
     ...(acpModel ? [{ id: 'acp', config: { provider: 'openai-codex', model: acpModel } }] : []),
     // Its tool and prompt section go together; `subagent` stays for delegation.

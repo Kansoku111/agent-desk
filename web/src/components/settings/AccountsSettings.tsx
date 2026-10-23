@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, ExternalLink, KeyRound, Loader2 } from 'lucide-react'
+import { CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw } from 'lucide-react'
 import { act, openExternal, request, toast, useStore } from '../../store'
 import { ChatGptConnections } from './ChatGptConnections'
 
@@ -205,6 +205,68 @@ function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hin
     </section>
   )
 }
+/** A local OpenAI-compatible server (Ollama, LM Studio, vLLM); its models are read when it connects. */
+function LocalLlmCard() {
+  const account = useStore((state) => state.server?.accounts.localLlm)
+  const saved = useStore((state) => state.server?.settings.localLlm)
+  const [url, setUrl] = useState(saved?.baseURL ?? '')
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const connect = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await request<{ models: { id: string }[] }>('localLlm.set', { baseURL: url, key })
+      setKey('')
+      toast(`ローカル LLM のモデルを ${result.models.length} 件読み込みました`, 'success')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    setBusy(false)
+  }
+
+  return (
+    <section className="account-card">
+      <div className="account-head">
+        <div>
+          <h3>ローカル LLM（任意）</h3>
+          <p className="muted">Ollama・LM Studio・vLLM など、OpenAI 互換のサーバーのモデルを使います。</p>
+        </div>
+        {account?.configured && <span className="badge success"><CheckCircle2 size={12} /> 接続済み</span>}
+      </div>
+      {account?.configured && saved && (
+        <div className="account-row">
+          <div className="local-models">{saved.models.map((model) => <code key={model.id}>{model.id}</code>)}</div>
+          <button type="button" className="button" disabled={busy} onClick={() => void act('localLlm.remove')}>削除</button>
+        </div>
+      )}
+      <form
+        className="inline-form wrap"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void connect()
+        }}
+      >
+        <input className="local-llm-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="http://localhost:11434/v1" aria-label="ローカル LLM の URL" />
+        <input
+          type="password"
+          autoComplete="off"
+          value={key}
+          onChange={(event) => setKey(event.target.value)}
+          placeholder={account?.keyed ? account.masked ?? 'API キー' : 'API キー（任意）'}
+          aria-label="ローカル LLM の API キー"
+        />
+        <button type="submit" className="button primary" disabled={!url.trim() || busy}>
+          {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} {account?.configured ? '再読み込み' : '接続'}
+        </button>
+      </form>
+      {error && <p className="form-error">{error}</p>}
+    </section>
+  )
+}
+
 export function AccountsSettings() {
   return (
     <div className="settings-section">
@@ -224,6 +286,7 @@ export function AccountsSettings() {
         consoleUrl="https://platform.deepseek.com/api_keys"
         placeholder="sk-…"
       />
+      <LocalLlmCard />
     </div>
   )
 }

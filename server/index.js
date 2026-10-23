@@ -14,12 +14,13 @@ import { codeStamp, uiBuild } from './code-stamp.js'
 import { ChatGptLogin } from './chatgpt-login.js'
 import { Checkpoints } from './checkpoints.js'
 import {
-  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, maskSecret,
+  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret,
 } from './credentials.js'
 import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeTeamChildPatch } from './dsh-config.js'
 import { DshUpdater } from './dsh-update.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
 import { createSettingsService, DEFAULT_SETTINGS, migrateSettings } from './settings.js'
+import { localLlmSettings, localRoute } from './local-llm.js'
 import { teamConfig } from './team-config.js'
 import { readJson, writeJson } from './json-file.js'
 import { catalogModelLimits, configuredModelCatalog } from './model-catalog.js'
@@ -153,6 +154,11 @@ async function accounts() {
     },
     claudeAdmin: { configured: Boolean(snapshot.refs[ANTHROPIC_ADMIN_REF]), masked: maskSecret(snapshot.refs[ANTHROPIC_ADMIN_REF]) },
     deepseek: { configured: Boolean(snapshot.refs[DEEPSEEK_REF]), masked: maskSecret(snapshot.refs[DEEPSEEK_REF]) },
+    localLlm: {
+      configured: Boolean(localRoute(settings.localLlm)),
+      keyed: Boolean(snapshot.refs[LOCAL_LLM_REF]),
+      masked: maskSecret(snapshot.refs[LOCAL_LLM_REF]),
+    },
     error,
   }
 }
@@ -230,6 +236,7 @@ const catalogSignature = async (result) => JSON.stringify({
   definitions: createHash('sha256').update(JSON.stringify(configuredModels)).digest('hex'),
   // Native DeepSeek discovery returns no models until its key is present.
   deepseek: (await accounts()).deepseek.configured,
+  local: localLlmSettings(settings.localLlm),
 })
 
 const getSettings = () => settings
@@ -264,6 +271,7 @@ async function applyHomePatch() {
     persona,
     webSearch: { plugin: WEB_SEARCH_PLUGIN, credentials: paths.credentials },
     instructions: settings.customInstructions,
+    localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
   })
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
   return home || children
@@ -601,6 +609,7 @@ const handlers = {
   ...createAccountHandlers({
     appVersion: APP_VERSION, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost,
     updateModelCatalog, refreshChatGptUsage, getChatgptUsage: () => chatgptUsage, refreshUsageHistory, usageState,
+    updateSettings: (patch) => settingsService.update(patch),
   }),
   ...createModelHandlers({
     getSettings, saveSettings, broadcast, threads, catalog, catalogState, updater, modelUpdater, modelUpdateState,

@@ -11,11 +11,11 @@ import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 
 const MAX_CHILDREN = 12
-const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek']
-const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek' }
-type DshProvider = 'gpt' | 'claudeApi' | 'deepseek'
+const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek', 'local']
+const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', local: 'ローカル LLM' }
+type DshProvider = 'gpt' | 'claudeApi' | 'deepseek' | 'local'
 /** Each dsh provider's models in the model list. */
-const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official' } as const
+const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', local: 'local-llm' } as const
 const OFF_PROVIDER = { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } }
 const TIERS: { tier: TeamTier; label: string; note: string }[] = [
   { tier: 'low', label: '低枠', note: '単純な作業、繰り返しの多い作業、量の多い作業' },
@@ -39,6 +39,7 @@ function fullConfig(saved: Config): Config {
     gptLeader: saved.gptLeader ?? { model: null, effort: 'high' },
     claudeApi: saved.claudeApi ?? OFF_PROVIDER,
     deepseek: saved.deepseek ?? OFF_PROVIDER,
+    local: saved.local ?? OFF_PROVIDER,
   }
 }
 
@@ -154,12 +155,14 @@ const PROVIDER_NOTE: Record<TeamProvider, string> = {
   claude: '画面なしの Claude Code です。Claude Code 自身の認証（サブスクリプション・API キー・クラウド）を使い、起動前に課金方式を確認します。Agent Desk に登録した API キーとは別です。',
   claudeApi: 'チームの自動処理に推奨。dsh から Anthropic API を使い、使った分だけ課金されます。Claude Code やそのサブスクリプションとは別の実行方式で、設定・ツール・会話の履歴も異なります。子としてだけ使えます。',
   deepseek: 'dsh のタスクとして、DeepSeek の API キーで動きます（使った分だけ DeepSeek に課金されます）。子としてだけ使えます。',
+  local: 'dsh のタスクとして、自分のモデルサーバーで動きます（課金なし）。他より遅く弱いため、小さく明確な作業向けです。子としてだけ使えます。',
 }
 
 function ProviderCard({ server, config, provider, onChange }: { server: AppState; config: Config; provider: TeamProvider; onChange: Change }) {
   const on = part(config, provider).enabled
   const signedOut = provider === 'gpt' && !server.accounts.chatgpt.signedIn
   const noKey = (provider === 'deepseek' && !server.accounts.deepseek.configured) || (provider === 'claudeApi' && !server.accounts.claude.configured)
+    || (provider === 'local' && !server.accounts.localLlm?.configured)
   return (
     <section className={`account-card team-provider-card ${on ? '' : 'off'}`}>
       <div className="setting compact">
@@ -168,7 +171,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
           <p className="muted">
             {PROVIDER_NOTE[provider]}
             {signedOut && ' ChatGPT にサインインすると使えます（設定 → アカウント）。'}
-            {noKey && ` 設定 → アカウントで ${provider === 'claudeApi' ? 'Anthropic' : 'DeepSeek'} の API キーを登録すると使えます。`}
+            {noKey && (provider === 'local' ? ' 設定 → アカウントでサーバーの URL を登録すると使えます。' : ` 設定 → アカウントで ${provider === 'claudeApi' ? 'Anthropic' : 'DeepSeek'} の API キーを登録すると使えます。`)}
           </p>
         </div>
         <label className="switch">
@@ -370,7 +373,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const save = async () => {
     if (needsAuth && !auth.ready) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, local: draft.local, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
@@ -417,11 +420,11 @@ export function TeamSettings() {
               リーダーが作業を分けて子のエージェントに任せ、終わった子から順に届く報告を確認して、合格か手直しかを決めます。
             </p>
             <p className="muted">
-              リーダー（Claude Code / GPT）、同時に動かせる子の数、子に使う GPT・Claude・Claude（API）・DeepSeek と枠（低・中）ごとのモデルは、TM を押したときに選びます。初期設定では子はすべてオフで、使うものだけをオンにします（オンにしたものの枠だけが画面に出ます）。前回の選び方を覚えています。
+              リーダー（Claude Code / GPT）、同時に動かせる子の数、子に使う GPT・Claude・Claude（API）・DeepSeek・ローカル LLM と枠（低・中）ごとのモデルは、TM を押したときに選びます。初期設定では子はすべてオフで、使うものだけをオンにします（オンにしたものの枠だけが画面に出ます）。前回の選び方を覚えています。
               動いているチームの子の枠と数は、チームのパネルの「このチームの設定」から変えられます。
             </p>
             <p className="muted">
-              リーダーが選ぶのは枠と GPT / Claude / Claude（API） / DeepSeek だけで、モデル名は選びません。Claude Code の子は Claude Code 自身の認証と課金方式で、Claude（API）の子は Agent Desk に登録した API キーで動きます。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
+              リーダーが選ぶのは枠と GPT / Claude / Claude（API） / DeepSeek / ローカル LLM だけで、モデル名は選びません。Claude Code の子は Claude Code 自身の認証と課金方式で、Claude（API）の子は Agent Desk に登録した API キーで動きます。子は承認なしで作業し、それでも止まったときはリーダーが判断します。
             </p>
           </div>
         </div>

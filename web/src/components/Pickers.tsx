@@ -10,11 +10,12 @@ import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { openProjectDialog } from './ProjectDialog'
 import { useWheelSelect } from './useWheelSelect'
 
-const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official']
+const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official', 'local-llm']
 const PROVIDER_NOTE: Record<string, string> = {
   'openai-codex': 'ChatGPT サブスクリプション',
   anthropic: 'Anthropic API キー',
   'deepseek-official': 'DeepSeek API キー',
+  'local-llm': 'このネットワークのサーバー',
 }
 
 function modelName(server: AppState | null, value: string | null) {

@@ -7,6 +7,7 @@ export const PROVIDER_LABELS = {
   'openai-codex': 'ChatGPT',
   anthropic: 'Claude',
   'deepseek-official': 'DeepSeek',
+  'local-llm': 'ローカル LLM',
 }
 
 const FALLBACK_EFFORTS = [

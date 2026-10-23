@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Local LLM: Settings → Accounts → "ローカル LLM" connects an OpenAI-compatible model server (Ollama, LM Studio, vLLM, llama.cpp) by its URL (e.g. `http://localhost:11434/v1`), with an optional API key. Its models are read from `/models` when it connects and kept in the settings, so they stay in the model picker while the server is off; "再読み込み" reads them again. They run as dsh tasks without images or reasoning levels, with a 32K window unless the server reports one. Agent teams can use them as children ("ローカル LLM", child only, off by default).
 - Agent teams: reports that arrive while the leader works now reach it together in its next turn, as one message with the next steps said once, instead of one turn per report. A message gathers at most 6,000 characters of reports; the rest follow. Settings → Agent teams → "報告をまとめて渡す" (on by default) turns it off.
 - Agent teams: the leader's `send` takes `fresh: true` to start a child over in a new conversation (its earlier one is removed), for work that needs little of what it carried. It is refused while the child works.
 - Agent teams: a child whose turn ends on a passing failure (the model's service overloaded or down, a lost connection) goes on by itself once, a minute later, before the leader hears of it. A second failure, or a lasting one (usage limits, billing, auth, a refused request), reaches the leader as before; "全停止" also stops a child waiting to go on.

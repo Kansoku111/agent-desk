@@ -480,6 +480,9 @@ export class ThreadManager extends EventEmitter {
     if (provider === 'deepseek-official' && !accounts.deepseek.configured) {
       throw new Error('DeepSeek のモデルを使うには、設定で DeepSeek の API キーを登録してください。')
     }
+    if (provider === 'local-llm' && !accounts.localLlm?.configured) {
+      throw new Error('ローカル LLM を使うには、設定 → アカウントでサーバーの URL を登録してください。')
+    }
   }
 
   async #run(thread, active) {

@@ -645,6 +645,7 @@ export function Sidebar() {
     accounts?.chatgpt.signedIn && 'ChatGPT',
     accounts?.claude.configured && 'Claude',
     accounts?.deepseek.configured && 'DeepSeek',
+    accounts?.localLlm?.configured && 'ローカル LLM',
   ].filter(Boolean)
   const activeId = route.view === 'thread' || route.view === 'terminal' ? route.id : null
   const archivedCount = threads.filter((thread) => thread.archived && !thread.team?.childId).length

@@ -3,6 +3,7 @@
 import { CONTEXT_CHOICES, CONTEXT_PROVIDERS, INSTRUCTIONS_MAX, SUBAGENT_TOOLS } from './dsh-config.js'
 import { UPDATE_CHANNELS } from './dsh-update.js'
 import { FAST_PROVIDERS, recordFastPeriod } from './fast-mode.js'
+import { isLocalModelId, normalizeBaseUrl } from './local-llm.js'
 import { isModelId } from './model-catalog.js'
 import { PERMISSION_MODES } from './runtime.js'
 import { mergeTeamConfig, TEAM_DEFAULTS } from './team-config.js'
@@ -50,6 +51,8 @@ export const DEFAULT_SETTINGS = {
   modelAutoUpdate: true,
   remoteAccess: false,
   customInstructions: '',
+  // A local OpenAI-compatible server and the models it listed (see local-llm.js).
+  localLlm: { baseURL: null, models: [] },
   // 設定 → エージェントチーム (see team-config.js).
   agentTeams: structuredClone(TEAM_DEFAULTS),
 }
@@ -126,6 +129,21 @@ export function planSettingsUpdate(current, patch, now) {
     next.customInstructions = text
     effects.homePatch = true
   }
+  let localChanged = false
+  if (owns(patch, 'localLlm')) {
+    const value = patch.localLlm
+    assertRecord(value, 'localLlm')
+    const baseURL = value.baseURL === null ? null : normalizeBaseUrl(value.baseURL)
+    if (!Array.isArray(value.models) || value.models.length > 100) throw new Error('localLlm.models は 100 件までの配列で指定してください')
+    const models = value.models.map((model) => {
+      if (!isLocalModelId(model?.id)) throw new Error('使えないモデル ID です')
+      const contextWindow = model.contextWindow
+      if (contextWindow !== undefined && (!Number.isInteger(contextWindow) || contextWindow <= 0)) throw new Error('contextWindow は正の整数で指定してください')
+      return contextWindow ? { id: model.id, contextWindow } : { id: model.id }
+    })
+    next.localLlm = baseURL ? { baseURL, models } : { baseURL: null, models: [] }
+    localChanged = true
+  }
   if (owns(patch, 'agentTeams')) {
     // Read at a team's next launch or child; nothing restarts.
     next.agentTeams = mergeTeamConfig(current.agentTeams, patch.agentTeams)
@@ -171,6 +189,11 @@ export function planSettingsUpdate(current, patch, now) {
   effects.modelCatalog = (next.modelAutoUpdate !== false) !== (current.modelAutoUpdate !== false)
   effects.homePatch ||= effects.modelCatalog
   effects.modelCheck = effects.modelCatalog && next.modelAutoUpdate !== false
+  // The local route joins the catalog signature and the home patch; it fetches nothing.
+  if (localChanged) {
+    effects.modelCatalog = true
+    effects.homePatch = true
+  }
   return { settings: next, effects }
 }
 

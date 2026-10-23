@@ -5,21 +5,23 @@
 // here, so new models need no change to how the leader works.
 
 /**
- * Teams' children by provider: GPT, Claude (API) and DeepSeek run as dsh tasks
- * (on the ChatGPT subscription, and on the user's Anthropic and DeepSeek API
- * keys), Claude as a Claude Code task.
+ * Teams' children by provider: GPT, Claude (API), DeepSeek and the local
+ * server run as dsh tasks (on the ChatGPT subscription, the user's Anthropic
+ * and DeepSeek API keys, and their own machine), Claude as a Claude Code task.
  */
-export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek']
-/** Who can lead: DeepSeek only works as a child. */
+export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek', 'local']
+/** Who can lead: DeepSeek and local models only work as children. */
 export const LEADER_PROVIDERS = ['claude', 'gpt']
 export const TEAM_TIERS = ['low', 'mid']
-export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek' }
+export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', local: 'ローカル LLM' }
 export const MAX_CHILDREN_LIMIT = 12
 
 /** A Claude Code model alias (opus) or full name (claude-haiku-5-5), as `claude --model` takes it. */
 const CLAUDE_MODEL = /^[a-z0-9][a-z0-9.\-[\]]{0,79}$/i
 /** A dsh model id (gpt-5.6-luna, deepseek-v4-pro). */
 const DSH_MODEL = /^[a-z0-9][a-z0-9._-]{0,79}$/i
+/** A local server's model id, which may carry a tag or a path (qwen3:8b). */
+const LOCAL_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/
 /** Reasoning levels are the catalog's (or `claude --effort`'s) words. */
 const EFFORT = /^[a-z]{1,16}$/
 
@@ -44,6 +46,8 @@ export const TEAM_DEFAULTS = {
   claudeApi: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // Billed per token to their DeepSeek API key.
   deepseek: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
+  // A model server on the user's machine or network (設定 → アカウント → ローカル LLM).
+  local: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   maxChildren: 6,
   // Reports that wait while the leader works reach it together, in one turn, instead of one turn each.
   batchReports: true,
@@ -71,6 +75,7 @@ export function teamConfig(saved) {
     claude: provider('claude'),
     claudeApi: provider('claudeApi'),
     deepseek: provider('deepseek'),
+    local: provider('local'),
     maxChildren: Number.isInteger(value.maxChildren) ? value.maxChildren : TEAM_DEFAULTS.maxChildren,
   }
 }
@@ -127,7 +132,7 @@ export function mergeTeamConfig(current, patch) {
         next[provider][tier].enabled = part[tier].enabled
       }
       if (Object.hasOwn(part[tier], 'model')) {
-        next[provider][tier].model = choice(part[tier].model, provider === 'claude' ? CLAUDE_MODEL : DSH_MODEL, `${label}のモデル`)
+        next[provider][tier].model = choice(part[tier].model, provider === 'claude' ? CLAUDE_MODEL : provider === 'local' ? LOCAL_MODEL : DSH_MODEL, `${label}のモデル`)
       }
       if (Object.hasOwn(part[tier], 'effort')) next[provider][tier].effort = choice(part[tier].effort, EFFORT, `${label}の推論レベル`)
     }
@@ -148,6 +153,6 @@ export function mergeTeamConfig(current, patch) {
 /** A team needs a provider to hand work to: throws when the settings turn every one off. */
 export function assertChildrenOn(config) {
   if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled)) {
-    throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek の少なくとも一つをオンにしてください')
+    throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek・ローカル LLM の少なくとも一つをオンにしてください')
   }
 }

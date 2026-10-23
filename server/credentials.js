@@ -19,6 +19,8 @@ export const ANTHROPIC_REF = 'ANTHROPIC_API_KEY'
 // Reads the organization's usage and cost (Admin API); dsh never uses it.
 export const ANTHROPIC_ADMIN_REF = 'ANTHROPIC_ADMIN_KEY'
 export const DEEPSEEK_REF = 'DEEPSEEK_API_KEY'
+// Only for a local server that asks for a key (server/local-llm.js).
+export const LOCAL_LLM_REF = 'LOCAL_LLM_API_KEY'
 
 const REF_NAME = /^[A-Z_][A-Z0-9_]*$/
 

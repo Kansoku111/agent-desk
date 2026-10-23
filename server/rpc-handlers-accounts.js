@@ -1,14 +1,34 @@
 // RPC handlers for provider accounts (API keys and the ChatGPT sign-in) and for
 // the usage page's admin key (see index.js).
-import { ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, DEEPSEEK_REF } from './credentials.js'
+import { ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, DEEPSEEK_REF, LOCAL_LLM_REF } from './credentials.js'
 import { fetchCostDays } from './claude-cost.js'
 import { SiwcClient } from './siwc-client.js'
 import { isWorkspaceId } from './dsh-config.js'
 import { anthropicKeyProblem, checkAnthropicKey, checkDeepSeekKey } from './key-check.js'
+import { discoverLocalModels, normalizeBaseUrl } from './local-llm.js'
 
 /** Handlers for accounts and usage; index.js merges them into the request table. */
-export function createAccountHandlers({ appVersion, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost, updateModelCatalog, refreshChatGptUsage, getChatgptUsage, refreshUsageHistory, usageState }) {
+export function createAccountHandlers({ appVersion, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost, updateModelCatalog, refreshChatGptUsage, getChatgptUsage, refreshUsageHistory, usageState, updateSettings, discoverModels = discoverLocalModels }) {
   return {
+    // Connects (or reconnects) the local server: its models are read now and kept in the settings.
+    'localLlm.set': async ({ baseURL, key }) => {
+      const url = normalizeBaseUrl(baseURL)
+      const typed = String(key ?? '').trim()
+      if (/\s/.test(typed)) throw new Error('キーに空白や改行が含まれています。キーだけを貼り付けてください。')
+      const models = await discoverModels(url, typed || (await credentials.read()).refs[LOCAL_LLM_REF] || null)
+      if (typed) await credentials.setRef(LOCAL_LLM_REF, typed)
+      const { settings } = await updateSettings({ localLlm: { baseURL: url, models } })
+      broadcast('accounts', { accounts: await accounts() })
+      return { settings, models }
+    },
+
+    'localLlm.remove': async () => {
+      await credentials.unsetRef(LOCAL_LLM_REF)
+      const { settings } = await updateSettings({ localLlm: { baseURL: null, models: [] } })
+      broadcast('accounts', { accounts: await accounts() })
+      return { settings }
+    },
+
     'account.setKey': async ({ provider, key, force }) => {
       const ref = provider === 'anthropic' ? ANTHROPIC_REF : provider === 'deepseek' ? DEEPSEEK_REF : null
       if (!ref) throw new Error('不明なプロバイダーです')

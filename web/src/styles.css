@@ -2601,6 +2601,29 @@ select:focus {
   min-width: 0;
 }
 
+.inline-form.wrap {
+  flex-wrap: wrap;
+}
+
+.inline-form .local-llm-url {
+  flex-basis: 100%;
+}
+
+.local-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.local-models code {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .instructions-input {
   width: 100%;
   min-height: 180px;
