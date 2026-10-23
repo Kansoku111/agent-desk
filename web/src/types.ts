@@ -55,7 +55,7 @@ export type TeamProvider = 'gpt' | 'claude' | 'claudeApi' | 'deepseek'
 export type TeamLeaderProvider = 'gpt' | 'claude'
 export type TeamTier = 'low' | 'mid'
 /** `removed`: the child's task was deleted on its own. */
-export type TeamChildState = 'running' | 'approval' | 'idle' | 'closed' | 'error' | 'stopped' | 'removed'
+export type TeamChildState = 'running' | 'approval' | 'idle' | 'closed' | 'error' | 'stopped' | 'removed' | 'resuming'
 
 /** One child agent of a team: a dsh task (GPT, Claude (API), DeepSeek) or headless Claude Code (Claude). */
 export interface TeamChild {

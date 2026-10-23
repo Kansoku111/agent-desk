@@ -167,5 +167,11 @@ readline.createInterface({ input: process.stdin, crlfDelay: Infinity }).on('line
   const run = handle(message).finally(() => pending.delete(run))
   pending.add(run)
 }).on('close', () => {
-  void Promise.allSettled([...pending]).then(() => process.exit(0))
+  // The process ends by itself once the calls in flight are answered: process.exit with a
+  // fetch connection still closing trips a libuv assertion on Windows.
+  void Promise.allSettled([...pending]).then(() => {
+    process.exitCode = 0
+    // Should anything still hold it open, it goes anyway.
+    setTimeout(() => process.exit(0), 5000).unref()
+  })
 })

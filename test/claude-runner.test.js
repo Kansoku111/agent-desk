@@ -291,3 +291,18 @@ test('removing a running session prevents a late exit from recreating its file',
   await runner.writes.get(session.id)
   await assert.rejects(fs.access(path.join(dir, `${session.id}.json`)))
 })
+
+test('what was denied is reported with a turn that ended in an error too', async (t) => {
+  const { runner, spawned, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work' })
+  runner.run(session.id, 'x')
+  await tick()
+  const [proc] = spawned
+  const ended = done()
+  proc.write({ type: 'result', subtype: 'error_during_execution', is_error: true, result: '', permission_denials: [{ tool_name: 'Bash', tool_input: { command: 'rm -rf build' } }] })
+  await tick()
+  proc.end(1)
+  const info = await ended
+  assert.equal(info.status, 'error')
+  assert.deepEqual(info.denials, [{ tool_name: 'Bash', tool_input: { command: 'rm -rf build' } }])
+})

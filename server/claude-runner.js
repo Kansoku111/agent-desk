@@ -414,7 +414,8 @@ export class ClaudeRunner extends EventEmitter {
       : error
         ? `Claude Code を起動できませんでした: ${error.message}`
         : `Claude Code が終了しました（終了コード ${code ?? '?'}）${live.stderr.trim() ? `\n${live.stderr.trim()}` : ''}`
-    this.#finish(record, live.turn, { status: 'error', message, text: result ? '' : undefined })
+    // What was denied stays in the report of a turn that failed as well: the leader decides on it either way.
+    this.#finish(record, live.turn, { status: 'error', message, text: result ? '' : undefined, denials: live.denials })
   }
 
   #finish(record, turn, { status, message, text = '', denials = [], stopReason = null, quiet = false }) {

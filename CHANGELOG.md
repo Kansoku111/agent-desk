@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Agent teams: "全停止" and `close` no longer leave messages waiting that start the child's next turn once the stopped one ends (a closed child could work on unseen and uncounted). A leader's `send` that missed a GPT child's turn ending while it was steered now goes as soon as the child is free instead of waiting for good. A child waiting to go on after a passing failure shows as "再開待ち", and "全停止" can stop it.
+- Agent teams: a Claude child's report keeps the actions that were denied for want of an approval when its turn ends in an error, not only when it succeeds.
+- The agent-team MCP server no longer trips a libuv assertion on Windows when Claude Code closes it: it ends once its calls are answered instead of calling process.exit.
+- Docs: the Claude Code billing confirmation is described as it works: once per authentication mode, reused by every team.
 - Claude Code background status no longer counts internal/unknown hook tasks as active work or duplicates an agent under its task-registry id. Lifecycle hooks report in order so a delayed start cannot resurrect a completed agent; idle notifications reconcile missed agent completions without clearing running shell commands.
 - A GPT task on a model other than the one chosen under Settings → Models → Subagents (for example GPT-6 Astra with GPT-6.1 Sol chosen) started its subagents on its own model, because it called the plain `subagent`, which always runs on the task's model, instead of `subagent_gpt`. The prompt now tells each task to delegate with the pinned tool of its own model family, and to use `subagent_fork` only when the child must see the conversation. The paragraph is no longer than before (508 characters against 510 with both tools pinned). It is guidance to the model, not a guarantee; the settings screen now says plainly that `subagent` follows the task's model.
 - A Claude Code task's conversation view now shows a message you typed while it worked (Claude Code keeps it as a queued command, which was skipped), in the turn it was read in.

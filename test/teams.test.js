@@ -1414,3 +1414,56 @@ test('a team removed while a fresh start runs leaves neither task behind', async
   await assert.rejects(tool('send', { child: 'A', message: 'b', fresh: true }), /team was removed/)
   assert.deepEqual([...threads.threads.keys()].filter((id) => id !== team.leaderId), [])
 })
+
+test('stopping all drops what waited for the stopped turns, so nothing starts again', async (t) => {
+  const { agents, threads, terminals, tool, leader, manager, team } = await setup(t)
+  terminals.set(leader, { activity: 'running' })
+  await tool('spawn', { title: 'c', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  await tool('spawn', { title: 'g', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
+  agents.sessions.get('agent-1').steerable = false
+  await tool('send', { child: 'C', message: 'あとで' })
+  manager.messageChild(team.id, team.children[0].id, 'ユーザーの予約')
+  await tool('send', { child: 'G', message: 'あとで' })
+  assert.deepEqual(team.children.map((child) => child.pending.length), [1, 1])
+  await manager.stopAll(team.id)
+  threads.threads.get('thread-1').status = 'idle'
+  threads.emit('turn-finished', { threadId: 'thread-1', status: 'cancelled' })
+  await tick()
+  assert.equal(agents.running('agent-1'), false)
+  assert.equal(threads.threads.get('thread-1').status, 'idle')
+  assert.equal(agents.calls.filter((call) => call[0] === 'run').length, 1)
+})
+
+test('a closed child does not start again on a message the user left for it', async (t) => {
+  const { agents, tool, manager, team } = await setup(t)
+  await tool('spawn', { title: 'c', task: 'a', tier: 'low', provider: 'claude', name: 'C' })
+  manager.messageChild(team.id, team.children[0].id, 'ユーザーの予約')
+  await tool('close', { child: 'C' })
+  await tick()
+  assert.equal(agents.running('agent-1'), false)
+  assert.equal(agents.calls.filter((call) => call[0] === 'run').length, 1)
+})
+
+test('a message that missed the turn ending while it was steered goes when the child is free', async (t) => {
+  const { threads, tool } = await setup(t)
+  await tool('spawn', { title: 'g', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
+  // The turn ends while the steer is answered, and the steer did not take.
+  threads.steer = async (id, { text }) => {
+    threads.calls.push(['steer', id, text])
+    threads.finish(id, 'done')
+    await tick()
+    return { steered: false }
+  }
+  await tool('send', { child: 'G', message: '追加の指示' })
+  await tick()
+  assert.equal(threads.calls.filter((call) => call[0] === 'send' && call[1] === 'thread-1').at(-1)[2], '[リーダーから]\n追加の指示')
+})
+
+test('a child waiting to go on after a passing failure shows as such', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { threads, tool, manager, team } = await setup(t)
+  await tool('spawn', { title: 'g', task: 'b', tier: 'low', provider: 'gpt', name: 'G' })
+  failThread(threads, 'thread-1', '503 Service Unavailable')
+  assert.equal(manager.summary(team).children[0].state, 'resuming')
+  assert.match(await tool('status'), /G \[再開待ち\]/)
+})

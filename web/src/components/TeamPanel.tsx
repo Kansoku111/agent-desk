@@ -18,10 +18,13 @@ const STATE_LABEL: Record<TeamChildState, string> = {
   error: 'エラー',
   stopped: '停止中',
   removed: '削除済み',
+  resuming: '再開待ち',
 }
 const PROVIDER_LABEL = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude API', deepseek: 'DeepSeek' }
 
 const isActive = (state: TeamChildState) => state === 'running' || state === 'approval'
+/** What 全停止 stops: work under way, and work about to go on by itself. */
+const isStoppable = (state: TeamChildState) => isActive(state) || state === 'resuming'
 
 /** An idle child whose last turn ended in a report is waiting for the leader's audit. */
 export function stateLabel(child: TeamChild) {
@@ -32,6 +35,7 @@ export function stateLabel(child: TeamChild) {
 export function StateIcon({ state, size = 14 }: { state: TeamChildState; size?: number }) {
   if (state === 'running') return <Loader2 size={size} className="spin" />
   if (state === 'approval') return <ShieldAlert size={size} />
+  if (state === 'resuming') return <RefreshCw size={size} />
   if (state === 'closed') return <CheckCircle2 size={size} />
   if (state === 'error') return <XCircle size={size} />
   if (state === 'idle') return <CircleDot size={size} />
@@ -277,6 +281,7 @@ export function TeamPanel({ team }: { team: TeamSummary }) {
   const [usage, setUsage] = useState(false)
   const [stopping, setStopping] = useState(false)
   const running = team.children.filter((child) => isActive(child.state)).length
+  const stoppable = team.children.filter((child) => isStoppable(child.state)).length
   const children = [...team.children].sort((a, b) => a.createdAt - b.createdAt)
   return (
     <>
@@ -303,8 +308,8 @@ export function TeamPanel({ team }: { team: TeamSummary }) {
             <button type="button" className="button team-diagram-button" onClick={() => setUsage(true)} title="Claude と GPT（Codex）の利用上限を見る">
               <Gauge size={14} /> 使用量
             </button>
-            <button type="button" className="button team-diagram-button" onClick={() => setStopping(true)} disabled={running === 0}
-              title={running === 0 ? '作業中の子はいません' : '作業中の子をすべて止める'}>
+            <button type="button" className="button team-diagram-button" onClick={() => setStopping(true)} disabled={stoppable === 0}
+              title={stoppable === 0 ? '作業中の子はいません' : '作業中の子をすべて止める'}>
               <Square size={13} /> 全停止
             </button>
           </div>

@@ -75,6 +75,7 @@ const providerList = (providers) => providers.map((provider) => `"${provider}"`)
 const TIER_LABEL = { low: '低', mid: '中' }
 const STATE_LABEL = {
   running: '作業中', idle: '待機中', approval: '承認待ち', error: 'エラー', stopped: '停止中', closed: '終了', removed: '削除済み',
+  resuming: '再開待ち',
 }
 
 export class TeamManager extends EventEmitter {
@@ -256,6 +257,8 @@ export class TeamManager extends EventEmitter {
   #childState(child) {
     if (!child.taskId) return 'running'
     if ([...this.approvals.values()].some((entry) => entry.childId === child.id)) return 'approval'
+    // Stopped on a passing failure, going on by itself shortly (#resumeLater).
+    if (this.retries.has(`resume:${child.id}`)) return 'resuming'
     if (child.kind === 'thread') {
       const thread = this.threads.threads.get(child.taskId)
       if (!thread) return 'removed'
@@ -658,6 +661,8 @@ export class TeamManager extends EventEmitter {
       child.awaiting = false
       throw error
     }
+    // The turn may have ended while the steer was answered, with nothing left to send it then.
+    if (child.pending.length) void this.#flushChild(team, child)
     await this.#save()
     this.#emit(team)
     return `子「${child.name}」に${how}。報告が届くまで、ターンを終えて待ってください。`
@@ -831,7 +836,9 @@ export class TeamManager extends EventEmitter {
     this.#cancelResume(child)
     child.closed = true
     child.awaiting = false
+    // Nothing waiting starts it again once its turn ends.
     child.pending = []
+    child.followups = []
     child.updatedAt = this.now()
     for (const approval of [...this.approvals.values()]) {
       if (approval.childId === child.id) this.#settleApproval(team, approval, false)
@@ -941,6 +948,9 @@ export class TeamManager extends EventEmitter {
         continue
       }
       if (!child.taskId || !this.#childBusy(child)) continue
+      // What waited for this turn to end would start the next one: stopped means stopped.
+      child.pending = []
+      child.followups = []
       this.userStopped.add(child.id)
       try {
         if (child.kind === 'thread') await this.threads.cancel(child.taskId)
