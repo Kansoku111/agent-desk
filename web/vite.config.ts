@@ -13,6 +13,7 @@ export default defineConfig({
     proxy: {
       '/ws': { target: backend, ws: true, changeOrigin: true },
       '/attachments': { target: backend, changeOrigin: true },
+      '/local-image': { target: backend, changeOrigin: true },
       '/api/auth': { target: backend, changeOrigin: true },
     },
   },

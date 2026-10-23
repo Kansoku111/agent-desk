@@ -255,7 +255,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
               </button>
             )}
             <div className="column">
-              <Composer thread={thread} autoFocus />
+              <Composer key={thread.id} thread={thread} autoFocus />
             </div>
           </div>
         </div>

@@ -124,12 +124,13 @@ export class Outbox {
 
   private async pump(threadId: string, allowError: boolean) {
     while (this.canConnect()) {
-      let message = this.queues[threadId]?.[0]
+      const message = this.queues[threadId]?.[0]
       if (!message) return
       if (message.phase === 'sending' || message.phase === 'uncertain') {
         if (!await this.reconcile(threadId, message)) return
-        message = this.queues[threadId]?.[0]
-        if (!message) return
+        // The next entry can also be awaiting a receipt (several queued
+        // follow-ups may have been steered before the page reloaded).
+        continue
       }
       const thread = this.options.thread(threadId)
       if (!thread || (thread.status !== 'idle' && !(allowError && thread.status === 'error')) || message.phase !== 'queued') return

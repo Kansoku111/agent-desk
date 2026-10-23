@@ -187,6 +187,28 @@ test('concurrent flushes serialize one task and a fast completed turn drains the
   assert.deepEqual(calls, [ID, NEXT_ID])
 })
 
+test('reconnect reconciles every previously sent message even when the thread stays idle', async () => {
+  // The connection can remain open while acknowledgements time out. The user
+  // can then steer another follow-up, leaving multiple durable pending IDs.
+  const first = fixture({ request: async () => { throw new TransportError('lost ack') } })
+  first.state.status = 'running'
+  first.outbox.enqueue('task', 'one', [])
+  first.outbox.enqueue('task', 'two', [])
+  await first.outbox.steer('task', ID)
+  await first.outbox.steer('task', NEXT_ID)
+  const initial = readQueues(first.state.saved)
+  assert.deepEqual(initial.task.map((message) => message.phase), ['sending', 'sending'])
+  const calls = []
+  const { outbox } = fixture({ initial, request: async (type, params) => {
+    calls.push({ type, id: params.messageId })
+    assert.equal(type, 'thread.messageStatus')
+    return { status: 'accepted', kind: 'steer', turnId: 'turn' }
+  } })
+  await outbox.flush('task')
+  assert.deepEqual(calls.map((call) => call.id), [ID, NEXT_ID])
+  assert.deepEqual(outbox.snapshot(), {})
+})
+
 test('a late acknowledgement cannot restore a deleted task queue', async () => {
   const reply = deferred()
   const started = deferred()
