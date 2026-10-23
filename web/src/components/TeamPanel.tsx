@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import {
   ArrowLeft, CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Users, X, XCircle,
 } from 'lucide-react'
@@ -275,7 +275,7 @@ function UsageDialog({ onClose }: { onClose: () => void }) {
 }
 
 /** The right-hand panel beside a team's leader: its children, live, and what needs the user. */
-export function TeamPanel({ team }: { team: TeamSummary }) {
+export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }) {
   const [diagram, setDiagram] = useState(false)
   const [editing, setEditing] = useState(false)
   const [usage, setUsage] = useState(false)
@@ -327,7 +327,7 @@ export function TeamPanel({ team }: { team: TeamSummary }) {
       )}
     </>
   )
-}
+})
 
 // ---------------------------------------------------------------- the diagram
 

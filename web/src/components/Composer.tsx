@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
+import { memo, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
 import { ArrowUp, Clock3, CornerDownRight, FileText, Loader2, Paperclip, Square, X } from 'lucide-react'
 import { act, isImageAttachment, isTouch, removeQueued, retryQueued, sendMessage, setState, startThread, steerQueued, uploadAttachment, useStore } from '../store'
 import type { Attachment, PermissionMode, ThreadSummary } from '../types'
@@ -31,7 +31,7 @@ function UsageRing({ used, size }: { used: number; size: number }) {
   )
 }
 
-export function Composer({ thread, autoFocus }: { thread?: ThreadSummary; autoFocus?: boolean }) {
+export const Composer = memo(function Composer({ thread, autoFocus }: { thread?: ThreadSummary; autoFocus?: boolean }) {
   const key = thread?.id ?? 'new'
   const draft = useStore((state) => state.draft)
   const queued = useStore((state) => (thread ? state.queued[thread.id] : undefined)) ?? []
@@ -249,4 +249,4 @@ export function Composer({ thread, autoFocus }: { thread?: ThreadSummary; autoFo
       {dragging && <div className="drop-hint">ドロップしてファイルを添付</div>}
     </div>
   )
-}
+})

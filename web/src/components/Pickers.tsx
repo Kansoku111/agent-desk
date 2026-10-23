@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import {
   Brain, ChevronDown, FolderOpen, FolderPlus, KeyRound, Monitor, Shield, ShieldAlert, ShieldCheck, X, Zap,
 } from 'lucide-react'
@@ -38,19 +39,23 @@ export function byNewest(a: { id: string }, b: { id: string }) {
 
 export function ModelPicker({ value, onChange }: { value: string | null; onChange: (value: string) => void }) {
   const server = useStore((state) => state.server)
-  const groups = new Map<string, CatalogModel[]>()
-  for (const model of server ? visibleModels(server) : []) {
-    const list = groups.get(model.provider) ?? []
-    list.push(model)
-    groups.set(model.provider, list)
-  }
-  // Models the ChatGPT account no longer offers sink to the bottom of their group.
-  for (const list of groups.values()) list.sort((a, b) => Number(Boolean(a.retired)) - Number(Boolean(b.retired)) || byNewest(a, b))
-  const order = [...new Set([...PROVIDER_ORDER, ...groups.keys()])].filter((provider) => groups.has(provider))
-  // The wheel walks the models the menu offers, in menu order.
-  const selectable = server
-    ? order.filter((provider) => providerReady(server, provider)).flatMap((provider) => groups.get(provider)!.map((model) => model.value))
-    : []
+  // Regrouped only when the server state changes, not on every render of the composer.
+  const { groups, order, selectable } = useMemo(() => {
+    const groups = new Map<string, CatalogModel[]>()
+    for (const model of server ? visibleModels(server) : []) {
+      const list = groups.get(model.provider) ?? []
+      list.push(model)
+      groups.set(model.provider, list)
+    }
+    // Models the ChatGPT account no longer offers sink to the bottom of their group.
+    for (const list of groups.values()) list.sort((a, b) => Number(Boolean(a.retired)) - Number(Boolean(b.retired)) || byNewest(a, b))
+    const order = [...new Set([...PROVIDER_ORDER, ...groups.keys()])].filter((provider) => groups.has(provider))
+    // The wheel walks the models the menu offers, in menu order.
+    const selectable = server
+      ? order.filter((provider) => providerReady(server, provider)).flatMap((provider) => groups.get(provider)!.map((model) => model.value))
+      : []
+    return { groups, order, selectable }
+  }, [server])
   const wheel = useWheelSelect<HTMLButtonElement>(selectable, value, onChange)
   if (!server) return null
   const label = modelName(server, wheel.shown) ?? 'モデルを選択'

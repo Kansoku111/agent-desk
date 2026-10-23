@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Bot, CheckCircle2, ChevronLeft, ChevronRight, CircleSlash, Loader2, MessageSquare, X, XCircle } from 'lucide-react'
 import { setSubagentPanel, setState, useStore } from '../store'
 import type { SubagentInfo, SubagentStatus, ThreadSummary, TurnItem } from '../types'
@@ -213,7 +213,7 @@ function Detail({ subagent, workspace }: { subagent: SubagentInfo; workspace: st
 }
 
 /** The right-hand panel: a task's subagents, live, and what each one is doing. */
-export function SubagentPanel({ thread }: { thread: ThreadSummary }) {
+export const SubagentPanel = memo(function SubagentPanel({ thread }: { thread: ThreadSummary }) {
   const subagents = useStore((state) => state.subagents[thread.id])
   const focus = useStore((state) => state.subagentFocus)
   const selected = subagents?.find((subagent) => subagent.id === focus)
@@ -227,4 +227,4 @@ export function SubagentPanel({ thread }: { thread: ThreadSummary }) {
       </aside>
     </>
   )
-}
+})

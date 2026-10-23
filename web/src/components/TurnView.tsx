@@ -228,7 +228,7 @@ function Steer({ item }: { item: SteerItem }) {
   return <UserBubble text={item.text} images={item.images} note="作業中に送信" />
 }
 
-export function Item({ item, workspace }: { item: TurnItem; workspace: string }) {
+export const Item = memo(function Item({ item, workspace }: { item: TurnItem; workspace: string }) {
   switch (item.type) {
     case 'agent':
       return <div className="agent-text"><Markdown text={item.text} workspace={workspace} /></div>
@@ -243,7 +243,7 @@ export function Item({ item, workspace }: { item: TurnItem; workspace: string })
     case 'steer':
       return <Steer item={item} />
   }
-}
+})
 
 export function Elapsed({ since }: { since: number }) {
   const [now, setNow] = useState(Date.now())

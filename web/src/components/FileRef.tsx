@@ -89,8 +89,11 @@ export function useFileInfo(ref: string | null | undefined, workspace: string | 
 
 /** useFileInfo for several references at once, in the same order. */
 export function useFileInfos(refs: readonly string[], workspace: string | null) {
-  useSyncExternalStore(subscribe, () => version)
   const infos = refs.map((ref) => isUncPath(ref) ? null : known.get(keyOf(workspace, ref))?.info ?? null)
+  // What the server said about a file never changes once it exists, so only references still
+  // unresolved (and asked again later) follow the lookups that finish; the others stay put.
+  const unresolved = infos.some((info, index) => !info && !isUncPath(refs[index]))
+  useSyncExternalStore(subscribe, () => (unresolved ? version : -1))
   useEffect(() => {
     refs.forEach((ref, index) => {
       if (!infos[index] && !isUncPath(ref)) ask(workspace, ref)

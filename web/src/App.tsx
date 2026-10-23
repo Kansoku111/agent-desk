@@ -1,16 +1,19 @@
-import { useEffect } from 'react'
+import { Suspense, useEffect } from 'react'
 import { AlertTriangle, CheckCircle2, Info, Loader2, WifiOff } from 'lucide-react'
 import { Home } from './components/Home'
-import { SettingsDialog } from './components/Settings'
 import { ProjectDialog } from './components/ProjectDialog'
 import { TeamStartDialog } from './components/TeamSettings'
 import { Sidebar } from './components/Sidebar'
 import { ThreadView } from './components/ThreadView'
-import { TerminalView } from './components/TerminalView'
 import { AgentView } from './components/AgentView'
 import { FileMenuHost } from './components/FileRef'
+import { lazyChunk } from './lazy-chunk'
 import { useSidebarSwipe } from './sidebarSwipe'
 import { getState, navigate, remoteHost, setState, teamChildOf, useStore } from './store'
+
+// Only used once opened: the terminal screen (xterm) and the settings dialog stay out of the first load.
+const TerminalView = lazyChunk(() => import('./components/TerminalView').then((module) => ({ default: module.TerminalView })))
+const SettingsDialog = lazyChunk(() => import('./components/Settings').then((module) => ({ default: module.SettingsDialog })))
 
 function useTheme() {
   const theme = useStore((state) => state.server?.settings.theme ?? 'dark')
@@ -131,10 +134,10 @@ export function App() {
           </div>
         )}
         {route.view === 'thread' ? <ThreadView threadId={route.id} />
-          : route.view === 'terminal' ? <TerminalView key={route.id} terminalId={route.id} />
+          : route.view === 'terminal' ? <Suspense fallback={null}><TerminalView key={route.id} terminalId={route.id} /></Suspense>
             : route.view === 'agent' ? <AgentView taskId={route.id} /> : <Home />}
       </main>
-      {settingsOpen && <SettingsDialog tab={settingsOpen} />}
+      {settingsOpen && <Suspense fallback={null}><SettingsDialog tab={settingsOpen} /></Suspense>}
       {projectDialog && <ProjectDialog />}
       {teamStart && <TeamStartDialog key={teamStart} workspace={teamStart} />}
       <Toasts />

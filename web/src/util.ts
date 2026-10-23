@@ -267,7 +267,22 @@ const DESKTOP_VERBS: Record<string, string> = {
   wait: '待機',
 }
 
+const summaries = new WeakMap<ToolItem, { workspace: string | null | undefined; summary: ToolSummary }>()
+
+/**
+ * The one-line summary of a tool call. A turn's items are not changed once
+ * received, and the store hands back the same object for an item that did not
+ * change, so the summary (and its diff) is computed once per item.
+ */
 export function summarizeTool(item: ToolItem, workspace?: string | null): ToolSummary {
+  const cached = summaries.get(item)
+  if (cached && cached.workspace === workspace) return cached.summary
+  const summary = computeSummary(item, workspace)
+  summaries.set(item, { workspace, summary })
+  return summary
+}
+
+function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary {
   const input = (item.input ?? {}) as Record<string, unknown>
   const name = item.name.toLowerCase()
   const output = item.output ?? ''

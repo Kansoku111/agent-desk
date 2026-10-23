@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ArrowDown, Bot, ChevronDown, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, SquareTerminal, Trash2,
 } from 'lucide-react'
@@ -65,13 +65,13 @@ export function OpenInMenu({ workspace }: { workspace: string }) {
   )
 }
 
-/** Estimated API cost of the task's turns up to and including one turn, or null when none were billed. */
-function costUpTo(turns: Turn[], index: number) {
+/** Estimated API cost of the task's turns up to and including each turn, or null where none was billed yet. */
+function costsUpTo(turns: Turn[]) {
   let total: number | null = null
-  for (const turn of turns.slice(0, index + 1)) {
+  return turns.map((turn) => {
     if (turn.usage?.cost != null) total = (total ?? 0) + turn.usage.cost
-  }
-  return total
+    return total
+  })
 }
 
 /** Shows or hides the subagent panel; only on tasks that started subagents. */
@@ -95,7 +95,7 @@ function SubagentToggle({ threadId }: { threadId: string }) {
   )
 }
 
-function Header({ thread }: { thread: ThreadSummary }) {
+const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
   const sidebarOpen = useStore((state) => state.sidebarOpen)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
@@ -180,7 +180,7 @@ function Header({ thread }: { thread: ThreadSummary }) {
       </div>
     </header>
   )
-}
+})
 
 export function ThreadView({ threadId }: { threadId: string }) {
   const thread = useStore((state) => state.server?.threads.find((entry) => entry.id === threadId))
@@ -209,6 +209,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
 
   if (!thread) return <div className="main-empty">タスクが見つかりません</div>
   const undoableId = turns ? undoableRestore(turns) : null
+  const costs = turns ? costsUpTo(turns) : []
   return (
     <div className="thread-view">
       <Header thread={thread} />
@@ -231,7 +232,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                   key={turn.id}
                   turn={turn}
                   workspace={thread.workspace}
-                  taskCost={costUpTo(turns, index)}
+                  taskCost={costs[index]}
                   threadId={thread.id}
                   threadBusy={thread.status === 'running'}
                   undoable={turn.id === undoableId}
