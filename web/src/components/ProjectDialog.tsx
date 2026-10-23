@@ -106,7 +106,7 @@ export function ProjectDialog() {
                     value={typed}
                     onChange={(event) => setTyped(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.nativeEvent.isComposing) return
+                      if (event.nativeEvent.isComposing || event.keyCode === 229) return
                       if (event.key === 'Enter') {
                         event.preventDefault()
                         if (typed.trim()) choose(typed.trim().replace(/^"(.*)"$/, '$1'))

@@ -128,7 +128,7 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
               onChange={(event) => setTitle(event.target.value)}
               onBlur={() => void save()}
               onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing) return
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return
                 if (event.key === 'Enter') void save()
                 if (event.key === 'Escape') {
                   setTitle(thread.title)

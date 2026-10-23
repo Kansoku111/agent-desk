@@ -9,7 +9,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, openExternal, request, setState, uploadAttachment, useRemote, useStore } from '../store'
-import { useDraft } from '../drafts'
+import { getDraft, useDraft } from '../drafts'
 import type { Attachment, TerminalSummary } from '../types'
 import { copyText, workspaceLabel } from '../util'
 import { ConfirmDialog } from './Modal'
@@ -145,7 +145,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
               onChange={(event) => setTitle(event.target.value)}
               onBlur={() => void save()}
               onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing) return
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return
                 if (event.key === 'Enter') void save()
                 if (event.key === 'Escape') {
                   setTitle(terminal.title)
@@ -261,6 +261,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
   const [sending, setSending] = useState(false)
   const submit = async () => {
     if (sending || uploading > 0) return
+    const sent = text
     if (attachments.length) {
       // The files go in first, so their paths come before the message.
       setSending(true)
@@ -275,16 +276,20 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
       }
       setAttachments([])
     }
-    if (text) {
+    if (sent) {
       // A paste keeps line breaks in the message; Enter then sends it.
       if (term) {
-        term.paste(text)
+        term.paste(sent)
         setTimeout(() => sendInput(terminalId, '\r'), 60)
       } else {
         // The screen is not open here: the server pastes the message and sends it.
-        request('terminal.send', { terminalId, text }).catch(() => {})
+        setSending(true)
+        const result = await act('terminal.send', { terminalId, text: sent })
+        setSending(false)
+        if (result === null) return
       }
-      setText('')
+      // What was typed while the message was on its way is the next one.
+      if (getDraft(`terminal:${terminalId}`) === sent) setText('')
     } else {
       // The server presses Enter (and again if Claude Code did not take it); it waits for the file paths to be taken first.
       request('terminal.send', { terminalId, text: '' }).catch(() => {})
@@ -373,7 +378,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
           onChange={(event) => setText(event.target.value)}
           // Enter sends on a computer (Shift+Enter breaks the line); on a phone it stays a line break.
           onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || isTouch()) return
+            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229 || isTouch()) return
             event.preventDefault()
             void submit()
           }}

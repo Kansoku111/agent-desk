@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowDown, Clock3, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, Send, Square, X } from 'lucide-react'
 import { act, isTouch, setState, teamChildOf, useRemote, useStore } from '../store'
-import { useDraft } from '../drafts'
+import { getDraft, useDraft } from '../drafts'
 import { workspaceLabel } from '../util'
 import { BackToLeader, StateIcon, stateLabel } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
@@ -46,7 +46,8 @@ export function AgentView({ taskId }: { taskId: string }) {
     const result = await act('team.message', { teamId: team.id, childId: child.id, text: body })
     setSending(false)
     if (result) {
-      setText('')
+      // What was typed while the message was on its way is the next one.
+      if (getDraft(`agent:${taskId}`).trim() === body) setText('')
       stick.current = true
     }
   }
@@ -147,7 +148,7 @@ export function AgentView({ taskId }: { taskId: string }) {
                 aria-label={`子「${child.name}」に送るメッセージ`}
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.nativeEvent.isComposing) return
+                  if (event.nativeEvent.isComposing || event.keyCode === 229) return
                   if (event.key === 'Escape' && working) {
                     event.preventDefault()
                     void act('team.stopChild', { teamId: team.id, childId: child.id })

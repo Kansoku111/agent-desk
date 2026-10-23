@@ -130,7 +130,7 @@ function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; activ
             onChange={(event) => setTitle(event.target.value)}
             onBlur={() => void save()}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return
               if (event.key === 'Enter') void save()
               if (event.key === 'Escape') {
                 setTitle(thread.title)
@@ -236,7 +236,7 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
             onChange={(event) => setTitle(event.target.value)}
             onBlur={() => void save()}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return
               if (event.key === 'Enter') void save()
               if (event.key === 'Escape') {
                 setTitle(terminal.title)
@@ -415,7 +415,7 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
               onChange={(event) => setName(event.target.value)}
               onBlur={() => void saveName()}
               onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing) return
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return
                 if (event.key === 'Enter') void saveName()
                 if (event.key === 'Escape') setRenaming(false)
               }}

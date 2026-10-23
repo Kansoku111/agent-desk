@@ -66,7 +66,10 @@ function readToken(): string | null {
   if (fromUrl) {
     try {
       sessionStorage.setItem(TOKEN_KEY, fromUrl)
-    } catch {}
+    } catch {
+      // Kept in the address instead, so a reload can still connect.
+      return fromUrl
+    }
     url.searchParams.delete('t')
     url.searchParams.delete('port')
     history.replaceState(null, '', url.pathname + url.search + url.hash)

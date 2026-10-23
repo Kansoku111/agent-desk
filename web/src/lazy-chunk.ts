@@ -16,8 +16,11 @@ export function lazyChunk<T extends ComponentType<any>>(load: () => Promise<{ de
     } catch (error) {
       let reloaded = true
       try {
-        reloaded = sessionStorage.getItem(RELOAD_KEY) !== null
-        if (!reloaded) sessionStorage.setItem(RELOAD_KEY, '1')
+        // Without a mark that survives the reload, it would reload again and again.
+        if (sessionStorage.getItem(RELOAD_KEY) === null) {
+          sessionStorage.setItem(RELOAD_KEY, '1')
+          reloaded = false
+        }
       } catch {}
       if (!reloaded) {
         window.location.reload()
