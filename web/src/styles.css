@@ -2768,33 +2768,6 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
-.model-form {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 12px;
-}
-
-.model-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-
-.model-form-actions {
-  display: flex;
-  grid-column: 1 / -1;
-  justify-content: flex-end;
-}
-
-@media (max-width: 560px) {
-  .model-form {
-    grid-template-columns: 1fr;
-  }
-}
-
 .custom-models {
   display: flex;
   flex-direction: column;

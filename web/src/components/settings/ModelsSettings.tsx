@@ -1,14 +1,12 @@
-import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronUp, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { act, request, toast, useStore } from '../../store'
-import type { CustomModel, FastProvider, ModelUpdate } from '../../types'
+import { useState } from 'react'
+import { ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react'
+import { act, toast, useStore } from '../../store'
+import type { FastProvider, ModelUpdate } from '../../types'
 import { byNewest, providerReady } from '../Pickers'
 import { isModelVisible } from '../../model-selection'
 import { dateTime } from './shared'
 
-type Templates = Record<CustomModel['provider'], { id: string; name: string }[]>
-
-const MODEL_PROVIDERS: { id: CustomModel['provider']; label: string }[] = [
+const MODEL_PROVIDERS = [
   { id: 'openai-codex', label: 'ChatGPT' },
   { id: 'anthropic', label: 'Claude' },
 ]
@@ -253,132 +251,12 @@ function ModelVisibility() {
 }
 
 export function ModelsSettings({ contextOptions }: { contextOptions: number[] }) {
-  const custom = useStore((state) => state.server?.settings.customModels) ?? []
-  const [templates, setTemplates] = useState<Templates | null>(null)
-  const [provider, setProvider] = useState<CustomModel['provider']>('anthropic')
-  const [id, setId] = useState('')
-  const [name, setName] = useState('')
-  const [template, setTemplate] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = async () => {
-    try {
-      const result = await request<{ templates: Templates }>('models.templates')
-      setTemplates(result.templates)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    }
-  }
-  useEffect(() => {
-    void load()
-  }, [])
-
-  const choices = [...(templates?.[provider] ?? [])].sort(byNewest)
-  const chosenTemplate = choices.some((entry) => entry.id === template) ? template : choices[0]?.id ?? ''
-
-  const add = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      const result = await request<{ busy: boolean }>('models.addCustom', { provider, modelId: id, name, template: chosenTemplate })
-      toast(result.busy ? `${id} を追加しました。作業中のタスクが終わると一覧に反映されます` : `${id} を追加しました`, 'success')
-      setId('')
-      setName('')
-      void load()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    }
-    setBusy(false)
-  }
-
-  const remove = async (entry: CustomModel) => {
-    if (await act('models.removeCustom', { provider: entry.provider, modelId: entry.id }) !== null) {
-      toast(`${entry.id} を削除しました`, 'success')
-      void load()
-    }
-  }
-
   return (
     <div className="settings-section">
       <ModelVisibility />
       <FastMode />
       <ContextSizes contextOptions={contextOptions} />
       <Subagents />
-      <section className="account-card">
-        <div className="account-head">
-          <div>
-            <h3>モデルを追加</h3>
-            <p className="muted">
-              一覧にない新しいモデルを ID で追加します。コンテキスト長や推論レベルなどの設定は「元にするモデル」から引き継ぎます。
-            </p>
-          </div>
-        </div>
-        <form
-          className="model-form"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void add()
-          }}
-        >
-          <label>
-            <span>プロバイダー</span>
-            <select value={provider} onChange={(event) => setProvider(event.target.value as CustomModel['provider'])}>
-              {MODEL_PROVIDERS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>モデル ID</span>
-            <input
-              value={id}
-              onChange={(event) => setId(event.target.value)}
-              placeholder={provider === 'anthropic' ? 'claude-sonnet-6' : 'gpt-6.2-sol'}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          <label>
-            <span>表示名（任意）</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder={id || 'Claude Sonnet 6'} />
-          </label>
-          <label>
-            <span>元にするモデル</span>
-            <select value={chosenTemplate} onChange={(event) => setTemplate(event.target.value)} disabled={!choices.length}>
-              {choices.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
-            </select>
-          </label>
-          <div className="model-form-actions">
-            <button type="submit" className="button primary" disabled={!id.trim() || !chosenTemplate || busy}>
-              {busy ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} 追加
-            </button>
-          </div>
-        </form>
-        {error && <p className="form-error">{error}</p>}
-        <p className="fine-print">
-          モデル ID は提供元の API で使われる名前です（Claude は Claude Console のモデル一覧、ChatGPT は Codex のモデル名）。
-          存在しない ID を追加すると、送信時にエラーになります。
-        </p>
-      </section>
-
-      {custom.length > 0 && (
-        <section className="account-card">
-          <div className="account-head"><div><h3>追加したモデル</h3></div></div>
-          <ul className="custom-models">
-            {custom.map((entry) => (
-              <li key={`${entry.provider}/${entry.id}`}>
-                <div>
-                  <span>{entry.name || entry.id}</span>
-                  <code>{MODEL_PROVIDERS.find((item) => item.id === entry.provider)?.label} · {entry.id} · 元: {entry.template}</code>
-                </div>
-                <button type="button" className="icon-button" title="削除" aria-label={`${entry.id} を削除`} onClick={() => void remove(entry)}>
-                  <Trash2 size={14} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
       <ModelUpdateCard />
     </div>
   )

@@ -318,7 +318,6 @@ export interface Settings {
   lastWorkspace: string | null
   notifications: boolean
   anthropicWorkspaceId: string | null
-  customModels: CustomModel[]
   /** Picker visibility keyed by ACP model value; missing entries are visible. */
   modelVisibility: Record<string, boolean>
   browserTool: boolean
@@ -424,13 +423,6 @@ export interface ModelUpdate {
     /** Models in the catalog that the account's list no longer has. */
     retired: AddedModel[]
   }
-}
-
-export interface CustomModel {
-  provider: 'openai-codex' | 'anthropic'
-  id: string
-  template: string
-  name: string | null
 }
 
 export type LoginState =

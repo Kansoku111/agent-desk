@@ -30,7 +30,6 @@ export const DEFAULT_SETTINGS = {
   lastWorkspace: null,
   notifications: true,
   anthropicWorkspaceId: null,
-  customModels: [],
   // Picker visibility only; existing tasks and runtime model definitions stay intact.
   modelVisibility: {},
   // Agent tools (desktop is opt-in and Windows only).

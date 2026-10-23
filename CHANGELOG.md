@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Team Claude Code leaders and children inherit normal authentication, including users' own API keys and cloud credentials, rather than subscription-only environment filtering or API/cloud rejection. Regular CL behavior is unchanged. Saved team choices, models, and histories remain intact; no automatic migration to API, enabling, or fallback is performed.
 - docs/architecture.md now lists what Agent Desk reads and saves of Claude Code's data.
 
+### Removed
+
+- Settings → Models → "モデルを追加" (adding a model by ID, cloned from another model's definition) and its list. New models arrive by the automatic sync with the ChatGPT account's list and the newest pi-ai release. Models added this way earlier leave the catalog.
+
 ### Fixed
 
 - Agent teams: a Claude child that ended its turn while its own commands ran in the background (`run_in_background`, Monitor) reported "waiting for …" to the leader as if done, and its `claude -p` exited, so it was never woken when they finished: the team stalled until someone said "続けて". The run now keeps Claude Code's input open while `background_tasks_changed` lists anything, Claude Code goes on by itself when they end, and only the answer given with nothing left in the background reaches the leader. The wait is capped at 2 hours; past that the report names what was left. Claude children are told they may end a turn on a background command; dsh children still wait for theirs.

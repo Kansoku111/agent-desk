@@ -236,22 +236,3 @@ export async function configuredModelCatalog(customModels = [], fetched = null) 
   }
   return { changed: false, definitions, added, models, skipped, warnings }
 }
-
-/** Models a custom entry can be based on, for the settings form. */
-export async function templateModels() {
-  const [dir] = catalogDataDirs()
-  const result = {}
-  for (const provider of CUSTOM_MODEL_PROVIDERS) {
-    result[provider] = []
-    try {
-      const data = chatCatalog(JSON.parse(await fs.readFile(path.join(dir, `${provider}.json`), 'utf8')))
-      for (const group of Object.values(data)) {
-        for (const [id, model] of Object.entries(group)) {
-          if (model?.[MARKER] === 'custom' || model?.[MARKER] === 'account' || /-\d{8}$/.test(id)) continue
-          result[provider].push({ id, name: model.name ?? id })
-        }
-      }
-    } catch {}
-  }
-  return result
-}

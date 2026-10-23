@@ -204,7 +204,7 @@ async function syncModelCatalog() {
   let result
   try {
     const fromAccount = settings.modelAutoUpdate !== false ? accountModelAdditions(codexLimits.availability) : []
-    result = await configuredModelCatalog([...settings.customModels, ...fromAccount], modelUpdater.fetched)
+    result = await configuredModelCatalog(fromAccount, modelUpdater.fetched)
     configuredModels = result.definitions
     if (codexLimits.definitions.length) configuredModels['openai-codex'] = codexLimits.definitions
   } catch (error) {
@@ -583,7 +583,7 @@ const handlers = {
     updateSettings: (patch) => settingsService.update(patch),
   }),
   ...createModelHandlers({
-    getSettings, saveSettings, broadcast, threads, catalog, catalogState, updates, modelUpdater, modelUpdateState,
+    threads, catalog, catalogState, updates, modelUpdater, modelUpdateState,
     updateModelCatalog, refreshCodexModels,
   }),
   ...createTerminalHandlers({ paths, getSettings, saveSettings, broadcast, terminals, teams, agents }),
@@ -628,8 +628,7 @@ const handlers = {
 // Admission checks above run inside the queue, not before its possible wait.
 for (const type of [
   'thread.create', 'thread.update', 'terminal.create', 'team.create', 'workspace.pick', 'workspace.add', 'workspace.remove',
-  'project.create', 'project.rename', 'project.color', 'account.setKey', 'account.setWorkspace',
-  'models.addCustom', 'models.removeCustom', 'remote.set',
+  'project.create', 'project.rename', 'project.color', 'account.setKey', 'account.setWorkspace', 'remote.set',
 ]) {
   const handler = handlers[type]
   handlers[type] = (...args) => settingsService.run(() => handler(...args))
