@@ -23,6 +23,7 @@ function GuideList({ title, setting, saved, fields }: { title: string; setting: 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Saved elsewhere (another window, a phone): follow it unless there are unsaved edits here.
+  // Nothing is edited while a save is on its way, so its own result is never taken for one.
   if (!same(saved, base)) {
     setBase(saved)
     if (same(draft, base)) setDraft(saved)
@@ -48,16 +49,16 @@ function GuideList({ title, setting, saved, fields }: { title: string; setting: 
     <section className="account-card">
       <div className="account-head">
         <h3>{title}</h3>
-        <button type="button" className="button ghost" onClick={add} disabled={draft.length >= ENTRIES_MAX}>
+        <button type="button" className="button ghost" onClick={add} disabled={saving || draft.length >= ENTRIES_MAX}>
           <Plus size={14} /> 追加
         </button>
       </div>
       {draft.map((entry) => (
         <div key={entry.id} className="team-guide">
           <div className="team-guide-head">
-            <input value={entry.name} maxLength={NAME_MAX} onChange={(event) => edit(entry.id, { name: event.target.value })}
+            <input value={entry.name} maxLength={NAME_MAX} readOnly={saving} onChange={(event) => edit(entry.id, { name: event.target.value })}
               placeholder="名前" aria-label={`${title}の名前`} />
-            <button type="button" className="icon-button" onClick={() => setDraft(draft.filter((other) => other.id !== entry.id))}
+            <button type="button" className="icon-button" disabled={saving} onClick={() => setDraft(draft.filter((other) => other.id !== entry.id))}
               title="削除" aria-label={`${entry.name || title}を削除`}>
               <Trash2 size={15} />
             </button>
@@ -66,6 +67,7 @@ function GuideList({ title, setting, saved, fields }: { title: string; setting: 
             const value = entry[field.key] ?? ''
             const props = {
               value,
+              readOnly: saving,
               placeholder: field.placeholder,
               'aria-label': `${entry.name || title}の${field.label}`,
               onChange: (event: { target: { value: string } }) => edit(entry.id, { [field.key]: event.target.value }),
