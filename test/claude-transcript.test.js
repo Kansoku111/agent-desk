@@ -105,6 +105,15 @@ test('userText shows a slash command as typed and strips reminders from a prompt
   assert.equal(userText([{ type: 'text', text: '<system-reminder>x</system-reminder>\n質問です' }, { type: 'image', source: {} }]), '質問です\n\n[画像]')
 })
 
+test('a ! shell command shows as typed, and its output is not shown as a turn', () => {
+  assert.equal(userText('<bash-input>ls -la</bash-input>'), '! ls -la')
+  const conversation = conversationOf([
+    user('u1', '<bash-input>git status</bash-input>', 1),
+    user('u2', '<bash-stdout>On branch main</bash-stdout><bash-stderr></bash-stderr>', 2),
+  ])
+  assert.deepEqual(conversation.turns.map((turn) => turn.user.text), ['! git status'])
+})
+
 test('only the latest turns are kept, and the rest are counted', () => {
   const entries = []
   for (let i = 0; i < MAX_TURNS + 5; i += 1) entries.push(user(`u${i}`, `質問${i}`, i))

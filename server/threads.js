@@ -499,20 +499,19 @@ export class ThreadManager extends EventEmitter {
       this.#checkRun(thread, active)
       const prompt = await this.#promptBlocks(turn)
       this.#checkRun(thread, active)
-      if (thread.carryover) {
+      const { carryover, restoreNote } = thread
+      if (carryover) {
         const turns = this.turns.get(thread.id) ?? []
         const summary = carryoverText(turns.filter((entry) => entry !== turn))
         if (summary) prompt.unshift({ type: 'text', text: summary })
-        delete thread.carryover
-        this.#saveIndex()
       }
-      if (thread.restoreNote) {
-        prompt.unshift({ type: 'text', text: restoreNoteText(thread.restoreNote) })
-        delete thread.restoreNote
-        this.#saveIndex()
-      }
+      if (restoreNote) prompt.unshift({ type: 'text', text: restoreNoteText(restoreNote) })
       active.phase = 'prompting'
       const result = await runtime.prompt(thread.sessionId, prompt)
+      // Only a prompt the runtime took counts as telling the agent; a failed one keeps both for the next turn.
+      if (carryover) delete thread.carryover
+      if (restoreNote) delete thread.restoreNote
+      if (carryover || restoreNote) this.#saveIndex()
       const stopReason = result?.stopReason ?? 'end_turn'
       outcome = stopReason === 'cancelled' || active.cancelled
         ? { status: 'cancelled', stopReason: 'cancelled' }
@@ -691,6 +690,8 @@ export class ThreadManager extends EventEmitter {
       throw new Error('このあとに新しいメッセージを送ったか、別の時点に戻したため、取り消せません')
     }
     const result = await this.checkpoints.restore(thread.workspace, turn.restore.undo)
+    // A partial undo keeps its record, so it can be tried again.
+    if (result.error) return { files: result.restored.length + result.removed.length, error: result.error }
     delete turn.restore
     for (const entry of turns) if (entry.revertedBy === turn.id) delete entry.revertedBy
     if (thread.restoreNote?.turnId === turn.id) delete thread.restoreNote
@@ -880,12 +881,12 @@ export class ThreadManager extends EventEmitter {
     receipt.status = 'accepted'
     try {
       await this.#persistTurns(threadId)
-    } catch (error) {
+    } catch {
+      // The runtime already took the steer, so it reached the agent; only its record is uncertain.
       receipt.status = 'pending'
       item.delivery = 'uncertain'
       this.#saveTurns(threadId)
-      if (messageId) return { status: 'uncertain' }
-      throw error
+      return { status: 'uncertain', steered: true }
     }
     this.#emitTurn(threadId, turn, true)
     return { status: 'accepted', turnId: turn.id, kind: 'steer', steered: true }
@@ -1052,9 +1053,11 @@ export class ThreadManager extends EventEmitter {
     await Promise.all([...this.active.keys()].map((threadId) => this.cancel(threadId)))
     await Promise.allSettled([...this.requests.values(), ...this.removing.values(), ...this.turnLoads.values()])
     await Promise.all(active.map((entry) => entry.done))
-    await this.indexWriter.flush()
-    await Promise.all([...this.turnWriters.values()].map((writer) => writer.flush()))
+    // One failing file must not keep the others from being written.
+    const flushes = await Promise.allSettled([this.indexWriter.flush(), ...[...this.turnWriters.values()].map((writer) => writer.flush())])
     for (const timer of this.emitTimers.values()) clearTimeout(timer)
     this.emitTimers.clear()
+    const failed = flushes.find((result) => result.status === 'rejected')
+    if (failed) throw failed.reason
   }
 }

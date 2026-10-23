@@ -19,7 +19,7 @@ const IDLE_MS = 10 * 60_000
 /** Lines that hold messages start with one of these (the others are requests, snapshots and bookkeeping). */
 const WANTED = [Buffer.from('{"parentUuid"'), Buffer.from('{"type":"system"')]
 
-const NOISE = /^<(local-command-|task-notification|system-reminder>\s*$)/
+const NOISE = /^<(local-command-|task-notification|bash-(stdout|stderr)>|system-reminder>\s*$)/
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 const INTERRUPT = /^\[Request interrupted by user/
 
@@ -28,7 +28,7 @@ const time = (entry) => {
   return Number.isFinite(value) ? value : Date.now()
 }
 
-/** The text a user entry shows: slash commands as typed, system reminders and command output left out. */
+/** The text a user entry shows: slash and ! shell commands as typed, system reminders and command output left out. */
 export function userText(content) {
   const parts = []
   if (typeof content === 'string') parts.push(content)
@@ -44,6 +44,11 @@ export function userText(content) {
     if (command) {
       const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(part)?.[1]?.trim()
       shown.push(args ? `${command[1]} ${args}` : command[1])
+      continue
+    }
+    const shell = /<bash-input>([\s\S]*?)<\/bash-input>/.exec(part)
+    if (shell) {
+      shown.push(`! ${shell[1].trim()}`)
       continue
     }
     const text = part.replace(REMINDER, '').trim()

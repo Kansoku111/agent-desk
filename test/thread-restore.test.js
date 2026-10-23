@@ -115,3 +115,47 @@ test('restoreNoteText names a later request by its first line', () => {
   const text = restoreNoteText({ request: 'fix the header\nand the footer', first: false })
   assert.match(text, /before an earlier request of theirs \("fix the header"\)/)
 })
+
+test('a partly failed undo keeps its record, so the undo can be tried again', async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-undo-'))
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  const { pool } = fakePool(async () => {})
+  const undos = []
+  const checkpoints = {
+    async snapshot() { return { commit: 'before-commit' } },
+    async restore(_workspace, target, undoRef) {
+      if (undoRef) return { undo: 'undo-commit', restored: ['notes.txt'], removed: [], error: null }
+      undos.push(target)
+      return undos.length === 1
+        ? { undo: null, restored: [], removed: [], error: 'unable to unlink notes.txt: Permission denied' }
+        : { undo: null, restored: ['notes.txt'], removed: [], error: null }
+    },
+    async changes() { return [] },
+    async tidy() {},
+    async forget() {},
+  }
+  const manager = new ThreadManager({
+    paths: {
+      threadsIndex: path.join(base, 'threads.json'),
+      threadsDir: path.join(base, 'threads'),
+      attachmentsDir: path.join(base, 'attachments'),
+      dshHome: path.join(base, 'dsh-home'),
+      runtimeCwd: path.join(base, 'runtime'),
+    },
+    pool,
+    catalog: { learn: () => false },
+    getAccounts: async () => ({}),
+    getTurnUsage: async () => null,
+    checkpoints,
+  })
+  t.after(() => manager.shutdown())
+
+  const thread = await manager.create({ workspace: base, model: '["test","model"]' })
+  await manager.send(thread.id, { text: 'edit' })
+  const [turn] = await settled(manager, thread.id)
+  await manager.restoreCheckpoint(thread.id, turn.id)
+  assert.deepEqual(await manager.undoRestore(thread.id, turn.id), { files: 0, error: 'unable to unlink notes.txt: Permission denied' })
+  assert.ok((await manager.get(thread.id)).turns[0].restore)
+  assert.deepEqual(await manager.undoRestore(thread.id, turn.id), { files: 1, error: null })
+  assert.equal((await manager.get(thread.id)).turns[0].restore, undefined)
+})

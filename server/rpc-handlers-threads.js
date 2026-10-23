@@ -39,8 +39,13 @@ export function createThreadHandlers({ paths, threads, teams, subagents, getSett
       getSettings().defaultEffort = effort || getSettings().defaultEffort
       getSettings().defaultPermissionMode = permissionMode ?? getSettings().defaultPermissionMode
       if (thread.workspace !== paths.myPc && !getSettings().workspaces.includes(thread.workspace)) getSettings().workspaces.unshift(thread.workspace)
-      await saveSettings()
-      broadcast('settings', { settings: getSettings() })
+      try {
+        await saveSettings()
+        broadcast('settings', { settings: getSettings() })
+      } catch (error) {
+        // The task is already running. An error here would leave the draft to be sent again as a second task.
+        console.warn('[agent-desk] task created; saving settings failed:', error.message)
+      }
       return { thread: threads.summary(threads.threads.get(thread.id)) }
     },
 

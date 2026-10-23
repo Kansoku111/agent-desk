@@ -4,7 +4,9 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { createThreadHandlers } from '../server/rpc-handlers-threads.js'
 import { ThreadManager } from '../server/threads.js'
+import { fixture } from './helpers/thread-manager.js'
 
 test('two sends that arrive together start one turn; the other is refused', async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-send-'))
@@ -64,4 +66,53 @@ test('two sends that arrive together start one turn; the other is refused', asyn
   finish()
   for (let attempt = 0; attempt < 200 && manager.busy; attempt++) await new Promise((resolve) => setTimeout(resolve, 5))
   assert.equal(prompts.length, 1)
+})
+
+test('a summary for a new session is kept when the prompt that would carry it fails', async (t) => {
+  const f = await fixture(t)
+  const delivered = []
+  let failNext = false
+  f.runtime.prompt = async (_sessionId, blocks) => {
+    if (failNext) {
+      failNext = false
+      throw new Error('ACP connection closed')
+    }
+    delivered.push(blocks.map((block) => block.text).join('\n'))
+    return { stopReason: 'end_turn' }
+  }
+  const finished = () => new Promise((resolve) => f.manager.once('turn-finished', resolve))
+  let done = finished()
+  await f.manager.send(f.thread.id, { text: 'first question' })
+  assert.equal((await done).status, 'done')
+  await f.manager.update(f.thread.id, { permissionMode: 'read-only' })
+  failNext = true
+  done = finished()
+  await f.manager.send(f.thread.id, { text: 'second' })
+  assert.equal((await done).status, 'error')
+  done = finished()
+  await f.manager.send(f.thread.id, { text: 'third' })
+  assert.equal((await done).status, 'done')
+  assert.match(delivered.at(-1), /previous_conversation/)
+  assert.match(delivered.at(-1), /first question/)
+})
+
+test('a task whose settings cannot be saved is still reported as created, and its first message is sent once', async (t) => {
+  const f = await fixture(t)
+  const settings = { workspaces: [], lastWorkspace: null, defaultModel: null, defaultEffort: '', defaultPermissionMode: 'workspace-write' }
+  const handlers = createThreadHandlers({
+    paths: f.paths,
+    threads: f.manager,
+    teams: { userWrote() {} },
+    subagents: { list: async () => [] },
+    getSettings: () => settings,
+    saveSettings: async () => { throw new Error('EPERM: settings file is locked') },
+    broadcast() {},
+  })
+  const warn = t.mock.method(console, 'warn', () => {})
+  const { thread } = await handlers['thread.create']({ workspace: f.base, model: '["test","model"]', text: 'hello', images: [] })
+  await f.started.promise
+  assert.equal(f.calls.prompts.length, 1)
+  assert.equal(f.manager.threads.get(thread.id).id, thread.id)
+  assert.equal(warn.mock.calls.length, 1)
+  assert.match(warn.mock.calls[0].arguments[0], /saving settings failed/)
 })

@@ -258,7 +258,7 @@ test('failed final steering receipt is uncertain, never a replayable rejection',
     return write(value)
   })
   const message = { text: 'follow up', messageId: randomUUID() }
-  assert.deepEqual(await f.manager.steer(f.thread.id, message), { status: 'uncertain' })
+  assert.deepEqual(await f.manager.steer(f.thread.id, message), { status: 'uncertain', steered: true })
   assert.deepEqual(await f.manager.messageStatus(f.thread.id, message.messageId), { status: 'uncertain' })
   assert.deepEqual(await f.manager.send(f.thread.id, message), { status: 'uncertain' })
   assert.equal(f.calls.steers.length, 1)
@@ -268,6 +268,17 @@ test('failed final steering receipt is uncertain, never a replayable rejection',
   assert.deepEqual(await restarted.messageStatus(f.thread.id, message.messageId), { status: 'uncertain' })
   assert.deepEqual(await restarted.steer(f.thread.id, message), { status: 'uncertain' })
   assert.equal((await f.disk()).receipts[0].status, 'pending')
+})
+
+test('a steer the runtime took is reported as delivered even when its record cannot be saved', async (t) => {
+  const f = await fixture(t)
+  await f.manager.send(f.thread.id, { text: 'initial' })
+  await f.started.promise
+  const writer = f.manager.turnWriters.get(f.thread.id)
+  t.mock.method(writer, 'write', async () => { throw new Error('accepted write failed') })
+  // Without a messageId there is no receipt to retry with, so the caller must not send the steer again.
+  assert.deepEqual(await f.manager.steer(f.thread.id, { text: 'follow up' }), { status: 'uncertain', steered: true })
+  assert.equal(f.calls.steers.length, 1)
 })
 
 test('remove waits for in-flight steering receipt completion before deleting the turn file', async (t) => {
