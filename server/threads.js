@@ -961,12 +961,15 @@ export class ThreadManager extends EventEmitter {
     }
     item.permission = { requestId, options: params.options ?? [] }
     thread.pendingApproval = true
+    // Event listeners (including the team's approval relay) inspect and may
+    // answer the request synchronously, so register it before publishing it.
+    const response = new Promise((resolve) => {
+      this.permissions.set(requestId, { resolve, threadId, item, options: params.options ?? [] })
+    })
     this.#emitThread(thread)
     this.#emitTurn(threadId, turn, true)
     this.emit('approval-needed', { threadId, title: thread.title, tool: item.name })
-    return new Promise((resolve) => {
-      this.permissions.set(requestId, { resolve, threadId, item, options: params.options ?? [] })
-    })
+    return response
   }
 
   /** The approvals a task waits for now (a team relays them to its leader). */

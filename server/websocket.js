@@ -49,6 +49,9 @@ export function createSocketServer({ dev, clients, handlers, fullState, terminal
   }
 
   wss.on('connection', async (ws, client) => {
+    // ws closes a peer on protocol/payload errors, but also emits 'error'.
+    // Without a listener one bad connection terminates the entire server.
+    ws.on('error', () => {})
     client.socket = ws
     clients.set(ws, client)
     cancelIdleExit()

@@ -167,7 +167,7 @@ export class LogTail {
     }
     if (stat.size === this.size) return []
     // dsh rewrote the log (recovery); read it again from the start.
-    if (stat.size < this.offset) this.#reset()
+    if (stat.size < this.size) this.#reset()
     let buffer
     const handle = await fs.open(this.file, 'r')
     try {
