@@ -18,7 +18,10 @@ export function createWorkspaceHandlers({ paths, getSettings, saveSettings, broa
   }
 
   async function addWorkspace(dir) {
-    const resolved = path.resolve(String(dir ?? '').trim().replace(/^"(.*)"$/, '$1'))
+    // path.resolve('') would be the server's own folder, so an empty path is refused.
+    const text = String(dir ?? '').trim().replace(/^"(.*)"$/, '$1').trim()
+    if (!text) throw new Error('フォルダを指定してください')
+    const resolved = path.resolve(text)
     const stat = await fsp.stat(resolved).catch(() => null)
     if (!stat?.isDirectory()) throw new Error(`フォルダが見つかりません: ${resolved}`)
     if (resolved === paths.myPc) return resolved

@@ -10,7 +10,8 @@ export const RULE_NAME = 'AgentDesk-Remote-Tailscale'
 const RULE_TITLE = 'Agent Desk (Tailscale remote access)'
 
 const powershell = () => path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-const quote = (text) => `'${String(text).replace(/'/g, "''")}'`
+// PowerShell reads the curly quotes (U+2018 to U+201B) as quote marks too, so each one is doubled.
+const quote = (text) => `'${String(text).replace(/['\u2018\u2019\u201A\u201B]/g, (mark) => mark + mark)}'`
 const encode = (script) => Buffer.from(script, 'utf16le').toString('base64')
 
 /**

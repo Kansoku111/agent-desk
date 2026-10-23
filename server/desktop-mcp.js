@@ -21,9 +21,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // ------------------------------------------------------------------ helper
 
 let helper = null
+const READY_TIMEOUT_MS = 30_000
 
 /** The running PowerShell helper, started on first use and again if it died. */
-export function startHelper(spawnImpl = spawn) {
+export function startHelper(spawnImpl = spawn, readyTimeoutMs = READY_TIMEOUT_MS) {
   if (helper) return helper
   const child = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helperScript], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -34,7 +35,13 @@ export function startHelper(spawnImpl = spawn) {
   let readyResolve
   let readyReject
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject })
+  // A helper that never reports ready would stall every desktop call: stop it, so the next call starts a new one.
+  const readyTimer = setTimeout(() => {
+    fail(new Error('デスクトップ操作の補助プロセスが時間内に起動しませんでした'))
+    child.kill()
+  }, readyTimeoutMs)
   const fail = (error) => {
+    clearTimeout(readyTimer)
     readyReject(error)
     for (const { reject } of pending.values()) reject(error)
     pending.clear()
@@ -48,7 +55,10 @@ export function startHelper(spawnImpl = spawn) {
       log('helper:', line)
       return
     }
-    if (message.ready) return readyResolve()
+    if (message.ready) {
+      clearTimeout(readyTimer)
+      return readyResolve()
+    }
     const entry = pending.get(message.id)
     if (!entry) return
     pending.delete(message.id)

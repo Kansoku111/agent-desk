@@ -295,7 +295,7 @@ function StopRunning([string]$root) {
   if ($left.Count -gt 0) {
     Say "  このフォルダのプログラムがまだ $($left.Count) 個動いています。" 'Yellow'
     if (-not (Confirm '  終了させて続けますか？')) { return $false }
-    foreach ($p in $left) { & taskkill.exe /PID $p.ProcessId /T /F 2>&1 | Out-Null }
+    foreach ($p in $left) { & taskkill.exe /PID $p.ProcessId /T /F | Out-Null }
     Start-Sleep -Seconds 2
   }
   return $true
@@ -307,7 +307,8 @@ function RunNpm([string]$root, [string[]]$arguments) {
   Push-Location -LiteralPath $root
   try {
     # Shown as it runs; kept out of this function's return value.
-    & cmd.exe /d /c "npm $($arguments -join ' ')" 2>&1 | Out-Host
+    # stderr is merged inside cmd: PowerShell would stop at npm's first warning line.
+    & cmd.exe /d /c "npm $($arguments -join ' ') 2>&1" | Out-Host
     return $LASTEXITCODE
   } finally {
     Pop-Location
@@ -329,6 +330,15 @@ function CopyItems([string]$from, [string]$to) {
   }
 }
 
+# Puts the backup back. If that fails too, say where the backup is and stop here.
+function RestoreBackup([string]$backup, [string]$root) {
+  try {
+    CopyItems $backup $root
+  } catch {
+    Fail "元に戻せませんでした（$($_.Exception.Message)）。バックアップは $backup にあります。Agent Desk を閉じてから、もう一度実行してください。"
+  }
+}
+
 # ------------------------------------------------------------------ main
 
 $newPackage = ReadJson (Join-Path $Payload 'package.json')
@@ -341,7 +351,7 @@ Say '  設定・API キー・タスクの履歴（%APPDATA%\AgentDesk）はそ�
 
 Step 'Node.js を確認しています'
 $nodeVersion = $null
-try { $nodeVersion = (& node.exe -v 2>$null) } catch {}
+try { $nodeVersion = (& cmd.exe /d /c "node.exe -v 2>nul") } catch {}
 if (-not $nodeVersion) {
   Fail 'Node.js が見つかりません。https://nodejs.org/ から LTS 版を入れてから、もう一度実行してください。'
 }
@@ -395,7 +405,7 @@ try {
 } catch {
   Say "  入れ替えに失敗しました: $($_.Exception.Message)" 'Red'
   Say '  元に戻しています…'
-  CopyItems $backup $root
+  RestoreBackup $backup $root
   Fail '更新できませんでした。元の版に戻しました。Agent Desk を閉じてから、もう一度実行してください。'
 }
 
@@ -410,7 +420,7 @@ if ($oldDsh -and $newDsh -and (CompareVersion $oldDsh $newDsh) -gt 0) {
 }
 if ($code -ne 0) {
   Say '  npm install に失敗しました。元の版に戻しています…' 'Red'
-  CopyItems $backup $root
+  RestoreBackup $backup $root
   RunNpm $root @('install', '--no-audit', '--no-fund') | Out-Null
   Fail 'インターネットにつながっているか確かめて、もう一度実行してください。元の版に戻しました。'
 }

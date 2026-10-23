@@ -23,6 +23,28 @@ test('PowerShell helper startup failure rejects readiness', async () => {
   child.stderr.end()
 })
 
+test('a PowerShell helper that never reports ready is killed, and the next call starts a new one', async () => {
+  const stalled = () => {
+    const child = new EventEmitter()
+    child.stdin = new PassThrough()
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.killed = false
+    child.kill = () => { child.killed = true; return true }
+    return child
+  }
+  const first = stalled()
+  const current = startHelper(() => first, 20)
+  await assert.rejects(current.ready, /時間内に起動しませんでした/)
+  assert.equal(first.killed, true)
+
+  const second = stalled()
+  const next = startHelper(() => second, 20)
+  assert.notEqual(next, current)
+  await assert.rejects(next.ready, /時間内に起動しませんでした/)
+  assert.equal(second.killed, true)
+})
+
 test('viewFor fits displays into 1280x800 without upscaling', () => {
   assert.deepEqual(viewFor(fullHd), { width: 1280, height: 720 })
   assert.deepEqual(viewFor({ x: 0, y: 0, width: 2560, height: 1600 }), { width: 1280, height: 800 })

@@ -91,10 +91,14 @@ function ensureChrome(port) {
       'about:blank',
     ]
     log(`starting ${path.basename(executable)} on port ${port}`)
+    let launchError = null
     const child = spawn(executable, chromeArgs, { detached: true, stdio: 'ignore', windowsHide: false })
+    // Without a listener, a failed start (the file vanished, say) would end this process.
+    child.once('error', (error) => { launchError = error })
     child.unref()
     const deadline = Date.now() + 20_000
     while (Date.now() < deadline) {
+      if (launchError) throw new Error(`Chrome could not start: ${launchError.message}`)
       if (await chromeAnswers(port)) return
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
