@@ -1467,3 +1467,14 @@ test('a child waiting to go on after a passing failure shows as such', async (t)
   assert.equal(manager.summary(team).children[0].state, 'resuming')
   assert.match(await tool('status'), /G \[再開待ち\]/)
 })
+
+test('a Claude child may leave a long command in the background; a dsh child is told to wait for it', async (t) => {
+  const { tool, agents } = await setup(t)
+  await tool('spawn', { title: 'a', task: 'x', tier: 'low', provider: 'claude', name: 'C' })
+  const args = agents.calls.find((call) => call[0] === 'create')[1].args
+  const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
+  assert.match(prompt, /you are woken when it ends/)
+  assert.doesNotMatch(prompt, /Wait for every command to finish/)
+  const { childPrompt } = await import('../server/teams-prompts.js')
+  assert.match(childPrompt(), /Wait for every command to finish/)
+})

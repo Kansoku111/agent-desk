@@ -32,6 +32,15 @@ const STDERR_TAIL = 4000
 const KILL_WAIT_MS = 5000
 /** How long a turn that has answered waits for a message it was handed but has not taken yet. */
 const STEER_GRACE_MS = 15_000
+/**
+ * A turn that answered while commands of its own still run in the background
+ * (Bash run_in_background, Monitor) is not over: Claude Code starts a turn of
+ * its own when they end, as long as its input stays open. It is waited for this
+ * long after the answer at most...
+ */
+export const BACKGROUND_WAIT_MS = 2 * 60 * 60_000
+/** ...and once nothing runs in the background, a turn of its own is waited for this long before the input closes. */
+const WAKE_GRACE_MS = 30_000
 
 const CUT_OFF = 'Agent Desk が終了したため、作業が途中で止まりました。'
 
@@ -99,7 +108,7 @@ export class ClaudeRunner extends EventEmitter {
    */
   constructor({
     dir, findClaude: find = () => findClaude(), spawn = spawnProcess, preflight = null, log = () => {}, now = Date.now, platform = process.platform,
-    steerGraceMs = STEER_GRACE_MS,
+    steerGraceMs = STEER_GRACE_MS, backgroundWaitMs = BACKGROUND_WAIT_MS, wakeGraceMs = WAKE_GRACE_MS,
   }) {
     super()
     this.dir = dir
@@ -110,6 +119,8 @@ export class ClaudeRunner extends EventEmitter {
     this.now = now
     this.platform = platform
     this.steerGraceMs = steerGraceMs
+    this.backgroundWaitMs = backgroundWaitMs
+    this.wakeGraceMs = wakeGraceMs
     /** @type {Map<string, object>} sessions by id */
     this.records = new Map()
     /**
@@ -231,6 +242,8 @@ export class ClaudeRunner extends EventEmitter {
     const live = {
       proc: null, turn, stopping: false, apiKey: null, refusal: null, stderr: '', result: null,
       steers: new Map(), early: [], denials: [], ended: false, grace: null,
+      // Its commands running in the background (task id → description), and the waits on them.
+      background: new Map(), answered: false, wake: null, backgroundCap: null, cutBackground: null,
     }
     live.exited = new Promise((resolve) => { live.markExited = resolve })
 
@@ -311,6 +324,8 @@ export class ClaudeRunner extends EventEmitter {
   /** Closes the run's input: Claude Code exits once it has nothing left to do. */
   #endInput(live) {
     clearTimeout(live.grace)
+    clearTimeout(live.wake)
+    clearTimeout(live.backgroundCap)
     if (live.ended) return
     live.ended = true
     try {
@@ -321,9 +336,36 @@ export class ClaudeRunner extends EventEmitter {
   /** The turn answered: input closes now, unless a message was handed over that Claude Code has not taken (it follows as a turn of its own). */
   #answered(live) {
     clearTimeout(live.grace)
+    live.answered = true
+    if (live.background.size) return this.#awaitBackground(live)
     if ([...live.steers.values()].every((steer) => steer.taken)) return this.#endInput(live)
     live.grace = setTimeout(() => this.#endInput(live), this.steerGraceMs)
     live.grace.unref?.()
+  }
+
+  /**
+   * The answer came with commands still running in the background: the input
+   * stays open for Claude Code to go on when they end, BACKGROUND_WAIT_MS at most;
+   * then it closes, and the turn's report says what was left running.
+   */
+  #awaitBackground(live) {
+    clearTimeout(live.backgroundCap)
+    live.backgroundCap = setTimeout(() => {
+      live.cutBackground = [...live.background.values()]
+      this.#endInput(live)
+    }, this.backgroundWaitMs)
+    live.backgroundCap.unref?.()
+  }
+
+  /** What runs in the background changed (`background_tasks_changed` lists all of it). */
+  #onBackground(live, tasks) {
+    live.background = new Map((Array.isArray(tasks) ? tasks : []).map((task) => [task.task_id, String(task.description ?? task.task_type ?? '')]))
+    if (live.background.size || !live.answered) return
+    // The last one ended after the answer: Claude Code goes on by itself; if it does not, the turn is over.
+    clearTimeout(live.backgroundCap)
+    clearTimeout(live.wake)
+    live.wake = setTimeout(() => this.#answered(live), this.wakeGraceMs)
+    live.wake.unref?.()
   }
 
   /** Feeds the prompt to a started run and follows its output until it exits. */
@@ -360,8 +402,13 @@ export class ClaudeRunner extends EventEmitter {
     if (event.type === 'system' && event.subtype === 'init') {
       record.started = true
       record.modelInUse = event.model ?? record.modelInUse
+      // A turn of its own started (a background command ended): its answer is awaited again.
+      live.answered = false
+      clearTimeout(live.wake)
+      clearTimeout(live.backgroundCap)
       return
     }
+    if (event.type === 'system' && event.subtype === 'background_tasks_changed') return this.#onBackground(live, event.tasks)
     if (event.type === 'result') {
       live.result = event
       live.denials.push(...(Array.isArray(event.permission_denials) ? event.permission_denials : []))
@@ -393,6 +440,8 @@ export class ClaudeRunner extends EventEmitter {
   #onExit(record, live, code, error) {
     if (this.live.get(record.id) === live) this.live.delete(record.id)
     clearTimeout(live.grace)
+    clearTimeout(live.wake)
+    clearTimeout(live.backgroundCap)
     live.ended = true
     live.markExited()
     // A message Claude Code never took is said so in the turn, not dropped quietly.
@@ -407,7 +456,10 @@ export class ClaudeRunner extends EventEmitter {
     if (this.closing) return this.#finish(record, live.turn, { status: 'error', message: CUT_OFF, quiet: true })
     if (live.stopping) return this.#finish(record, live.turn, { status: 'cancelled' })
     if (result && !result.is_error) {
-      return this.#finish(record, live.turn, { status: 'done', text: String(result.result ?? ''), denials: live.denials, stopReason: result.stop_reason })
+      const cut = live.cutBackground?.length
+        ? `\n\n（バックグラウンドの作業が ${Math.round(this.backgroundWaitMs / 60_000)} 分たっても終わらなかったため、待つのをやめました。止まった作業: ${live.cutBackground.map((entry) => entry || '名前なし').join('、')}）`
+        : ''
+      return this.#finish(record, live.turn, { status: 'done', text: `${String(result.result ?? '')}${cut}`, denials: live.denials, stopReason: result.stop_reason })
     }
     const message = result
       ? String(result.result || result.subtype || 'Claude Code がエラーで止まりました')

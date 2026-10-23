@@ -306,3 +306,95 @@ test('what was denied is reported with a turn that ended in an error too', async
   assert.equal(info.status, 'error')
   assert.deepEqual(info.denials, [{ tool_name: 'Bash', tool_input: { command: 'rm -rf build' } }])
 })
+
+const background = (...tasks) => ({ type: 'system', subtype: 'background_tasks_changed', tasks: tasks.map(([task_id, description]) => ({ task_id, task_type: 'local_bash', description })) })
+
+/** A runner whose waits on background commands are short enough to see. */
+async function setupWaits(t, waits) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-runner-'))
+  const { spawn, spawned } = fakeSpawn()
+  const runner = await new ClaudeRunner({ dir, spawn, findClaude: () => '/usr/bin/claude', platform: 'linux', ...waits }).load()
+  const finished = []
+  runner.on('finished', (info) => finished.push(info))
+  t.after(() => runner.shutdown())
+  return { runner, spawned, finished }
+}
+
+test('an answer given while a background command runs is not the end: Claude Code goes on when it ends, and its last answer is the reply', async (t) => {
+  const { runner, spawned, finished } = await setupWaits(t, {})
+  const session = await runner.create({ workspace: '/work' })
+  runner.run(session.id, 'measure')
+  await tick()
+  const [proc] = spawned
+  // As claude -p 2.1.309 reports it (stream-json, input left open).
+  proc.write(init())
+  proc.write(background(['b1', 'wide 60 runs']))
+  proc.write({ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'waiting for the run' }] } })
+  proc.write({ type: 'result', subtype: 'success', is_error: false, result: 'waiting for the run' })
+  await tick()
+  assert.equal(proc.stdin.writableEnded, false)
+  assert.equal(runner.running(session.id), true)
+  assert.equal(finished.length, 0)
+  // The command ends; Claude Code starts a turn of its own.
+  proc.write({ type: 'system', subtype: 'task_notification', task_id: 'b1', status: 'completed' })
+  proc.write(background())
+  proc.write(init())
+  proc.write({ type: 'assistant', message: { id: 'm2', content: [{ type: 'text', text: '集計しました' }] } })
+  proc.write({ type: 'result', subtype: 'success', is_error: false, result: '集計しました', permission_denials: [{ tool_name: 'Write', tool_input: {} }] })
+  await tick()
+  assert.equal(proc.stdin.writableEnded, true)
+  proc.end(0)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(finished.length, 1)
+  assert.equal(finished[0].text, '集計しました')
+  assert.equal(finished[0].denials.length, 1)
+})
+
+test('a background command that ends without a turn of its own ends the turn after a short wait', async (t) => {
+  const { runner, spawned, finished } = await setupWaits(t, { wakeGraceMs: 20 })
+  const session = await runner.create({ workspace: '/work' })
+  runner.run(session.id, 'x')
+  await tick()
+  const [proc] = spawned
+  proc.write(background(['b1', 'build']))
+  proc.write({ type: 'result', subtype: 'success', is_error: false, result: 'started the build' })
+  await tick()
+  proc.write(background())
+  await tick()
+  assert.equal(proc.stdin.writableEnded, false)
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  assert.equal(proc.stdin.writableEnded, true)
+  proc.end(0)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(finished[0].text, 'started the build')
+})
+
+test('a background command that outlasts the wait is left, and the report says so', async (t) => {
+  const { runner, spawned, finished } = await setupWaits(t, { backgroundWaitMs: 20 })
+  const session = await runner.create({ workspace: '/work' })
+  runner.run(session.id, 'x')
+  await tick()
+  const [proc] = spawned
+  proc.write(background(['b1', 'npx vite']))
+  proc.write({ type: 'result', subtype: 'success', is_error: false, result: 'server is up' })
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  assert.equal(proc.stdin.writableEnded, true)
+  proc.end(0)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.match(finished[0].text, /^server is up\n\n（バックグラウンドの作業が 0 分たっても終わらなかったため、待つのをやめました。止まった作業: npx vite）$/)
+})
+
+test('a background command still running when the turn answers keeps the input open for a message as well', async (t) => {
+  const { runner, spawned } = await setupWaits(t, {})
+  const session = await runner.create({ workspace: '/work' })
+  runner.run(session.id, 'x')
+  await tick()
+  const [proc] = spawned
+  proc.write(background(['b1', 'tests']))
+  proc.write({ type: 'result', subtype: 'success', is_error: false, result: 'waiting' })
+  await tick()
+  // The leader's message reaches it while it waits.
+  assert.equal(runner.steer(session.id, 'もう一つ'), true)
+  assert.match(proc.input, /もう一つ/)
+  runner.stop(session.id)
+})

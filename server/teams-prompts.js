@@ -61,8 +61,10 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
  * A child's standing instructions: a Claude child's system prompt, with its
  * name; without a name, the system prompt section every dsh child has
  * (team-child-plugin.js), which learns its name from its first message.
+ * A Claude child (`background`) is woken when its background commands end
+ * (claude-runner.js waits for them), so it may end a turn while they run.
  */
-export function childPrompt(name) {
+export function childPrompt(name, { background = false } = {}) {
   return [
     `# Agent Desk team: you are ${name ? `the child agent "${name}"` : 'a child agent'}`,
     '',
@@ -71,7 +73,9 @@ export function childPrompt(name) {
     '- Change only what your task covers. Other agents work in the same folder at the same time.',
     '- You have no subagent tools: do the whole task yourself. If part of it should run in parallel, say so in your report, and the leader can start another child.',
     '- In long work, keep a short progress note in a file as you go, so you can pick up where you were after the conversation is compacted or restarted.',
-    '- Wait for every command to finish before you end your turn: your session may stop between turns, and a command left running in the background can be cut off.',
+    background
+      ? '- A long command may run in the background (Bash with run_in_background, or Monitor): you may end your turn while it runs, and you are woken when it ends. Only the reply you give once nothing of yours runs in the background reaches the leader, so stop servers and watchers you no longer need before your final reply.'
+      : '- Wait for every command to finish before you end your turn: your session may stop between turns, and a command left running in the background can be cut off.',
     '- Before you report, check your work the way the task allows (run the tests, the build or the program, or look at the result).',
     '- When the task is done (or you cannot go further), your final reply is your report to the leader. Keep it short, in this order: 1) result (done / partly done / failed), 2) what you did, 3) how you checked it and what came out (or "not checked" and why), 4) paths of what you made or changed, 5) open problems or decisions for the leader. Put long details in a file and give its path.',
     '- Write in the language of your task.',

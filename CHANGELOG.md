@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Agent teams: a Claude child that ended its turn while its own commands ran in the background (`run_in_background`, Monitor) reported "waiting for …" to the leader as if done, and its `claude -p` exited, so it was never woken when they finished: the team stalled until someone said "続けて". The run now keeps Claude Code's input open while `background_tasks_changed` lists anything, Claude Code goes on by itself when they end, and only the answer given with nothing left in the background reaches the leader. The wait is capped at 2 hours; past that the report names what was left. Claude children are told they may end a turn on a background command; dsh children still wait for theirs.
 - Agent teams: "全停止" and `close` no longer leave messages waiting that start the child's next turn once the stopped one ends (a closed child could work on unseen and uncounted). A leader's `send` that missed a GPT child's turn ending while it was steered now goes as soon as the child is free instead of waiting for good. A child waiting to go on after a passing failure shows as "再開待ち", and "全停止" can stop it.
 - Agent teams: a Claude child's report keeps the actions that were denied for want of an approval when its turn ends in an error, not only when it succeeds.
 - The agent-team MCP server no longer trips a libuv assertion on Windows when Claude Code closes it: it ends once its calls are answered instead of calling process.exit.
