@@ -39,7 +39,7 @@ function fakePty() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30))
 
-async function setup({ launch, preflight = () => null, instructions } = {}) {
+async function setup({ launch, preflight = () => null, instructions, gptSubagent } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-terminals-'))
   const workspace = path.join(dir, 'project')
   const claudeHome = path.join(dir, 'claude')
@@ -54,7 +54,7 @@ async function setup({ launch, preflight = () => null, instructions } = {}) {
     pty,
     findClaude: () => 'C:\\Tools\\claude.exe',
     claudeHome,
-    launch, preflight, instructions,
+    launch, preflight, instructions, gptSubagent,
   }).load()
   return { dir, workspace, claudeHome, pty, sent, manager }
 }
@@ -113,6 +113,26 @@ test('a task cannot start the user\'s agents whose model only a proxy routes', a
   // Behind a proxy (ANTHROPIC_BASE_URL) the route can work, so they stay.
   assert.deepEqual(unroutedAgents(claudeHome, { ANTHROPIC_BASE_URL: 'http://localhost:10100' }), [])
   assert.deepEqual(unroutedAgents(path.join(dir, 'missing'), {}), [])
+})
+
+test('a task gets subagent_gpt on the chosen GPT model; a team\'s leader does not', async () => {
+  let gpt = { model: 'gpt-6.1-sol', home: 'C:\\AgentDesk' }
+  const { workspace, pty, manager, dir } = await setup({ gptSubagent: () => gpt, launch: () => ({ args: [] }) })
+  const terminal = await manager.create({ workspace })
+  const file = path.join(dir, 'claude-gpt-subagent', `${terminal.id}.json`)
+  const args = pty.spawned[0].args
+  assert.deepEqual(args.slice(-4), ['--mcp-config', file, '--settings', path.join(dir, 'claude-terminal-settings.json')])
+  const server = JSON.parse(await fs.readFile(file, 'utf8')).mcpServers['agent-desk-gpt']
+  assert.ok(server.args[0].endsWith('gpt-subagent-mcp.js'))
+  assert.deepEqual(server.args.slice(1), ['--workspace', workspace, '--name', 'gpt-6.1-sol'])
+  assert.deepEqual(server.env, { AGENT_DESK_HOME: 'C:\\AgentDesk' })
+  await manager.create({ workspace, team: { id: 'team-1', role: 'leader' } })
+  assert.ok(!pty.spawned[1].args.includes('--mcp-config'))
+  gpt = null
+  await manager.create({ workspace })
+  assert.ok(!pty.spawned[2].args.includes('--mcp-config'))
+  await manager.remove(terminal.id)
+  await assert.rejects(fs.stat(file))
 })
 
 test('hookEffect follows a turn: prompt, approval, tool, stop', () => {

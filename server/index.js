@@ -15,7 +15,7 @@ import { Checkpoints } from './checkpoints.js'
 import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret,
 } from './credentials.js'
-import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeTeamChildPatch } from './dsh-config.js'
+import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
 import { createSettingsService, DEFAULT_SETTINGS, migrateSettings } from './settings.js'
@@ -129,6 +129,7 @@ const terminals = await new TerminalManager({
   },
   launch: (record) => teams?.launchFor(record) ?? null,
   instructions: () => settings.customInstructions,
+  gptSubagent: () => (settings.subagentModels?.['openai-codex'] ? { model: settings.subagentModels['openai-codex'], home: paths.home } : null),
   preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
   log,
 }).load()
@@ -257,6 +258,8 @@ async function applyHomePatch() {
     localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
   })
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
+  // Read by each subagent_gpt call, so no runtime restarts for it.
+  await writeGptSubagentPatch(paths.gptSubagentPatch, { subagents, persona })
   return home || children
 }
 await applyHomePatch()

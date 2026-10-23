@@ -25,6 +25,20 @@ const MANAGED_ENV = ['ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 
 
 const STDERR_TAIL = 16_000
 
+/** The environment every dsh process Agent Desk starts runs with. */
+export function dshEnv(paths, mode, base = process.env) {
+  const env = { ...base }
+  for (const name of MANAGED_ENV) delete env[name]
+  return Object.assign(env, {
+    DSH_HOME: paths.dshHome,
+    DSH_PERMISSION_MODE: mode,
+    DSH_TELEMETRY_MODE: 'DISABLED',
+    AGENT_DESK_FAST_MODE: paths.fastMode,
+    AGENT_DESK_SIWC_CREDENTIALS: paths.credentials,
+    AGENT_DESK_SIWC_MANAGED: 'managed-by-agent-desk-siwc-hook',
+  })
+}
+
 export class AcpRuntime extends EventEmitter {
   /**
    * @param {object} options
@@ -62,16 +76,7 @@ export class AcpRuntime extends EventEmitter {
   async #start() {
     this.state = 'starting'
     await fs.mkdir(this.paths.runtimeCwd, { recursive: true })
-    const env = { ...process.env }
-    for (const name of MANAGED_ENV) delete env[name]
-    Object.assign(env, {
-      DSH_HOME: this.paths.dshHome,
-      DSH_PERMISSION_MODE: this.mode,
-      DSH_TELEMETRY_MODE: 'DISABLED',
-      AGENT_DESK_FAST_MODE: this.paths.fastMode,
-      AGENT_DESK_SIWC_CREDENTIALS: this.paths.credentials,
-      AGENT_DESK_SIWC_MANAGED: 'managed-by-agent-desk-siwc-hook',
-    })
+    const env = dshEnv(this.paths, this.mode)
     const layers = this.patches.flatMap((file) => ['--patch', file])
     const child = spawn(process.execPath, [...runtimeHookArgs(), dshBin, '--profile', 'acp', ...layers], {
       cwd: this.paths.runtimeCwd,

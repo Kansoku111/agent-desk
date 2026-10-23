@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { ClaudeTranscripts } from './claude-transcript.js'
 import { instructionsSection } from './instructions-plugin.js'
 import { readJson, writeJson } from './json-file.js'
@@ -25,6 +26,9 @@ export {
 } from './terminal-helpers.js'
 
 const require = createRequire(import.meta.url)
+const gptSubagentScript = fileURLToPath(new URL('./gpt-subagent-mcp.js', import.meta.url))
+/** The MCP server of a task's `subagent_gpt`; Claude Code calls it `mcp__agent-desk-gpt__subagent_gpt`. */
+const GPT_MCP_SERVER = 'agent-desk-gpt'
 const SCROLLBACK = 3000
 /** A model alias (opus, sonnet[1m]) or full name (claude-opus-5-5) for `claude --model`. */
 const MODEL_NAME = /^[a-z0-9][a-z0-9.\-[\]]{0,79}$/i
@@ -54,10 +58,12 @@ export class TerminalManager extends EventEmitter {
    * @param {string} [options.claudeHome]  Claude Code's own data folder (resumable transcripts)
    * @param {(record: object) => ({ args?: string[] } | null)} [options.launch]  more flags for a team's leader or child
    * @param {() => string} [options.instructions]  the user's custom instructions (a team's leader gets them in its own prompt, teams-launch.js)
+   * @param {() => ({ model: string, home: string } | null)} [options.gptSubagent]  the GPT subagent model and app home; null leaves `subagent_gpt` out
    */
   constructor({
     file, settingsFile, hookUrl, send, pty = null, findClaude: find = () => findClaude(), log = () => {},
     claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null, preflight = null, instructions = () => '',
+    gptSubagent = () => null,
   }) {
     super()
     this.file = file
@@ -67,6 +73,8 @@ export class TerminalManager extends EventEmitter {
     this.launch = launch
     this.instructions = instructions
     this.instructionsFile = path.join(path.dirname(settingsFile), 'claude-instructions.md')
+    this.gptSubagent = gptSubagent
+    this.gptMcpDir = path.join(path.dirname(settingsFile), 'claude-gpt-subagent')
     this.preflight = preflight
     this.hookUrl = hookUrl
     this.send = send
@@ -354,6 +362,25 @@ export class TerminalManager extends EventEmitter {
     this.#startNow(record, size, pending.prompt, { claude, env })
   }
 
+  /** Writes the task's `subagent_gpt` MCP config (gpt-subagent-mcp.js); null when no GPT subagent model is set. */
+  #writeGptMcp(record) {
+    const gpt = this.gptSubagent()
+    if (!gpt) return null
+    const file = path.join(this.gptMcpDir, `${record.id}.json`)
+    fs.mkdirSync(this.gptMcpDir, { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({
+      mcpServers: {
+        [GPT_MCP_SERVER]: {
+          type: 'stdio',
+          command: process.execPath,
+          args: [gptSubagentScript, '--workspace', record.workspace, '--name', gpt.model],
+          env: { AGENT_DESK_HOME: gpt.home },
+        },
+      },
+    }, null, 2), { encoding: 'utf8', mode: 0o600 })
+    return file
+  }
+
   #startNow(record, size, prompt = null, checked = null) {
     const pty = this.#loadPty()
     const claude = checked?.claude ?? this.findClaude()
@@ -369,6 +396,8 @@ export class TerminalManager extends EventEmitter {
     const deniedAgents = unroutedAgents(this.claudeHome, env)
     const settings = extra ? teamHookSettings(undefined, undefined, { deniedAgents }) : hookSettings(undefined, undefined, { deniedAgents })
     fs.writeFileSync(extra ? this.teamSettingsFile : this.settingsFile, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 })
+    // A team's leader hands work to its children instead.
+    const gptMcp = record.team ? null : this.#writeGptMcp(record)
     const command = launchCommand(claude, [
       ...(resume ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
       // Flags apply to this session only; `/model` typed in Claude Code would change the user's default everywhere.
@@ -377,6 +406,7 @@ export class TerminalManager extends EventEmitter {
       // Some of these flags take a list (--mcp-config, --allowedTools), so the
       // single-value --settings comes last: the prompt after it stays the prompt.
       ...(standing ? ['--append-system-prompt-file', this.instructionsFile] : []),
+      ...(gptMcp ? ['--mcp-config', gptMcp] : []),
       ...(extra?.args ?? []),
       '--settings', extra ? this.teamSettingsFile : this.settingsFile,
       ...(prompt ? [prompt] : []),
@@ -758,6 +788,7 @@ export class TerminalManager extends EventEmitter {
     live?.term.dispose()
     this.records.delete(id)
     this.subscribers.delete(id)
+    fs.rmSync(path.join(this.gptMcpDir, `${id}.json`), { force: true })
     await this.#save()
     this.emit('removed', { terminalId: id })
     return { removed: true }

@@ -257,6 +257,41 @@ export function teamChildPatch({ subagents = [], persona = null } = {}) {
 ${YAML.stringify(rows)}`
 }
 
+/**
+ * The extra layer of the headless dsh that a Claude Code task's `subagent_gpt`
+ * runs (gpt-subagent-mcp.js): the user's GPT subagent model, and no subagent
+ * tools of its own, like a team's child. Same options as homePatch, plus the
+ * model; null when no GPT subagent model is set.
+ */
+export function gptSubagentPatch({ subagents = [], persona = null } = {}) {
+  const gpt = subagents.find(({ provider, model }) => provider === 'openai-codex' && isModelId(model))
+  if (!gpt) return null
+  const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
+  const rows = [
+    { id: 'agent-default-model', config: { provider: gpt.provider, model: gpt.model } },
+    ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
+    ...pinned.map(({ provider }) => ({ id: `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`, disabled: true })),
+  ]
+  const { personaPrefix = '', personaSuffix = '' } = persona ?? {}
+  rows.push({ id: 'system-prompt', config: { personaPrefix, personaSuffix } })
+  return `# Managed by Agent Desk: this file is rewritten on every start.
+# Applied after cordis.patch.yml in the headless dsh behind a Claude Code
+# task's subagent_gpt: the user's GPT subagent model, without subagent tools.
+${YAML.stringify(rows)}`
+}
+
+/** Writes the GPT subagent's layer ({@link gptSubagentPatch}), or removes it; true when the file changed. */
+export async function writeGptSubagentPatch(file, options) {
+  const next = gptSubagentPatch(options)
+  if (next) return writePatch(file, next)
+  try {
+    await fs.rm(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Writes the patch; returns true when the file changed. */
 export async function writeHomePatch(file, options) {
   return writePatch(file, homePatch(options))

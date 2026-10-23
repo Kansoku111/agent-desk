@@ -39,6 +39,8 @@ export function appPaths(home = defaultAppHome()) {
     fastMode: path.join(home, 'fast-mode.json'),
     // The extra dsh layer of agent teams' children (dsh-config.js teamChildPatch).
     teamChildPatch: path.join(home, 'team-child.patch.yml'),
+    // The headless dsh behind a Claude Code task's subagent_gpt (dsh-config.js gptSubagentPatch).
+    gptSubagentPatch: path.join(home, 'gpt-subagent.patch.yml'),
     dshHome,
     credentials: path.join(dshHome, '.credentials.yaml'),
     homePatch: path.join(dshHome, 'cordis.patch.yml'),
