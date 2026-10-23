@@ -101,7 +101,12 @@ export class ChatGptLogin {
     const server = createServer((request, response) => {
       response.setHeader('Cache-Control', 'no-store')
       response.setHeader('Content-Type', 'text/plain; charset=utf-8')
-      const url = new URL(request.url, 'http://127.0.0.1')
+      let url
+      try {
+        url = new URL(request.url, 'http://127.0.0.1')
+      } catch {
+        return response.writeHead(400).end('Invalid request URL')
+      }
       if (url.pathname !== '/auth/callback') return response.writeHead(404).end('Not found')
       if (consumed) return response.writeHead(409).end('Attempt already consumed')
       consumed = true

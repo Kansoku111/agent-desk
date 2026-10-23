@@ -88,7 +88,13 @@ function addResponses(days, events, pricing) {
 export function summarizeHistory(files, now = Date.now()) {
   const today = localDay(now)
   const month = today.slice(0, 7)
-  const firstDaily = localDay(now - (DAILY_DAYS - 1) * 86_400_000)
+  // A local day can be 23 or 25 hours at a daylight-saving transition.
+  const dayAgo = (count) => {
+    const date = new Date(now)
+    date.setDate(date.getDate() - count)
+    return localDay(date.getTime())
+  }
+  const firstDaily = dayAgo(DAILY_DAYS - 1)
   const overall = { today: emptyTotals(), month: emptyTotals(), all: emptyTotals() }
   const models = new Map()
   const providers = new Map()
@@ -119,7 +125,7 @@ export function summarizeHistory(files, now = Date.now()) {
   }
   const days = []
   for (let index = DAILY_DAYS - 1; index >= 0; index -= 1) {
-    const day = localDay(now - index * 86_400_000)
+    const day = dayAgo(index)
     if (!days.some((point) => point.day === day)) days.push(daily.get(day) ?? { day, cost: 0, tokens: 0 })
   }
   const weight = (totals) => totals.cost ?? 0
