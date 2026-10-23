@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { decodeSessionLog, mergeUsage, responseCost, summarizeUsage, turnUsage } from '../server/usage.js'
+import { decodeSessionLog, decodeSessionRange, mergeUsage, responseCost, summarizeUsage, turnUsage } from '../server/usage.js'
 
 const sonnet = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }
 const pricing = new Map([['anthropic/claude-sonnet-5-5', sonnet]])
@@ -49,6 +49,51 @@ test('decodeSessionLog reads appended zstd frames', () => {
   const frame = (lines) => zlib.zstdCompressSync(Buffer.from(lines.map((line) => JSON.stringify(line)).join('\n') + '\n'))
   const log = Buffer.concat([frame([{ type: 'session' }]), frame([{ type: 'turn/start' }, { type: 'turn/end' }])])
   assert.deepEqual(decodeSessionLog(log).map((event) => event.type), ['session', 'turn/start', 'turn/end'])
+})
+
+test('decodeSessionRange reads only the end of the log and gives the same events a full read does', async () => {
+  const frame = (events) => zlib.zstdCompressSync(Buffer.from(events.map((event) => JSON.stringify(event)).join('\n') + '\n'))
+  const timed = (seq, time, type = 'assistant/message') => ({ type, seq, time, data: { usage: { inputTokens: 1 }, message: { source: { provider: 'anthropic', model: 'm' } } } })
+  // 60 frames of two events each, one event per time unit; the log opens with an untimed header.
+  const frames = [frame([{ type: 'session', id: 's' }])]
+  for (let index = 0; index < 60; index += 1) frames.push(frame([timed(index * 2, 100 + index * 2), timed(index * 2 + 1, 101 + index * 2, 'turn/end')]))
+  const log = Buffer.concat(frames)
+  const full = decodeSessionLog(log)
+  for (const [since, until] of [[-Infinity, Infinity], [0, Infinity], [150, Infinity], [151, 160], [219, 219], [500, Infinity], [100, 100]]) {
+    const wanted = full.filter((event) => event.time >= since && event.time <= until)
+    const range = await decodeSessionRange(log, { since, until })
+    assert.deepEqual(range.filter((event) => event.time !== undefined), wanted, `since ${since} until ${until}`)
+  }
+  // `keep` drops lines before they are parsed.
+  const ends = await decodeSessionRange(log, { since: 150, keep: (line) => line.includes('turn/end') })
+  assert.deepEqual(ends, full.filter((event) => event.type === 'turn/end' && event.time >= 150))
+  // One stray old frame (the clock stepped back) does not hide the events behind it.
+  const stepped = Buffer.concat([frame([timed(0, 500)]), frame([timed(1, 10)]), frame([timed(2, 600)])])
+  assert.deepEqual((await decodeSessionRange(stepped, { since: 400 })).map((event) => event.seq), [0, 2])
+  // Frames that do not decode are skipped, as decodeSessionLog does.
+  const broken = Buffer.concat([frames[1], Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 1, 2, 3]), frames[2]])
+  assert.deepEqual((await decodeSessionRange(broken)).map((event) => event.seq), decodeSessionLog(broken).map((event) => event.seq))
+})
+
+test('turnUsage ignores subagent logs of other sessions without reading them whole, and re-reads only a changed log', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-usage-'))
+  const file = (id) => path.join(home, 'sessions', '--ws--', id, 'session.v4.jsonl.zstd')
+  const frame = (events) => zlib.zstdCompressSync(Buffer.from(events.map((event) => JSON.stringify(event)).join('\n') + '\n'))
+  const response = (seq, time) => ({ type: 'assistant/message', seq, time, data: { message: { source: { provider: 'openai-codex', model: 'gpt-5.5' } }, usage: { inputTokens: 10, outputTokens: 1 } } })
+  const since = Date.now() - 1000
+  try {
+    for (const id of ['parent', 'child', 'stranger']) await fs.mkdir(path.dirname(file(id)), { recursive: true })
+    // The turn's end arrives after the first look: the wait loop reads the grown log, not the same bytes twice.
+    await fs.writeFile(file('parent'), Buffer.concat([frame([{ type: 'session', id: 'parent' }]), frame([response(0, since + 1)])]))
+    await fs.writeFile(file('child'), Buffer.concat([frame([{ type: 'session', id: 'child', parentSession: 'parent' }]), frame([response(0, since + 2)])]))
+    await fs.writeFile(file('stranger'), Buffer.concat([frame([{ type: 'session', id: 'stranger', parentSession: 'x' }]), frame([response(0, since + 2)])]))
+    setTimeout(() => void fs.appendFile(file('parent'), frame([{ type: 'turn/end', seq: 1, time: since + 5 }])), 100)
+    const total = await turnUsage({ dshHome: home, sessionId: 'parent', since, waitMs: 3000 })
+    assert.equal(total.requests, 2)
+    assert.equal(total.input, 20)
+  } finally {
+    await fs.rm(home, { recursive: true, force: true })
+  }
 })
 
 test('mergeUsage adds counts and keeps a cost when either side has one', () => {

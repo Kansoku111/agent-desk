@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { readJson, writeJson } from './json-file.js'
-import { decodeSessionLog, loadPricing, priceResponse } from './usage.js'
+import { FRAME_BATCH, frameStarts, frameTexts, loadPricing, priceResponse } from './usage.js'
 
 const CACHE_VERSION = 1
 const LOG_NAME = 'session.v4.jsonl.zstd'
@@ -50,12 +50,19 @@ function addTotals(into, from) {
  * One log's responses summed by local day and `provider/model`.
  * @returns {Record<string, Record<string, ReturnType<typeof emptyTotals>>>}
  */
-export function dailyUsage(events, pricing) {
-  const days = {}
+export function dailyUsage(events, pricing, days = {}) {
+  addResponses(days, events, pricing)
+  return days
+}
+
+/** Adds the responses among `events` to `days`, in order; true when there was one. */
+function addResponses(days, events, pricing) {
+  let added = false
   for (const event of events) {
     if (event?.type !== 'assistant/message' || typeof event.time !== 'number') continue
     const usage = event.data?.usage
     if (!usage) continue
+    added = true
     const source = event.data?.message?.source ?? {}
     const model = source.provider && source.model ? `${source.provider}/${source.model}` : 'unknown'
     const day = (days[localDay(event.time)] ??= {})
@@ -70,7 +77,7 @@ export function dailyUsage(events, pricing) {
       cost: priceResponse(pricing, model, usage, event.time),
     })
   }
-  return days
+  return added
 }
 
 /**
@@ -178,6 +185,66 @@ export class UsageHistory extends EventEmitter {
     return logs
   }
 
+  /**
+   * One log's cache entry. A log only grows by appended frames, so when the
+   * cache says how far it was read (`offset`: where its last frame starts, the
+   * only one that may have been growing) and the log has grown, only the frames
+   * from there on are decoded and added to the sums of the frames before that
+   * one (`base`, or `days` when the last frame held no response). Any other
+   * change reads the whole log. Responses are added in log order either way.
+   */
+  async #sum(log, cached, pricing) {
+    const handle = await fs.open(log.file, 'r')
+    try {
+      const read = async (offset) => {
+        const { size } = await handle.stat()
+        const buffer = Buffer.alloc(Math.max(0, size - offset))
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset)
+        return buffer.subarray(0, bytesRead)
+      }
+      let offset = 0
+      let days = {}
+      let buffer = null
+      if (Number.isInteger(cached?.offset) && cached.size < log.size) {
+        buffer = await read(cached.offset)
+        // Still the frame the cache ended at, not a log written anew.
+        if (frameStarts(buffer)[0] === 0) {
+          offset = cached.offset
+          days = structuredClone(cached.base ?? cached.days)
+        } else buffer = null
+      }
+      buffer ??= await read(0)
+      const starts = frameStarts(buffer)
+      let settled = null
+      let lastAdded = false
+      for (let from = 0; from < starts.length; from += FRAME_BATCH) {
+        const texts = await frameTexts(buffer, starts, from, Math.min(starts.length, from + FRAME_BATCH))
+        for (let index = 0; index < texts.length; index += 1) {
+          const last = from + index === starts.length - 1
+          if (last) settled = structuredClone(days)
+          if (texts[index] === null) continue
+          const events = []
+          for (const line of texts[index].split('\n')) {
+            if (!line.includes('assistant/message')) continue
+            try {
+              events.push(JSON.parse(line))
+            } catch {}
+          }
+          if (addResponses(days, events, pricing) && last) lastAdded = true
+        }
+      }
+      return {
+        size: log.size,
+        mtimeMs: log.mtimeMs,
+        ...(starts.length ? { offset: offset + starts.at(-1) } : {}),
+        days,
+        ...(lastAdded ? { base: settled } : {}),
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
   async #scan() {
     if (!this.cache) await this.#load()
     const pricing = await this.pricing()
@@ -187,13 +254,13 @@ export class UsageHistory extends EventEmitter {
     for (const log of await this.#logs()) {
       const cached = this.cache.files[log.key]
       if (!repriced && cached?.size === log.size && cached?.mtimeMs === log.mtimeMs) continue
-      let events
+      let entry
       try {
-        events = decodeSessionLog(await fs.readFile(log.file))
+        entry = await this.#sum(log, repriced ? null : cached, pricing)
       } catch {
         continue
       }
-      this.cache.files[log.key] = { size: log.size, mtimeMs: log.mtimeMs, days: dailyUsage(events, pricing) }
+      this.cache.files[log.key] = entry
       changed = true
     }
     this.cache.pricing = signature

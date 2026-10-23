@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import zlib from 'node:zlib'
+import { decodeSessionLog } from '../server/usage.js'
 import { dailyUsage, localDay, summarizeHistory, UsageHistory } from '../server/usage-history.js'
 
 const sonnet = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }
@@ -93,6 +94,51 @@ test('UsageHistory caches per log, rescans changed logs and keeps removed ones',
   assert.equal(second.all.requests, 3)
   assert.equal(second.all.cost, 5)
   assert.ok(pricingCalls >= 1)
+  await fs.rm(home, { recursive: true, force: true })
+})
+
+test('UsageHistory adds only the frames appended since the last scan and gets what a full read gets', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-history-'))
+  const dshHome = path.join(home, 'dsh-home')
+  const file = path.join(dshHome, 'sessions', '--work--', 'grow', 'session.v4.jsonl.zstd')
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const now = at('2026-10-09T12:00:00')
+  const call = (seq, input) => ({ type: 'assistant/message', seq, time: now - 1000 + seq, data: { message: { source: { provider: 'anthropic', model: 'claude-sonnet-5-5' } }, usage: { inputTokens: input, outputTokens: 1 } } })
+  const frames = [log([{ type: 'session', id: 'grow' }])]
+  for (let seq = 0; seq < 40; seq += 1) frames.push(log(seq % 3 === 2 ? [{ type: 'turn/end', seq, time: now }] : [call(seq, 1000 + seq)]))
+  const options = { dshHome, file: path.join(home, 'usage-history.json'), pricing: async () => pricing, now: () => now }
+  let scanner = new UsageHistory(options)
+  // The log as it grows: on a frame edge, through several frames, cut inside the
+  // last frame, unchanged in size, and read by a new process from the saved cache.
+  const steps = [{ frames: 5 }, { frames: 12 }, { frames: 12 }, { frames: 26, cut: 3 }, { frames: 26, cut: 3, restart: true }, { frames: 27 }, { frames: 41 }]
+  for (const [index, { frames: count, cut = 0, restart = false }] of steps.entries()) {
+    const whole = Buffer.concat(frames.slice(0, count))
+    const bytes = whole.subarray(0, whole.length - cut)
+    await fs.writeFile(file, bytes)
+    await fs.utimes(file, new Date(), new Date(Date.now() + (index + 1) * 1000))
+    if (restart) scanner = new UsageHistory(options)
+    await scanner.refresh()
+    const entry = scanner.cache.files['--work--/grow']
+    assert.deepEqual(entry.days, dailyUsage(decodeSessionLog(bytes), pricing), `step ${index}`)
+    assert.ok(Number.isInteger(entry.offset) && entry.offset <= bytes.length)
+  }
+  await fs.rm(home, { recursive: true, force: true })
+})
+
+test('UsageHistory reads a log that was written anew from the start', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-history-'))
+  const dshHome = path.join(home, 'dsh-home')
+  const file = path.join(dshHome, 'sessions', '--work--', 'again', 'session.v4.jsonl.zstd')
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const now = at('2026-10-09T12:00:00')
+  const call = (seq, input) => ({ type: 'assistant/message', seq, time: now - 1000, data: { message: { source: { provider: 'anthropic', model: 'claude-sonnet-5-5' } }, usage: { inputTokens: input, outputTokens: 0 } } })
+  const history = new UsageHistory({ dshHome, file: path.join(home, 'usage-history.json'), pricing: async () => pricing, now: () => now })
+  await fs.writeFile(file, Buffer.concat([log([call(0, 1_000_000)]), log([call(1, 1_000_000)]), log([call(2, 1_000_000)])]))
+  assert.equal((await history.refresh()).all.cost, 6)
+  // Recovery rewrote the log: bigger, but not the old one with frames appended.
+  await fs.writeFile(file, Buffer.concat([log([call(0, 500_000)]), log([call(1, 500_000)]), log([call(2, 500_000)]), log([call(3, 500_000)]), log([call(4, 500_000)])]))
+  await fs.utimes(file, new Date(), new Date(Date.now() + 5000))
+  assert.equal((await history.refresh()).all.cost, 5)
   await fs.rm(home, { recursive: true, force: true })
 })
 

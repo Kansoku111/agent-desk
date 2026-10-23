@@ -16,25 +16,25 @@ async function tempHome() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-subagents-'))
 }
 
-test('decodeFrames reads whole frames and stops before one still being written', () => {
+test('decodeFrames reads whole frames and stops before one still being written', async () => {
   const first = frame({ type: 'a', seq: 0 }, { type: 'b', seq: 1 })
   const second = frame({ type: 'c', seq: 2 })
-  const whole = decodeFrames(Buffer.concat([first, second]))
+  const whole = await decodeFrames(Buffer.concat([first, second]))
   assert.deepEqual(whole.events.map((entry) => entry.type), ['a', 'b', 'c'])
   // The last frame is read again next time, as it may still grow.
   assert.equal(whole.consumed, first.length)
 
-  const cut = decodeFrames(Buffer.concat([first, second.subarray(0, second.length - 3)]))
+  const cut = await decodeFrames(Buffer.concat([first, second.subarray(0, second.length - 3)]))
   assert.deepEqual(cut.events.map((entry) => entry.type), ['a', 'b'])
   assert.equal(cut.consumed, first.length)
 })
 
-test('decodeFrames skips a corrupt piece rather than stalling on it', () => {
+test('decodeFrames skips a corrupt piece rather than stalling on it', async () => {
   const first = frame({ type: 'a', seq: 0 })
   // A magic number planted inside a frame breaks it into pieces that never decode.
   const corrupt = Buffer.concat([first.subarray(0, 6), Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), first.subarray(6)])
   const later = ['b', 'c', 'd', 'e', 'f'].map((type, index) => frame({ type, seq: index + 1 }))
-  const result = decodeFrames(Buffer.concat([corrupt, ...later]))
+  const result = await decodeFrames(Buffer.concat([corrupt, ...later]))
   assert.deepEqual(result.events.map((entry) => entry.type), ['b', 'c', 'd', 'e', 'f'])
 })
 
@@ -51,6 +51,25 @@ test('LogTail returns each event once as the log grows', async () => {
   await fs.appendFile(file, frame({ type: 'turn/end', seq: 2, time: 3 }))
   assert.deepEqual((await tail.read()).map((entry) => entry.type), ['tool/call', 'turn/end'])
   assert.deepEqual(await tail.read(), [])
+  await fs.rm(dir, { recursive: true, force: true })
+})
+
+test('LogTail with a line filter parses only the lines asked for and still returns each event once', async () => {
+  const dir = await tempHome()
+  const file = path.join(dir, 'session.v4.jsonl.zstd')
+  const tail = new LogTail(file, { keep: (line) => line.includes('tool/call') || line.includes('"session"') })
+  await fs.writeFile(file, Buffer.concat([frame(header('s1')), frame({ type: 'turn/start', seq: 0, time: 1 }, { type: 'tool/call', seq: 1, time: 2 })]))
+  assert.deepEqual((await tail.read()).map((entry) => entry.type), ['tool/call'])
+  assert.equal(tail.header.id, 's1')
+  await fs.appendFile(file, frame({ type: 'tool/result', seq: 2, time: 3 }, { type: 'tool/call', seq: 3, time: 4 }))
+  await fs.appendFile(file, frame({ type: 'turn/end', seq: 4, time: 5 }))
+  assert.deepEqual((await tail.read()).map((entry) => entry.seq), [3])
+  assert.deepEqual(await tail.read(), [])
+  // Many frames, as a long task writes, come back whole and in order.
+  const many = []
+  for (let seq = 5; seq < 105; seq += 1) many.push(frame({ type: seq % 2 ? 'tool/call' : 'step/start', seq, time: seq }))
+  await fs.appendFile(file, Buffer.concat(many))
+  assert.deepEqual((await tail.read()).map((entry) => entry.seq), Array.from({ length: 50 }, (_, index) => 5 + index * 2))
   await fs.rm(dir, { recursive: true, force: true })
 })
 

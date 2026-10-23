@@ -10,6 +10,7 @@
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import zlib from 'node:zlib'
 import { clip } from './transcript.js'
 import { findSessionLog, loadPricing, priceResponse } from './usage.js'
@@ -27,19 +28,24 @@ const GRACE_MS = 30_000
 /** Unwatched tasks whose logs are dropped from memory after this long. */
 const IDLE_EVICT_MS = 15 * 60_000
 
-/** The text of every complete line in a zstd frame, or null when the piece is not one whole frame. */
-function frameEvents(piece) {
-  let text
-  try {
-    text = zlib.zstdDecompressSync(piece).toString('utf8')
-  } catch {
-    return null
-  }
+const decompress = promisify(zlib.zstdDecompress)
+/** Frames decompressed at once (on the thread pool) while a log is read. */
+const PREFETCH = 16
+
+/** The decompressed text of a piece, or null when it does not decode. */
+const pieceText = (piece) => decompress(piece).then((text) => text.toString('utf8'), () => null)
+
+/**
+ * The events on every complete line of a frame's text, or null when the piece is
+ * not one whole frame. Lines `keep` turns down are not parsed.
+ */
+function frameEvents(text, keep) {
+  if (text === null) return null
   // A frame cut short decodes without an error but stops mid-line.
   if (!text.endsWith('\n')) return null
   const events = []
   for (const line of text.split('\n')) {
-    if (!line.trim()) continue
+    if (!line.trim() || (keep && !keep(line))) continue
     try {
       events.push(JSON.parse(line))
     } catch {
@@ -50,14 +56,11 @@ function frameEvents(piece) {
 }
 
 /** The complete lines decoded so far from a frame that may still be written. */
-function partialEvents(piece) {
-  let text = ''
-  try {
-    text = zlib.zstdDecompressSync(piece).toString('utf8')
-  } catch {}
+function partialEvents(text, keep) {
+  text ??= ''
   const events = []
   for (const line of text.slice(0, text.lastIndexOf('\n') + 1).split('\n')) {
-    if (!line.trim()) continue
+    if (!line.trim() || (keep && !keep(line))) continue
     try {
       events.push(JSON.parse(line))
     } catch {}
@@ -68,20 +71,40 @@ function partialEvents(piece) {
 /**
  * Decodes the frames of a log read from a frame start. The last frame may
  * still be growing, so `consumed` stops at its start and the next read
- * decodes it again (callers drop events they have seen by `seq`).
+ * decodes it again (callers drop events they have seen by `seq`). Frames are
+ * decompressed on the thread pool, a batch at a time, so a long log does not
+ * hold up the event loop.
  * @param {Buffer} buffer
- * @returns {{ events: object[], consumed: number }}
+ * @param {{ keep?: ((line: string) => boolean) | null }} [options] `keep` tests a raw line;
+ *   only lines it accepts are parsed and returned.
+ * @returns {Promise<{ events: object[], consumed: number }>}
  */
-export function decodeFrames(buffer) {
+export async function decodeFrames(buffer, { keep = null } = {}) {
   const starts = []
   for (let index = buffer.indexOf(ZSTD_MAGIC); index !== -1; index = buffer.indexOf(ZSTD_MAGIC, index + 4)) starts.push(index)
   const events = []
+  const single = new Map()
+  // The text of the piece from one start to the next, ready before it is asked for.
+  const singleText = async (index) => {
+    if (!single.has(index)) {
+      const upto = Math.min(starts.length, index + PREFETCH)
+      const batch = []
+      for (let at = index; at < upto; at += 1) {
+        single.set(at, pieceText(buffer.subarray(starts[at], starts[at + 1] ?? buffer.length)))
+        batch.push(single.get(at))
+      }
+      await Promise.all(batch)
+    }
+    return single.get(index)
+  }
   let consumed = starts[0] ?? 0
   let from = 0
   while (from < starts.length) {
+    const previous = from
     let next = -1
     for (let to = from + 1; to < starts.length && to <= from + MAX_JOIN; to += 1) {
-      const decoded = frameEvents(buffer.subarray(starts[from], starts[to]))
+      const text = to === from + 1 ? await singleText(from) : await pieceText(buffer.subarray(starts[from], starts[to]))
+      const decoded = frameEvents(text, keep)
       if (decoded) {
         events.push(...decoded)
         next = to
@@ -91,25 +114,39 @@ export function decodeFrames(buffer) {
     if (next !== -1) {
       from = next
       consumed = starts[from]
+      for (let index = previous; index < from; index += 1) single.delete(index)
       continue
     }
     if (starts.length - from <= MAX_JOIN) {
       // The frame being written (maybe with a magic number inside it).
-      events.push(...partialEvents(buffer.subarray(starts[from])))
+      events.push(...partialEvents(await pieceText(buffer.subarray(starts[from])), keep))
       consumed = starts[from]
       break
     }
     // A piece no join can decode: skip it rather than stall on it.
     from += 1
     consumed = starts[from]
+    single.delete(previous)
   }
   return { events, consumed }
 }
 
+/**
+ * The lines of a task's own log that {@link SubagentTracker} uses: the calls
+ * that may start a subagent, the catalog entries naming one, and the header.
+ */
+const ROOT_LINE = (line) => line.includes('tool/call') || line.includes('subagent/catalog') || line.includes('"session"')
+
 /** Reads one session log as it grows, returning each event once. */
 export class LogTail {
-  constructor(file) {
+  /**
+   * @param {string} file
+   * @param {{ keep?: ((line: string) => boolean) | null }} [options] only lines `keep` accepts are parsed
+   *   (the rest never reach the caller, so they do not move the `seq` that tells what was seen).
+   */
+  constructor(file, { keep = null } = {}) {
     this.file = file
+    this.keep = keep
     this.#reset()
   }
 
@@ -141,7 +178,7 @@ export class LogTail {
       await handle.close()
     }
     this.size = this.offset + buffer.length
-    const { events, consumed } = decodeFrames(buffer)
+    const { events, consumed } = await decodeFrames(buffer, { keep: this.keep })
     this.offset += consumed
     const fresh = []
     for (const event of events) {
@@ -438,7 +475,7 @@ export class SubagentTracker extends EventEmitter {
     if (!tree.file) {
       tree.file = await findSessionLog(this.dshHome, tree.sessionId)
       if (!tree.file) return
-      tree.root = new LogTail(tree.file)
+      tree.root = new LogTail(tree.file, { keep: ROOT_LINE })
     }
     this.#scan(tree, tree.sessionId, 1, await tree.root.read())
     const folder = path.dirname(path.dirname(tree.file))
