@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import YAML from 'yaml'
 import { homePatch, isWorkspaceId } from '../server/dsh-config.js'
-import { anthropicKeyProblem } from '../server/key-check.js'
+import { anthropicKeyProblem, checkAnthropicKey, checkDeepSeekKey } from '../server/key-check.js'
 
 test('anthropicKeyProblem flags ids and other credential kinds', () => {
   assert.match(anthropicKeyProblem('apikey_01AbCdEf'), /ID/)
@@ -11,6 +11,21 @@ test('anthropicKeyProblem flags ids and other credential kinds', () => {
   assert.match(anthropicKeyProblem('sk-ant-admin01-xyz'), /Admin/)
   assert.match(anthropicKeyProblem('sk-ant-api03-abc def'), /空白/)
   assert.equal(anthropicKeyProblem('sk-ant-api03-abcdef'), null)
+})
+
+test('key validation probes reject redirects before forwarding credentials', async (t) => {
+  const requests = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push({ url, options })
+    return Response.json({ data: [] })
+  })
+
+  assert.equal((await checkAnthropicKey('sk-ant-api03-test')).status, 'valid')
+  assert.equal((await checkDeepSeekKey('ds-test')).status, 'valid')
+  assert.equal(requests.length, 2)
+  assert.ok(requests.every(({ options }) => options.redirect === 'error'))
+  assert.equal(requests[0].options.headers['x-api-key'], 'sk-ant-api03-test')
+  assert.equal(requests[1].options.headers.authorization, 'Bearer ds-test')
 })
 
 test('homePatch adds the workspace header only for a valid id', () => {

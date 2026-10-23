@@ -33,7 +33,7 @@ export class CredentialStore {
     try {
       return await fs.readFile(this.file, 'utf8')
     } catch (error) {
-      if (error.code === 'ENOENT') return ''
+      if (error.code === 'ENOENT') return null
       throw error
     }
   }
@@ -41,7 +41,7 @@ export class CredentialStore {
   /** Parsed snapshot: `{ refs, records }`; never throws on a missing file. */
   async read() {
     const text = await this.#readText()
-    if (!text.trim()) return { refs: {}, records: {} }
+    if (text === null || !text.trim()) return { refs: {}, records: {} }
     const doc = YAML.parseDocument(text)
     if (doc.errors.length) throw new Error(`credential file is not valid YAML (${doc.errors[0].code})`)
     const value = doc.toJS() ?? {}
@@ -52,12 +52,12 @@ export class CredentialStore {
     await fs.mkdir(path.dirname(this.file), { recursive: true })
     await withFileLock(this.file, async () => {
       const text = await this.#readText()
-      const doc = text.trim() ? YAML.parseDocument(text) : new YAML.Document({})
+      const doc = text?.trim() ? YAML.parseDocument(text) : new YAML.Document({})
       if (doc.errors.length) {
         // Never overwrite content we could not read: the user may fix it by hand.
         throw new Error(`credential file is not valid YAML (${doc.errors[0].code}); not overwriting it`)
       }
-      if (!YAML.isMap(doc.contents)) doc.contents = doc.createNode({})
+      if (!YAML.isMap(doc.contents)) throw new Error('credential file root is not a mapping; not overwriting it')
       mutate(doc)
       for (const section of ['refs', 'records']) {
         const node = doc.get(section)

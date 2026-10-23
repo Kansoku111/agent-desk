@@ -3,7 +3,7 @@
 
 async function probe(url, headers, timeoutMs = 8000) {
   try {
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) })
+    const response = await fetch(url, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) })
     if (response.ok) return { status: 'valid', response }
     let message = ''
     try {

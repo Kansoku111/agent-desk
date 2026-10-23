@@ -4,7 +4,7 @@
 
 // Keys the app manages in the credential store. The launch environment would
 // otherwise win over the store and silently ignore keys saved in Settings.
-const MANAGED_ENV = ['ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'DSH_HOME', 'DSH_PERMISSION_MODE']
+const MANAGED_ENV = ['ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'LOCAL_LLM_API_KEY', 'DSH_HOME', 'DSH_PERMISSION_MODE']
 
 /** The environment every dsh process Agent Desk starts runs with. */
 export function dshEnv(paths, mode, base = process.env) {

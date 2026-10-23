@@ -12,6 +12,7 @@ import YAML from 'yaml'
 import { homePatch } from '../server/dsh-config.js'
 import { discoverLocalModels, localRoute, normalizeBaseUrl, parseModelList } from '../server/local-llm.js'
 import { planSettingsUpdate, DEFAULT_SETTINGS } from '../server/settings.js'
+import { dshEnv } from '../server/dsh-env.js'
 import { mergeTeamConfig, teamConfig } from '../server/team-config.js'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -47,6 +48,16 @@ test('discovery sends the key and explains failures', async () => {
   await assert.rejects(discoverLocalModels('http://h/v1', null, { fetchImpl: reply(404, {}) }), /HTTP 404/)
   await assert.rejects(discoverLocalModels('http://h/v1', null, { fetchImpl: reply(200, { data: [] }) }), /モデルがありません/)
   await assert.rejects(discoverLocalModels('http://h/v1', null, { fetchImpl: async () => { throw new Error('refused') } }), /接続できません/)
+})
+
+test('dsh does not inherit a local model key that should come from the credential store', () => {
+  const env = dshEnv({ dshHome: 'dsh-home', fastMode: 'fast-mode', credentials: 'credentials' }, 'workspace-write', {
+    LOCAL_LLM_API_KEY: 'inherited-key',
+    KEEP_ME: 'unchanged',
+  })
+  assert.equal(env.LOCAL_LLM_API_KEY, undefined)
+  assert.equal(env.KEEP_ME, 'unchanged')
+  assert.equal(localRoute({ baseURL: 'http://h/v1', models: [{ id: 'a' }] }).apiKeyEnv, undefined)
 })
 
 test('the route joins the home patch only when it has models', () => {
