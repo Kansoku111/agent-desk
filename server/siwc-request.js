@@ -91,10 +91,66 @@ export function requireCompleted(response) {
     headers: response.headers
   })
 }
+// A response the backend stops feeding stays open with no error and no close,
+// so neither the SDK (its timeout ends at the headers) nor dsh ever gives up on
+// it. Silence this long, twice the longest gap seen in real GPT replies, ends
+// the request as a timeout, which dsh retries.
+export const SIWC_IDLE_MS = 600_000
+export async function sendWithIdleLimit(send, url, init, idleMs = SIWC_IDLE_MS) {
+  const error = new Error(`SIWC stream timed out: no data for ${Math.round(idleMs / 1000)} s`)
+  const stall = new AbortController()
+  let timer, reader
+  const arm = () => {
+    timer = setTimeout(() => {
+      stall.abort(error)
+      reader?.cancel(error).catch(() => {})
+    }, idleMs)
+  }
+  arm()
+  let response
+  try {
+    response = await send(url, {
+      ...init,
+      signal: init.signal ? AbortSignal.any([init.signal, stall.signal]) : stall.signal
+    })
+  } catch (cause) {
+    throw stall.signal.aborted ? error : cause
+  } finally {
+    clearTimeout(timer)
+  }
+  if (!response.body) return response
+  reader = response.body.getReader()
+  const body = new ReadableStream({
+    async pull(controller) {
+      arm()
+      let chunk
+      try {
+        chunk = await reader.read()
+      } catch (cause) {
+        throw stall.signal.aborted ? error : cause
+      } finally {
+        clearTimeout(timer)
+      }
+      if (stall.signal.aborted) throw error
+      if (chunk.done) controller.close()
+      else controller.enqueue(chunk.value)
+    },
+    cancel(reason) {
+      clearTimeout(timer)
+      return reader.cancel(reason)
+    }
+  })
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers
+  })
+}
 export function withSiwc(model, options, {
   credentials = process.env.AGENT_DESK_SIWC_CREDENTIALS,
   client,
-  fetch: fetcher
+  fetch: fetcher,
+  idleMs = SIWC_IDLE_MS
 } = {}) {
   if (!isSiwcModel(model)) return options
   if (!credentials && !client) throw new Error('Official ChatGPT route requires Agent Desk SIWC authentication hook')
@@ -119,13 +175,13 @@ export function withSiwc(model, options, {
       headers.delete('chatgpt-account-id')
       headers.delete('content-length')
       headers.delete('OpenAI-Beta')
-      const response = await send(request.url, {
+      const response = await sendWithIdleLimit(send, request.url, {
         method: 'POST',
         redirect: 'error',
         headers,
         body: JSON.stringify(body),
         signal: request.signal
-      })
+      }, idleMs)
       return requireCompleted(await explainSiwcUsage(response))
     }
   }

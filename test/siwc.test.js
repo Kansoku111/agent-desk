@@ -6,7 +6,7 @@ import path from 'node:path'
 import { generateKeyPair, SignJWT } from 'jose'
 import { CredentialStore, SIWC_RECORD, CODEX_RECORD, describeChatGpt } from '../server/credentials.js'
 import { SiwcClient, verifySiwcIdToken, SIWC_ISSUER, SIWC_RESOURCE } from '../server/siwc-client.js'
-import { siwcPayload, siwcEffort, SIWC_UNSUPPORTED_FIELDS, withSiwc, requireCompleted } from '../server/siwc-request.js'
+import { siwcPayload, siwcEffort, SIWC_UNSUPPORTED_FIELDS, withSiwc, requireCompleted, sendWithIdleLimit } from '../server/siwc-request.js'
 import { ChatGptLogin } from '../server/chatgpt-login.js'
 import { migrateSettings, planSettingsUpdate } from '../server/settings.js'
 import { siwcModelDefinitions } from '../server/siwc-models.js'
@@ -134,6 +134,39 @@ test('SIWC per-request fetch injects latest token only at fixed public endpoint'
     method: 'POST',
     body: '{}'
   }), /Refusing/)
+})
+test('SIWC ends a stream the backend stops feeding as a timeout and drops the connection', async () => {
+  const signals = []
+  const opts = withSiwc(model, {}, {
+    client: { auth: async () => ({ access_token: 'token' }) },
+    idleMs: 30,
+    fetch: async (_url, init) => {
+      signals.push(init.signal)
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\n\n'))
+        }
+      }))
+    }
+  })
+  const response = await opts.fetch(`${SIWC_RESOURCE}/responses`, { method: 'POST', body: '{"input":[]}' })
+  await assert.rejects(response.text(), /SIWC stream timed out: no data for 0 s/)
+  assert.equal(signals[0].aborted, true)
+})
+test('SIWC times out a request whose headers never arrive', async () => {
+  const send = (_url, init) => new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
+  await assert.rejects(sendWithIdleLimit(send, 'https://example.com', {}, 30), /timed out/)
+})
+test('SIWC idle limit counts only upstream silence, not a slow reader or the caller aborting', async () => {
+  const send = async () => new Response('data: {"type":"response.completed"}\n\n')
+  const response = await sendWithIdleLimit(send, 'https://example.com', {}, 30)
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.match(await response.text(), /response\.completed/)
+  const caller = new AbortController()
+  const hanging = (_url, init) => new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
+  const pending = sendWithIdleLimit(hanging, 'https://example.com', { signal: caller.signal }, 1000)
+  caller.abort(new Error('Request was aborted'))
+  await assert.rejects(pending, /Request was aborted/)
 })
 test('SIWC rejects incomplete and interrupted streams instead of treating SDK length as success', async () => {
   await assert.rejects(requireCompleted(new Response('data: {"type":"response.incomplete"}\n\n')).text(), /did not complete/)
