@@ -1,11 +1,16 @@
 // RPC handlers for provider accounts (API keys and the ChatGPT sign-in) and for
 // the usage page's admin key (see index.js).
-import { ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, DEEPSEEK_REF, LOCAL_LLM_REF } from './credentials.js'
+import { ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, DEEPSEEK_REF, LOCAL_LLM_REF, OPENCODE_GO_REF } from './credentials.js'
 import { fetchCostDays } from './claude-cost.js'
 import { SiwcClient } from './siwc-client.js'
 import { isWorkspaceId } from './dsh-config.js'
-import { anthropicKeyProblem, checkAnthropicKey, checkDeepSeekKey } from './key-check.js'
+import { anthropicKeyProblem, checkAnthropicKey, checkDeepSeekKey, checkOpenCodeGoKey } from './key-check.js'
 import { discoverLocalModels, normalizeBaseUrl } from './local-llm.js'
+
+/** The credential refs of the API keys set in 設定 → アカウント, by provider. */
+const KEY_REFS = { anthropic: ANTHROPIC_REF, deepseek: DEEPSEEK_REF, opencodeGo: OPENCODE_GO_REF }
+/** Key checks of the providers whose models join the catalog only with a key. */
+const CATALOG_KEY_CHECKS = { deepseek: checkDeepSeekKey, opencodeGo: checkOpenCodeGoKey }
 
 /** Handlers for accounts and usage; index.js merges them into the request table. */
 export function createAccountHandlers({ appVersion, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost, updateModelCatalog, refreshChatGptUsage, getChatgptUsage, refreshUsageHistory, usageState, updateSettings, discoverModels = discoverLocalModels }) {
@@ -30,7 +35,7 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
     },
 
     'account.setKey': async ({ provider, key, force }) => {
-      const ref = provider === 'anthropic' ? ANTHROPIC_REF : provider === 'deepseek' ? DEEPSEEK_REF : null
+      const ref = Object.hasOwn(KEY_REFS, provider) ? KEY_REFS[provider] : null
       if (!ref) throw new Error('不明なプロバイダーです')
       const trimmed = String(key ?? '').trim()
       if (!trimmed) throw new Error('API キーを入力してください')
@@ -46,7 +51,7 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
           if (check.status !== 'invalid') await setAnthropicWorkspace(null)
         }
       } else {
-        check = await checkDeepSeekKey(trimmed)
+        check = await CATALOG_KEY_CHECKS[provider](trimmed)
       }
       if (check.status === 'invalid' && !force) {
         throw new Error('この API キーは認証に失敗しました。キーを確認してください。')
@@ -55,7 +60,7 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
       const next = await accounts()
       broadcast('accounts', { accounts: next })
       if (provider === 'anthropic') void refreshClaudeCost()
-      if (provider === 'deepseek') await updateModelCatalog()
+      if (CATALOG_KEY_CHECKS[provider]) await updateModelCatalog()
       return { check, accounts: next }
     },
 
@@ -66,9 +71,9 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
         const key = refs[ANTHROPIC_REF]
         return { check: key ? await checkAnthropicKey(key, getSettings().anthropicWorkspaceId) : null }
       }
-      if (provider === 'deepseek') {
-        const key = refs[DEEPSEEK_REF]
-        return { check: key ? await checkDeepSeekKey(key) : null }
+      if (Object.hasOwn(CATALOG_KEY_CHECKS, provider)) {
+        const key = refs[KEY_REFS[provider]]
+        return { check: key ? await CATALOG_KEY_CHECKS[provider](key) : null }
       }
       throw new Error('不明なプロバイダーです')
     },
@@ -90,13 +95,13 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
     },
 
     'account.removeKey': async ({ provider }) => {
-      const ref = provider === 'anthropic' ? ANTHROPIC_REF : provider === 'deepseek' ? DEEPSEEK_REF : null
+      const ref = Object.hasOwn(KEY_REFS, provider) ? KEY_REFS[provider] : null
       if (!ref) throw new Error('不明なプロバイダーです')
       await credentials.unsetRef(ref)
       const next = await accounts()
       broadcast('accounts', { accounts: next })
       if (provider === 'anthropic') void refreshClaudeCost()
-      if (provider === 'deepseek') await updateModelCatalog()
+      if (CATALOG_KEY_CHECKS[provider]) await updateModelCatalog()
       return { accounts: next }
     },
 

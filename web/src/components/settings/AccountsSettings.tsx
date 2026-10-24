@@ -65,14 +65,14 @@ function ClaudeWorkspace({ current, choices, onDone }: {
 }
 
 function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hint }: {
-  provider: 'anthropic' | 'deepseek'
+  provider: 'anthropic' | 'deepseek' | 'opencodeGo'
   title: string
   description: string
   consoleUrl: string
   placeholder: string
   hint?: string
 }) {
-  const account = useStore((state) => (provider === 'anthropic' ? state.server?.accounts.claude : state.server?.accounts.deepseek))
+  const account = useStore((state) => (provider === 'anthropic' ? state.server?.accounts.claude : state.server?.accounts[provider]))
   const workspaceId = useStore((state) => state.server?.accounts.claude.workspaceId ?? null)
   const [key, setKey] = useState('')
   const [saving, setSaving] = useState(false)
@@ -283,6 +283,13 @@ export function AccountsSettings() {
         title="DeepSeek（任意）"
         description="API キー（従量課金）"
         consoleUrl="https://platform.deepseek.com/api_keys"
+        placeholder="sk-…"
+      />
+      <ApiKeyCard
+        provider="opencodeGo"
+        title="OpenCode Go（任意）"
+        description="API キー（定額制）"
+        consoleUrl="https://opencode.ai/auth"
         placeholder="sk-…"
       />
       <LocalLlmCard />

@@ -42,13 +42,16 @@ test('catalog does not accept a runtime snapshot that predates a key change', as
   assert.ok(catalog.data.models.every((model) => model.provider !== 'deepseek-official'))
 })
 
-test('saving and removing a DeepSeek key refreshes the picker catalog without a manual refresh', { timeout: 45_000 }, async (t) => {
+/**
+ * Saves and removes a key through the real save handler, runtimes and
+ * discovery, with no provider requests or real credentials: only the free
+ * key-validation endpoint is mocked.
+ */
+async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe }) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-account-catalog-'))
   const hook = path.join(home, 'offline-fetch.mjs')
-  // Exercise the real save handler, runtimes and discovery, with no provider
-  // requests or real credentials. Only the free key-validation endpoint is mocked.
   await fs.writeFile(hook, `globalThis.fetch = async (url) => {
-    if (String(url) === 'https://api.deepseek.com/models') return new Response('{"data":[]}', { status: 200 });
+    if (String(url) === ${JSON.stringify(probe)}) return new Response('{"data":[]}', { status: 200 });
     throw new Error('offline account-catalog test');
   }`)
   await fs.writeFile(path.join(home, 'settings.json'), JSON.stringify({ modelAutoUpdate: false }))
@@ -110,16 +113,30 @@ test('saving and removing a DeepSeek key refreshes the picker catalog without a 
     }
     assert.fail(`catalog did not converge: ${output}\nlast state: ${JSON.stringify({ accounts: lastState?.accounts, runtime: lastState?.runtime, models: lastState?.catalog?.models?.map(({ provider, id }) => ({ provider, id })) })}`)
   }
-  const deepseek = (state) => state.catalog.models.filter((model) => model.provider === 'deepseek-official')
+  const models = (state) => state.catalog.models.filter((model) => model.provider === catalogProvider)
   const initial = await waitFor((state) => state.catalog.models.length > 0)
-  assert.equal(deepseek(initial).length, 0)
-  const saved = await request('account.setKey', { provider: 'deepseek', key: 'sk-test-only-not-a-real-key' })
+  assert.equal(models(initial).length, 0)
+  const saved = await request('account.setKey', { provider, key: 'sk-test-only-not-a-real-key' })
   assert.equal(saved.check.status, 'valid')
-  const added = await waitFor((state) => deepseek(state).length > 0)
-  assert.equal(added.accounts.deepseek.configured, true)
-  assert.ok(deepseek(added).every((model) => model.id && model.value))
-  await request('account.removeKey', { provider: 'deepseek' })
-  const removed = await waitFor((state) => deepseek(state).length === 0)
-  assert.equal(removed.accounts.deepseek.configured, false)
+  const added = await waitFor((state) => models(state).length > 0)
+  assert.equal(added.accounts[account].configured, true)
+  assert.ok(models(added).every((model) => model.id && model.value))
+  await request('account.removeKey', { provider })
+  const removed = await waitFor((state) => models(state).length === 0)
+  assert.equal(removed.accounts[account].configured, false)
   assert.ok(removed.catalog.models.some((model) => model.provider === 'openai-codex'))
+  return added
+}
+
+test('saving and removing a DeepSeek key refreshes the picker catalog without a manual refresh', { timeout: 45_000 }, async (t) => {
+  await keyRefreshesCatalog(t, { provider: 'deepseek', account: 'deepseek', catalogProvider: 'deepseek-official', probe: 'https://api.deepseek.com/models' })
+})
+
+test('saving and removing an OpenCode Go key adds and removes its catalog models', { timeout: 45_000 }, async (t) => {
+  const added = await keyRefreshesCatalog(t, {
+    provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
+  })
+  // The models are pi-ai's opencode-go catalog, served through dsh.
+  const ids = added.catalog.models.filter((model) => model.provider === 'opencode-go').map((model) => model.id)
+  for (const id of ['glm-5.3', 'kimi-k3', 'qwen3.8-max']) assert.ok(ids.includes(id), ids.join(', '))
 })

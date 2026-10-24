@@ -35,6 +35,6 @@ API キーと公式 SIWC の登録・トークンは `dsh-home/.credentials.yaml
 - **チームの実行方式と互換性:** Claude（API）の子は dsh で動き、Claude Code とは実行方式・履歴を分離します。既存のチームの選択・モデル・履歴はそのまま残し、自動移行・有効化・フォールバックは行いません。
 - **Claude Code（CL）の会話:** 画面に表示し、再開するために、Claude Code が自分で保存した会話記録（`~/.claude/projects` の中）を読みます。この PC の中だけで扱い、書き換えません。作業中の表示が終わらないときのために、Claude Code が自分の状態（作業中か待機中か）を書く `~/.claude/sessions` のファイルも、その確認のためだけに読みます。
 - **チームの Claude の子:** 起動した `claude -p` の出力（返答・ツールの実行と結果・利用上限の情報）を読み、直近60ターンぶんを、データフォルダの `team-agents/` に保存します。
-- **Agent Desk 自身の通信先:** OpenAI（ChatGPT・Codex のサインインと利用）、DeepSeek と Anthropic の API（それぞれの API キーを登録して使うときや、キーの確認・料金の取得）です。Claude Code の通信は Claude Code 自身が行います。
+- **Agent Desk 自身の通信先:** OpenAI（ChatGPT・Codex のサインインと利用）、DeepSeek・Anthropic・OpenCode Go の API（それぞれの API キーを登録して使うときや、キーの確認・料金の取得）です。Claude Code の通信は Claude Code 自身が行います。
 - **スマホから使う設定:** 有効にすると、会話の内容は Tailscale 経由で、あなたの端末に表示されます。
 - **保存先:** 上の表のデータフォルダだけです。リポジトリ（ソースコード）の中には保存しません。`AGENT_DESK_HOME` をリポジトリの中に向けた場合に備えて、`.gitignore` でデータフォルダの中身を除外しています。

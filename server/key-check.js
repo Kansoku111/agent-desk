@@ -87,3 +87,9 @@ export async function checkDeepSeekKey(key) {
   delete result.response
   return result
 }
+
+export async function checkOpenCodeGoKey(key) {
+  const result = await probe('https://opencode.ai/inference/go/v1/models', { authorization: `Bearer ${key}` })
+  delete result.response
+  return result
+}

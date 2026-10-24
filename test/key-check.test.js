@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import YAML from 'yaml'
 import { homePatch, isWorkspaceId } from '../server/dsh-config.js'
-import { anthropicKeyProblem, checkAnthropicKey, checkDeepSeekKey } from '../server/key-check.js'
+import { anthropicKeyProblem, checkAnthropicKey, checkDeepSeekKey, checkOpenCodeGoKey } from '../server/key-check.js'
 
 test('anthropicKeyProblem flags ids and other credential kinds', () => {
   assert.match(anthropicKeyProblem('apikey_01AbCdEf'), /ID/)
@@ -22,10 +22,24 @@ test('key validation probes reject redirects before forwarding credentials', asy
 
   assert.equal((await checkAnthropicKey('sk-ant-api03-test')).status, 'valid')
   assert.equal((await checkDeepSeekKey('ds-test')).status, 'valid')
-  assert.equal(requests.length, 2)
+  assert.equal((await checkOpenCodeGoKey('oc-test')).status, 'valid')
+  assert.equal(requests.length, 3)
   assert.ok(requests.every(({ options }) => options.redirect === 'error'))
   assert.equal(requests[0].options.headers['x-api-key'], 'sk-ant-api03-test')
   assert.equal(requests[1].options.headers.authorization, 'Bearer ds-test')
+  assert.equal(requests[2].url, 'https://opencode.ai/inference/go/v1/models')
+  assert.equal(requests[2].options.headers.authorization, 'Bearer oc-test')
+})
+
+test('an OpenCode Go key the service refuses is invalid', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ error: { type: 'server_error', message: 'Invalid credential' } }, { status: 401 }))
+  assert.deepEqual(await checkOpenCodeGoKey('oc-wrong'), { status: 'invalid', httpStatus: 401, message: 'Invalid credential' })
+})
+
+test('homePatch adds the OpenCode Go route only while its key is saved', () => {
+  assert.equal(YAML.parse(homePatch())[0].config.providers['opencode-go'], undefined)
+  // pi-ai's catalog route: no models, protocol or URL of Agent Desk's own.
+  assert.deepEqual(YAML.parse(homePatch({ opencodeGo: true }))[0].config.providers['opencode-go'], { apiKeyEnv: 'OPENCODE_API_KEY' })
 })
 
 test('homePatch adds the workspace header only for a valid id', () => {

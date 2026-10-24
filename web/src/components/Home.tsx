@@ -35,6 +35,7 @@ export function Home() {
   const onPc = draft.workspace === server.app.myPc
   const suggestions = onPc ? PC_SUGGESTIONS : SUGGESTIONS
   const noAccount = !accounts.chatgpt.signedIn && !accounts.claude.configured && !accounts.deepseek.configured
+    && !accounts.opencodeGo?.configured
     && !accounts.localLlm?.configured
 
   return (

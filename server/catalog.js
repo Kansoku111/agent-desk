@@ -7,6 +7,7 @@ export const PROVIDER_LABELS = {
   'openai-codex': 'ChatGPT',
   anthropic: 'Claude',
   'deepseek-official': 'DeepSeek',
+  'opencode-go': 'OpenCode Go',
   'local-llm': 'ローカル LLM',
 }
 
@@ -17,7 +18,7 @@ const FALLBACK_EFFORTS = [
 ]
 
 // A runtime can finish learning options it fetched before the catalog signature
-// changed (for example, while a DeepSeek key is being saved). Such a snapshot
+// changed (for example, while a DeepSeek or OpenCode Go key is being saved). Such a snapshot
 // must not make that new signature look current.
 function matchesSignature(signature, models) {
   let requirements
@@ -27,8 +28,9 @@ function matchesSignature(signature, models) {
     return true
   }
   if (!requirements || typeof requirements !== 'object') return true
-  return typeof requirements.deepseek !== 'boolean'
-    || models.some((model) => model.provider === 'deepseek-official') === requirements.deepseek
+  const matches = (name, provider) => typeof requirements[name] !== 'boolean'
+    || models.some((model) => model.provider === provider) === requirements[name]
+  return matches('deepseek', 'deepseek-official') && matches('opencodeGo', 'opencode-go')
 }
 
 export class Catalog {

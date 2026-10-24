@@ -13,7 +13,7 @@ import { codeStamp, uiBuild } from './code-stamp.js'
 import { ChatGptLogin } from './chatgpt-login.js'
 import { Checkpoints } from './checkpoints.js'
 import {
-  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret,
+  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF,
 } from './credentials.js'
 import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
@@ -168,6 +168,7 @@ async function accounts() {
     },
     claudeAdmin: { configured: Boolean(snapshot.refs[ANTHROPIC_ADMIN_REF]), masked: maskSecret(snapshot.refs[ANTHROPIC_ADMIN_REF]) },
     deepseek: { configured: Boolean(snapshot.refs[DEEPSEEK_REF]), masked: maskSecret(snapshot.refs[DEEPSEEK_REF]) },
+    opencodeGo: { configured: Boolean(snapshot.refs[OPENCODE_GO_REF]), masked: maskSecret(snapshot.refs[OPENCODE_GO_REF]) },
     localLlm: {
       configured: Boolean(localRoute(settings.localLlm)),
       keyed: Boolean(snapshot.refs[LOCAL_LLM_REF]),
@@ -249,6 +250,8 @@ const catalogSignature = async (result) => JSON.stringify({
   definitions: createHash('sha256').update(JSON.stringify(configuredModels)).digest('hex'),
   // Native DeepSeek discovery returns no models until its key is present.
   deepseek: (await accounts()).deepseek.configured,
+  // OpenCode Go's route is in the home patch only while its key is saved.
+  opencodeGo: (await accounts()).opencodeGo.configured,
   local: localLlmSettings(settings.localLlm),
 })
 
@@ -284,6 +287,7 @@ async function applyHomePatch() {
     webSearch: { plugin: WEB_SEARCH_PLUGIN, credentials: paths.credentials },
     instructions: settings.customInstructions,
     localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
+    opencodeGo: (await accounts()).opencodeGo.configured,
   })
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
   // Read by each subagent_gpt call, so no runtime restarts for it.

@@ -645,6 +645,7 @@ export function Sidebar() {
     accounts?.chatgpt.signedIn && 'ChatGPT',
     accounts?.claude.configured && 'Claude',
     accounts?.deepseek.configured && 'DeepSeek',
+    accounts?.opencodeGo?.configured && 'OpenCode Go',
     accounts?.localLlm?.configured && 'ローカル LLM',
   ].filter(Boolean)
   const activeId = route.view === 'thread' || route.view === 'terminal' ? route.id : null

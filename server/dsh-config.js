@@ -5,7 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import YAML from 'yaml'
 import { writeText } from './json-file.js'
-import { ANTHROPIC_REF } from './credentials.js'
+import { ANTHROPIC_REF, OPENCODE_GO_REF } from './credentials.js'
 import { LOCAL_PROVIDER } from './local-llm.js'
 import { isModelId } from './model-catalog.js'
 import { SIWC_KEY_REF, SIWC_RESOURCE } from './siwc-client.js'
@@ -16,6 +16,12 @@ const WORKSPACE_ID = /^wrkspc_[A-Za-z0-9]+$/
 export function isWorkspaceId(value) {
   return typeof value === 'string' && WORKSPACE_ID.test(value)
 }
+
+/**
+ * pi-ai's own OpenCode Go provider: a catalog route, so its models, wire
+ * protocols and the `x-opencode-session` header come from pi-ai.
+ */
+export const OPENCODE_GO_PROVIDER = 'opencode-go'
 
 /** Context sizes the settings screen offers, in tokens. */
 export const CONTEXT_CHOICES = [64_000, 128_000, 200_000, 272_000, 400_000, 500_000, 1_000_000]
@@ -127,6 +133,7 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
 # openai-codex provider key now dispatches standard openai-responses to api.openai.com.
 # Claude uses an Anthropic API key
 # (refs/${ANTHROPIC_REF}). DeepSeek stays available through the shipped route.
+# OpenCode Go (pi-ai's catalog route) is added while refs/${OPENCODE_GO_REF} is set.
 # The ACP bridge decides once, at startup and from its default model, whether
 # prompts may carry images; the shipped default (deepseek-v4-flash) is text
 # only, so it is set to an image-capable model. Tasks still pick their own.
@@ -153,10 +160,11 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  *   added to every system prompt by {@link INSTRUCTIONS_PLUGIN}.
  * @param {object | null} [options.localRoute] - the local server's route
  *   (local-llm.js `localRoute`), or null when none is set up.
+ * @param {boolean} [options.opencodeGo] - whether an OpenCode Go key is saved.
  */
 export function homePatch({
   anthropicWorkspaceId = null, modelOverrides = {}, catalogModels = {},
-  subagents = [], persona = null, webSearch = null, instructions = '', localRoute = null,
+  subagents = [], persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false,
 } = {}) {
   // dsh's default (5 tries, 10 s at most) gives up within about 15 s, shorter
   // than the minute-long upstream hiccups ChatGPT's backend has.
@@ -190,7 +198,17 @@ export function homePatch({
       ?? null
   }
   const rows = [
-    { id: 'llm-pi-ai', config: { providers: { 'openai-codex': codex, anthropic, ...(localRoute ? { [LOCAL_PROVIDER]: localRoute } : {}) } } },
+    {
+      id: 'llm-pi-ai',
+      config: {
+        providers: {
+          'openai-codex': codex,
+          anthropic,
+          ...(opencodeGo ? { [OPENCODE_GO_PROVIDER]: { apiKeyEnv: OPENCODE_GO_REF } } : {}),
+          ...(localRoute ? { [LOCAL_PROVIDER]: localRoute } : {}),
+        },
+      },
+    },
     // The model pickers prefer the same one (web/src/components/Pickers.tsx).
     ...(acpModel ? [{ id: 'acp', config: { provider: 'openai-codex', model: acpModel } }] : []),
     // Its tool and prompt section go together; `subagent` stays for delegation.

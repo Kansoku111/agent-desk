@@ -20,7 +20,7 @@ const STATE_LABEL: Record<TeamChildState, string> = {
   removed: '削除済み',
   resuming: '再開待ち',
 }
-const PROVIDER_LABEL = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude API', deepseek: 'DeepSeek', local: 'ローカル' }
+const PROVIDER_LABEL = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude API', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', local: 'ローカル' }
 
 const isActive = (state: TeamChildState) => state === 'running' || state === 'approval'
 /** What 全停止 stops: work under way, and work about to go on by itself. */

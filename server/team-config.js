@@ -6,15 +6,16 @@
 import { ENTRY_ID } from './team-playbooks.js'
 
 /**
- * Teams' children by provider: GPT, Claude (API), DeepSeek and the local
- * server run as dsh tasks (on the ChatGPT subscription, the user's Anthropic
- * and DeepSeek API keys, and their own machine), Claude as a Claude Code task.
+ * Teams' children by provider: GPT, Claude (API), DeepSeek, OpenCode Go and
+ * the local server run as dsh tasks (on the ChatGPT subscription, the user's
+ * Anthropic, DeepSeek and OpenCode Go API keys, and their own machine), Claude
+ * as a Claude Code task.
  */
-export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek', 'local']
-/** Who can lead: DeepSeek and local models only work as children. */
+export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'local']
+/** Who can lead: DeepSeek, OpenCode Go and local models only work as children. */
 export const LEADER_PROVIDERS = ['claude', 'gpt']
 export const TEAM_TIERS = ['low', 'mid']
-export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', local: 'ローカル LLM' }
+export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', local: 'ローカル LLM' }
 export const MAX_CHILDREN_LIMIT = 12
 
 /** A Claude Code model alias (opus) or full name (claude-haiku-5-5), as `claude --model` takes it. */
@@ -47,6 +48,8 @@ export const TEAM_DEFAULTS = {
   claudeApi: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // Billed per token to their DeepSeek API key.
   deepseek: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
+  // Their OpenCode Go subscription (open models, with usage limits instead of a per-token bill).
+  opencodeGo: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // A model server on the user's machine or network (設定 → アカウント → ローカル LLM).
   local: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   maxChildren: 6,
@@ -78,6 +81,7 @@ export function teamConfig(saved) {
     claude: provider('claude'),
     claudeApi: provider('claudeApi'),
     deepseek: provider('deepseek'),
+    opencodeGo: provider('opencodeGo'),
     local: provider('local'),
     maxChildren: Number.isInteger(value.maxChildren) ? value.maxChildren : TEAM_DEFAULTS.maxChildren,
     policy: typeof value.policy === 'string' && ENTRY_ID.test(value.policy) ? value.policy : null,
@@ -158,6 +162,6 @@ export function mergeTeamConfig(current, patch) {
 /** A team needs a provider to hand work to: throws when the settings turn every one off. */
 export function assertChildrenOn(config) {
   if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled)) {
-    throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek・ローカル LLM の少なくとも一つをオンにしてください')
+    throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek・OpenCode Go・ローカル LLM の少なくとも一つをオンにしてください')
   }
 }

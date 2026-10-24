@@ -7,13 +7,14 @@ import { TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 export const PREFIX = '[Agent Desk チーム]'
 
 /** Each provider's models in the model list (catalog). */
-export const CATALOG_PROVIDER = { gpt: 'openai-codex', claude: 'anthropic', claudeApi: 'anthropic', deepseek: 'deepseek-official', local: 'local-llm' }
+export const CATALOG_PROVIDER = { gpt: 'openai-codex', claude: 'anthropic', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' }
 /** How each provider's children run, as the leader reads it. */
 const PROVIDER_WHAT = {
   gpt: 'GPT on the user\'s ChatGPT subscription',
   claude: 'Claude Code using its own user-confirmed subscription, API key or cloud authentication',
   claudeApi: 'Claude through dsh on the user\'s Anthropic API key, billed per token (credits depend on their plan)',
   deepseek: 'DeepSeek, billed per token to the user\'s DeepSeek API key (low cost)',
+  opencodeGo: 'open models (GLM, Kimi, DeepSeek, Qwen and others) on the user\'s OpenCode Go subscription, with 5-hour, weekly and monthly usage limits',
   local: 'a model on the user\'s own model server: free, but slower and weaker than the others; give it small, well-defined tasks',
 }
 const CLAUDE_ALIASES = { opus: 'Opus（最新）', sonnet: 'Sonnet（最新）', haiku: 'Haiku（最新）', fable: 'Fable（最新）' }
@@ -45,7 +46,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
     '2. Write each task so it can be done from that text alone: the goal, the exact scope, what "done" means, where results go, and what the report should say. Put long material in a file and pass its path.',
     '3. After starting children, end your turn and wait. Do not check `status` in a loop: an idle turn costs nothing, and reports arrive in this conversation by themselves, in the order the children finish (those that came while you worked arrive together). Handle them, then end your turn again. A child may also report again on its own (the user spoke to it directly); handle that the same way.',
     '4. Audit without reading everything: check the report and how the child checked its work, sample the results, and open details (`read_report`, the files) only when needed. Accepted: `close` the child. Needs fixes: `send` them to the same child, which keeps its context. Later work on the same scope (a second pass, a new requirement) also goes to the same child with `send`, even after `close`; add `fresh: true` when the work needs little of that conversation, so the child starts over without carrying it.',
-    '5. Children work without approvals. A GPT, DeepSeek or local child that still stops at one reaches you as a message: decide with `approve`. An action a Claude child was not allowed to take is listed in its report. Use `ask_user` only for what you cannot decide yourself, or what needs the user\'s own judgment, accounts or files.',
+    '5. Children work without approvals. A GPT, DeepSeek, OpenCode Go or local child that still stops at one reaches you as a message: decide with `approve`. An action a Claude child was not allowed to take is listed in its report. Use `ask_user` only for what you cannot decide yourself, or what needs the user\'s own judgment, accounts or files.',
     '6. When everything is done, give the user a short summary of the outcome.',
     ...(gpt
       ? [

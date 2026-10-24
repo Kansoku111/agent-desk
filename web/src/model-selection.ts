@@ -4,6 +4,7 @@ export function providerReady(server: AppState, provider: string) {
   if (provider === 'openai-codex') return server.accounts.chatgpt.signedIn
   if (provider === 'anthropic') return server.accounts.claude.configured
   if (provider === 'deepseek-official') return server.accounts.deepseek.configured
+  if (provider === 'opencode-go') return Boolean(server.accounts.opencodeGo?.configured)
   if (provider === 'local-llm') return Boolean(server.accounts.localLlm?.configured)
   return false
 }

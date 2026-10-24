@@ -12,11 +12,11 @@ import { TeamGuides } from './TeamGuides'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 
 const MAX_CHILDREN = 12
-const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek', 'local']
-const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', local: 'ローカル LLM' }
-type DshProvider = 'gpt' | 'claudeApi' | 'deepseek' | 'local'
+const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'local']
+const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', local: 'ローカル LLM' }
+type DshProvider = 'gpt' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'local'
 /** Each dsh provider's models in the model list. */
-const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', local: 'local-llm' } as const
+const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' } as const
 const OFF_PROVIDER = { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } }
 const TIERS: { tier: TeamTier; label: string; note: string }[] = [
   { tier: 'low', label: '低枠', note: '単純な作業、繰り返しの多い作業、量の多い作業' },
@@ -40,6 +40,7 @@ function fullConfig(saved: Config): Config {
     gptLeader: saved.gptLeader ?? { model: null, effort: 'high' },
     claudeApi: saved.claudeApi ?? OFF_PROVIDER,
     deepseek: saved.deepseek ?? OFF_PROVIDER,
+    opencodeGo: saved.opencodeGo ?? OFF_PROVIDER,
     local: saved.local ?? OFF_PROVIDER,
   }
 }
@@ -156,6 +157,7 @@ const PROVIDER_NOTE: Record<TeamProvider, string> = {
   claude: 'Claude Code 自身の認証と課金',
   claudeApi: 'Anthropic API（従量課金）',
   deepseek: 'DeepSeek API（従量課金）',
+  opencodeGo: 'OpenCode Go サブスクリプション',
   local: '課金なし。小さく明確な作業向け',
 }
 
@@ -163,6 +165,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
   const on = part(config, provider).enabled
   const signedOut = provider === 'gpt' && !server.accounts.chatgpt.signedIn
   const noKey = (provider === 'deepseek' && !server.accounts.deepseek.configured) || (provider === 'claudeApi' && !server.accounts.claude.configured)
+    || (provider === 'opencodeGo' && !server.accounts.opencodeGo?.configured)
     || (provider === 'local' && !server.accounts.localLlm?.configured)
   return (
     <section className={`account-card team-provider-card ${on ? '' : 'off'}`}>
@@ -383,7 +386,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const save = async () => {
     if (needsAuth && !auth.ready) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, local: draft.local, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, local: draft.local, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }

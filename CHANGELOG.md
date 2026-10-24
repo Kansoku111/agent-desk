@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- OpenCode Go: Settings → Accounts → "OpenCode Go" takes an OpenCode Go API key (checked against `https://opencode.ai/inference/go/v1/models`). While it is saved, dsh gets pi-ai's `opencode-go` route, so its models (GLM, Kimi, DeepSeek, Qwen and others, from pi-ai's catalog) show in the model picker; requests carry dsh's own User-Agent and an `x-opencode-session` header per conversation. No cost is shown (flat-rate subscription). Agent teams can use them as children ("OpenCode Go", child only, off by default).
+
 ## [0.1.2] - 2026-10-24
 
 ### Added

@@ -13,8 +13,8 @@ export const MCP_SERVER = 'agent-team'
  * Tools a Claude child does without: those that would stop it waiting for a
  * person, and those that start other agents (subagents, workflows, scheduled
  * or remote runs). A child does its own work, so the team stays the size the
- * user set and everything that runs shows in the team panel. GPT and DeepSeek
- * children run in dsh processes without subagent tools (dsh-config.js teamChildPatch).
+ * user set and everything that runs shows in the team panel. GPT, DeepSeek and
+ * other dsh children run in dsh processes without subagent tools (dsh-config.js teamChildPatch).
  */
 const CHILD_DISALLOWED = [
   'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode',

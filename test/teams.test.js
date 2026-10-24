@@ -184,6 +184,7 @@ const CATALOG = {
       { value: '["openai-codex","gpt-6.1-sol"]', provider: 'openai-codex', id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' },
       { value: '["anthropic","claude-haiku-5-5"]', provider: 'anthropic', id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' },
       { value: '["deepseek-official","deepseek-v4-flash"]', provider: 'deepseek-official', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      { value: '["opencode-go","glm-5.3"]', provider: 'opencode-go', id: 'glm-5.3', name: 'GLM-5.3' },
     ],
   },
 }
@@ -1096,7 +1097,7 @@ test('team settings: defaults fill in, patches are checked', () => {
   assert.throws(() => mergeTeamConfig(undefined, { maxChildren: 0 }), /1〜12/)
   assert.throws(() => mergeTeamConfig(undefined, { gpt: { low: { model: 'bad model' } } }), /GPT の低枠のモデル/)
   // Nothing is on until the user turns it on; a team asks for at least one.
-  for (const provider of ['gpt', 'claude', 'claudeApi', 'deepseek']) assert.equal(teamConfig({})[provider].enabled, false)
+  for (const provider of ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo']) assert.equal(teamConfig({})[provider].enabled, false)
   assert.equal(mergeTeamConfig(undefined, { gpt: { enabled: false } }).gpt.enabled, false)
   assert.throws(() => assertChildrenOn(teamConfig({})), /少なくとも一つ/)
   assert.doesNotThrow(() => assertChildrenOn(mergeTeamConfig(undefined, { claude: { enabled: true } })))
@@ -1112,6 +1113,10 @@ test('team settings: defaults fill in, patches are checked', () => {
   assert.equal(mergeTeamConfig(undefined, { deepseek: { enabled: true, low: { model: 'deepseek-v4-flash' } } }).deepseek.low.model, 'deepseek-v4-flash')
   assert.throws(() => mergeTeamConfig(undefined, { leaderProvider: 'deepseek' }), /リーダー/)
   assert.equal(teamConfig({ leaderProvider: 'deepseek' }).leaderProvider, 'claude')
+  // So is OpenCode Go.
+  assert.equal(mergeTeamConfig(undefined, { opencodeGo: { enabled: true, mid: { model: 'kimi-k3' } } }).opencodeGo.mid.model, 'kimi-k3')
+  assert.throws(() => mergeTeamConfig(undefined, { opencodeGo: { enabled: true, low: { enabled: false }, mid: { enabled: false } } }), /OpenCode Go の低枠と中枠/)
+  assert.throws(() => mergeTeamConfig(undefined, { leaderProvider: 'opencodeGo' }), /リーダー/)
 })
 
 test('a team starts only with a provider turned on, and cannot be left without one', async (t) => {
@@ -1156,6 +1161,24 @@ test('a DeepSeek child is a full-access dsh task on a DeepSeek model', async (t)
   assert.equal(manager.summary(team).children[0].provider, 'deepseek')
   await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'mid', provider: 'deepseek' }), /DeepSeekの中枠はユーザーがオフ/)
   await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'low' }), /"gpt" \/ "claude" \/ "deepseek"/)
+})
+
+test('an OpenCode Go child is a full-access dsh task on an OpenCode Go model', async (t) => {
+  const { threads, tool, team, workspace, manager, terminals, leader } = await setup(t, {
+    opencodeGo: { enabled: true, low: { enabled: false, model: null, effort: null }, mid: { enabled: true, model: 'glm-5.3', effort: 'high' } },
+  })
+  const args = terminals.records.get(leader).launch.args
+  const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
+  assert.match(prompt, /provider "opencodeGo" \(open models .*OpenCode Go subscription.*usage limits\): low = turned off by the user \(do not use\), mid = GLM-5\.3/)
+  assert.match(await tool('spawn', { title: '調査', task: 'ログを読む', tier: 'mid', provider: 'opencodeGo', name: 'O' }), /子「O」を起動しました（GLM-5\.3・中）/)
+  const [, options] = threads.calls.find((call) => call[0] === 'create')
+  assert.deepEqual(options, {
+    workspace, model: '["opencode-go","glm-5.3"]', effort: 'high', permissionMode: 'danger-full-access',
+    team: { id: team.id, childId: team.children[0].id },
+  })
+  assert.equal(manager.summary(team).children[0].kind, 'thread')
+  assert.equal(manager.summary(team).children[0].provider, 'opencodeGo')
+  await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'low', provider: 'opencodeGo' }), /OpenCode Goの低枠はユーザーがオフ/)
 })
 
 test('a Claude (API) child is a full-access dsh task on an Anthropic model, not a Claude Code run; it is off until turned on', async (t) => {
