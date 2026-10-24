@@ -47,14 +47,14 @@ test('catalog does not accept a runtime snapshot that predates a key change', as
  * discovery, with no provider requests or real credentials: only the free
  * key-validation endpoint is mocked.
  */
-async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}' }) {
+async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false } }) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-account-catalog-'))
   const hook = path.join(home, 'offline-fetch.mjs')
   await fs.writeFile(hook, `globalThis.fetch = async (url) => {
     if (String(url) === ${JSON.stringify(probe)}) return new Response(${JSON.stringify(probeBody)}, { status: 200 });
     throw new Error('offline account-catalog test');
   }`)
-  await fs.writeFile(path.join(home, 'settings.json'), JSON.stringify({ modelAutoUpdate: false }))
+  await fs.writeFile(path.join(home, 'settings.json'), JSON.stringify(settings))
   const child = spawn(process.execPath, ['--import', pathToFileURL(hook).href, 'server/index.js', '--no-open', '--port', '0'], {
     cwd: root, env: { ...process.env, AGENT_DESK_HOME: home },
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
@@ -146,6 +146,7 @@ test('OpenCode Go models the service no longer lists leave the picker', { timeou
   const added = await keyRefreshesCatalog(t, {
     provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
     probeBody: JSON.stringify({ data: live.map((id) => ({ id })) }),
+    settings: { modelAutoUpdate: true },
   })
   const ids = added.catalog.models.filter((model) => model.provider === 'opencode-go').map((model) => model.id).sort()
   assert.deepEqual(ids, [...live].sort())

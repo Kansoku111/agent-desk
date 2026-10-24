@@ -15,22 +15,20 @@ export const OPENCODE_GO_MODELS_URL = 'https://opencode.ai/inference/go/v1/model
 
 const MAX_AGE_MS = 6 * 60 * 60 * 1000
 
-/** The model ids of the installed pi-ai `opencode-go` catalog (both key layouts). */
-export async function installedModelIds() {
+/** The chat models of the installed pi-ai `opencode-go` catalog (both key layouts): id → name. */
+export async function installedModels() {
   const [dir] = catalogDataDirs()
-  if (!dir) return new Set()
+  const models = new Map()
+  if (!dir) return models
   try {
     const data = JSON.parse(await fs.readFile(path.join(dir, 'opencode-go.json'), 'utf8'))
-    const ids = new Set()
     for (const group of Object.values(data)) {
       for (const model of Object.values(group ?? {})) {
-        if ((model?.type ?? 'chat') === 'chat' && typeof model?.id === 'string') ids.add(model.id)
+        if ((model?.type ?? 'chat') === 'chat' && typeof model?.id === 'string') models.set(model.id, model.name ?? model.id)
       }
     }
-    return ids
-  } catch {
-    return new Set()
-  }
+  } catch {}
+  return models
 }
 
 /** The ids of an OpenAI-style `/models` body, or null when it does not look like one. */
@@ -45,14 +43,22 @@ export class OpenCodeGoModels {
    * @param {object} options
    * @param {string} options.file - where the last list is kept
    * @param {typeof fetch} [options.fetchImpl]
-   * @param {() => Promise<Set<string>>} [options.installed] - ids the catalog can serve
+   * @param {() => Promise<Map<string, string>>} [options.installed] - the models the catalog can serve
    */
-  constructor({ file, fetchImpl = fetch, installed = installedModelIds }) {
+  constructor({ file, fetchImpl = fetch, installed = installedModels }) {
     Object.assign(this, { file, fetchImpl, installed })
     /** @type {{ ids: string[], fetchedAt: number } | null} */
     this.saved = null
     /** Catalog models among the live ones; null serves the whole catalog. */
     this.served = null
+    /** Catalog models the service no longer lists. */
+    this.hidden = []
+    /** Whether the last read failed (the previous list is still used). */
+    this.failed = false
+  }
+
+  get checkedAt() {
+    return this.saved?.fetchedAt ?? null
   }
 
   async load() {
@@ -64,10 +70,11 @@ export class OpenCodeGoModels {
 
   async #resolve() {
     const live = this.saved?.ids
-    const installed = live ? await this.installed() : null
-    const served = live ? [...installed].filter((id) => live.includes(id)) : []
+    const installed = live ? await this.installed() : new Map()
+    const served = [...installed.keys()].filter((id) => live?.includes(id))
     // A list that shares nothing with the catalog is a sign of a bad reply, not of an empty service.
     this.served = served.length ? served.sort() : null
+    this.hidden = this.served ? [...installed].filter(([id]) => !live.includes(id)).map(([id, name]) => ({ id, name })) : []
   }
 
   /**
@@ -83,12 +90,13 @@ export class OpenCodeGoModels {
         redirect: 'error',
         signal: AbortSignal.timeout(8000),
       })
-      if (!response.ok) return false
-      const ids = parseModelIds(await response.json())
-      if (!ids) return false
+      const ids = response.ok ? parseModelIds(await response.json()) : null
+      if (!ids) throw new Error('unreadable list')
       this.saved = { ids, fetchedAt: Date.now() }
+      this.failed = false
       await writeJson(this.file, this.saved).catch(() => {})
     } catch {
+      this.failed = true
       return false
     }
     await this.#resolve()

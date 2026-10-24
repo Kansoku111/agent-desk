@@ -483,6 +483,14 @@ export interface ModelUpdate {
     /** Models in the catalog that the account's list no longer has. */
     retired: AddedModel[]
   }
+  /** OpenCode Go's list, which the picker follows; null without a saved key or with the sync off. */
+  opencodeGo: {
+    checkedAt: number | null
+    /** The last read failed; the previous list is used. */
+    error: boolean
+    /** Catalog models the service no longer lists (hidden from the picker). */
+    hidden: { id: string; name: string }[]
+  } | null
 }
 
 export type LoginState =

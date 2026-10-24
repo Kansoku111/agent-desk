@@ -5,7 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import YAML from 'yaml'
 import { homePatch } from '../server/dsh-config.js'
-import { installedModelIds, OpenCodeGoModels, parseModelIds } from '../server/opencode-go-models.js'
+import { installedModels, OpenCodeGoModels, parseModelIds } from '../server/opencode-go-models.js'
 
 const list = (...ids) => Response.json({ object: 'list', data: ids.map((id) => ({ id, object: 'model' })) })
 
@@ -15,7 +15,7 @@ async function setup(t, reply) {
   const calls = []
   const models = await new OpenCodeGoModels({
     file: path.join(dir, 'models.json'),
-    installed: async () => new Set(['glm-5.3', 'kimi-k3', 'space-bunny']),
+    installed: async () => new Map([['glm-5.3', 'GLM-5.3'], ['kimi-k3', 'Kimi K3'], ['space-bunny', 'Space Bunny']]),
     fetchImpl: async (url, options) => { calls.push({ url, options }); return reply() },
   }).load()
   return { models, calls, file: path.join(dir, 'models.json') }
@@ -26,6 +26,7 @@ test('the served list is the catalog models the service still lists', async (t) 
   assert.equal(models.served, null)
   assert.equal(await models.refresh('oc-key'), true)
   assert.deepEqual(models.served, ['glm-5.3', 'kimi-k3'])
+  assert.deepEqual(models.hidden, [{ id: 'space-bunny', name: 'Space Bunny' }])
   assert.equal(calls[0].options.headers.authorization, 'Bearer oc-key')
   assert.equal(calls[0].options.redirect, 'error')
   assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')).ids, ['glm-5.3', 'kimi-k3', 'beam-free'])
@@ -38,7 +39,9 @@ test('a fresh list is not read again, and a failed read keeps the previous one',
   assert.equal(await models.refresh('oc-key'), false)
   assert.equal(calls.length, 1)
   reply = () => new Response('nope', { status: 500 })
+  assert.equal(models.failed, false)
   assert.equal(await models.refresh('oc-key', { maxAgeMs: 0 }), false)
+  assert.equal(models.failed, true)
   assert.deepEqual(models.served, ['glm-5.3'])
   assert.equal(await models.refresh(null, { maxAgeMs: 0 }), false)
 })
@@ -54,7 +57,7 @@ test('a list that shares nothing with the catalog serves the whole catalog', asy
 test('the saved list is used at start before any read', async (t) => {
   const { models, file } = await setup(t, () => list('kimi-k3'))
   await models.refresh('oc-key')
-  const again = await new OpenCodeGoModels({ file, installed: async () => new Set(['kimi-k3', 'glm-5.3']) }).load()
+  const again = await new OpenCodeGoModels({ file, installed: async () => new Map([['kimi-k3', 'Kimi K3'], ['glm-5.3', 'GLM-5.3']]) }).load()
   assert.deepEqual(again.served, ['kimi-k3'])
 })
 
@@ -65,6 +68,21 @@ test('homePatch lists the served OpenCode Go models', () => {
 })
 
 test('the installed catalog is readable', async () => {
-  const ids = await installedModelIds()
-  assert.ok(ids.has('glm-5.3'))
+  const models = await installedModels()
+  assert.equal(models.get('glm-5.3'), 'GLM-5.3')
+})
+
+test('the shared model check also reads OpenCode Go', async () => {
+  const { createModelHandlers } = await import('../server/rpc-handlers-models.js')
+  const order = []
+  const handlers = createModelHandlers({
+    threads: { busy: false },
+    updates: {},
+    modelUpdater: { check: async () => order.push('pi-ai') },
+    modelUpdateState: () => ({ opencodeGo: null }),
+    refreshCodexModels: async () => order.push('codex'),
+    checkOpenCodeGoModels: async () => order.push('opencode-go'),
+  })
+  await handlers['modelUpdate.check']()
+  assert.deepEqual(order, ['codex', 'pi-ai', 'opencode-go'])
 })

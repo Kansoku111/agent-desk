@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- OpenCode Go's model list follows the service: the saved key reads `/v1/models` (at once, then every six hours) and the picker keeps only the catalog models still listed there, so withdrawn ones (e.g. Space Bunny, Cat Jam Free, Step 5 Preview Free) disappear. Models newer than the bundled pi-ai catalog still arrive with a pi-ai update.
+- OpenCode Go's model list follows the service: the saved key reads `/v1/models` (at once, then every six hours) and the picker keeps only the catalog models still listed there, so withdrawn ones (e.g. Space Bunny, Cat Jam Free, Step 5 Preview Free) disappear. Models newer than the bundled pi-ai catalog still arrive with a pi-ai update. It is part of the model sync in Settings → About → 更新: the automatic-sync switch controls it, 今すぐ確認 reads it, and 同期の詳細 shows the last check, read failures and the hidden models.
 - EX remembers parent/child model selections as soon as they change, even when the dialog is cancelled or launch fails. Selections are saved on the app and restored across browsers, phones and app restarts; legacy browser-only choices migrate only if no app-side choice exists. TM settings remain separate.
 
 ### Added

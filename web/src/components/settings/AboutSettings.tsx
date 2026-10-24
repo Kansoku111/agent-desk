@@ -131,10 +131,13 @@ function UpdatesCard({ updates }: { updates: Updates }) {
             <span className="update-versions">
               {models.phase === 'checking' ? '確認中…' : recent ? recent.models.map((model) => model.name).join('、') : models.checkedAt ? '' : '未確認'}
             </span>
-            <span className="update-action">{!busy && !models.error && models.account?.status !== 'error' && models.checkedAt && <Latest />}</span>
+            <span className="update-action">{!busy && !models.error && models.account?.status !== 'error' && !models.opencodeGo?.error && models.checkedAt && <Latest />}</span>
             {models.error && <p className="form-error">{models.error}</p>}
             {autoSync && signedIn && models.account?.status === 'error' && (
               <p className="form-error">ChatGPT のモデル一覧を読み込めませんでした（前回の結果を使っています）</p>
+            )}
+            {models.opencodeGo?.error && (
+              <p className="form-error">OpenCode Go のモデル一覧を読み込めませんでした（前回の結果を使っています）</p>
             )}
           </div>
         )}
@@ -157,7 +160,7 @@ function UpdatesCard({ updates }: { updates: Updates }) {
           </div>
           <details className="model-sync-details">
             <summary>同期の詳細</summary>
-            <p className="muted">GPT はアカウントの一覧に、Claude などは pi-ai の最新版に合わせます。</p>
+            <p className="muted">GPT はアカウントの一覧に、OpenCode Go はサービスの一覧に、Claude などは pi-ai の最新版に合わせます。</p>
             <p className="muted">
               モデル定義: {models.source ? <code>pi-ai {models.source}</code> : '同梱のもの'}
               {models.latest && models.source && models.latest !== models.source && <> （最新: <code>{models.latest}</code>）</>}
@@ -174,6 +177,14 @@ function UpdatesCard({ updates }: { updates: Updates }) {
             )}
             {autoSync && models.account?.retired.length > 0 && (
               <p className="muted">提供終了の可能性: {models.account.retired.map((model) => model.name).join('、')}</p>
+            )}
+            {models.opencodeGo && (
+              <p className="muted">
+                OpenCode Go の一覧: {models.opencodeGo.error
+                  ? '読み込めませんでした（前回の結果を使っています）'
+                  : models.opencodeGo.checkedAt ? `照合済み（${dateTime(models.opencodeGo.checkedAt)}）` : '未確認'}
+                {models.opencodeGo.hidden.length > 0 && <>　非表示: {models.opencodeGo.hidden.map((model) => model.name).join('、')}</>}
+              </p>
             )}
             {models.models.length > 0 && (
               <ul className="custom-models">
