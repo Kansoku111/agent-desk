@@ -47,11 +47,11 @@ test('catalog does not accept a runtime snapshot that predates a key change', as
  * discovery, with no provider requests or real credentials: only the free
  * key-validation endpoint is mocked.
  */
-async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe }) {
+async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}' }) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-account-catalog-'))
   const hook = path.join(home, 'offline-fetch.mjs')
   await fs.writeFile(hook, `globalThis.fetch = async (url) => {
-    if (String(url) === ${JSON.stringify(probe)}) return new Response('{"data":[]}', { status: 200 });
+    if (String(url) === ${JSON.stringify(probe)}) return new Response(${JSON.stringify(probeBody)}, { status: 200 });
     throw new Error('offline account-catalog test');
   }`)
   await fs.writeFile(path.join(home, 'settings.json'), JSON.stringify({ modelAutoUpdate: false }))
@@ -139,4 +139,14 @@ test('saving and removing an OpenCode Go key adds and removes its catalog models
   // The models are pi-ai's opencode-go catalog, served through dsh.
   const ids = added.catalog.models.filter((model) => model.provider === 'opencode-go').map((model) => model.id)
   for (const id of ['glm-5.3', 'kimi-k3', 'qwen3.8-max']) assert.ok(ids.includes(id), ids.join(', '))
+})
+
+test('OpenCode Go models the service no longer lists leave the picker', { timeout: 45_000 }, async (t) => {
+  const live = ['glm-5.3', 'kimi-k3', 'qwen3.8-max', 'hy3']
+  const added = await keyRefreshesCatalog(t, {
+    provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
+    probeBody: JSON.stringify({ data: live.map((id) => ({ id })) }),
+  })
+  const ids = added.catalog.models.filter((model) => model.provider === 'opencode-go').map((model) => model.id).sort()
+  assert.deepEqual(ids, [...live].sort())
 })

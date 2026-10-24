@@ -26,6 +26,7 @@ import { readJson, UnmovableFileError, writeJson } from './json-file.js'
 import { catalogModelLimits, configuredModelCatalog } from './model-catalog.js'
 import { SiwcModelCatalog } from './siwc-models.js'
 import { ModelCatalogUpdater } from './model-updates.js'
+import { OpenCodeGoModels } from './opencode-go-models.js'
 import { resetPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
@@ -215,6 +216,8 @@ const modelUpdater = await new ModelCatalogUpdater({
   onCatalog: () => updateModelCatalog().then(() => {}),
   log: (...parts) => log('model update:', ...parts),
 }).load()
+/** The OpenCode Go models the service still lists, among the catalog's (see opencode-go-models.js). */
+const opencodeGoModels = await new OpenCodeGoModels({ file: path.join(paths.home, 'opencode-go-models.json') }).load()
 /** The bundled and fetched models Agent Desk currently adds to dsh's catalog. */
 let catalogAdditions = []
 /** The account's model list, while models follow it (the setting is on). */
@@ -252,6 +255,7 @@ const catalogSignature = async (result) => JSON.stringify({
   deepseek: (await accounts()).deepseek.configured,
   // OpenCode Go's route is in the home patch only while its key is saved.
   opencodeGo: (await accounts()).opencodeGo.configured,
+  opencodeGoModels: opencodeGoModels.served,
   local: localLlmSettings(settings.localLlm),
 })
 
@@ -290,6 +294,7 @@ async function applyHomePatch() {
     instructions: settings.customInstructions,
     localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
     opencodeGo: (await accounts()).opencodeGo.configured,
+    opencodeGoModels: opencodeGoModels.served,
   })
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
   // Read by each subagent_gpt call, so no runtime restarts for it.
@@ -515,6 +520,8 @@ async function restartRuntimesWhenIdle() {
 }
 
 async function updateModelCatalog({ deferRuntimeEffects = false } = {}) {
+  // A key just saved reads the list at once; the periodic check below passes its own age.
+  await opencodeGoModels.refresh((await credentials.read().catch(() => null))?.refs?.[OPENCODE_GO_REF], { maxAgeMs: 60_000 })
   const result = await syncModelCatalog()
   resetPricing()
   catalog.setSignature(await catalogSignature(result))
@@ -742,6 +749,7 @@ function scheduleIdleExit() {
 
 let shuttingDown = false
 let codexModelsTimer = null
+let opencodeGoTimer = null
 async function shutdown(code = 0) {
   if (shuttingDown) return
   shuttingDown = true
@@ -749,6 +757,7 @@ async function shutdown(code = 0) {
   updates.stop()
   modelUpdater.stop()
   clearInterval(codexModelsTimer)
+  clearInterval(opencodeGoTimer)
   // Request cancellation first, then close the transports as well. A stalled
   // ACP cancellation must not keep shutdown waiting forever for its prompt.
   const drained = threads.shutdown().catch((error) => log('thread shutdown:', error.message))
@@ -791,6 +800,14 @@ void refreshClaudeCost({ maxAgeMs: 30 * 60_000 })
 void refreshCodexModels()
 codexModelsTimer = setInterval(() => void refreshCodexModels(), 6 * 60 * 60 * 1000)
 codexModelsTimer.unref()
+// OpenCode Go withdraws and renames models too: read its list the same way.
+const refreshOpenCodeGoModels = async () => {
+  if (!(await accounts()).opencodeGo.configured) return
+  await updateModelCatalog().catch((error) => log('OpenCode Go models:', error.message))
+}
+void refreshOpenCodeGoModels()
+opencodeGoTimer = setInterval(() => void refreshOpenCodeGoModels(), 6 * 60 * 60 * 1000)
+opencodeGoTimer.unref()
 
 // Boot the default runtime early and learn the model list in the background.
 threads.warmCatalog().catch((error) => log('model catalog warm-up failed:', error.message.split('\n')[0]))

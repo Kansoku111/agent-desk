@@ -163,10 +163,12 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  * @param {object | null} [options.localRoute] - the local server's route
  *   (local-llm.js `localRoute`), or null when none is set up.
  * @param {boolean} [options.opencodeGo] - whether an OpenCode Go key is saved.
+ * @param {string[] | null} [options.opencodeGoModels] - the catalog models OpenCode still
+ *   serves (opencode-go-models.js); null serves the whole catalog.
  */
 export function homePatch({
   anthropicWorkspaceId = null, modelOverrides = {}, catalogModels = {},
-  subagents = [], subagentsEnabled = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false,
+  subagents = [], subagentsEnabled = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null,
 } = {}) {
   // dsh's default (5 tries, 10 s at most) gives up within about 15 s, shorter
   // than the minute-long upstream hiccups ChatGPT's backend has.
@@ -206,7 +208,10 @@ export function homePatch({
         providers: {
           'openai-codex': codex,
           anthropic,
-          ...(opencodeGo ? { [OPENCODE_GO_PROVIDER]: { apiKeyEnv: OPENCODE_GO_REF } } : {}),
+          ...(opencodeGo ? { [OPENCODE_GO_PROVIDER]: {
+            apiKeyEnv: OPENCODE_GO_REF,
+            ...(opencodeGoModels?.length ? { models: opencodeGoModels.map((id) => ({ id })) } : {}),
+          } } : {}),
           ...(localRoute ? { [LOCAL_PROVIDER]: localRoute } : {}),
         },
       },
