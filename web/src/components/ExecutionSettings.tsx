@@ -13,6 +13,16 @@ const providers: { id: TeamProvider; name: string; catalog?: string }[] = [
   { id: 'opencodeGo', name: 'OpenCode Go', catalog: 'opencode-go' }, { id: 'local', name: 'ローカル LLM', catalog: 'local-llm' },
 ]
 
+const CHOICE_KEY = 'agent-desk.execution-models'
+const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku' }
+function readChoice() {
+  try {
+    const value = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? 'null')
+    if (typeof value?.leader === 'string' && providers.some((entry) => entry.id === value.provider) && typeof value.model === 'string') return value as typeof DEFAULT_CHOICE
+  } catch { /* use the defaults */ }
+  return DEFAULT_CHOICE
+}
+
 function CheckEditor({ checks, onChange }: { checks: ExecutionCheck[]; onChange: (checks: ExecutionCheck[]) => void }) {
   const update = (index: number, patch: Partial<ExecutionCheck>) => onChange(checks.map((check, i) => i === index ? { ...check, ...patch } : check))
   return <section className="account-card ex-checks">
@@ -25,7 +35,6 @@ function CheckEditor({ checks, onChange }: { checks: ExecutionCheck[]; onChange:
         <label>制限時間（秒）<input type="number" min={1} max={1800} value={(check.timeoutMs ?? 300000) / 1000} onChange={(e) => update(i, { timeoutMs: Number(e.target.value) * 1000 })} /></label></div>
       <label><input type="checkbox" checked={check.autoRepair === true} onChange={(e) => update(i, { autoRepair: e.target.checked })} /> 失敗時に子へ自動差し戻し</label>
     </div>)}
-    <p className="muted">コマンドはこのPCの権限で実行されます。自動差し戻しは実装内で修正できる検証だけに設定してください。</p>
   </section>
 }
 
@@ -56,9 +65,10 @@ export function ExecutionChecksDialog({ workspace, onClose }: { workspace: strin
 
 export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const server = useStore((state) => state.server)
-  const [leader, setLeader] = useState('claude:opus')
-  const [provider, setProvider] = useState<TeamProvider>('claude')
-  const [model, setModel] = useState('haiku')
+  const [saved] = useState(readChoice)
+  const [leader, setLeader] = useState(saved.leader)
+  const [provider, setProvider] = useState<TeamProvider>(saved.provider)
+  const [model, setModel] = useState(saved.model)
   const [checks, setChecks] = useChecks(workspace)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const [starting, setStarting] = useState(false)
@@ -82,7 +92,10 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       choices.batchReports = true
       choices.maxChildren = 6
       choices.policy = null
-      if (await startTeam(workspace, choices, usesClaude ? auth.confirmation : undefined, leader.startsWith('claude:') ? {} : { leaderModel: leader })) close()
+      if (await startTeam(workspace, choices, usesClaude ? auth.confirmation : undefined, leader.startsWith('claude:') ? {} : { leaderModel: leader })) {
+        try { localStorage.setItem(CHOICE_KEY, JSON.stringify({ leader, provider, model })) } catch { /* not remembered */ }
+        close()
+      }
     } finally { setStarting(false) }
   }
   return <Modal title="実行モード" onClose={close} width={620} className="team-start-modal">
@@ -99,7 +112,6 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
           {provider === 'claude' ? <><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></> : <><option value="">モデルを選択</option>{childModels.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</>}
         </select></label>
       </section>
-      <p className="muted">実行・検証・判定を順に進めます。APIのモデルは従量課金です。</p>
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
     </div>

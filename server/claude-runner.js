@@ -49,6 +49,18 @@ const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : te
 /** A message for stdin: one stream-json line, with the uuid Claude Code gives back when it takes the message. */
 const userLine = (text, uuid) => `${JSON.stringify({ type: 'user', message: { role: 'user', content: String(text) }, parent_tool_use_id: null, session_id: '', ...(uuid ? { uuid } : {}) })}\n`
 
+/** The token counts Claude Code reports at the end of a turn (cost is Claude Code's own estimate). */
+function resultUsage(result) {
+  const usage = result?.usage
+  if (!usage || typeof usage !== 'object') return null
+  const count = (value) => Number.isFinite(value) ? value : 0
+  return {
+    input: count(usage.input_tokens), output: count(usage.output_tokens),
+    cacheRead: count(usage.cache_read_input_tokens), cacheWrite: count(usage.cache_creation_input_tokens),
+    ...(Number.isFinite(result.total_cost_usd) ? { costUsd: result.total_cost_usd } : {}),
+  }
+}
+
 /** A tool result's content (a string or text blocks) as text. */
 function resultText(content) {
   if (typeof content === 'string') return content
@@ -462,7 +474,7 @@ export class ClaudeRunner extends EventEmitter {
       const cut = live.cutBackground?.length
         ? `\n\n（バックグラウンドの作業が ${Math.round(this.backgroundWaitMs / 60_000)} 分たっても終わらなかったため、待つのをやめました。止まった作業: ${live.cutBackground.map((entry) => entry || '名前なし').join('、')}）`
         : ''
-      return this.#finish(record, live.turn, { status: 'done', text: `${String(result.result ?? '')}${cut}`, denials: live.denials, stopReason: result.stop_reason })
+      return this.#finish(record, live.turn, { status: 'done', text: `${String(result.result ?? '')}${cut}`, denials: live.denials, stopReason: result.stop_reason, usage: resultUsage(result) })
     }
     const message = result
       ? String(result.result || result.subtype || 'Claude Code がエラーで止まりました')
@@ -470,10 +482,10 @@ export class ClaudeRunner extends EventEmitter {
         ? `Claude Code を起動できませんでした: ${error.message}`
         : `Claude Code が終了しました（終了コード ${code ?? '?'}）${live.stderr.trim() ? `\n${live.stderr.trim()}` : ''}`
     // What was denied stays in the report of a turn that failed as well: the leader decides on it either way.
-    this.#finish(record, live.turn, { status: 'error', message, text: result ? '' : undefined, denials: live.denials })
+    this.#finish(record, live.turn, { status: 'error', message, text: result ? '' : undefined, denials: live.denials, usage: result ? resultUsage(result) : null })
   }
 
-  #finish(record, turn, { status, message, text = '', denials = [], stopReason = null, quiet = false }) {
+  #finish(record, turn, { status, message, text = '', denials = [], stopReason = null, quiet = false, usage = null }) {
     for (const item of turn.items) {
       if (item.type === 'tool' && item.status === 'in_progress') item.status = status === 'done' ? 'completed' : 'failed'
     }
@@ -487,7 +499,7 @@ export class ClaudeRunner extends EventEmitter {
     this.emit('session', this.summary(record))
     if (quiet) return
     const reply = text || turn.items.filter((item) => item.type === 'agent').at(-1)?.text || ''
-    this.emit('finished', { id: record.id, status, text: reply, error: turn.error?.message ?? null, denials })
+    this.emit('finished', { id: record.id, status, text: reply, error: turn.error?.message ?? null, denials, ...(usage ? { usage } : {}) })
   }
 
   #kill(live) {

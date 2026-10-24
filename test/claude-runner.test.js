@@ -103,6 +103,21 @@ test('a turn is one claude -p run: the prompt on stdin, its events folded into t
   assert.throws(() => runner.run(session.id, 'もう一つ'), /作業中/)
 })
 
+test('the token counts Claude Code reports with its result go out with the finished turn', async (t) => {
+  const { runner, spawned, finished, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work', model: 'haiku', effort: 'low', args: [] })
+  runner.run(session.id, 'x')
+  await tick()
+  const ended = done()
+  spawned[0].write(init())
+  spawned[0].write({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.02,
+    usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 7 } })
+  await tick()
+  spawned[0].end(0)
+  await ended
+  assert.deepEqual(finished[0].usage, { input: 10, output: 5, cacheRead: 100, cacheWrite: 7, costUsd: 0.02 })
+})
+
 const inputLines = (proc) => proc.input.trim().split('\n').map((line) => JSON.parse(line))
 const replay = (uuid, content) => ({ type: 'user', isReplay: true, uuid, message: { role: 'user', content } })
 

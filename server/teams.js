@@ -26,7 +26,7 @@ import { leaderGuides, readPlaybook } from './team-playbooks.js'
 import { markOf, reportsMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
-import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspacesOverlap } from './execution.js'
+import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspaceWithin, workspacesOverlap } from './execution.js'
 
 const mcpScript = fileURLToPath(new URL('./team-mcp.js', import.meta.url))
 
@@ -199,6 +199,8 @@ export class TeamManager extends EventEmitter {
    */
   start() {
     for (const team of this.teams.values()) {
+      // A stop belongs to the run it stopped: it is saved when the app closes, and must not cancel the next run's checks.
+      if (team.execution) team.execution.stopped = false
       for (const child of [...team.children]) {
         if (child.execution?.phase === 'verifying') {
           child.execution.phase = 'review'
@@ -568,7 +570,8 @@ export class TeamManager extends EventEmitter {
     const own = this.#byTask(record.id)
     if (own?.child?.execution && own.child.execution.phase !== 'working') throw new Error('EXの検証・判定中です。親から send で手直しを依頼してください')
     for (const team of this.teams.values()) {
-      if (!team.execution || !workspacesOverlap(team.workspace, record.workspace)) continue
+      // Only work inside the EX folder is blocked; a parent folder (My PC, a drive) is caught by the staleness check instead.
+      if (!team.execution || !workspaceWithin(team.workspace, record.workspace)) continue
       if (own?.team === team) continue
       if (team.children.some((child) => !child.closed && child.execution?.mode !== 'research')) throw new Error('このフォルダはEXが実行・検証・判定中です')
     }
@@ -612,7 +615,18 @@ export class TeamManager extends EventEmitter {
     return { mode, criteria, checks, maxRepairs, repairs: 0, phase: 'working', startedAt: this.now() }
   }
 
-  async #exVerify(team, child, text) {
+  /** The leader asks for a fresh verification of what it reviewed (it may have edited files itself); no child turn is spent. */
+  async #reverify(team, args) {
+    const child = this.#child(team, args.child)
+    if (!team.execution || !child.execution || child.execution.mode === 'research') throw new Error('再検証できるのはEXの実装の子だけです')
+    if (child.closed || child.execution.phase !== 'review') throw new Error('判定待ちの子だけ再検証できます')
+    team.execution.stopped = false
+    const pending = this.#exVerify(team, child, '（親の依頼による再検証）', { repair: false }).finally(() => this.exPending.delete(pending))
+    this.exPending.add(pending)
+    return `${child.name} を再検証します。結果はこの会話に届きます。ターンを終えて待ってください。`
+  }
+
+  async #exVerify(team, child, text, { repair = true } = {}) {
     child.execution.phase = 'verifying'
     await this.#save()
     this.#emit(team)
@@ -623,10 +637,16 @@ export class TeamManager extends EventEmitter {
         this.#report(team, child, 'cancelled', 'EXの検証はユーザーにより停止されました。', { verified: true, byUser: true })
         return
       }
-      const run = await this.execution.verify({ id: child.id, folder: team.workspace, checks: child.execution.checks })
+      let run = await this.execution.verify({ id: child.id, folder: team.workspace, checks: child.execution.checks })
+      team.execution.metrics.verifications++
+      // The writer is idle here, so a source change is the checks' own (a formatter) or an outside edit: verify the new state once, without waking anyone.
+      if (run.status === 'stale' && this.teams.has(team.id) && team.children.includes(child) && !child.closed && !team.execution.stopped) {
+        run = await this.execution.verify({ id: child.id, folder: team.workspace, checks: child.execution.checks })
+        run.rerun = true
+        team.execution.metrics.verifications++
+      }
       if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return
       child.execution.verification = run
-      team.execution.metrics.verifications++
       if (run.status === 'cancelled' || team.execution.stopped) {
         child.execution.phase = 'review'
         this.#report(team, child, 'cancelled', verificationReport(run), { verified: true, byUser: true })
@@ -637,7 +657,7 @@ export class TeamManager extends EventEmitter {
       child.execution.failureKey = failed?.failureKey
       // Automatic repair is explicitly enabled per check; infrastructure errors,
       // cancellation, stale sources and timeouts always return to the parent.
-      if (!team.execution.stopped && run.status === 'failed' && failed?.autoRepair && failed.status === 'failed'
+      if (repair && !team.execution.stopped && run.status === 'failed' && failed?.autoRepair && failed.status === 'failed'
         && failed.exitCode !== null && !failed.error && !LASTING.test(failed.tail) && !TRANSIENT.test(failed.tail)
         && !repeated && child.execution.repairs < child.execution.maxRepairs) {
         child.execution.repairs++
@@ -673,6 +693,7 @@ export class TeamManager extends EventEmitter {
       case 'approve': return this.#approve(team, input)
       case 'ask_user': return this.#askUser(team, input)
       case 'close': return this.#close(team, input)
+      case 'verify': return this.#reverify(team, input)
       // Read when called: a playbook changed since the leader started is read as it is now.
       case 'playbook': return readPlaybook(this.guides().playbooks, input.name)
       default: throw new Error(`unknown tool: ${tool}`)
@@ -1028,7 +1049,9 @@ export class TeamManager extends EventEmitter {
     if (team.execution && !child.closed) {
       if (child.execution?.phase !== 'review') throw new Error('実行・検証が終わってから判定してください')
       const run = child.execution.verification
-      if (args.accept !== false) {
+      if (child.execution.mode === 'research') {
+        // Nothing was written and nothing is verified: reading the report is the judgment.
+      } else if (args.accept !== false) {
         if (!run || !['passed', 'unverified'].includes(run.status)) throw new Error('検証が成功していません。send で手直しするか accept:false と理由を指定して終了してください')
         const snapshot = await sourceSnapshot(team.workspace)
         if (child.execution.phase !== 'review' || child.execution.verification !== run) throw new Error('判定中に状態が変わりました')
@@ -1230,7 +1253,7 @@ export class TeamManager extends EventEmitter {
   // ---------------------------------------------------------------- reports to the leader
 
   #report(team, child, kind, text, extra = {}) {
-    if (team.execution && child.execution && !extra.verified && kind === 'report') {
+    if (team.execution && child.execution && child.execution.mode !== 'research' && !extra.verified && kind === 'report') {
       const pending = this.#exVerify(team, child, text).finally(() => this.exPending.delete(pending))
       this.exPending.add(pending)
       return
@@ -1268,14 +1291,14 @@ export class TeamManager extends EventEmitter {
 
   /** How much longer the waiting reports hold for those of children still working (REPORT_GATHER_MS); 0: they go now. */
   #gatherWait(team) {
-    if (team.execution && !team.queue.some((item) => item.kind === 'approval' || item.kind === 'error' || item.kind === 'cancelled' || !item.childId)) {
-      return team.children.some((child) => !child.closed && ['working', 'verifying'].includes(child.execution?.phase)) ? 1000 : 0
-    }
-    if (!this.gatherMs || !teamConfig(this.getSettings()).batchReports) return 0
-    // A child held up on an approval, or word from Agent Desk itself, goes at once.
-    if (team.queue.some((item) => item.kind === 'approval' || !item.childId)) return 0
+    const ex = Boolean(team.execution)
+    if (!this.gatherMs || (!ex && !teamConfig(this.getSettings()).batchReports)) return 0
+    // A child held up on an approval, or word from Agent Desk itself, goes at once; in EX so does a failure or a stop.
+    if (team.queue.some((item) => item.kind === 'approval' || !item.childId || (ex && (item.kind === 'error' || item.kind === 'cancelled')))) return 0
     if (team.queue.reduce((size, item) => size + (item.text?.length ?? 0), 0) >= BATCH_CHARS) return 0
-    const working = team.children.some((child) => !child.closed && child.awaiting && !team.queue.some((item) => item.childId === child.id))
+    const queued = (child) => team.queue.some((item) => item.childId === child.id)
+    const working = team.children.some((child) => !child.closed && !queued(child)
+      && (ex ? ['working', 'verifying'].includes(child.execution?.phase) : child.awaiting))
     if (!working) return 0
     const oldest = Math.min(...team.queue.map((item) => item.at))
     return Math.max(0, oldest + this.gatherMs - this.now())
@@ -1628,11 +1651,15 @@ export class TeamManager extends EventEmitter {
     if (found?.child) this.#emit(found.team)
   }
 
-  #onAgentFinished({ id, status, text, error, denials }) {
+  #onAgentFinished({ id, status, text, error, denials, usage }) {
     const found = this.#byTask(id)
     if (!found?.child) return
     const { team, child } = found
-    if (team.execution) team.execution.metrics.childTurns++
+    if (team.execution) {
+      team.execution.metrics.childTurns++
+      team.execution.usage = [...(team.execution.usage ?? []), { role: 'child', taskId: id, at: this.now(), usage: usage ?? null, status }].slice(-500)
+      void this.#save()
+    }
     const byUser = this.userStopped.delete(child.id)
     // A session being removed reports nothing: its record is dropped before its turn ends (claude-runner remove).
     if (!this.agents.get(id)) return

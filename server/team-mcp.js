@@ -126,6 +126,11 @@ if (process.env.AGENT_DESK_EXECUTION === '1') {
     maxRepairs: { type: 'integer', minimum: 0, maximum: 2 },
   })
   spawn.inputSchema.required.push('criteria', 'checks')
+  TOOLS.push({
+    name: 'verify',
+    description: 'Run the unit\'s verification again on the current files, for after you edited them yourself. No child turn is used; the result is reported to you, so end your turn.',
+    inputSchema: { type: 'object', properties: { child }, required: ['child'] },
+  })
   Object.assign(TOOLS.find((tool) => tool.name === 'close').inputSchema.properties, {
     accept: { type: 'boolean', description: 'Default true: accept verified work. false: abandon without accepting.' },
     reason: { type: 'string', description: 'Required for abandonment or acceptance without command verification.' },

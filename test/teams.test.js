@@ -235,8 +235,8 @@ async function setup(t, settings = {}, options = {}) {
   }
 }
 
-async function setupExecution(t) {
-  const base = await setup(t, { leaderProvider: 'gpt' })
+async function setupExecution(t, options = {}) {
+  const base = await setup(t, { leaderProvider: 'gpt' }, options)
   execFileSync('git', ['init', '-q', base.workspace])
   await fs.writeFile(path.join(base.workspace, 'source.txt'), 'original')
   const { team: view } = await base.manager.create({ workspace: base.workspace, execution: {} })
@@ -301,6 +301,65 @@ test('EX requires acceptance criteria and checks, isolates research and preserve
   await assert.rejects(tool('close', { child: writer.id }), /根拠/)
   await tool('close', { child: writer.id, reason: 'manually reviewed source' })
   assert.equal(writer.execution.outcome, 'accepted')
+})
+
+test('EX research reports skip verification and close without a reason', async (t) => {
+  const { tool, team, manager, threads } = await setupExecution(t)
+  manager.execution.verify = async () => { throw new Error('research must not be verified') }
+  await tool('spawn', { ...exTask, mode: 'research' })
+  const research = team.children[0]
+  threads.finish(research.taskId, 'found it')
+  assert.equal(manager.exPending.size, 0)
+  assert.equal(research.execution.phase, 'review')
+  assert.match(research.reports.at(-1).text, /found it/)
+  await tool('close', { child: research.id })
+  assert.equal(research.execution.outcome, 'accepted')
+})
+
+test('EX verify tool re-verifies the current files without a child turn', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(1)"' }])
+  await tool('spawn', { ...exTask, checks: ['test'] })
+  const child = team.children[0]
+  threads.finish(child.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  await fs.writeFile(path.join(workspace, 'source.txt'), 'parent edit')
+  await assert.rejects(tool('close', { child: child.id }), /変更/)
+  const turns = manager.summary(team).execution.metrics.childTurns
+  await tool('verify', { child: child.id })
+  await Promise.all([...manager.exPending])
+  assert.equal(child.execution.verification.status, 'passed')
+  assert.equal(manager.summary(team).execution.metrics.childTurns, turns)
+  await tool('close', { child: child.id })
+  assert.equal(child.execution.outcome, 'accepted')
+  await assert.rejects(tool('verify', { child: child.id }), /判定待ち/)
+})
+
+test('EX re-verifies once when a check rewrites the sources itself', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await manager.configureExecution(workspace, [{ id: 'fmt', command: 'node -e "const fs=require(\'fs\');if(fs.readFileSync(\'source.txt\',\'utf8\')!==\'formatted\')fs.writeFileSync(\'source.txt\',\'formatted\')"' }])
+  await tool('spawn', { ...exTask, checks: ['fmt'] })
+  const child = team.children[0]
+  threads.finish(child.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  assert.equal(child.execution.verification.status, 'passed')
+  assert.equal(child.execution.verification.rerun, true)
+})
+
+test('EX reports do not wait indefinitely for children still working', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let clock = 1_000_000
+  const { tool, team, manager, threads } = await setupExecution(t, { gatherMs: REPORT_GATHER_MS, now: () => clock })
+  const sent = () => threads.calls.filter((call) => call[0] === 'send' && call[1] === team.leaderId)
+  await tool('spawn', { ...exTask, mode: 'research', name: 'R' })
+  await tool('spawn', { ...exTask, name: 'W' })
+  const writer = team.children[1]
+  threads.finish(writer.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  const before = sent().length
+  clock += REPORT_GATHER_MS
+  t.mock.timers.tick(REPORT_GATHER_MS)
+  assert.equal(sent().length, before + 1)
 })
 
 test('EX stopAll before verification starts does not launch a command or auto-repair', async (t) => {
