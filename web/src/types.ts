@@ -352,6 +352,8 @@ export interface Settings {
   /** Sidebar tint of each project: an index into PROJECT_HUES, or -1 for none. */
   projectColors: Record<string, number>
   contextLimits: Record<'openai-codex' | 'anthropic', number | null>
+  /** Global subagent switch; older saves default to enabled. */
+  subagentsEnabled?: boolean
   /** Model of each fixed-model subagent tool; null leaves the tool out. */
   subagentModels: Record<'openai-codex' | 'anthropic', string | null>
   /** Fast mode per provider; applies to the models in `AppState.fastModels`. */

@@ -15,6 +15,7 @@ import readline from 'node:readline'
 import { runtimeHookArgs } from './dsh-compatibility.js'
 import { appPaths, dshBin } from './paths.js'
 import { dshEnv } from './dsh-env.js'
+import { subagentsAllowed } from './subagent-policy-plugin.js'
 
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
 const STDERR_TAIL = 4000
@@ -47,6 +48,9 @@ const TOOL = {
 const running = new Map()
 
 function run(id, prompt) {
+  if (!subagentsAllowed(paths.settings)) {
+    return Promise.reject(new Error('Subagents are disabled in Agent Desk settings.'))
+  }
   if (!fs.existsSync(paths.gptSubagentPatch)) {
     return Promise.reject(new Error('No GPT subagent model is set. Choose one in Agent Desk\'s model settings.'))
   }
@@ -103,7 +107,7 @@ async function handle(message) {
       })
     }
     if (method === 'ping') return send({ id, result: {} })
-    if (method === 'tools/list') return send({ id, result: { tools: [TOOL] } })
+    if (method === 'tools/list') return send({ id, result: { tools: subagentsAllowed(paths.settings) && fs.existsSync(paths.gptSubagentPatch) ? [TOOL] : [] } })
     if (method === 'tools/call') {
       if (params?.name !== TOOL.name) return send({ id, error: { code: -32602, message: `Unknown tool: ${params?.name}` } })
       const prompt = typeof params.arguments?.prompt === 'string' ? params.arguments.prompt.trim() : ''

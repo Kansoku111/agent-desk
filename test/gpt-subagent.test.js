@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import fs from 'node:fs/promises'
+import readline from 'node:readline'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,6 +25,27 @@ test('the GPT subagent\'s layer runs the chosen GPT model, without subagent tool
 test('no GPT subagent model, no layer', () => {
   assert.equal(gptSubagentPatch({ subagents: [{ provider: 'anthropic', model: 'claude-sonnet-5-5' }] }), null)
   assert.equal(gptSubagentPatch(), null)
+})
+
+test('disabled MCP returns no tool definitions and rejects a stale invocation even with a model layer', { timeout: 5000 }, async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-disabled-mcp-'))
+  t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  await fs.writeFile(path.join(dir, 'settings.json'), JSON.stringify({ subagentsEnabled: false }))
+  await fs.writeFile(path.join(dir, 'gpt-subagent.patch.yml'), gptSubagentPatch({ subagents: [{ provider: 'openai-codex', model: 'gpt-6.1-sol' }] }))
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../server/gpt-subagent-mcp.js', import.meta.url))], {
+    env: { ...process.env, AGENT_DESK_HOME: dir }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+  })
+  const closed = once(child, 'close')
+  t.after(async () => { if (child.exitCode === null) child.kill(); await closed })
+  const lines = readline.createInterface({ input: child.stdout })[Symbol.asyncIterator]()
+  child.stdin.write(JSON.stringify({ id: 1, method: 'tools/list' }) + '\n')
+  assert.deepEqual(JSON.parse((await lines.next()).value).result.tools, [])
+  child.stdin.write(JSON.stringify({ id: 2, method: 'tools/call', params: { name: 'subagent_gpt', arguments: { prompt: 'must not start' } } }) + '\n')
+  const reply = JSON.parse((await lines.next()).value)
+  assert.equal(reply.result.isError, true)
+  assert.match(reply.result.content[0].text, /disabled/)
+  child.stdin.end()
+  assert.equal((await closed)[0], 0)
 })
 
 test('MCP ignores non-object inputs and returns Invalid Request for malformed requests with an id', async t => {

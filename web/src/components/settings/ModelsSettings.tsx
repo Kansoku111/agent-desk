@@ -111,6 +111,7 @@ function FastMode() {
 function Subagents() {
   const server = useStore((state) => state.server)
   if (!server) return null
+  const enabled = server.settings.subagentsEnabled ?? true
   const chosen = server.settings.subagentModels ?? { 'openai-codex': null, anthropic: null }
   const rows: { provider: keyof typeof chosen; label: string; note: string }[] = [
     { provider: 'anthropic', label: 'Claude', note: 'GPT のタスクから。API の従量課金です。' },
@@ -122,8 +123,17 @@ function Subagents() {
         <div>
           <h3>サブエージェント</h3>
         </div>
+        <label className="switch">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => void act('settings.update', { patch: { subagentsEnabled: event.target.checked } })}
+            aria-label="サブエージェントを使う"
+          />
+          <span />
+        </label>
       </div>
-      {rows.map(({ provider, label, note }) => {
+      {enabled && rows.map(({ provider, label, note }) => {
         const models = server.catalog.models.filter((model) => model.provider === provider).sort(byNewest)
         const ready = providerReady(server, provider)
         const value = chosen[provider] ?? ''

@@ -151,6 +151,8 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  *   per provider and model id, from {@link contextOverrides}.
  * @param {{ provider: string, model: string, name?: string | null }[]} [options.subagents] -
  *   the fixed-model delegation tools to add, one per {@link SUBAGENT_TOOLS} provider.
+ * @param {boolean} [options.subagentsEnabled] - false omits all delegation tools and their generated guidance.
+ * @param {string | null} [options.settingsFile] - saved settings read by the live execution gate.
  * @param {{ personaPrefix: string, personaSuffix: string }} [options.persona] -
  *   the shipped persona ({@link shippedPersona}); the tools' guidance follows it.
  * @param {{ plugin: string, credentials: string } | null} [options.webSearch] -
@@ -164,7 +166,7 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  */
 export function homePatch({
   anthropicWorkspaceId = null, modelOverrides = {}, catalogModels = {},
-  subagents = [], persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false,
+  subagents = [], subagentsEnabled = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false,
 } = {}) {
   // dsh's default (5 tries, 10 s at most) gives up within about 15 s, shorter
   // than the minute-long upstream hiccups ChatGPT's backend has.
@@ -211,10 +213,16 @@ export function homePatch({
     },
     // The model pickers prefer the same one (web/src/components/Pickers.tsx).
     ...(acpModel ? [{ id: 'acp', config: { provider: 'openai-codex', model: acpModel } }] : []),
-    // Its tool and prompt section go together; `subagent` stays for delegation.
+    // Its tool and prompt section go together; delegation is configured below.
     { id: 'tool-workflow', disabled: true },
   ]
-  const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
+  if (settingsFile) rows.push({ insert: [{
+    id: 'agent-desk-subagent-policy',
+    name: new URL('./subagent-policy-plugin.js', import.meta.url).href,
+    config: { settingsFile },
+  }] })
+  if (!subagentsEnabled) rows.push(...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })))
+  const pinned = subagentsEnabled ? subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model)) : []
   if (pinned.length) {
     // Same shape as dsh-base's `subagent` row: fresh in-process children that
     // keep running in the background and accept `send_message`.
@@ -281,7 +289,8 @@ ${YAML.stringify(rows)}`
  * tools of its own, like a team's child. Same options as homePatch, plus the
  * model; null when no GPT subagent model is set.
  */
-export function gptSubagentPatch({ subagents = [], persona = null } = {}) {
+export function gptSubagentPatch({ subagents = [], subagentsEnabled = true, persona = null } = {}) {
+  if (!subagentsEnabled) return null
   const gpt = subagents.find(({ provider, model }) => provider === 'openai-codex' && isModelId(model))
   if (!gpt) return null
   const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))

@@ -143,7 +143,7 @@ const terminals = await new TerminalManager({
   },
   launch: (record) => teams?.launchFor(record) ?? null,
   instructions: () => settings.customInstructions,
-  gptSubagent: () => (settings.subagentModels?.['openai-codex'] ? { model: settings.subagentModels['openai-codex'], home: paths.home } : null),
+  gptSubagent: () => (settings.subagentsEnabled !== false && settings.subagentModels?.['openai-codex'] ? { model: settings.subagentModels['openai-codex'], home: paths.home } : null),
   preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
   log,
 }).load()
@@ -283,6 +283,8 @@ async function applyHomePatch() {
     modelOverrides: contextOverrides(settings.contextLimits, await modelLimits()),
     catalogModels: configuredModels,
     subagents,
+    subagentsEnabled: settings.subagentsEnabled !== false,
+    settingsFile: paths.settings,
     persona,
     webSearch: { plugin: WEB_SEARCH_PLUGIN, credentials: paths.credentials },
     instructions: settings.customInstructions,
@@ -291,7 +293,7 @@ async function applyHomePatch() {
   })
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
   // Read by each subagent_gpt call, so no runtime restarts for it.
-  await writeGptSubagentPatch(paths.gptSubagentPatch, { subagents, persona })
+  await writeGptSubagentPatch(paths.gptSubagentPatch, { subagents, persona, subagentsEnabled: settings.subagentsEnabled !== false })
   return home || children
 }
 await applyHomePatch()

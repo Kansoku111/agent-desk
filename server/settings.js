@@ -44,6 +44,7 @@ export const DEFAULT_SETTINGS = {
   projectColors: {},
   // null keeps each model's context size / leaves the fixed-model tool out.
   contextLimits: { 'openai-codex': null, anthropic: null },
+  subagentsEnabled: true,
   subagentModels: { 'openai-codex': null, anthropic: null },
   fastMode: { 'openai-codex': false, anthropic: false },
   fastModePeriods: { anthropic: [] },
@@ -62,7 +63,7 @@ export const DEFAULT_SETTINGS = {
 
 const BOOLEAN_SETTINGS = [
   'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool',
-  'checkpoints', 'modelAutoUpdate',
+  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled',
 ]
 const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool']
 const ENUM_SETTINGS = {
@@ -204,7 +205,7 @@ export function planSettingsUpdate(current, patch, now) {
   effects.restart = TOOL_SETTINGS.some((key) => next[key] !== current[key])
   effects.channel = next.dshUpdateChannel !== current.dshUpdateChannel
   effects.modelCatalog = (next.modelAutoUpdate !== false) !== (current.modelAutoUpdate !== false)
-  effects.homePatch ||= effects.modelCatalog
+  effects.homePatch ||= effects.modelCatalog || next.subagentsEnabled !== current.subagentsEnabled
   effects.modelCheck = effects.modelCatalog && next.modelAutoUpdate !== false
   // The local route joins the catalog signature and the home patch; it fetches nothing.
   if (localChanged) {
