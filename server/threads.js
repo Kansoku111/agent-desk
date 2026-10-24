@@ -245,6 +245,20 @@ export class ThreadManager extends EventEmitter {
     if (!this.emitTimers.has(key)) this.emitTimers.set(key, setTimeout(fire, TURN_EMIT_MS))
   }
 
+  /**
+   * A speed change is not a transcript change: while it is still moving it goes
+   * to the UI as a tiny event and is never written to disk. Only the settled
+   * average (state 'done') is saved and sent with the whole turn.
+   */
+  #publishSpeed(threadId, turn) {
+    if (turn.outputSpeed?.state === 'done') {
+      this.#saveTurns(threadId)
+      this.#emitTurn(threadId, turn)
+      return
+    }
+    this.emit('turn-speed', { threadId, turnId: turn.id, speed: turn.outputSpeed ?? null })
+  }
+
   // ---------------------------------------------------------------- commands
 
   /** `team`: the agent team (teams.js) this task works for as a child, as { id, childId }. */
@@ -931,8 +945,7 @@ export class ThreadManager extends EventEmitter {
     active.cancelled = true
     if (active.turn.outputSpeed?.state === 'streaming') {
       active.turn.outputSpeed = { ...active.turn.outputSpeed, state: 'paused' }
-      this.#saveTurns(threadId)
-      if (!this.stopping && !this.removing.has(threadId)) this.#emitTurn(threadId, active.turn, true)
+      if (!this.stopping && !this.removing.has(threadId)) this.#publishSpeed(threadId, active.turn)
     }
     this.#resolvePermissions(threadId, null)
     const thread = this.threads.get(threadId)
@@ -964,8 +977,7 @@ export class ThreadManager extends EventEmitter {
         if (active.cancelled && speed.state === 'streaming') return
         turn.outputSpeed = { tokensPerSecond: speed.tokensPerSecond, state: speed.state, estimated: true }
       }
-      this.#saveTurns(threadId)
-      this.#emitTurn(threadId, turn)
+      this.#publishSpeed(threadId, turn)
       return // Empty carrier updates must never create transcript items.
     }
     const side = applyUpdate(turn, update)
@@ -985,7 +997,10 @@ export class ThreadManager extends EventEmitter {
     if (!thread || !active || active.cancelled) {
       return Promise.resolve({ outcome: { outcome: 'cancelled' } })
     }
-    if (active.turn.outputSpeed?.state === 'streaming') active.turn.outputSpeed = { ...active.turn.outputSpeed, state: 'paused' }
+    if (active.turn.outputSpeed?.state === 'streaming') {
+      active.turn.outputSpeed = { ...active.turn.outputSpeed, state: 'paused' }
+      this.#publishSpeed(threadId, active.turn)
+    }
     const requestId = randomUUID()
     const turn = active.turn
     const toolCallId = params.toolCall?.toolCallId

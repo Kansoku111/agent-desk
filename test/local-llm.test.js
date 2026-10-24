@@ -177,7 +177,8 @@ test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) =
   const hello = new Promise((resolve) => { helloResolve = resolve })
   ws.on('message', (raw) => {
     const frame = JSON.parse(String(raw))
-    if (frame.event === 'turn' && frame.turn?.outputSpeed) speeds.push(frame.turn.outputSpeed)
+    if (frame.event === 'turnSpeed' && frame.speed) speeds.push(frame.speed)
+    if (frame.event === 'turn' && frame.turn?.outputSpeed?.state === 'streaming') speeds.push({ ...frame.turn.outputSpeed, whole: true })
     if (frame.event === 'hello') helloResolve(frame.state)
     if (replies.has(frame.id)) { replies.get(frame.id)(frame); replies.delete(frame.id) }
   })
@@ -213,6 +214,7 @@ test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) =
   const done = await waitFor(() => request('thread.get', { threadId: thread.id }), (next) => JSON.stringify(next).includes('ローカルからの返事') && !next.thread?.busy, 'the local reply')
   assert.ok(done)
   assert.ok(speeds.some((speed) => speed.state === 'streaming' && speed.tokensPerSecond > 0), `live speed must cross SSE → dsh → ACP → WebSocket: ${JSON.stringify({ speeds, turns: done.turns })}`)
+  assert.ok(speeds.every((entry) => !entry.whole), 'a moving speed must not resend the whole turn')
   const speed = done.turns.at(-1).outputSpeed
   assert.equal(speed.state, 'done')
   assert.equal(speed.estimated, true)

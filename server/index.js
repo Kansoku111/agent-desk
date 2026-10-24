@@ -385,6 +385,7 @@ await threads.load()
 // Claude children run headless (claude -p), after per-team auth consent checks.
 const agents = await new ClaudeRunner({ dir: path.join(paths.home, 'team-agents'), preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED, log }).load()
 agents.on('turn', ({ id, turn }) => broadcast('agentTurn', { id, turn }))
+agents.on('turn-speed', ({ id, turnId, speed }) => broadcast('agentTurnSpeed', { id, turnId, speed }))
 // The Claude subscription's limits, as the team's `claude -p` runs last reported them.
 const claudeLimitsFile = path.join(paths.home, 'claude-limits.json')
 let claudeLimits = readSavedClaudeLimits(await readJson(claudeLimitsFile, null).catch(() => null))
@@ -450,6 +451,7 @@ threads.on('turn', ({ threadId, turn }) => {
   broadcast('turn', { threadId, turn })
   followSubagents(threadId)
 })
+threads.on('turn-speed', ({ threadId, turnId, speed }) => broadcast('turnSpeed', { threadId, turnId, speed }))
 threads.on('removed', ({ threadId }) => {
   broadcast('removed', { threadId })
   subagents.forget(threadId)

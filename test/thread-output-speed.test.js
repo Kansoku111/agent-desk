@@ -115,6 +115,34 @@ test('committed ACP text is not a live stream and never acquires a fabricated sp
   assert.equal((await restarted.get(f.thread.id)).turns.at(-1).outputSpeed, undefined)
 })
 
+test('a moving speed is a tiny event: no whole-turn resend and nothing written until the average settles', async (t) => {
+  const f = await fixture(t)
+  await f.manager.send(f.thread.id, { text: 'test' })
+  await f.started.promise
+  const s = stream(f)
+  const turnEvents = [], speedEvents = []
+  f.manager.on('turn', (event) => turnEvents.push(event))
+  f.manager.on('turn-speed', (event) => speedEvents.push(event))
+  s.text()
+  s.at(500)
+  s.text()
+  await s.tick()
+  s.pause()
+  await s.flush()
+  assert.deepEqual(speedEvents.map((event) => event.speed?.state), ['streaming', 'paused'])
+  assert.ok(speedEvents.every((event) => event.threadId === f.thread.id && event.turnId === s.active.turn.id))
+  assert.equal(turnEvents.length, 0, 'the whole turn is not resent for a speed change')
+  await new Promise((resolve) => setTimeout(resolve, 700)) // longer than the transcript writer's delay
+  assert.equal((await f.disk()).turns.at(-1).outputSpeed, undefined, 'a moving speed is not written to disk')
+  await s.finish()
+  await new Promise((resolve) => setTimeout(resolve, 150)) // turn events are coalesced for 60 ms
+  assert.equal(turnEvents.at(-1).turn.outputSpeed.state, 'done', 'the settled average travels with the turn')
+  f.finish.resolve()
+  await s.active.done
+  await f.manager.shutdown()
+  assert.equal((await f.disk()).turns.at(-1).outputSpeed.state, 'done')
+})
+
 test('invalid metadata is ignored and a missing final average cannot relabel a rolling rate', async (t) => {
   const f = await fixture(t)
   await f.manager.send(f.thread.id, { text: 'test' })

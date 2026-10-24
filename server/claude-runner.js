@@ -262,7 +262,9 @@ export class ClaudeRunner extends EventEmitter {
       if (speed) turn.outputSpeed = speed
       else delete turn.outputSpeed
       if (this.live.get(id) !== live || this.closing) return
-      this.emit('turn', { id, turn })
+      // A moving speed is a tiny event; only the settled average travels with the whole turn.
+      if (speed?.state === 'done') this.emit('turn', { id, turn })
+      else this.emit('turn-speed', { id, turnId: turn.id, speed: speed ?? null })
     } })
     live.exited = new Promise((resolve) => { live.markExited = resolve })
 

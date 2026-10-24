@@ -322,6 +322,16 @@ function shareTurn(previous: Turn | undefined, next: Turn): Turn {
   return shared
 }
 
+/** The turns with one turn's speed replaced; the same list when nothing changes. */
+function withSpeed(turns: Turn[] | undefined, turnId: string, speed: Turn['outputSpeed'] | null): Turn[] | null {
+  const index = turns?.findIndex((turn) => turn.id === turnId) ?? -1
+  if (!turns || index < 0) return null
+  const turn = turns[index]
+  if (sameJson(turn.outputSpeed ?? null, speed)) return null
+  const { outputSpeed: _old, ...rest } = turn
+  return turns.map((entry, i) => (i === index ? (speed ? { ...rest, outputSpeed: speed } : rest) : entry))
+}
+
 function handleFrame(frame: any) {
   switch (frame.event) {
     case 'hello': {
@@ -381,6 +391,16 @@ function handleFrame(frame: any) {
       if (index >= 0 && turn === turns[index]) break
       const next = index >= 0 ? turns.map((entry, i) => (i === index ? turn : entry)) : [...turns, turn]
       setState({ agentTurns: { ...state.agentTurns, [frame.id]: next } })
+      break
+    }
+    case 'agentTurnSpeed': {
+      const next = withSpeed(state.agentTurns[frame.id], frame.turnId, frame.speed)
+      if (next) setState({ agentTurns: { ...state.agentTurns, [frame.id]: next } })
+      break
+    }
+    case 'turnSpeed': {
+      const next = withSpeed(state.turns[frame.threadId], frame.turnId, frame.speed)
+      if (next) setState({ turns: { ...state.turns, [frame.threadId]: next } })
       break
     }
     case 'termData':
