@@ -639,10 +639,10 @@ export class TeamManager extends EventEmitter {
       }
       let run = await this.execution.verify({ id: child.id, folder: team.workspace, checks: child.execution.checks })
       team.execution.metrics.verifications++
-      // The writer is idle here, so a source change is the checks' own (a formatter) or an outside edit: verify the new state once, without waking anyone.
-      if (run.status === 'stale' && this.teams.has(team.id) && team.children.includes(child) && !child.closed && !team.execution.stopped) {
-        run = await this.execution.verify({ id: child.id, folder: team.workspace, checks: child.execution.checks })
-        run.rerun = true
+      // Only explicitly permitted source-changing checks can trigger one rerun.
+      // Preserve both records: permitted changes still need the parent's review.
+      if (run.canRerun && this.teams.has(team.id) && team.children.includes(child) && !child.closed && !team.execution.stopped) {
+        run = await this.execution.verify({ id: child.id, folder: team.workspace, checks: child.execution.checks, previousRun: run })
         team.execution.metrics.verifications++
       }
       if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return

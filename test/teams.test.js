@@ -337,13 +337,30 @@ test('EX verify tool re-verifies the current files without a child turn', async 
 
 test('EX re-verifies once when a check rewrites the sources itself', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
-  await manager.configureExecution(workspace, [{ id: 'fmt', command: 'node -e "const fs=require(\'fs\');if(fs.readFileSync(\'source.txt\',\'utf8\')!==\'formatted\')fs.writeFileSync(\'source.txt\',\'formatted\')"' }])
+  await manager.configureExecution(workspace, [{ id: 'fmt', allowSourceChanges: true, command: 'node -e "const fs=require(\'fs\');if(fs.readFileSync(\'source.txt\',\'utf8\')!==\'formatted\')fs.writeFileSync(\'source.txt\',\'formatted\')"' }])
   await tool('spawn', { ...exTask, checks: ['fmt'] })
   const child = team.children[0]
   threads.finish(child.taskId, 'done')
   await Promise.all([...manager.exPending])
   assert.equal(child.execution.verification.status, 'passed')
   assert.equal(child.execution.verification.rerun, true)
+  const saved = JSON.parse(await fs.readFile(child.execution.verification.record, 'utf8'))
+  assert.equal(saved.rerun, true)
+  assert.equal(saved.previousRun.status, 'stale')
+  assert.equal(JSON.parse(await fs.readFile(saved.previousRun.record, 'utf8')).status, 'stale')
+  assert.match(child.reports.at(-1).text, /初回: stale/)
+})
+
+test('EX does not automatically reverify an ordinary check after source changes', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await manager.configureExecution(workspace, [{ id: 'test', command: `node -e "require('fs').writeFileSync('source.txt','unexpected')"` }])
+  await tool('spawn', { ...exTask, checks: ['test'] })
+  const child = team.children[0]
+  threads.finish(child.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  assert.equal(child.execution.verification.status, 'stale')
+  assert.equal(team.execution.metrics.verifications, 1)
+  assert.equal(child.execution.verification.rerun, undefined)
 })
 
 test('EX reports do not wait indefinitely for children still working', async (t) => {

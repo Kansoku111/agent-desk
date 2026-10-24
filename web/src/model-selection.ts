@@ -19,6 +19,19 @@ export function visibleModels(server: AppState) {
   return server.catalog.models.filter((model) => isModelVisible(server, model))
 }
 
+/** EX restores exact choices only; never substitute a model or billing route. */
+export function executionModelSelection(server: AppState, provider: string, leader: string, child: string) {
+  const routes: Record<string, string> = { claudeApi: 'anthropic', gpt: 'openai-codex', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' }
+  const available = server.catalog.models.filter((entry) => !entry.retired && isModelVisible(server, entry) && providerReady(server, entry.provider))
+  const leaderModels = available.filter((entry) => ['anthropic', 'openai-codex'].includes(entry.provider))
+  const childModels = available.filter((entry) => entry.provider === routes[provider])
+  return {
+    leaderModels, childModels,
+    leader: ['claude:opus', 'claude:sonnet'].includes(leader) || leaderModels.some((entry) => entry.value === leader) ? leader : '',
+    model: (provider === 'claude' ? ['haiku', 'sonnet', 'opus'].includes(child) : childModels.some((entry) => entry.id === child)) ? child : '',
+  }
+}
+
 /** A visible, connected model for a new task. Never fall back to a hidden choice. */
 export function pickDefaultModel(server: AppState, current: string | null): string | null {
   const models = visibleModels(server)

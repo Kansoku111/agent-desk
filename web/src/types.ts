@@ -111,6 +111,7 @@ export interface ExecutionCheck {
   cwd?: string
   timeoutMs?: number
   autoRepair?: boolean
+  allowSourceChanges?: boolean
 }
 export interface ExecutionWork {
   phase: 'working' | 'verifying' | 'review' | 'accepted'

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { ExecutionVerifier, normalizeChecks, sourceSnapshot } from '../server/execution.js'
+import { ExecutionVerifier, normalizeChecks, sourceSnapshot, EXECUTION_PROMPT } from '../server/execution.js'
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ex-'))
@@ -37,6 +37,28 @@ test('EX checks reject duplicate IDs, escaping paths and invalid timeout', () =>
   assert.throws(() => normalizeChecks([{ id: 'x', command: 'echo x' }, { id: 'x', command: 'echo y' }]))
   assert.throws(() => normalizeChecks([{ id: 'x', command: 'echo x', timeoutMs: 0 }]))
   assert.equal(normalizeChecks([{ id: 'x', command: 'echo x' }])[0].autoRepair, false)
+})
+
+test('EX source mutation permission defaults off and the parent may correct reviewed work', () => {
+  assert.equal(normalizeChecks([{ id: 'test', command: 'echo test' }])[0].allowSourceChanges, false)
+  assert.equal(normalizeChecks([{ id: 'fmt', command: 'echo fmt', allowSourceChanges: 'true' }])[0].allowSourceChanges, false)
+  assert.match(EXECUTION_PROMPT, /While a unit awaits judgment and all children are idle, you may make a small scoped correction/)
+  assert.match(EXECUTION_PROMPT, /after any edit, call verify/)
+  assert.doesNotMatch(EXECUTION_PROMPT, /or a verified result awaits judgment/)
+})
+
+test('EX attributes changes per check instead of allowing any change when a formatter is present', async (t) => {
+  const { folder, verifier } = await fixture(t)
+  const checks = [
+    { id: 'fmt', allowSourceChanges: true, command: `node -e "require('fs').writeFileSync('source.txt','formatted')"` },
+    { id: 'test', command: `node -e "require('fs').writeFileSync('source.txt','unexpected')"` },
+  ]
+  const run = await verifier.verify({ id: 'a', folder, checks })
+  assert.equal(run.status, 'stale')
+  assert.equal(run.canRerun, false)
+  assert.ok(run.checks.every((check) => check.sourceChanged))
+  const allowed = await verifier.verify({ id: 'b', folder, checks: [checks[0], { id: 'test', command: 'node -e "console.log(1)"' }] })
+  assert.equal(allowed.canRerun, true)
 })
 
 test('EX snapshots include untracked content and ignore generated files', async (t) => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { isModelVisible, pickDefaultModel, visibleModels } from '../web/src/model-selection.ts'
+import { isModelVisible, pickDefaultModel, visibleModels, executionModelSelection } from '../web/src/model-selection.ts'
 
 const model = (provider, id) => ({ provider, id, value: JSON.stringify([provider, id]), name: id, description: null })
 const sol = model('openai-codex', 'gpt-6.1-sol')
@@ -16,6 +16,32 @@ function server(modelVisibility, defaultModel = null) {
     accounts: { chatgpt: { signedIn: true }, claude: { configured: true }, deepseek: { configured: false } },
   }
 }
+
+test('EX restores exact available choices and clears unavailable models without fallback', () => {
+  const state = server({})
+  const valid = executionModelSelection(state, 'claudeApi', sol.value, claude.id)
+  assert.equal(valid.leader, sol.value)
+  assert.equal(valid.model, claude.id)
+  state.accounts.claude.configured = false
+  const disconnected = executionModelSelection(state, 'claudeApi', claude.value, claude.id)
+  assert.equal(disconnected.leader, '')
+  assert.equal(disconnected.model, '')
+  assert.equal(executionModelSelection(state, 'claude', 'claude:sonnet', 'haiku').model, 'haiku')
+  assert.equal(executionModelSelection(state, 'claude', 'claude:missing', 'missing').leader, '')
+  assert.equal(executionModelSelection(state, 'claude', 'claude:opus', 'missing').model, '')
+})
+
+test('EX rejects hidden, retired, removed and wrong-provider saved choices', () => {
+  const state = server({ [sol.value]: false })
+  assert.equal(executionModelSelection(state, 'gpt', sol.value, sol.id).leader, '')
+  assert.equal(executionModelSelection(state, 'gpt', sol.value, sol.id).model, '')
+  state.settings.modelVisibility[sol.value] = true
+  state.catalog.models = [{ ...sol, retired: true }, claude]
+  assert.equal(executionModelSelection(state, 'gpt', sol.value, sol.id).model, '')
+  assert.equal(executionModelSelection(state, 'claudeApi', 'missing', sol.id).model, '')
+  assert.equal(executionModelSelection(state, 'claudeApi', 'missing', claude.id).leader, '')
+  assert.equal(executionModelSelection(state, 'claudeApi', 'missing', claude.id).model, claude.id)
+})
 
 test('older settings show every model; hiding Terra leaves the catalog intact and checking restores it', () => {
   assert.deepEqual(visibleModels(server(undefined)), catalog)

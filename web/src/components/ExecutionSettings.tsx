@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { act, setState, startTeam, useStore } from '../store'
 import type { ExecutionCheck, TeamProvider, TeamSettings } from '../types'
-import { isModelVisible } from '../model-selection'
+import { executionModelSelection } from '../model-selection'
 import { Modal } from './Modal'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import type { AuthConsentState } from '../team-auth-consent'
@@ -33,6 +33,7 @@ function CheckEditor({ checks, onChange }: { checks: ExecutionCheck[]; onChange:
       <input aria-label={`検証${i + 1}のコマンド`} placeholder="npm test" value={check.command} onChange={(e) => update(i, { command: e.target.value })} />
       <div className="ex-check-heading"><label>実行場所<input value={check.cwd ?? '.'} onChange={(e) => update(i, { cwd: e.target.value })} /></label>
         <label>制限時間（秒）<input type="number" min={1} max={1800} value={(check.timeoutMs ?? 300000) / 1000} onChange={(e) => update(i, { timeoutMs: Number(e.target.value) * 1000 })} /></label></div>
+      <label><input type="checkbox" checked={check.allowSourceChanges === true} onChange={(e) => update(i, { allowSourceChanges: e.target.checked })} /> ソース変更と1回の再検証を許可</label>
       <label><input type="checkbox" checked={check.autoRepair === true} onChange={(e) => update(i, { autoRepair: e.target.checked })} /> 失敗時に子へ自動差し戻し</label>
     </div>)}
   </section>
@@ -73,13 +74,17 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const [starting, setStarting] = useState(false)
   const close = () => setState({ executionStart: null })
-  if (!server?.settings.agentTeams) return null
-  const usesClaude = leader.startsWith('claude:') || provider === 'claude'
-  const catalogProvider = providers.find((entry) => entry.id === provider)?.catalog
-  const childModels = server.catalog.models.filter((entry) => entry.provider === catalogProvider && isModelVisible(server, entry))
-  const leaderModels = server.catalog.models.filter((entry) => ['anthropic', 'openai-codex'].includes(entry.provider) && isModelVisible(server, entry))
+  const selection = server ? executionModelSelection(server, provider, leader, model) : null
+  useEffect(() => {
+    if (!selection) return
+    if (leader && !selection.leader) setLeader('')
+    if (model && !selection.model) setModel('')
+  }, [selection?.leader, selection?.model, leader, model])
+  if (!server?.settings.agentTeams || !selection) return null
+  const { leaderModels, childModels } = selection
+  const usesClaude = selection.leader.startsWith('claude:') || provider === 'claude'
   const start = async () => {
-    if (!checks || (usesClaude && !auth.ready)) return
+    if (!checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)) return
     setStarting(true)
     try {
       if (!await act('execution.configure', { workspace, checks })) return
@@ -101,20 +106,22 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   return <Modal title="実行モード" onClose={close} width={620} className="team-start-modal">
     <div className="team-start-body">
       <section className="account-card ex-models">
-        <label>親<select value={leader} onChange={(e) => setLeader(e.target.value)}>
+        <label>親<select value={selection.leader} onChange={(e) => setLeader(e.target.value)}>
+          <option value="">モデルを選択</option>
           <optgroup label="Claude Code"><option value="claude:opus">Opus</option><option value="claude:sonnet">Sonnet</option></optgroup>
           <optgroup label="API / サブスクリプション">{leaderModels.map((entry) => <option key={entry.value} value={entry.value}>{entry.name} · {entry.provider === 'anthropic' ? 'API' : 'ChatGPT'}</option>)}</optgroup>
         </select></label>
         <label>子<select value={provider} onChange={(e) => { setProvider(e.target.value as TeamProvider); setModel(e.target.value === 'claude' ? 'haiku' : '') }}>
           {providers.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
         </select></label>
-        <label>子のモデル<select value={model} onChange={(e) => setModel(e.target.value)}>
-          {provider === 'claude' ? <><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></> : <><option value="">モデルを選択</option>{childModels.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</>}
+        <label>子のモデル<select value={selection.model} onChange={(e) => setModel(e.target.value)}>
+          <option value="">モデルを選択</option>
+          {provider === 'claude' ? <><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></> : <>{childModels.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</>}
         </select></label>
       </section>
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
     </div>
-    <div className="modal-actions"><button type="button" className="button" onClick={close}>キャンセル</button><button type="button" className="button primary" disabled={starting || !checks || !model || (usesClaude && !auth.ready)} onClick={() => void start()}>始める</button></div>
+    <div className="modal-actions"><button type="button" className="button" onClick={close}>キャンセル</button><button type="button" className="button primary" disabled={starting || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)} onClick={() => void start()}>始める</button></div>
   </Modal>
 }

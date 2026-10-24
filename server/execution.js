@@ -38,7 +38,7 @@ export function normalizeChecks(value) {
     const timeoutMs = item.timeoutMs ?? 300_000
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 1_800_000) throw new Error('検証の制限時間は1秒〜30分です')
     ids.add(id)
-    return { id, command, cwd, timeoutMs, autoRepair: item.autoRepair === true }
+    return { id, command, cwd, timeoutMs, autoRepair: item.autoRepair === true, allowSourceChanges: item.allowSourceChanges === true }
   })
 }
 
@@ -120,16 +120,17 @@ export class ExecutionVerifier {
     await Promise.allSettled([...this.active.values()].map((entry) => entry.done))
     await this.writes
   }
-  async verify({ id, folder, checks }) {
+  async verify({ id, folder, checks, previousRun = null }) {
     if (this.active.has(id)) throw new Error('検証はすでに実行中です')
     const normalized = normalizeChecks(checks)
-    const entry = { ownerId: id, cancelled: false }
+    const entry = { ownerId: id, cancelled: false, previousRun: previousRun ? { id: previousRun.id, record: previousRun.record, status: previousRun.status, sourceHash: previousRun.sourceHash, endHash: previousRun.endHash } : null }
     this.active.set(id, entry)
     entry.done = this.#verify(entry, folder, normalized).finally(() => this.active.delete(id))
     return entry.done
   }
   async #verify(entry, folder, checks) {
     const run = { id: randomUUID(), ownerId: entry.ownerId, workspace: folder, startedAt: this.now(), checks: [], status: 'error' }
+    if (entry.previousRun) Object.assign(run, { rerun: true, previousRun: entry.previousRun })
     const runDir = path.join(this.dir, 'runs', run.id)
     await fs.promises.mkdir(runDir, { recursive: true })
     let watcher
@@ -139,20 +140,39 @@ export class ExecutionVerifier {
       // Watch only relevant source paths. Generated ignored files do not stale a
       // result; any observed source write does, even if later reverted.
       const known = new Set(before.files.map((file) => file.replaceAll('\\', '/')))
-      let changed = false
+      let changes = 0
+      let uncertain = false
       watcher = fs.watch(folder, { recursive: true }, (_event, name) => {
-        if (!name) { changed = true; return }
-        if (known.has(String(name).replaceAll('\\', '/'))) changed = true
+        if (!name) { uncertain = true; return }
+        if (known.has(String(name).replaceAll('\\', '/'))) changes++
       })
-      watcher.on('error', () => { changed = true })
+      watcher.on('error', () => { uncertain = true })
+      let baseline = before
+      let observed = 0
+      let unapprovedChange = false
       for (const check of checks) {
         if (entry.cancelled) break
-        run.checks.push(await this.#command(entry, folder, check, runDir))
-        if (run.checks.at(-1).status !== 'passed') break
+        if (changes !== observed) unapprovedChange = true
+        const startChanges = changes
+        const result = await this.#command(entry, folder, check, runDir)
+        const afterCheck = await sourceSnapshot(folder)
+        result.sourceChanged = changes !== startChanges || baseline.hash !== afterCheck.hash
+        if (result.sourceChanged && !check.allowSourceChanges) unapprovedChange = true
+        run.checks.push(result)
+        baseline = afterCheck
+        observed = changes
+        for (const name of afterCheck.files) known.add(name.replaceAll('\\', '/'))
+        if (result.status !== 'passed') break
       }
       const after = await sourceSnapshot(folder)
-      run.status = entry.cancelled ? 'cancelled' : changed || before.hash !== after.hash ? 'stale'
+      if (changes !== observed || baseline.hash !== after.hash) unapprovedChange = true
+      const changed = uncertain || changes > 0 || before.hash !== after.hash
+      run.status = entry.cancelled ? 'cancelled' : changed ? 'stale'
         : checks.length === 0 ? 'unverified' : run.checks.every((check) => check.status === 'passed') ? 'passed' : 'failed'
+      // This is permission to repeat, not proof of who changed the files.
+      run.canRerun = run.status === 'stale' && !uncertain && !unapprovedChange
+        && run.checks.length === checks.length && run.checks.every((check) => check.status === 'passed')
+        && run.checks.some((check) => check.sourceChanged && check.allowSourceChanges)
       run.endHash = after.hash
     } catch (error) {
       run.error = error.message
@@ -210,10 +230,10 @@ export class ExecutionVerifier {
   }
 }
 
-export const EXECUTION_PROMPT = `\n# EX — execution mode (takes precedence over team workflow advice)\nYou are the high-capability decision maker; children use only the inexpensive low tier. Minimize your own exploration and repeated turns, not completion quality. Delegate bounded implementation and investigation with clear acceptance criteria. Do small fixes directly only when you already have the evidence, and never change files while a child is working, verification is running, or a verified result awaits judgment. Do not use other subagents.\nCall status once to discover project verification IDs. Every spawn must include criteria and checks (an explicit empty array means no command verification). You may provide extraChecks for task-specific commands: id, command, cwd, timeoutMs, autoRepair. Commands run with the server user's permissions: avoid destructive or external side effects. Only enable autoRepair for checks whose failures can safely be repaired within the assigned implementation scope. Never weaken tests or acceptance criteria just to obtain success.\nThe app runs checks after the child finishes and returns one combined report; it handles at most two bounded repair attempts without waking you. Do not poll or ask for progress. End your turn while waiting. Check recorded evidence and important diffs, then close to accept or send to request bounded changes. If you edited files yourself after a verification, call verify (no child turn is spent) and end your turn. Research reports are not verified: read them and close. close with accept:false and reason abandons work without claiming completion. Unverified acceptance requires a reason describing your own checks. A stale/failed verification cannot be accepted. EX serializes write work through judgment; close a completed write unit before starting the next. Read-only investigation may run in parallel using mode:research and checks:[], but must never modify sources. Claude Code research has only Read/Glob/Grep. Never claim command success proves the user's goal.\n`
+export const EXECUTION_PROMPT = `\n# EX — execution mode (takes precedence over team workflow advice)\nYou are the high-capability decision maker; children use only the inexpensive low tier. Minimize your own exploration and repeated turns, not completion quality. Delegate bounded implementation and investigation with clear acceptance criteria. Do small fixes directly only when you already have the evidence, and never change files while a child is working or verification is running. While a unit awaits judgment and all children are idle, you may make a small scoped correction yourself; after any edit, call verify and wait for the new result before accepting. Do not use other subagents.\nCall status once to discover project verification IDs. Every spawn must include criteria and checks (an explicit empty array means no command verification). You may provide extraChecks for task-specific commands: id, command, cwd, timeoutMs, autoRepair, allowSourceChanges. Set allowSourceChanges only for intentionally source-changing checks such as formatters; it permits one automatic rerun, not automatic acceptance. Review both runs and the changed diff. Commands run with the server user's permissions: avoid destructive or external side effects. Only enable autoRepair for checks whose failures can safely be repaired within the assigned implementation scope. Never weaken tests or acceptance criteria just to obtain success.\nThe app runs checks after the child finishes and returns one combined report; it handles at most two bounded repair attempts without waking you. Do not poll or ask for progress. End your turn while waiting. Check recorded evidence and important diffs, then close to accept or send to request bounded changes. If you edited files yourself after a verification, call verify (no child turn is spent) and end your turn. Research reports are not verified: read them and close. close with accept:false and reason abandons work without claiming completion. Unverified acceptance requires a reason describing your own checks. A stale/failed verification cannot be accepted. EX serializes write work through judgment; close a completed write unit before starting the next. Read-only investigation may run in parallel using mode:research and checks:[], but must never modify sources. Claude Code research has only Read/Glob/Grep. Never claim command success proves the user's goal.\n`
 
 export function verificationReport(run) {
-  return [`[EX 検証: ${run.status}]`, `対象: ${run.sourceHash ?? '取得失敗'}`, ...run.checks.map((check) =>
+  return [`[EX 検証: ${run.status}]`, ...(run.previousRun ? [`変更検出後に許可された再検証を1回実行しました。外部編集との区別は保証しないため、変更差分を確認してください。`, `初回: ${run.previousRun.status} / ${run.previousRun.record}`, `初回対象: ${run.previousRun.sourceHash} → ${run.previousRun.endHash}`] : []), `対象: ${run.sourceHash ?? '取得失敗'}`, ...run.checks.map((check) =>
     `${check.id}: ${check.status} (exit ${check.exitCode ?? 'なし'})\nコマンド: ${check.command}\n場所: ${check.cwd}\nログ: ${check.log}`),
   run.error ?? '', run.status === 'stale' ? '検証中にソースが変更されました（再検証後も変わる場合、検証コマンド自体がファイルを書き換えている可能性があります）。' : '', `記録: ${run.record}`, 'コマンドの成功は仕様の充足を保証しません。完了条件と差分を確認して判定してください。'].filter(Boolean).join('\n')
 }

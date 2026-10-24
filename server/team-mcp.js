@@ -122,6 +122,7 @@ if (process.env.AGENT_DESK_EXECUTION === '1') {
     extraChecks: { type: 'array', items: { type: 'object', properties: {
       id: { type: 'string' }, command: { type: 'string' }, cwd: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1000, maximum: 1800000 },
       autoRepair: { type: 'boolean', description: 'Only true when failure can be repaired within the implementation scope.' },
+      allowSourceChanges: { type: 'boolean', description: 'Default false. Explicitly permit source changes during this check (e.g. a formatter) and one automatic rerun. Changes still require parent review.' },
     }, required: ['id', 'command'] } },
     maxRepairs: { type: 'integer', minimum: 0, maximum: 2 },
   })
