@@ -83,7 +83,7 @@ export async function openIn(target, dir) {
   if (!fs.existsSync(dir)) throw new Error(`フォルダが見つかりません: ${dir}`)
   const detached = { detached: true, stdio: 'ignore' }
   if (target === 'files') {
-    if (isWin) spawn('explorer.exe', [dir], detached).unref()
+    if (isWin) openFront(dir, false)
     else spawn(isMac ? 'open' : 'xdg-open', [dir], detached).unref()
     return
   }
@@ -115,19 +115,29 @@ export async function openIn(target, dir) {
  */
 export function openFile(file, how) {
   const detached = { detached: true, stdio: 'ignore' }
+  if (isWin) {
+    openFront(file, how === 'reveal')
+    return
+  }
   if (how === 'reveal') {
-    if (isWin) {
-      // explorer.exe parses its own command line: /select,"<path>" must reach it verbatim.
-      spawn('explorer.exe', [`/select,"${file}"`], { ...detached, windowsVerbatimArguments: true }).unref()
-    } else if (isMac) {
+    if (isMac) {
       spawn('open', ['-R', file], detached).unref()
     } else {
       spawn('xdg-open', [path.dirname(file)], detached).unref()
     }
     return
   }
-  if (isWin) spawn('explorer.exe', [file], detached).unref()
-  else spawn(isMac ? 'open' : 'xdg-open', [file], detached).unref()
+  spawn(isMac ? 'open' : 'xdg-open', [file], detached).unref()
+}
+
+/** Windows: opens the path and raises the new window above the app (see open-front.ps1). */
+function openFront(file, reveal) {
+  const script = fileURLToPath(new URL('./open-front.ps1', import.meta.url))
+  spawn('powershell.exe', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
+    '-Path', file,
+    ...(reveal ? ['-Reveal'] : []),
+  ], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
 }
 
 /** Current branch and number of changed files, or null outside a git repo. */
