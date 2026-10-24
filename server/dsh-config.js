@@ -330,7 +330,7 @@ export async function writeHomePatch(file, options) {
 }
 
 export function abPatch({ subagents = [], writable = false, lean = true } = {}) {
-  const disabled = [...BASE_SUBAGENT_TOOLS, 'tool-workflow', 'tool-goal', 'tool-plugin-manager',
+  const disabled = [...BASE_SUBAGENT_TOOLS, 'tool-workflow', 'tool-goal', 'tool-plugin-manager', 'tool-ask-user',
     ...subagents.filter(({ provider }) => SUBAGENT_TOOLS[provider]).map(({ provider }) => `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`),
     ...(!writable ? ['tool-bash', 'tool-pwsh', 'tool-jobs', 'tool-skill'] : []),
     ...(!writable && lean ? ['tool-web'] : [])]

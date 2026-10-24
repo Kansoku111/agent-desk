@@ -8,12 +8,13 @@ import { AbRunner, abClaudeArgs } from '../server/ab-runner.js'
 import { AB_CONSULT } from '../server/ab.js'
 import { runtimeKey } from '../server/runtime.js'
 import { createMcpServerList } from '../server/mcp-servers.js'
+import { fixture, deferred, pending } from './helpers/thread-manager.js'
 
 test('AB runtime has no write/shell/delegation definitions during consultation', () => {
   for (const lean of [true, false]) {
     const rows = YAML.parse(abPatch({ lean, subagents: [{ provider: 'anthropic', model: 'test' }, { provider: 'openai-codex', model: 'test' }] }))
     const disabled = (id) => rows.some((row) => row.id === id && row.disabled)
-    for (const id of ['tool-bash', 'tool-pwsh', 'tool-workflow', 'tool-goal', 'tool-subagent', 'tool-subagent-fork', 'tool-plugin-manager']) assert.ok(disabled(id), id)
+    for (const id of ['tool-bash', 'tool-pwsh', 'tool-workflow', 'tool-goal', 'tool-subagent', 'tool-subagent-fork', 'tool-plugin-manager', 'tool-ask-user']) assert.ok(disabled(id), id)
     assert.deepEqual(rows.find((row) => row.id === 'tool-fs').config, { write: false, edit: false })
     assert.equal(disabled('tool-web'), lean)
   }
@@ -27,8 +28,8 @@ test('AB guard fails closed for unknown tools and rejects sandbox escalation', (
   for (const name of ['write', 'edit', 'pwsh', 'bash', 'subagent', 'workflow', 'unknown_new_tool', 'mcp__chrome__evaluate_script']) assert.equal(abToolAllowed(name, false), false)
   let guard
   apply({ tools: { guard: (fn) => { guard = fn } }, systemPrompt: { section: () => {} } }, { writable: false })
-  assert.ok(guard({ name: 'read', args: { sandbox_permissions: 'danger-full-access' } }))
-  assert.equal(guard({ name: 'read', args: {} }), undefined)
+  assert.ok(guard({ name: 'read', arguments: { sandbox_permissions: 'danger-full-access' } }))
+  assert.equal(guard({ name: 'read', arguments: {} }), undefined)
 })
 
 test('AB uses separate profiles and no mutating MCP in consultation even with tools ON', () => {
@@ -63,5 +64,5 @@ test('AB adapter sends raw consultation and translates final results', async () 
   assert.equal(created.ab.runId, 'R')
   const finished = new Promise((resolve) => runner.once('finished', resolve))
   threads.emit('turn-finished', { threadId: 'T', status: 'done' })
-  assert.deepEqual(await finished, { runId: 'R', jobId: 'J', status: 'completed', text: 'final report', error: undefined })
+  assert.deepEqual(await finished, { runId: 'R', jobId: 'J', status: 'completed', text: 'final report', error: undefined, denials: [] })
 })

@@ -5,6 +5,7 @@ import type {
 } from './types'
 import { Outbox, readQueues, type QueuedMessage } from './outbox'
 import { RpcClient } from './rpc-client'
+import { notificationRoute, notificationText, type TaskNotification } from './notification'
 export type { QueuedMessage } from './outbox'
 
 type Route = { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string } | { view: 'ab'; id: string }
@@ -523,19 +524,11 @@ function announceNewModels(update: ModelUpdate | undefined) {
   toast(`新しいモデルを追加しました: ${names}${busy ? '（作業中のタスクが終わるとモデルの一覧に出ます）' : ''}`, 'success')
 }
 
-function notify(frame: { kind: string; threadId: string; title: string; status?: string; terminal?: boolean }) {
-  const route: Route = frame.terminal ? { view: 'terminal', id: frame.threadId } : { view: 'thread', id: frame.threadId }
+function notify(frame: TaskNotification) {
+  const route = notificationRoute(frame)
   const viewing = state.route.view === route.view && state.route.id === frame.threadId && !document.hidden
   if (viewing) return
-  const text = frame.kind === 'approval-needed'
-    ? `承認待ち: ${frame.title}`
-    : frame.kind === 'team-ask'
-      ? `チームのリーダーが確認を求めています: ${frame.title}`
-      : frame.status === 'error'
-        ? `エラーで停止: ${frame.title}`
-        : frame.status === 'cancelled'
-          ? `停止しました: ${frame.title}`
-          : `完了しました: ${frame.title}`
+  const text = notificationText(frame)
   if (document.hidden && state.server?.settings.notifications && 'Notification' in window && Notification.permission === 'granted') {
     const notification = new Notification('Agent Desk', { body: text, tag: frame.threadId })
     notification.onclick = () => {

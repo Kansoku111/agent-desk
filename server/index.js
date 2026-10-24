@@ -432,6 +432,8 @@ const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRun
 ab.on('ab', (run) => broadcast('ab', { run }))
 ab.on('removed', ({ id }) => broadcast('abRemoved', { id }))
 ab.on('fault', (error) => log('AB:', error.message))
+abRunner.on('fault', (error) => log('AB runner:', error.message))
+ab.on('notify', (notification) => broadcast('notify', notification))
 
 // What each task's subagents are doing, read from their dsh logs (see subagents.js).
 const subagents = new SubagentTracker({

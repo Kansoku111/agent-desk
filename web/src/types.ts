@@ -11,10 +11,11 @@ export interface AbConfig {
 export interface AbJob {
   id: string; role: string; model: string; status: string; report: string; error?: string
   handle?: { kind: string; id: string }
+  denials?: string[]; stopError?: string
 }
 export interface AbRun {
   id: string; workspace: string; title: string; text: string; config: AbConfig
-  phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string
+  phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string; warning?: string; retryJobId?: string
   messages: string[]; createdAt: number; updatedAt: number
 }
 

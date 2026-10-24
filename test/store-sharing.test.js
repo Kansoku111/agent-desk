@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import ts from 'typescript'
 import { Outbox, readQueues } from '../web/src/outbox.ts'
 import { RpcClient } from '../web/src/rpc-client.ts'
+import { notificationRoute, notificationText } from '../web/src/notification.ts'
 
 async function fixture() {
   const source = await fs.readFile(new URL('../web/src/store.ts', import.meta.url), 'utf8')
@@ -13,6 +14,7 @@ async function fixture() {
     if (name === 'react') return {}
     if (name === './outbox') return { Outbox, readQueues }
     if (name === './rpc-client') return { RpcClient }
+    if (name === './notification') return { notificationRoute, notificationText }
     throw new Error(`unexpected import: ${name}`)
   }
   const storage = { getItem: () => null, setItem() {}, removeItem() {} }
@@ -23,17 +25,39 @@ async function fixture() {
     constructor() { socket = this }
     send() {}
   }
-  const window = { matchMedia: () => ({ matches: false }), addEventListener() {} }
-  const document = { addEventListener() {} }
-  new Function('require', 'exports', 'location', 'sessionStorage', 'localStorage', 'history', 'window', 'document', 'WebSocket', outputText)(
+  const notifications = []
+  class Notification {
+    static permission = 'granted'
+    constructor(title, options) { this.title = title; this.options = options; notifications.push(this) }
+  }
+  const window = { matchMedia: () => ({ matches: false }), addEventListener() {}, Notification, focus() {} }
+  const document = { addEventListener() {}, hidden: false }
+  new Function('require', 'exports', 'location', 'sessionStorage', 'localStorage', 'history', 'window', 'document', 'WebSocket', 'Notification', outputText)(
     require, exports, { hostname: '127.0.0.1', href: 'http://127.0.0.1/?t=test', protocol: 'http:', host: '127.0.0.1' },
-    storage, storage, { replaceState() {} }, window, document, WebSocket,
+    storage, storage, { replaceState() {} }, window, document, WebSocket, Notification,
   )
   exports.connect()
   const frame = (value) => socket.onmessage({ data: JSON.stringify(value) })
   frame({ event: 'hello', state: { app: { uiBuild: 'test' }, settings: {}, threads: [], terminals: [], teams: [] } })
-  return { store: exports, frame }
+  return { store: exports, frame, document, notifications }
 }
+
+test('AB browser notifications open AB, and the visible AB view suppresses duplicate alerts', async () => {
+  const { store, frame, document, notifications } = await fixture()
+  store.getState().server.settings.notifications = true
+  const event = { event: 'notify', kind: 'ab-approval', ab: true, threadId: 'AB-run', title: '設計案' }
+  store.setState({ route: { view: 'ab', id: 'AB-run' } })
+  frame(event)
+  assert.equal(notifications.length, 0)
+  assert.equal(store.getState().toasts.length, 0)
+  document.hidden = true
+  store.setState({ route: { view: 'home' } })
+  frame(event)
+  assert.equal(notifications.length, 1)
+  assert.match(notifications[0].options.body, /ABの案を確認/)
+  notifications[0].onclick()
+  assert.deepEqual(store.getState().route, { view: 'ab', id: 'AB-run' })
+})
 
 const turn = () => ({
   id: 'turn', status: 'running', startedAt: 1, endedAt: null, error: null, stopReason: null,
