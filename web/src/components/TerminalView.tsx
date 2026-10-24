@@ -8,7 +8,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, openExternal, request, setState, uploadAttachment, useRemote, useStore } from '../store'
+import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, openExternal, request, setState, toast, uploadAttachment, useRemote, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import type { Attachment, TerminalSummary } from '../types'
 import { copyText, workspaceLabel } from '../util'
@@ -286,9 +286,13 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
       } else {
         // The screen is not open here: the server pastes the message and sends it.
         setSending(true)
-        const result = await act('terminal.send', { terminalId, text: sent })
+        // A server from before the change answers null even when it sent the message.
+        const sentOk = await request('terminal.send', { terminalId, text: sent }).then(() => true, (error: unknown) => {
+          toast(error instanceof Error ? error.message : String(error), 'error')
+          return false
+        })
         setSending(false)
-        if (result === null) return
+        if (!sentOk) return
       }
       // What was typed while the message was on its way is the next one.
       if (getDraft(`terminal:${terminalId}`) === sent) setText('')

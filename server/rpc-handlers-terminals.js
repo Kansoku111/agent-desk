@@ -30,6 +30,8 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
     'terminal.choose': ({ terminalId, key, label }) => terminals.choose(terminalId, key, label),
     'terminal.send': ({ terminalId, text }) => {
       terminals.sendMessage(terminalId, text)
+      // Something other than null: the page takes null as a failure.
+      return { sent: true }
     },
     'terminal.resize': ({ terminalId, size, claim }, client) => {
       terminals.resize(terminalId, client, size, claim !== false)
