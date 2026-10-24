@@ -463,7 +463,8 @@ export class TeamManager extends EventEmitter {
     }
     if (execution) {
       if (!path.isAbsolute(team.workspace)) throw new Error('作業フォルダを指定してください')
-      await sourceSnapshot(team.workspace) // Validate that source state can be recorded before launching.
+      // Hashing every file here made a large folder (My PC) take ~30s to start; each child's verification takes its own snapshot.
+      if (!(await fs.promises.stat(team.workspace).catch(() => null))?.isDirectory()) throw new Error('作業フォルダが見つかりません')
       for (const provider of TEAM_PROVIDERS) config[provider].mid.enabled = false
       if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled && config[provider].low.enabled && config[provider].low.model)) throw new Error('EXの子の低枠モデルを選んでください')
       config.batchReports = true
