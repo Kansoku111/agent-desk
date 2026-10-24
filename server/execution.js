@@ -89,6 +89,15 @@ export async function sourceSnapshot(folder) {
   return { hash: digest.digest('hex'), files }
 }
 
+export function normalizeExecutionModels(value) {
+  const providers = ['claude', 'claudeApi', 'gpt', 'deepseek', 'opencodeGo', 'local']
+  if (!value || typeof value !== 'object' || !providers.includes(value.provider)
+    || typeof value.leader !== 'string' || value.leader.length > 500
+    || typeof value.model !== 'string' || value.model.length > 200) throw new Error('EXのモデル選択が不正です')
+  // Empty strings are intentional: a provider may have been selected before its model.
+  return { leader: value.leader, provider: value.provider, model: value.model }
+}
+
 export class ExecutionVerifier {
   constructor({ dir, now = Date.now }) {
     this.dir = dir
@@ -100,7 +109,28 @@ export class ExecutionVerifier {
   async load() {
     const saved = await readJson(path.join(this.dir, 'projects.json'), { projects: {} })
     this.projects = saved.projects ?? {}
+    const models = await readJson(path.join(this.dir, 'models.json'), { models: null })
+    this.models = models.models ? normalizeExecutionModels(models.models) : null
     return this
+  }
+  async modelSelection() {
+    // A dialog reopened just after a change waits for that durable write.
+    await this.writes.catch(() => {})
+    return structuredClone(this.models ?? null)
+  }
+  async configureModels(value, onlyIfUnset = false) {
+    const models = normalizeExecutionModels(value)
+    const write = this.writes.catch(() => {}).then(async () => {
+      // Browser-only preferences from older versions must not replace a choice
+      // already saved on the app by another device.
+      if (!onlyIfUnset || !this.models) {
+        await writeJson(path.join(this.dir, 'models.json'), { version: 1, models })
+        this.models = models
+      }
+      return structuredClone(this.models)
+    })
+    this.writes = write
+    return write
   }
   checks(folder) { return structuredClone(this.projects[workspaceKey(folder)] ?? []) }
   async configure(folder, checks) {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- EX remembers parent/child model selections as soon as they change, even when the dialog is cancelled or launch fails. Selections are saved on the app and restored across browsers, phones and app restarts; legacy browser-only choices migrate only if no app-side choice exists. TM settings remain separate.
+
 ### Added
 
 - Execution mode (EX), next to TM: a separately configured parent/low-tier-child workflow with project verification commands, application-recorded logs and source fingerprints, bounded automatic repairs, explicit acceptance/abandonment, read-only parallel investigation, and serialized writes through review. Checks support cancellation and timeout; stale or failed results cannot be accepted. Available dsh usage and workflow counts are recorded without equating API prices with subscription usage. Existing TM choices and behavior remain unchanged outside overlapping EX workspace protection. See [docs/execution.md](docs/execution.md).

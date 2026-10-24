@@ -66,25 +66,45 @@ export function ExecutionChecksDialog({ workspace, onClose }: { workspace: strin
 
 export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const server = useStore((state) => state.server)
-  const [saved] = useState(readChoice)
-  const [leader, setLeader] = useState(saved.leader)
-  const [provider, setProvider] = useState<TeamProvider>(saved.provider)
-  const [model, setModel] = useState(saved.model)
+  const [choice, setChoice] = useState(readChoice)
+  const { leader, provider, model } = choice
+  const [modelsReady, setModelsReady] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const result = await act<{ models: typeof DEFAULT_CHOICE | null }>('execution.models', {})
+      if (!alive || !result) return
+      // Migrate browser-only preferences once, without overwriting a newer
+      // selection saved from another device. This never starts a model.
+      const restored = result.models ? result : await act<{ models: typeof DEFAULT_CHOICE }>('execution.setModels', { models: readChoice(), onlyIfUnset: true })
+      if (!alive || !restored?.models) return
+      setChoice(restored.models)
+      setModelsReady(true)
+    })()
+    return () => { alive = false }
+  }, [])
+  const changeModels = (patch: Partial<typeof DEFAULT_CHOICE>) => {
+    const next = { ...choice, ...patch }
+    setChoice(next)
+    try { localStorage.setItem(CHOICE_KEY, JSON.stringify(next)) } catch { /* server persistence remains available */ }
+    void act('execution.setModels', { models: next })
+  }
   const [checks, setChecks] = useChecks(workspace)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const [starting, setStarting] = useState(false)
   const close = () => setState({ executionStart: null })
   const selection = server ? executionModelSelection(server, provider, leader, model) : null
   useEffect(() => {
-    if (!selection) return
-    if (leader && !selection.leader) setLeader('')
-    if (model && !selection.model) setModel('')
-  }, [selection?.leader, selection?.model, leader, model])
+    if (!modelsReady || !selection) return
+    if ((leader && !selection.leader) || (model && !selection.model)) {
+      setChoice((current) => ({ ...current, leader: selection.leader, model: selection.model }))
+    }
+  }, [modelsReady, selection?.leader, selection?.model, leader, model])
   if (!server?.settings.agentTeams || !selection) return null
   const { leaderModels, childModels } = selection
-  const usesClaude = selection.leader.startsWith('claude:') || provider === 'claude'
+  const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude')
   const start = async () => {
-    if (!checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)) return
+    if (!modelsReady || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)) return
     setStarting(true)
     try {
       if (!await act('execution.configure', { workspace, checks })) return
@@ -98,7 +118,6 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       choices.maxChildren = 6
       choices.policy = null
       if (await startTeam(workspace, choices, usesClaude ? auth.confirmation : undefined, leader.startsWith('claude:') ? {} : { leaderModel: leader })) {
-        try { localStorage.setItem(CHOICE_KEY, JSON.stringify({ leader, provider, model })) } catch { /* not remembered */ }
         close()
       }
     } finally { setStarting(false) }
@@ -106,15 +125,15 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   return <Modal title="実行モード" onClose={close} width={620} className="team-start-modal">
     <div className="team-start-body">
       <section className="account-card ex-models">
-        <label>親<select value={selection.leader} onChange={(e) => setLeader(e.target.value)}>
+        <label>親<select disabled={!modelsReady || starting} value={modelsReady ? selection.leader : ''} onChange={(e) => changeModels({ leader: e.target.value })}>
           <option value="">モデルを選択</option>
           <optgroup label="Claude Code"><option value="claude:opus">Opus</option><option value="claude:sonnet">Sonnet</option></optgroup>
           <optgroup label="API / サブスクリプション">{leaderModels.map((entry) => <option key={entry.value} value={entry.value}>{entry.name} · {entry.provider === 'anthropic' ? 'API' : 'ChatGPT'}</option>)}</optgroup>
         </select></label>
-        <label>子<select value={provider} onChange={(e) => { setProvider(e.target.value as TeamProvider); setModel(e.target.value === 'claude' ? 'haiku' : '') }}>
+        <label>子<select disabled={!modelsReady || starting} value={provider} onChange={(e) => changeModels({ provider: e.target.value as TeamProvider, model: e.target.value === 'claude' ? 'haiku' : '' })}>
           {providers.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
         </select></label>
-        <label>子のモデル<select value={selection.model} onChange={(e) => setModel(e.target.value)}>
+        <label>子のモデル<select disabled={!modelsReady || starting} value={modelsReady ? selection.model : ''} onChange={(e) => changeModels({ model: e.target.value })}>
           <option value="">モデルを選択</option>
           {provider === 'claude' ? <><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></> : <>{childModels.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</>}
         </select></label>
@@ -122,6 +141,6 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
     </div>
-    <div className="modal-actions"><button type="button" className="button" onClick={close}>キャンセル</button><button type="button" className="button primary" disabled={starting || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)} onClick={() => void start()}>始める</button></div>
+    <div className="modal-actions"><button type="button" className="button" onClick={close}>キャンセル</button><button type="button" className="button primary" disabled={starting || !modelsReady || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)} onClick={() => void start()}>始める</button></div>
   </Modal>
 }

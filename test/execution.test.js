@@ -18,6 +18,36 @@ async function fixture(t) {
   return { folder, root, verifier }
 }
 
+test('EX remembers model selection before a task starts, across restart and reads during a save', async (t) => {
+  const { root, verifier } = await fixture(t)
+  assert.equal(await verifier.modelSelection(), null)
+  const choice = { leader: 'claude:sonnet', provider: 'claudeApi', model: 'claude-haiku-5-5' }
+  const pending = verifier.configureModels(choice)
+  const reread = verifier.modelSelection()
+  choice.model = 'mutated-after-save'
+  await pending
+  assert.equal((await reread).model, 'claude-haiku-5-5')
+  const restored = await new ExecutionVerifier({ dir: path.join(root, 'records') }).load()
+  assert.deepEqual(await restored.modelSelection(), { leader: 'claude:sonnet', provider: 'claudeApi', model: 'claude-haiku-5-5' })
+  const copy = await restored.modelSelection()
+  copy.leader = 'changed'
+  assert.equal((await restored.modelSelection()).leader, 'claude:sonnet')
+})
+
+test('EX model saves are ordered and legacy browser migration never overwrites another device', async (t) => {
+  const { verifier } = await fixture(t)
+  const first = { leader: 'claude:sonnet', provider: 'claudeApi', model: '' }
+  const last = { ...first, model: 'claude-haiku-5-5' }
+  const one = verifier.configureModels(first)
+  const two = verifier.configureModels(last)
+  const migration = verifier.configureModels({ leader: 'claude:opus', provider: 'claude', model: 'haiku' }, true)
+  await Promise.all([one, two, migration])
+  assert.deepEqual(await verifier.modelSelection(), last)
+  await assert.rejects(verifier.configureModels({ leader: null, provider: 'claude', model: 'haiku' }), /不正/)
+  await assert.rejects(verifier.configureModels({ leader: '', provider: 'unknown', model: '' }), /不正/)
+  assert.deepEqual(await verifier.modelSelection(), last)
+})
+
 test('EX supports plain project folders without Git and releases invalid requests', async (t) => {
   const { root, verifier } = await fixture(t)
   const folder = path.join(root, 'plain')

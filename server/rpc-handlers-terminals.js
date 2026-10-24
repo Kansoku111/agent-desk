@@ -57,6 +57,8 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
     // Agent teams (TM). `size` is the viewer's terminal, as for terminal.create.
     // `choices`: what the user picked in the start dialog; the next team starts from them.
     'team.claudeAuth': (input) => teams.inspectClaudeAuth(input),
+    'execution.models': async () => ({ models: await teams.execution.modelSelection() }),
+    'execution.setModels': async ({ models, onlyIfUnset }) => ({ models: await teams.execution.configureModels(models, onlyIfUnset === true) }),
     'execution.checks': ({ workspace }) => teams.executionChecks(workspace),
     'execution.configure': ({ workspace, checks }) => teams.configureExecution(workspace, checks),
     'team.create': async ({ workspace, size, choices, authConfirmation, execution }) => {
