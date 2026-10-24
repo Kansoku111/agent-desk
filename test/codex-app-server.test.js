@@ -194,6 +194,37 @@ test('image turn saves exclusive workspace/preview files, retains png and record
   assert.ok(starts.every(entry => entry.params.ephemeral === true))
   await assert.rejects(client.cleanupImageThread('../auth'), /Invalid/)
 })
+test('image results accept 0.164 attachment references and legacy inline data', async t => {
+  const { client } = await setup(t)
+  const threadId = 'attachment-test'
+  const root = path.join(client.home, 'generated_images', threadId)
+  await fs.mkdir(root, { recursive: true })
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=', 'base64')
+  const savedPath = path.join(root, 'image.png')
+  await fs.writeFile(savedPath, bytes)
+  const item = {
+    type: 'imageGeneration',
+    id: 'image-attachment',
+    status: 'completed',
+    fileId: 'file-generated-image',
+    savedPath,
+    inputImages: [{ path: '/reference.png', sha256: 'a'.repeat(64) }],
+    revisedPrompt: 'A small blue circle.'
+  }
+  const saved = await client.imageResult(threadId, [item])
+  assert.deepEqual(saved.bytes, bytes)
+  assert.equal(saved.source, 'item.savedPath')
+  assert.equal(saved.format, 'png')
+  assert.equal(saved.revisedPrompt, item.revisedPrompt)
+  const inline = await client.imageResult(threadId, [{
+    type: 'imageGeneration', status: 'completed', result: bytes.toString('base64')
+  }])
+  assert.deepEqual(inline.bytes, bytes)
+  assert.equal(inline.source, 'item.result')
+  const outside = path.join(client.home, 'outside.png')
+  await fs.writeFile(outside, bytes)
+  await assert.rejects(client.imageResult(threadId, [{ ...item, savedPath: outside }]), /outside this thread/)
+})
 test('image cleanup failure does not replace a generated image result', async t => {
   const { dir, client } = await setup(t)
   await login(client)

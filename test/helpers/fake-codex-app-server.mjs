@@ -128,8 +128,9 @@ for await (const line of readline.createInterface({
       type: 'imageGeneration',
       id: 'image-mock',
       status: 'completed',
-      result: '',
+      fileId: 'file-generated-image',
       savedPath,
+      inputImages: [],
       revisedPrompt: 'A small blue circle.'
     }
     notify('item/completed', {

@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated the bundled Codex app-server (`@openai/codex`) from 0.163.0 to 0.164.0.
 - Agent Desk no longer installs dsh releases itself: the install, verification, rollback and recovery steps (and "自動で更新する") are gone, and so is the execution lock they needed. The update check remains.
 - Agent teams: GPT, Claude (API) and DeepSeek children get their standing instructions as a system prompt section (a dsh plugin in the children's layer) instead of their first message, so compaction no longer drops them. The first message names the child and gives its task.
 - Agent teams: a child checks its work before it reports (tests, build, running it, or looking at the result), and its report says how it checked and what came out, between what it did and the paths it changed. The leader audits with that in hand.

@@ -50,7 +50,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-shortcut.ps1
 3. To use Claude, paste an Anthropic API key that starts with `sk-ant-api` and save it. The app checks that the key works when you save it. The `apikey_…` shown in the Console is an ID, not a key.
 4. On the home screen, choose a workspace folder, type your request, and send it.
 
-SIWC uses a local 127.0.0.1 callback; cancel and retry if it does not complete. The separate Codex connection also offers a device-code fallback. Images and Codex limits use the official bundled `@openai/codex` 0.163.0 app-server with an app-owned CODEX_HOME, never your PATH codex or ~/.codex. Images remain enabled by default but require that separate connection. GPT fast mode is unavailable on SIWC; Claude fast mode is unchanged. Codex limits are not the SIWC app-specific allowance; check [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). Tokens stay local; requests/reference images are sent to the relevant OpenAI service. No paid upgrade is required to use SIWC.
+SIWC uses a local 127.0.0.1 callback; cancel and retry if it does not complete. The separate Codex connection also offers a device-code fallback. Images and Codex limits use the official bundled `@openai/codex` 0.164.0 app-server with an app-owned CODEX_HOME, never your PATH codex or ~/.codex. Images remain enabled by default but require that separate connection. GPT fast mode is unavailable on SIWC; Claude fast mode is unchanged. Codex limits are not the SIWC app-specific allowance; check [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). Tokens stay local; requests/reference images are sent to the relevant OpenAI service. No paid upgrade is required to use SIWC.
 
 ## Documentation (Japanese)
 
