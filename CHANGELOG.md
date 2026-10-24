@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-24
+
 ### Added
 
 - Agent Desk updates itself. Settings → About → "更新" has an "Agent Desk" row for the newest GitHub release (checked at startup and every six hours, with the sidebar's dot), and its "更新" button installs it and restarts Agent Desk on the same port and token, so open windows reconnect to the new version. A git checkout fast-forwards to the release tag; it is refused with uncommitted changes or commits the release lacks. Other installs take the release's `AgentDesk-<version>.zip`, checked against GitHub's SHA-256 digest, and keep `node_modules` and the user's own files. `npm install` runs when the lockfile changed. When the new version does not start, the previous one is put back and started, and the row says why. It is refused while a task works, from a phone, and under `npm run dev`. Pushing a `v<version>` tag publishes the release with the zip (`.github/workflows/release.yml`, `scripts/pack-release.mjs`); see [docs/development.md](docs/development.md).
@@ -30,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Agent teams: when a team's policy says how to choose a tier or provider, the leader follows it over the built-in tier descriptions (low for simple or repetitive work, mid for judgment), in its instructions and in the `spawn` tool. A policy still cannot turn on a tier the user switched off.
 - Updated the bundled Codex app-server (`@openai/codex`) from 0.163.0 to 0.164.0.
 - Agent Desk no longer installs dsh releases itself: the install, verification, rollback and recovery steps (and "自動で更新する") are gone, and so is the execution lock they needed. The update check remains.
 - Agent teams: GPT, Claude (API) and DeepSeek children get their standing instructions as a system prompt section (a dsh plugin in the children's layer) instead of their first message, so compaction no longer drops them. The first message names the child and gives its task.
