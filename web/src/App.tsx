@@ -74,6 +74,8 @@ export function App() {
   const settingsOpen = useStore((state) => state.settingsOpen)
   const projectDialog = useStore((state) => state.projectDialog)
   const teamStart = useStore((state) => state.teamStart)
+  // The server restarts into the new version; the window reconnects to it.
+  const updating = useStore((state) => state.server?.updates?.app?.phase === 'installing')
   const title = useStore((state) => {
     const { route } = state
     if (route.view === 'thread') return state.server?.threads.find((thread) => thread.id === route.id)?.title
@@ -128,11 +130,13 @@ export function App() {
       {/* Narrow screens show the sidebar over the page; a tap beside it closes it. */}
       {sidebarOpen && <div className="sidebar-backdrop" aria-hidden="true" onClick={() => setState({ sidebarOpen: false })} />}
       <main className="main">
-        {connection === 'closed' && (
-          <div className="banner">
-            <WifiOff size={14} /> {remoteHost ? 'PC との接続が切れました。再接続しています…' : 'サーバーとの接続が切れました。再接続しています…'}
-          </div>
-        )}
+        {updating
+          ? <div className="banner"><Loader2 size={14} className="spin" /> Agent Desk を更新しています…</div>
+          : connection === 'closed' && (
+            <div className="banner">
+              <WifiOff size={14} /> {remoteHost ? 'PC との接続が切れました。再接続しています…' : 'サーバーとの接続が切れました。再接続しています…'}
+            </div>
+          )}
         {route.view === 'thread' ? <ThreadView threadId={route.id} />
           : route.view === 'terminal' ? <Suspense fallback={null}><TerminalView key={route.id} terminalId={route.id} /></Suspense>
             : route.view === 'agent' ? <AgentView taskId={route.id} /> : <Home />}

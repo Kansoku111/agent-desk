@@ -406,7 +406,19 @@ interface ReleaseItem {
   prompt: string | null
 }
 
-/** Newer releases of dsh, the bundled Codex and Claude Code. */
+/** Agent Desk's own newest release, and the update button's progress. */
+export interface AppRelease {
+  installed: string
+  available: string | null
+  /** The release page of `available`. */
+  url: string | null
+  /** How this install updates; null when it cannot (`npm run dev`). */
+  method: 'git' | 'zip' | null
+  phase: 'idle' | 'downloading' | 'installing'
+  error: string | null
+}
+
+/** Newer releases of Agent Desk, dsh, the bundled Codex and Claude Code. */
 export interface Updates {
   checking: boolean
   checkedAt: number | null
@@ -416,6 +428,8 @@ export interface Updates {
   codex: ReleaseItem
   /** `installed` is null when Claude Code is not installed. */
   claude: { installed: string | null; available: string | null; error: string | null; updating: boolean }
+  /** Null when package.json names no GitHub repository. */
+  app: AppRelease | null
 }
 
 export interface AddedModel {

@@ -1,5 +1,7 @@
-// Checks for newer releases of what Agent Desk runs on: the embedded dsh, the
-// bundled Codex app-server and the user's Claude Code.
+// Checks for newer releases of Agent Desk itself and of what it runs on: the
+// embedded dsh, the bundled Codex app-server and the user's Claude Code.
+//
+// Agent Desk updates itself from its GitHub releases (app-update.js).
 //
 // Nothing here installs dsh or Codex. Both are pinned in package.json and a
 // new release usually needs code changes, so an update is handed to an AI
@@ -181,15 +183,21 @@ export class UpdateChecker extends EventEmitter {
    * @param {string} options.root   project folder
    * @param {{ dsh: string, codex: string }} options.installed  versions this server runs
    * @param {() => string} options.getChannel  dsh release channel
+   * @param {object} [options.app]  Agent Desk itself: `installed`, `method` ('git', 'zip' or null when it
+   *   cannot install), `lookup()` for the newest release, `install(release, setPhase)` and the last update's `result`
    */
   constructor({
     root, installed, getChannel, lookup = lookupReleases, readClaude = claudeVersion,
     updateClaude = () => runClaude(['update'], { timeoutMs: 600_000 }),
-    source = fs.existsSync(path.join(root, '.git')), log = () => {},
+    source = fs.existsSync(path.join(root, '.git')), app = null, log = () => {},
   }) {
     super()
-    Object.assign(this, { root, getChannel, lookup, readClaude, runClaudeUpdate: updateClaude, source, log })
+    Object.assign(this, { root, getChannel, lookup, readClaude, runClaudeUpdate: updateClaude, source, app, log })
     this.releases = null
+    this.appRelease = null
+    // A failed update stays on screen until the next try.
+    this.appError = app?.result && !app.result.ok
+      ? `${app.result.to} に更新できなかったので、元の版に戻しました: ${firstLine(app.result.error ?? '')}` : null
     this.state = {
       checking: false,
       checkedAt: null,
@@ -198,6 +206,9 @@ export class UpdateChecker extends EventEmitter {
       dsh: { installed: installed.dsh, available: null, error: null, prompt: null },
       codex: { installed: installed.codex, available: null, error: null, prompt: null },
       claude: { installed: null, available: null, error: null, updating: false },
+      app: app
+        ? { installed: app.installed, available: null, url: null, method: app.method ?? null, phase: 'idle', error: this.appError }
+        : null,
     }
     this.timer = null
     this.pending = null
@@ -236,10 +247,12 @@ export class UpdateChecker extends EventEmitter {
   async #check() {
     this.state.checking = true
     this.#emit()
-    const [releases, claude] = await Promise.all([
+    const [releases, claude, ownRelease] = await Promise.all([
       this.lookup({ cwd: this.root }).catch((error) => ({ dsh: { error }, codex: { error }, claude: { error } })),
       this.readClaude().then((version) => ({ version }), (error) => ({ error })),
+      this.app?.lookup().then((release) => ({ release }), (error) => ({ error })),
     ])
+    if (ownRelease) this.#applyApp(ownRelease)
     this.releases = releases
     this.#apply()
     const item = this.state.claude
@@ -268,6 +281,38 @@ export class UpdateChecker extends EventEmitter {
         ? updatePrompt(kind, { root: this.root, installed: item.installed, available: item.available, channel: kind === 'dsh' ? channel : null })
         : null
     }
+  }
+
+  #applyApp({ release, error }) {
+    const item = this.state.app
+    if (!error) this.appRelease = release ?? null
+    item.available = error ? null : newer(item.installed, release?.version)
+    item.url = item.available ? release.url : null
+    if (item.phase === 'idle') item.error = this.appError ?? (error ? `確認に失敗しました: ${firstLine(error)}` : null)
+  }
+
+  /**
+   * The update button: downloads the release and hands over to the updater,
+   * which restarts Agent Desk. Resolves while this server is shutting down;
+   * a failure before that is shown on the row.
+   */
+  async installApp() {
+    const item = this.state.app
+    if (!item || item.phase !== 'idle') return this.snapshot()
+    if (!item.available || !this.appRelease || !item.method) throw new Error('入れられる新しい版がありません')
+    this.appError = item.error = null
+    try {
+      await this.app.install(this.appRelease, (phase) => {
+        item.phase = phase
+        this.#emit()
+      })
+    } catch (error) {
+      item.phase = 'idle'
+      this.appError = item.error = `更新できませんでした: ${firstLine(error)}`
+      this.log('app update:', error.message)
+      this.#emit()
+    }
+    return this.snapshot()
   }
 
   channelChanged() {

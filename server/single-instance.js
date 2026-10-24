@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
+import { updateFiles } from './app-update.js'
 import { tryAcquireDataLock } from './data-lock.js'
 import { readJson } from './json-file.js'
 import { openAppWindow } from './system.js'
@@ -166,5 +167,26 @@ export async function claimDataFolder({ paths, serverInfoFile, codeStamp, openWi
     }
   }
 
+  // An update (scripts/apply-update.mjs) stopped the old instance itself and
+  // left its port and token here, so the windows still open reconnect.
+  takeover ??= handedOver(updateFiles(paths.home).handoff)
+
   return { takeover, releaseDataLock }
+}
+
+const HANDOFF_MAX_AGE_MS = 30 * 60_000
+
+function handedOver(file) {
+  let handoff
+  try {
+    handoff = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return null
+  } finally {
+    // Used once: a later launch starts on its own port and token.
+    fs.rmSync(file, { force: true })
+  }
+  const fresh = Date.now() - handoff?.at < HANDOFF_MAX_AGE_MS
+  if (!fresh || !Number.isInteger(handoff.port) || typeof handoff.token !== 'string' || !handoff.token) return null
+  return { port: handoff.port, token: handoff.token, windows: Number(handoff.windows) || 0 }
 }

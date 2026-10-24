@@ -37,6 +37,8 @@ npm install
 npm start
 ```
 
+Without git, unpack `AgentDesk-<version>.zip` from the [releases](https://github.com/Kansoku111/agent-desk/releases) instead. Either way, later versions install from Settings → About → "更新" in the app.
+
 On Windows, you can also double-click `AgentDesk.cmd`. The first run installs the dependencies. To add a Start menu shortcut, run this in PowerShell from the project folder:
 
 ```powershell
@@ -59,7 +61,7 @@ SIWC uses a local 127.0.0.1 callback; cancel and retry if it does not complete. 
 - [スマホから使う](docs/remote.md): phone access over Tailscale
 - [使用量の表示](docs/usage.md): usage and cost display
 - [変更を戻す](docs/restore.md): restoring the workspace
-- [dsh と Codex の更新](docs/updating.md): update checks and the steps an AI agent follows to update
+- [更新](docs/updating.md): the in-app update of Agent Desk itself, and the steps an AI agent follows to update dsh and Codex
 - [仕組みとデータの保存場所](docs/architecture.md): architecture and where data is stored
 - [既知の制約](docs/known-issues.md): known limitations
 - [開発](docs/development.md): development commands and main files

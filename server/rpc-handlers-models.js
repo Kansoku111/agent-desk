@@ -6,6 +6,7 @@ export function createModelHandlers({ threads, catalog, catalogState, updates, m
   return {
     'updates.check': async () => ({ updates: await updates.check() }),
     'updates.updateClaude': async () => ({ updates: await updates.updateClaude() }),
+    'updates.installApp': async () => ({ updates: await updates.installApp() }),
 
     'modelUpdate.check': async () => {
       // The ChatGPT account's own list first (the authoritative one), then pi-ai's newest release.

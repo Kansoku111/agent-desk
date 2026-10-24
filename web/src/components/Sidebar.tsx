@@ -533,7 +533,7 @@ export function Sidebar() {
   const accounts = useStore((state) => state.server?.accounts)
   const updateOffered = useStore((state) => {
     const updates = state.server?.updates
-    return Boolean(updates && (updates.dsh.available || updates.codex.available || updates.claude.available))
+    return Boolean(updates && (updates.app?.available || updates.dsh.available || updates.codex.available || updates.claude.available))
   })
   const route = useStore((state) => state.route)
   const draftWorkspace = useStore((state) => state.draft.workspace)

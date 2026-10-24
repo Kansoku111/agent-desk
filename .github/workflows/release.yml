@@ -1,0 +1,39 @@
+name: Release
+
+# Pushing a tag v<version> (the version in package.json) publishes that
+# release with AgentDesk-<version>.zip, which the in-app update installs.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: node scripts/pack-release.mjs --tag "${{ github.ref_name }}"
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          zip="release/AgentDesk-${version}.zip"
+          # A release written by hand before the tag keeps its notes; it only gets the zip.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$zip" --clobber
+          else
+            gh release create "$TAG" "$zip" --verify-tag --title "Agent Desk ${version}" --notes-file release/notes.md
+          fi

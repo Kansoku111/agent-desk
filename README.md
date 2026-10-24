@@ -38,6 +38,8 @@ git clone https://github.com/Kansoku111/agent-desk.git
 cd agent-desk
 ```
 
+git を使わない場合は、[リリース](https://github.com/Kansoku111/agent-desk/releases) の `AgentDesk-<版>.zip` を展開しても使えます。どちらの入れ方でも、新しい版はアプリ内の「設定 → 情報 → 更新」から入れられます。
+
 ### スタートメニュー・タスクバーから（Windows）
 
 ```powershell
@@ -89,7 +91,7 @@ npm start
 - [スマホから使う](docs/remote.md): Tailscale 経由での接続
 - [使用量の表示](docs/usage.md): 概算料金と Claude の請求額
 - [変更を戻す](docs/restore.md): ワークスペースの巻き戻し
-- [dsh と Codex の更新](docs/updating.md): 更新の確認と、AI に任せる更新の手順
+- [更新](docs/updating.md): Agent Desk 本体の更新ボタンと、dsh・Codex を AI に任せて更新する手順
 - [仕組みとデータの保存場所](docs/architecture.md): 構成と保存先
 - [既知の制約](docs/known-issues.md): 現在の制約
 - [開発](docs/development.md): 開発コマンドと主なファイルの役割

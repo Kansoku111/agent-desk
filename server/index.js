@@ -17,6 +17,7 @@ import {
 } from './credentials.js'
 import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
+import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
 import { createSettingsService, DEFAULT_SETTINGS, migrateSettings } from './settings.js'
 import { localLlmSettings, localRoute } from './local-llm.js'
@@ -55,6 +56,8 @@ import { createTerminalHandlers } from './rpc-handlers-terminals.js'
 
 const require = createRequire(import.meta.url)
 const APP_VERSION = require('../package.json').version
+// Where Agent Desk's own releases come from; AGENT_DESK_UPDATE_REPO (owner/name) points elsewhere, e.g. to try an update.
+const APP_REPO = process.env.AGENT_DESK_UPDATE_REPO || githubRepository(require('../package.json'))
 const DSH_VERSION = require('@deepseek-ai/dsh/package.json').version
 
 // ------------------------------------------------------------------ options
@@ -174,11 +177,25 @@ async function accounts() {
   }
 }
 
-// Newer releases of dsh, the bundled Codex and Claude Code (設定 → 情報).
+// Newer releases of Agent Desk, dsh, the bundled Codex and Claude Code (設定 → 情報).
+// `npm run dev` serves the sources being edited: it shows a new release but does not install it.
+const APP_UPDATE_METHOD = DEV ? null : installMethod(projectRoot)
 const updates = new UpdateChecker({
   root: projectRoot,
   installed: { dsh: DSH_VERSION, codex: CODEX_VERSION },
   getChannel: () => settings.dshUpdateChannel,
+  app: APP_REPO && {
+    installed: APP_VERSION,
+    method: APP_UPDATE_METHOD,
+    lookup: () => latestRelease({ repo: APP_REPO, needAsset: APP_UPDATE_METHOD === 'zip' }),
+    install: createAppInstaller({
+      root: projectRoot, home: paths.home, repo: APP_REPO, method: APP_UPDATE_METHOD, version: APP_VERSION, args, busy, shutdown,
+      // The next version takes over this port and token, so the open windows reconnect.
+      handoff: () => ({ port: server.address().port, token, windows: countClients(false) }),
+      log,
+    }),
+    result: await takeUpdateResult(paths.home),
+  },
   log: (...parts) => log('update check:', ...parts),
 })
 

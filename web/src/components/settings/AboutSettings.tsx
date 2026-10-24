@@ -9,11 +9,13 @@ const UPDATE_CHANNELS: UpdateChannel[] = ['latest', 'next', 'alpha']
 /** How long a newly added model shows in the updates card. */
 const RECENT_MODELS_MS = 7 * 24 * 60 * 60 * 1000
 
-function Versions({ installed, available, children }: { installed: string | null; available: string | null; children?: ReactNode }) {
+function Versions({ installed, available, url, children }: { installed: string | null; available: string | null; url?: string | null; children?: ReactNode }) {
   return (
     <span className="update-versions">
       <code>{installed ?? '—'}</code>
-      {available && <code>→ {available}</code>}
+      {available && (url
+        ? <button type="button" className="link-button" onClick={() => openExternal(url)} title="リリースノート"><code>→ {available}</code></button>
+        : <code>→ {available}</code>)}
       {children}
     </span>
   )
@@ -50,7 +52,7 @@ function UpdatesCard({ updates }: { updates: Updates }) {
   const [checking, setChecking] = useState(false)
   const busy = checking || updates.checking || models?.phase === 'checking'
   const recent = models?.lastAdded && Date.now() - models.lastAdded.at < RECENT_MODELS_MS ? models.lastAdded : null
-  const { dsh, codex, claude } = updates
+  const { dsh, codex, claude, app } = updates
 
   const check = async () => {
     setChecking(true)
@@ -70,6 +72,22 @@ function UpdatesCard({ updates }: { updates: Updates }) {
         </button>
       </div>
       <div className="update-list">
+        {app && (
+          <div className="update-row">
+            <span className="update-name">Agent Desk</span>
+            <Versions installed={app.installed} available={app.available} url={app.url} />
+            <span className="update-action">
+              {app.available && app.method
+                ? (
+                  <button type="button" className="button" disabled={app.phase !== 'idle'} onClick={() => void act('updates.installApp')}>
+                    {app.phase === 'idle' ? <Download size={14} /> : <Loader2 size={14} className="spin" />} 更新
+                  </button>
+                )
+                : !app.available && updates.checkedAt && !app.error && <Latest />}
+            </span>
+            {app.error && <p className="form-error">{app.error}</p>}
+          </div>
+        )}
         <div className="update-row">
           <span className="update-name">dsh</span>
           <Versions installed={dsh.installed} available={dsh.available}>

@@ -10,7 +10,7 @@ const DEV_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
 const PC_ONLY = new Set([
   'workspace.pick', 'folder.pick', 'workspace.open', 'file.open', 'system.openUrl', 'chatgpt.login',
   'codex.login', 'codex.cancel', 'codex.logout', 'chatgpt.logout',
-  'remote.set', 'remote.rotate', 'remote.recheck', 'remote.allowFirewall',
+  'remote.set', 'remote.rotate', 'remote.recheck', 'remote.allowFirewall', 'updates.installApp',
 ])
 
 /** The socket server; `clients` and `handlers` are index.js's, `dev` is the dev-mode flag. */
