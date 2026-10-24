@@ -437,6 +437,10 @@ export class TeamManager extends EventEmitter {
     return this.claudeAuth.inspect(dir, team)
   }
 
+  async confirmAbAuth(workspace, confirmation) {
+    if (confirmation) await this.#confirmAuth({ id: randomUUID(), workspace }, confirmation, false)
+  }
+
   guardClaudeLaunch(context) {
     const team = context.record?.team?.id
       ? this.teams.get(context.record.team.id) : this.#byTask(context.record?.id)?.team

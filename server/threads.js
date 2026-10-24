@@ -262,7 +262,7 @@ export class ThreadManager extends EventEmitter {
   // ---------------------------------------------------------------- commands
 
   /** `team`: the agent team (teams.js) this task works for as a child, as { id, childId }. */
-  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', team = null }) {
+  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', team = null, ab = null }) {
     if (this.stopping) throw new Error('アプリを終了しています')
     await assertDirectory(workspace)
     if (this.stopping) throw new Error('アプリを終了しています')
@@ -283,6 +283,7 @@ export class ThreadManager extends EventEmitter {
       status: 'idle',
       pendingApproval: false,
       ...(team ? { team } : {}),
+      ...(ab ? { ab } : {}),
     }
     this.threads.set(thread.id, thread)
     this.turns.set(thread.id, [])
@@ -299,6 +300,7 @@ export class ThreadManager extends EventEmitter {
   async #update(threadId, patch) {
     const thread = this.#available(threadId)
     const running = this.active.has(threadId)
+    if (thread.ab && (patch.permissionMode !== undefined || patch.model !== undefined)) throw new Error('ABの担当モデルと権限は変更できません')
     if (typeof patch.title === 'string' && patch.title.trim()) thread.title = patch.title.trim().slice(0, 120)
     if (typeof patch.archived === 'boolean') thread.archived = patch.archived
     if (patch.permissionMode !== undefined && patch.permissionMode !== thread.permissionMode) {

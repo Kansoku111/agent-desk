@@ -7,7 +7,7 @@ import { act, getState, isNarrow, navigate, request, setState, startTerminal, to
 import { selectThreadRange } from '../thread-selection'
 import { threadMarkdown } from '../thread-transcript'
 import { ConfirmDialog } from './Modal'
-import type { TerminalSummary, ThreadSummary, Turn } from '../types'
+import type { AbRun, TerminalSummary, ThreadSummary, Turn } from '../types'
 import { copyText, parseModel, relativeTime, workspaceLabel } from '../util'
 import { PROJECT_HUES, projectColor, stepColor } from '../projectColors'
 import { Dropdown, MenuItem } from './Popover'
@@ -338,13 +338,15 @@ interface Group {
   color: number
   threads: ThreadSummary[]
   terminals: TerminalSummary[]
+  ab: AbRun[]
 }
 
 /** Agent tasks and Claude Code tasks of one group, most recent first. */
 function groupRows(group: Group) {
   return [
-    ...group.threads.map((thread) => ({ id: thread.id, updatedAt: thread.updatedAt, thread, terminal: null })),
-    ...group.terminals.map((terminal) => ({ id: terminal.id, updatedAt: terminal.updatedAt, thread: null, terminal })),
+    ...group.threads.map((thread) => ({ id: thread.id, updatedAt: thread.updatedAt, thread, terminal: null, ab: null })),
+    ...group.terminals.map((terminal) => ({ id: terminal.id, updatedAt: terminal.updatedAt, thread: null, terminal, ab: null })),
+    ...group.ab.map((ab) => ({ id: ab.id, updatedAt: ab.updatedAt, thread: null, terminal: null, ab })),
   ].sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
@@ -461,6 +463,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
               <CheckSquare size={14} />
             </button>
           )}
+          <button type="button" className="icon-button small cl-button" title="AB：2社に相談" aria-label={`${group.label} でABを始める`} onClick={() => setState({ abStart: group.path })}>AB</button>
           <button type="button" className="icon-button small cl-button ex-button" title="実行モード"
             aria-label={`${group.label} で実行モードを始める`} onClick={() => setState({ executionStart: group.path })}>EX</button>
           <button type="button" className="icon-button small cl-button tm-button" title="エージェントチームを始める（リーダーや子のモデルを選んでから始めます）"
@@ -537,6 +540,12 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
           )}
           {shownRows.map((row) => (row.thread
             ? <ThreadRow key={row.id} thread={row.thread} active={activeId === row.id} selection={selection} />
+            : row.ab ? <li key={row.id} className={`thread-row ${activeId === row.id ? 'active' : ''}`}>
+              <button className="thread-button" onClick={(event) => selection.enabled ? selection.toggle(row.id, event.shiftKey) : navigate({ view: 'ab', id: row.id })}>
+                {selection.enabled && <input type="checkbox" readOnly checked={selection.selected.has(row.id)} tabIndex={-1} />}
+                <span className="cl-mark tm-mark small">AB</span><span className="thread-title">{row.ab.title}</span>
+                {['consulting', 'judging', 'preparing', 'implementing', 'reviewing'].includes(row.ab.phase) ? <Loader2 size={13} className="spin" /> : row.ab.phase === 'awaiting-approval' ? <span className="status-dot approval" title="案の確認待ち" /> : <span className="thread-time">{relativeTime(row.ab.updatedAt)}</span>}
+              </button></li>
             : <TerminalRow key={row.id} terminal={row.terminal!} active={activeId === row.id} selection={selection} />))}
         </ul>
       )}
@@ -554,6 +563,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
 export function Sidebar() {
   const threads = useStore((state) => state.server?.threads) ?? []
   const terminals = useStore((state) => state.server?.terminals) ?? []
+  const ab = useStore((state) => state.server?.ab) ?? []
   const workspaces = useStore((state) => state.server?.settings.workspaces) ?? []
   const myPc = useStore((state) => state.server?.app.myPc) ?? ''
   const names = useStore((state) => state.server?.settings.projectNames)
@@ -584,10 +594,10 @@ export function Sidebar() {
     const shown = (task: { archived: boolean; title: string; workspace: string }) => Boolean(task.archived) === archived
       && (!needle || task.title.toLowerCase().includes(needle) || task.workspace.toLowerCase().includes(needle))
     // A team's children show in their leader's panel, not as tasks of their own.
-    const visible = threads.filter((thread) => !thread.team?.childId && shown(thread))
+    const visible = threads.filter((thread) => !thread.team?.childId && !thread.ab && shown(thread))
     const visibleTerminals = terminals.filter((terminal) => shown(terminal))
     // My PC first, then projects in recent-use order, then any project only a task remembers.
-    const order = [myPc, ...workspaces, ...threads.map((thread) => thread.workspace), ...terminals.map((terminal) => terminal.workspace)].filter(Boolean)
+    const order = [myPc, ...workspaces, ...threads.map((thread) => thread.workspace), ...terminals.map((terminal) => terminal.workspace), ...ab.map((run) => run.workspace)].filter(Boolean)
     const result: Group[] = []
     for (const path of new Set(order)) {
       const pc = path === myPc
@@ -598,17 +608,18 @@ export function Sidebar() {
         color: projectColor(colors, path),
         threads: visible.filter((thread) => thread.workspace === path),
         terminals: visibleTerminals.filter((terminal) => terminal.workspace === path),
+        ab: ab.filter((run) => run.workspace === path && shown({ ...run, archived: false })),
       })
     }
-    const any = (group: Group) => group.threads.length > 0 || group.terminals.length > 0
+    const any = (group: Group) => group.threads.length > 0 || group.terminals.length > 0 || group.ab.length > 0
     // Searching or browsing the archive shows only groups with matches; otherwise projects stay listed.
     return needle || archived
       ? result.filter(any)
       : result.filter((group) => group.pc || any(group) || workspaces.includes(group.path))
-  }, [threads, terminals, workspaces, myPc, names, colors, needle, archived])
+  }, [threads, terminals, ab, workspaces, myPc, names, colors, needle, archived])
 
   // Search/archive changes cannot leave hidden tasks selected for deletion.
-  const activeId = route.view === 'thread' || route.view === 'terminal' ? route.id : null
+  const activeId = route.view === 'thread' || route.view === 'terminal' || route.view === 'ab' ? route.id : null
   const rowsOf = (group: Group) => visibleRows(groupRows(group), expandedPaths.includes(group.path), Boolean(needle), activeId)
   const availableIds = new Set(groups.flatMap((group) => rowsOf(group).map((row) => row.id)))
   const selectedIds = selected.filter((id) => availableIds.has(id))
@@ -652,7 +663,8 @@ export function Sidebar() {
     const terminalIds = new Set(terminals.map((terminal) => terminal.id))
     for (const threadId of ids) {
       try {
-        if (terminalIds.has(threadId)) await request('terminal.remove', { terminalId: threadId })
+        if (ab.some((run) => run.id === threadId)) await request('ab.remove', { runId: threadId })
+        else if (terminalIds.has(threadId)) await request('terminal.remove', { terminalId: threadId })
         else await request('thread.remove', { threadId })
       } catch {
         failed.push(threadId)

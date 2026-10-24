@@ -329,6 +329,26 @@ export async function writeHomePatch(file, options) {
   return writePatch(file, homePatch(options))
 }
 
+export function abPatch({ subagents = [], writable = false, lean = true } = {}) {
+  const disabled = [...BASE_SUBAGENT_TOOLS, 'tool-workflow', 'tool-goal', 'tool-plugin-manager',
+    ...subagents.filter(({ provider }) => SUBAGENT_TOOLS[provider]).map(({ provider }) => `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`),
+    ...(!writable ? ['tool-bash', 'tool-pwsh', 'tool-jobs', 'tool-skill'] : []),
+    ...(!writable && lean ? ['tool-web'] : [])]
+  return YAML.stringify([
+    ...disabled.map((id) => ({ id, disabled: true })),
+    ...(!writable ? [{ id: 'tool-fs', config: { write: false, edit: false } }] : []),
+    { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable } }] },
+  ])
+}
+export async function writeAbPatches(paths, options) {
+  const results = await Promise.all([
+    writePatch(paths.abLeanPatch, abPatch({ ...options, lean: true })),
+    writePatch(paths.abResearchPatch, abPatch({ ...options, lean: false })),
+    writePatch(paths.abWritePatch, abPatch({ ...options, writable: true })),
+  ])
+  return results.some(Boolean)
+}
+
 /** Writes the children's layer ({@link teamChildPatch}); returns true when the file changed. */
 export async function writeTeamChildPatch(file, options) {
   return writePatch(file, teamChildPatch(options))

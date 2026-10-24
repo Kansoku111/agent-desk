@@ -5,6 +5,7 @@ import { ProjectDialog } from './components/ProjectDialog'
 import { TeamStartDialog } from './components/TeamSettings'
 import { ExecutionStartDialog } from './components/ExecutionSettings'
 import { Sidebar } from './components/Sidebar'
+import { AbStartDialog, AbView } from './components/Ab'
 import { ThreadView } from './components/ThreadView'
 import { AgentView } from './components/AgentView'
 import { FileMenuHost } from './components/FileRef'
@@ -76,6 +77,7 @@ export function App() {
   const projectDialog = useStore((state) => state.projectDialog)
   const teamStart = useStore((state) => state.teamStart)
   const executionStart = useStore((state) => state.executionStart)
+  const abStart = useStore((state) => state.abStart)
   // The server restarts into the new version; the window reconnects to it.
   const updating = useStore((state) => state.server?.updates?.app?.phase === 'installing')
   const title = useStore((state) => {
@@ -83,6 +85,7 @@ export function App() {
     if (route.view === 'thread') return state.server?.threads.find((thread) => thread.id === route.id)?.title
     if (route.view === 'terminal') return state.server?.terminals.find((terminal) => terminal.id === route.id)?.title
     if (route.view === 'agent') return state.server && teamChildOf(state.server, route.id)?.child.title
+    if (route.view === 'ab') return state.server?.ab?.find((run) => run.id === route.id)?.title
     return null
   })
 
@@ -141,12 +144,13 @@ export function App() {
           )}
         {route.view === 'thread' ? <ThreadView threadId={route.id} />
           : route.view === 'terminal' ? <Suspense fallback={null}><TerminalView key={route.id} terminalId={route.id} /></Suspense>
-            : route.view === 'agent' ? <AgentView taskId={route.id} /> : <Home />}
+            : route.view === 'agent' ? <AgentView taskId={route.id} /> : route.view === 'ab' ? <AbView key={route.id} id={route.id} /> : <Home />}
       </main>
       {settingsOpen && <Suspense fallback={null}><SettingsDialog tab={settingsOpen} /></Suspense>}
       {projectDialog && <ProjectDialog />}
       {teamStart && <TeamStartDialog key={teamStart} workspace={teamStart} />}
       {executionStart && <ExecutionStartDialog key={executionStart} workspace={executionStart} />}
+      {abStart && <AbStartDialog key={abStart} workspace={abStart} />}
       <Toasts />
       <FileMenuHost />
     </div>

@@ -7,7 +7,7 @@ import { Outbox, readQueues, type QueuedMessage } from './outbox'
 import { RpcClient } from './rpc-client'
 export type { QueuedMessage } from './outbox'
 
-type Route = { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string }
+type Route = { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string } | { view: 'ab'; id: string }
 export type SettingsTab = 'accounts' | 'models' | 'teams' | 'personalize' | 'usage' | 'general' | 'remote' | 'about'
 
 interface Toast {
@@ -37,6 +37,7 @@ export interface State {
   /** The folder the team start dialog (TM) is open for. */
   teamStart: string | null
   executionStart: string | null
+  abStart: string | null
   sidebarOpen: boolean
   toasts: Toast[]
   queued: Record<string, QueuedMessage[]>
@@ -116,7 +117,7 @@ function forgetToken() {
 function readRoute(): Route {
   try {
     const saved = JSON.parse(sessionStorage.getItem(ROUTE_KEY) ?? 'null')
-    if (['thread', 'terminal', 'agent'].includes(saved?.view) && typeof saved.id === 'string') return saved
+    if (['thread', 'terminal', 'agent', 'ab'].includes(saved?.view) && typeof saved.id === 'string') return saved
   } catch {}
   return { view: 'home' }
 }
@@ -163,6 +164,7 @@ let state: State = {
   projectDialog: false,
   teamStart: null,
   executionStart: null,
+  abStart: null,
   sidebarOpen: !isNarrow(),
   toasts: [],
   queued: readQueued(),
@@ -350,6 +352,7 @@ function handleFrame(frame: any) {
       const route = (state.route.view === 'thread' && !server.threads.some((thread) => thread.id === (state.route as { id: string }).id))
         || (state.route.view === 'terminal' && !server.terminals.some((terminal) => terminal.id === (state.route as { id: string }).id))
         || (state.route.view === 'agent' && !teamChildOf(server, state.route.id))
+        || (state.route.view === 'ab' && !(server.ab ?? []).some((run) => run.id === (state.route as { id: string }).id))
         ? { view: 'home' as const }
         : state.route
       setState({ server, connection: 'open', draft, route, turns: {}, agentTurns: {}, subagents: {} })
@@ -374,6 +377,15 @@ function handleFrame(frame: any) {
       if (state.route.view === 'terminal' && state.route.id === frame.terminalId) navigate({ view: 'home' })
       break
     }
+    case 'ab': {
+      const runs = state.server?.ab ?? []
+      updateServer({ ab: [...runs.filter((run) => run.id !== frame.run.id), frame.run] })
+      break
+    }
+    case 'abRemoved':
+      updateServer({ ab: (state.server?.ab ?? []).filter((run) => run.id !== frame.id) })
+      if (state.route.view === 'ab' && state.route.id === frame.id) navigate({ view: 'home' })
+      break
     case 'team':
       upsertTeam(frame.team)
       break

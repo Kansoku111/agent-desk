@@ -13,6 +13,9 @@ export function createMcpServerList({ paths, getSettings, getTeams }) {
   /** MCP servers mounted into a task's session; ACP stdio servers need an absolute command. */
   function mcpServersFor(thread) {
     const servers = []
+    // Consultation cannot use browser/desktop tools to bypass its read-only sandbox.
+    // WebSearch/WebFetch are native tools in the non-lean AB runtime.
+    if (thread.ab && !thread.ab.writable) return servers
     // A team's child the user keeps lean goes without them (teams.js toolsFor).
     const tools = getTeams()?.toolsFor(thread) ?? true
     if (tools && getSettings().browserTool) servers.push(chromeServer(thread))

@@ -4,7 +4,22 @@ export type PermissionMode = 'read-only' | 'workspace-write' | 'danger-full-acce
 export type ThreadStatus = 'idle' | 'running' | 'error'
 export type Theme = 'system' | 'light' | 'dark'
 
+export interface AbConfig {
+  a: string; b: string; leader: string; implementer: string
+  lean: boolean; delegate: boolean; review: boolean
+}
+export interface AbJob {
+  id: string; role: string; model: string; status: string; report: string; error?: string
+  handle?: { kind: string; id: string }
+}
+export interface AbRun {
+  id: string; workspace: string; title: string; text: string; config: AbConfig
+  phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string
+  messages: string[]; createdAt: number; updatedAt: number
+}
+
 export interface ThreadSummary {
+  ab?: { runId: string; jobId: string; writable: boolean; lean: boolean }
   id: string
   title: string
   workspace: string
@@ -522,6 +537,7 @@ export interface AppState {
   threads: ThreadSummary[]
   terminals: TerminalSummary[]
   teams: TeamSummary[]
+  ab?: AbRun[]
   runtime: Record<PermissionMode, 'stopped' | 'starting' | 'ready' | 'failed'>
   login: LoginState
   codexLogin?: LoginState

@@ -15,7 +15,7 @@ import { Checkpoints } from './checkpoints.js'
 import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF,
 } from './credentials.js'
-import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch } from './dsh-config.js'
+import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
@@ -46,6 +46,9 @@ import { DEFAULT_REMOTE_PORT, RemoteAccess } from './remote.js'
 import { TerminalManager } from './terminals.js'
 import { TeamManager } from './teams.js'
 import { ClaudeRunner } from './claude-runner.js'
+import { AbManager } from './ab.js'
+import { AbRunner } from './ab-runner.js'
+import { createAbHandlers } from './rpc-handlers-ab.js'
 import { claimDataFolder } from './single-instance.js'
 import { createRequestHandler, listenWithRetry } from './http-routes.js'
 import { createSocketServer } from './websocket.js'
@@ -150,7 +153,7 @@ const terminals = await new TerminalManager({
   log,
 }).load()
 /** Whether an agent or a Claude Code task is working: the app must not exit or be replaced then. */
-const busy = () => threads.busy || terminals.busy || agents.busy || teams.busy
+const busy = () => threads.busy || terminals.busy || agents.busy || teams.busy || ab.busy || abAgents.busy
 
 async function accounts() {
   let snapshot = { refs: {}, records: {} }
@@ -335,7 +338,8 @@ async function applyHomePatch() {
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
   // Read by each subagent_gpt call, so no runtime restarts for it.
   await writeGptSubagentPatch(paths.gptSubagentPatch, { subagents, persona, subagentsEnabled: settings.subagentsEnabled !== false })
-  return home || children
+  const abChanged = await writeAbPatches(paths, { subagents })
+  return home || children || abChanged
 }
 await applyHomePatch()
 
@@ -408,6 +412,27 @@ teams = await new TeamManager({
   log,
 }).load()
 
+const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'),
+  preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
+const abRunner = new AbRunner({ threads, agents: abAgents, instructions: () => settings.customInstructions,
+  guard: (record) => teams.guardExecution(record) })
+const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner,
+  validateModel: (value) => {
+    if (['claude:opus', 'claude:sonnet', 'claude:haiku'].includes(value)) return
+    if (!catalog.data.models.some((model) => model.value === value && !model.retired && settings.modelVisibility?.[value] !== false)) throw new Error('ABのモデルを選び直してください')
+  },
+  authorize: async ({ workspace, config, authConfirmation }) => {
+    if ([config.a, config.b, config.leader, config.implementer].some((value) => value.startsWith('claude:'))) {
+      await teams.confirmAbAuth(workspace, authConfirmation)
+      const problem = await teams.claudeAuth.guard(null, teams.claudeAuth.context(workspace))
+      if (problem) throw new Error(problem)
+    }
+  },
+}).load()
+ab.on('ab', (run) => broadcast('ab', { run }))
+ab.on('removed', ({ id }) => broadcast('abRemoved', { id }))
+ab.on('fault', (error) => log('AB:', error.message))
+
 // What each task's subagents are doing, read from their dsh logs (see subagents.js).
 const subagents = new SubagentTracker({
   dshHome: paths.dshHome,
@@ -470,7 +495,7 @@ threads.on('catalog', (snapshot) => broadcast('catalog', { catalog: catalogState
 threads.on('runtime', (status) => broadcast('runtime', { runtime: status }))
 // A team's children report to their leader, not to the user.
 threads.on('turn-finished', (info) => {
-  if (!teams.isChild(info.threadId)) broadcast('notify', { kind: 'turn-finished', ...info })
+  if (!teams.isChild(info.threadId) && !threads.threads.get(info.threadId)?.ab) broadcast('notify', { kind: 'turn-finished', ...info })
 })
 terminals.on('terminal', (terminal) => broadcast('terminal', { terminal }))
 terminals.on('removed', ({ terminalId }) => broadcast('terminalRemoved', { terminalId }))
@@ -539,7 +564,7 @@ threads.on('turn-finished', ({ threadId }) => {
   costTimer = setTimeout(() => void refreshClaudeCost(), 6 * 60_000)
 })
 threads.on('approval-needed', (info) => {
-  if (!teams.isChild(info.threadId)) broadcast('notify', { kind: 'approval-needed', ...info })
+  if (!teams.isChild(info.threadId) && !threads.threads.get(info.threadId)?.ab) broadcast('notify', { kind: 'approval-needed', ...info })
 })
 // dsh reads the home patch at startup, so a changed patch restarts the
 // runtimes once no turn is running. Threads resume their sessions afterwards.
@@ -632,6 +657,7 @@ async function fullState(client) {
     threads: threads.list(),
     terminals: terminals.list(),
     teams: teams.list(),
+    ab: ab.list(),
     runtime: pool.status(),
     login: login.state,
     codexLogin: client?.remote ? { phase: 'idle' } : codexApp.login,
@@ -679,6 +705,8 @@ const handlers = {
   }),
   ...createTerminalHandlers({ paths, getSettings, saveSettings, broadcast, terminals, teams, agents }),
 
+  ...createAbHandlers(ab),
+
   'state.get': (_params, client) => fullState(client),
 
   'settings.update': ({ patch }) => settingsService.update(patch),
@@ -713,6 +741,15 @@ const handlers = {
     if (error) throw new Error(error)
     return { remoteAccess: remoteState() }
   },
+}
+
+// AB workers can only be driven through AB's approval/state machine, not generic task RPCs.
+for (const type of ['thread.send', 'thread.steer', 'thread.update', 'thread.remove', 'thread.cancel', 'checkpoint.restore', 'checkpoint.undo']) {
+  const handler = handlers[type]
+  handlers[type] = (input, ...args) => {
+    if (threads.threads.get(input?.threadId)?.ab) throw new Error('AB画面から操作してください')
+    return handler(input, ...args)
+  }
 }
 
 // Legacy project/account handlers also mutate settings. They share the same
@@ -803,9 +840,12 @@ async function shutdown(code = 0) {
   clearInterval(opencodeGoTimer)
   // Request cancellation first, then close the transports as well. A stalled
   // ACP cancellation must not keep shutdown waiting forever for its prompt.
+  const abDrained = ab.shutdown().catch((error) => log('AB shutdown:', error.message))
   const drained = threads.shutdown().catch((error) => log('thread shutdown:', error.message))
   await pool.pause().catch((error) => log('runtime shutdown:', error.message))
   await drained
+  await abDrained
+  await abAgents.shutdown().catch((error) => log('AB agents shutdown:', error.message))
   await teams.stop().catch((error) => log('team shutdown:', error.message))
   await terminals.shutdown().catch((error) => log('terminal shutdown:', error.message))
   await agents.shutdown().catch((error) => log('team agents shutdown:', error.message))
