@@ -57,11 +57,13 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
     // Agent teams (TM). `size` is the viewer's terminal, as for terminal.create.
     // `choices`: what the user picked in the start dialog; the next team starts from them.
     'team.claudeAuth': (input) => teams.inspectClaudeAuth(input),
-    'team.create': async ({ workspace, size, choices, authConfirmation }) => {
-      const result = await teams.create({ workspace, size, choices, authConfirmation })
+    'execution.checks': ({ workspace }) => teams.executionChecks(workspace),
+    'execution.configure': ({ workspace, checks }) => teams.configureExecution(workspace, checks),
+    'team.create': async ({ workspace, size, choices, authConfirmation, execution }) => {
+      const result = await teams.create({ workspace, size, choices, authConfirmation, execution })
       const folder = result.team.workspace
       if (folder !== paths.myPc && !getSettings().workspaces.includes(folder)) getSettings().workspaces.unshift(folder)
-      getSettings().agentTeams = result.team.config
+      if (!execution) getSettings().agentTeams = result.team.config
       await saveSettings()
       broadcast('settings', { settings: getSettings() })
       return result

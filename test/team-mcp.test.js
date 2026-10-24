@@ -90,6 +90,19 @@ test('the team MCP server lists its tools and forwards calls with the team secre
   }
 })
 
+test('EX MCP exposes required acceptance criteria, low tier and explicit abandonment', async () => {
+  const mcp = startMcp('http://127.0.0.1:9/api/team', { AGENT_DESK_EXECUTION: '1' })
+  try {
+    const { result } = await mcp.request('tools/list', {})
+    const spawn = result.tools.find((tool) => tool.name === 'spawn')
+    assert.ok(spawn.inputSchema.required.includes('criteria'))
+    assert.ok(spawn.inputSchema.required.includes('checks'))
+    assert.deepEqual(spawn.inputSchema.properties.tier.enum, ['low'])
+    assert.deepEqual(spawn.inputSchema.properties.mode.enum, ['write', 'research'])
+    assert.equal(result.tools.find((tool) => tool.name === 'close').inputSchema.properties.accept.type, 'boolean')
+  } finally { await mcp.close() }
+})
+
 test('invalid MCP JSON values do not crash and requests with ids get Invalid Request', async () => {
   const mcp = startMcp('http://127.0.0.1:9/api/team')
   try {

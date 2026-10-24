@@ -148,7 +148,7 @@ const terminals = await new TerminalManager({
   log,
 }).load()
 /** Whether an agent or a Claude Code task is working: the app must not exit or be replaced then. */
-const busy = () => threads.busy || terminals.busy || agents.busy
+const busy = () => threads.busy || terminals.busy || agents.busy || teams.busy
 
 async function accounts() {
   let snapshot = { refs: {}, records: {} }
@@ -419,7 +419,7 @@ subagents.on('change', ({ threadId, subagent }) => {
   // backstop), and a team never bills the Anthropic API: a child that starts a
   // subagent, or a GPT leader that starts a Claude one, is stopped.
   const starting = subagent.status === 'starting' || subagent.status === 'running'
-  if (starting && teams.inTeam(threadId) && (subagent.provider === 'anthropic' || teams.isChild(threadId))) {
+  if (starting && teams.inTeam(threadId) && (subagent.provider === 'anthropic' || teams.isChild(threadId) || teams.isExecution(threadId))) {
     void teams.stopApiUse(threadId).catch((error) => log('team:', error.message))
   }
 })

@@ -400,6 +400,7 @@ export class TerminalManager extends EventEmitter {
   }
 
   #startNow(record, size, prompt = null, checked = null) {
+    this.executionGuard?.(record)
     const pty = this.#loadPty()
     const claude = checked?.claude ?? this.findClaude()
     if (!claude) throw new Error('Claude Code（claude コマンド）が見つかりません。Claude Code をインストールしてから開き直してください。')
@@ -585,6 +586,7 @@ export class TerminalManager extends EventEmitter {
   input(id, client, data, reply = false) {
     const live = this.live.get(id)
     if (!live?.alive || typeof data !== 'string' || !data) return false
+    if (!reply && data !== '\x1b' && data !== '\x03') this.executionGuard?.(this.records.get(id))
     if (reply) {
       if (live.controller && live.controller !== client) return false
     } else {
@@ -641,6 +643,7 @@ export class TerminalManager extends EventEmitter {
   /** A message typed outside the terminal screen: pasted (keeping its line breaks) and sent with Enter. */
   async sendMessage(id, text) {
     const live = await this.#whenReady(id)
+    this.executionGuard?.(this.records.get(id))
     if (typeof text !== 'string') return
     // A paste marker inside the text would end the paste early and send the rest as typed keys.
     if (text) live.proc.write(live.term.modes.bracketedPasteMode ? `\x1b[200~${text.replace(PASTE_MARKERS, '')}\x1b[201~` : text)

@@ -21,8 +21,8 @@ function panning(from: EventTarget | null) {
 }
 
 function dialogOpen() {
-  const { settingsOpen, projectDialog, teamStart } = getState()
-  return settingsOpen !== null || projectDialog || teamStart !== null
+  const { settingsOpen, projectDialog, teamStart, executionStart } = getState()
+  return settingsOpen !== null || projectDialog || teamStart !== null || executionStart !== null
 }
 
 export function useSidebarSwipe() {

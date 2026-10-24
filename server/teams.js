@@ -26,6 +26,7 @@ import { leaderGuides, readPlaybook } from './team-playbooks.js'
 import { markOf, reportsMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
+import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspacesOverlap } from './execution.js'
 
 const mcpScript = fileURLToPath(new URL('./team-mcp.js', import.meta.url))
 
@@ -136,6 +137,10 @@ export class TeamManager extends EventEmitter {
     /** Children the user stopped with "全停止": the leader is told it was the user, and not to go on by itself. */
     this.userStopped = new Set()
     this.writes = Promise.resolve()
+    this.execution = new ExecutionVerifier({ dir: path.join(dir, 'execution'), now })
+    this.exPending = new Set()
+    threads.executionGuard = (record) => this.guardExecution(record)
+    terminals.executionGuard = (record) => this.guardExecution(record)
 
     threads.on('thread', (thread) => this.#onThread(thread))
     threads.on('turn-finished', (info) => this.#onThreadFinished(info))
@@ -160,6 +165,7 @@ export class TeamManager extends EventEmitter {
   // ---------------------------------------------------------------- storage
 
   async load() {
+    await this.execution.load()
     const saved = await readJson(this.file, EMPTY_TEAMS)
     for (const team of restoreTeams(saved, this.getSettings)) this.teams.set(team.id, team)
     const remembered = await readJson(this.authFile, { version: 1, accepted: [] })
@@ -194,6 +200,11 @@ export class TeamManager extends EventEmitter {
   start() {
     for (const team of this.teams.values()) {
       for (const child of [...team.children]) {
+        if (child.execution?.phase === 'verifying') {
+          child.execution.phase = 'review'
+          delete child.execution.verification
+          this.#report(team, child, 'error', 'EXの検証が再起動で中断されました。send で再検証を依頼してください。', { verified: true })
+        }
         // The app stopped before the child's task was made: there is no conversation to go on with, so the child is dropped.
         if (!child.taskId) {
           if (child.awaiting && !child.closed) this.#report(team, child, 'error', 'Agent Desk が再起動したため、子の作業を始める前に止まりました。必要なら spawn で任せ直してください。')
@@ -211,6 +222,9 @@ export class TeamManager extends EventEmitter {
   }
 
   async stop() {
+    for (const team of this.teams.values()) if (team.execution) team.execution.stopped = true
+    await this.execution.stop()
+    await Promise.allSettled([...this.exPending])
     for (const approval of this.approvals.values()) clearTimeout(approval.timer)
     for (const timer of this.retries.values()) clearTimeout(timer)
     for (const entry of this.delivering.values()) clearTimeout(entry.timer)
@@ -236,6 +250,7 @@ export class TeamManager extends EventEmitter {
       leaderId: team.leaderId,
       leaderKind: team.leaderKind,
       config: this.config(team),
+      ...(team.execution ? { execution: { leaderModel: team.execution.leaderModel, stopped: team.execution.stopped, metrics: team.execution.metrics } } : {}),
       createdAt: team.createdAt,
       updatedAt: team.updatedAt,
       children: team.children.map((child) => this.#childSummary(child)),
@@ -263,6 +278,7 @@ export class TeamManager extends EventEmitter {
       state: this.#childState(child),
       closed: Boolean(child.closed),
       awaiting: Boolean(child.awaiting),
+      ...(child.execution ? { execution: child.execution } : {}),
       pending: child.pending.length,
       // What the user wrote to a Claude child while it worked: it goes when the turn ends, or at once with steerFollowup.
       followups: (child.followups ?? []).map(({ id, text }) => ({ id, text })),
@@ -332,6 +348,8 @@ export class TeamManager extends EventEmitter {
     return Boolean(this.#byTask(threadId))
   }
 
+  isExecution(threadId) { return Boolean(this.#byTask(threadId)?.team.execution) }
+
   #childBusy(child) {
     if (!child.taskId) return true
     if (child.kind === 'thread') return this.threads.threads.get(child.taskId)?.status === 'running'
@@ -368,12 +386,13 @@ export class TeamManager extends EventEmitter {
 
   /** The flags of every turn of a Claude child: no approvals, no tools that wait for a person (teams-launch.js). */
   #agentArgs(team, child) {
+    this.guardExecution({ id: team.leaderId, workspace: team.workspace })
     return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions(), lean: this.#lean(team, child) })
   }
 
   /** A child without the browser, desktop and image tools (its MCP servers): the team keeps children lean and its spawn did not ask for them. */
   #lean(team, child) {
-    return this.config(team).leanChildren && !child.tools
+    return child.execution?.mode === 'research' || (this.config(team).leanChildren && !child.tools)
   }
 
   /** Whether a dsh task's session gets the browser, desktop and image tools (index.js mcpServersFor). */
@@ -431,7 +450,7 @@ export class TeamManager extends EventEmitter {
    * starting it (a patch over the saved settings, as settings.update takes);
    * the result's `config` is what the team runs with, to remember for the next one.
    */
-  async create({ workspace, size, choices = {}, authConfirmation }) {
+  async create({ workspace, size, choices = {}, authConfirmation, execution = null }) {
     const config = mergeTeamConfig(this.getSettings(), choices ?? {})
     assertChildrenOn(config)
     const now = this.now()
@@ -440,8 +459,21 @@ export class TeamManager extends EventEmitter {
       id: randomUUID(), secret: randomBytes(24).toString('hex'), workspace: String(workspace ?? ''), leaderId: '',
       leaderKind: gpt ? 'thread' : 'terminal', config, createdAt: now, updatedAt: now, seq: 0, children: [], queue: [], asks: [],
     }
+    if (execution) {
+      if (!path.isAbsolute(team.workspace)) throw new Error('作業フォルダを指定してください')
+      await sourceSnapshot(team.workspace) // Validate that source state can be recorded before launching.
+      for (const provider of TEAM_PROVIDERS) config[provider].mid.enabled = false
+      if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled && config[provider].low.enabled && config[provider].low.model)) throw new Error('EXの子の低枠モデルを選んでください')
+      config.batchReports = true
+      team.execution = { metrics: { childTurns: 0, parentTurns: 0, parentReports: 0, verifications: 0, repairs: 0 }, stopped: false }
+      if (execution.leaderModel) {
+        if (typeof execution.leaderModel !== 'string' || !this.catalog.data.models.some((model) => model.value === execution.leaderModel && ['anthropic', 'openai-codex'].includes(model.provider))) throw new Error('親モデルが見つかりません')
+        team.execution.leaderModel = execution.leaderModel
+        team.leaderKind = 'thread'
+      }
+    }
     if (authConfirmation) await this.#confirmAuth(team, authConfirmation, false)
-    if (gpt) return this.#createGptLed(team, config)
+    if (gpt || team.execution?.leaderModel) return this.#createGptLed(team, config)
     this.teams.set(team.id, team)
     let terminal
     try {
@@ -462,9 +494,9 @@ export class TeamManager extends EventEmitter {
 
   async #createGptLed(team, config) {
     const id = config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model
-    if (!id) throw new Error('GPT のリーダーのモデルが決まっていません。チームを始める画面で選んでください')
-    const model = this.catalog.data.models.find((entry) => entry.provider === 'openai-codex' && entry.id === id)?.value
-      ?? JSON.stringify(['openai-codex', id])
+    if (!id && !team.execution?.leaderModel) throw new Error('GPT のリーダーのモデルが決まっていません。チームを始める画面で選んでください')
+    const model = team.execution?.leaderModel ?? (this.catalog.data.models.find((entry) => entry.provider === 'openai-codex' && entry.id === id)?.value
+      ?? JSON.stringify(['openai-codex', id]))
     this.teams.set(team.id, team)
     let thread
     try {
@@ -479,10 +511,11 @@ export class TeamManager extends EventEmitter {
     }
     team.workspace = thread.workspace
     team.leaderId = thread.id
-    await this.threads.update(thread.id, { title: 'エージェントチーム' }).catch(() => {})
+    const title = team.execution ? '実行モード' : 'エージェントチーム'
+    await this.threads.update(thread.id, { title }).catch(() => {})
     await this.#save()
     this.#emit(team)
-    return { team: this.summary(team), thread: { ...thread, title: 'エージェントチーム' } }
+    return { team: this.summary(team), thread: { ...thread, title } }
   }
 
   /** Deletes a team with its leader and every child task. */
@@ -490,6 +523,7 @@ export class TeamManager extends EventEmitter {
     const team = this.teams.get(teamId)
     if (!team) return { removed: false }
     this.teams.delete(teamId)
+    for (const child of team.children) this.execution.cancel(child.id)
     for (const approval of [...this.approvals.values()]) {
       if (approval.teamId === teamId) this.#dropApproval(approval)
     }
@@ -517,6 +551,107 @@ export class TeamManager extends EventEmitter {
       this.emit('removed', { teamId })
     }
     return { removed: true }
+  }
+
+  // ---------------------------------------------------------------- EX execution mode
+
+  get busy() { return this.exPending.size > 0 || this.execution.active.size > 0 }
+
+  executionChecks(workspace) { return { checks: this.execution.checks(workspace) } }
+  async configureExecution(workspace, checks) {
+    if (!path.isAbsolute(workspace) || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) throw new Error('作業フォルダが見つかりません')
+    return { checks: await this.execution.configure(workspace, checks) }
+  }
+
+  guardExecution(record) {
+    if (!record?.workspace) return
+    const own = this.#byTask(record.id)
+    if (own?.child?.execution && own.child.execution.phase !== 'working') throw new Error('EXの検証・判定中です。親から send で手直しを依頼してください')
+    for (const team of this.teams.values()) {
+      if (!team.execution || !workspacesOverlap(team.workspace, record.workspace)) continue
+      if (own?.team === team) continue
+      if (team.children.some((child) => !child.closed && child.execution?.mode !== 'research')) throw new Error('このフォルダはEXが実行・検証・判定中です')
+    }
+  }
+
+  #exRoom(team, except = null, research = false) {
+    if (research) return
+    if ([...(this.threads.restoring ?? [])].some((record) => workspacesOverlap(record.workspace, team.workspace))) throw new Error('同じフォルダの変更を復元中です')
+    for (const thread of this.threads.threads.values()) {
+      if (thread.id !== team.leaderId && thread.id !== except?.taskId && thread.status === 'running' && thread.permissionMode !== 'read-only'
+        && workspacesOverlap(thread.workspace, team.workspace)) throw new Error('同じフォルダで別のタスクが作業中です')
+    }
+    for (const record of this.terminals.records.values()) {
+      if (record.id !== team.leaderId && workspacesOverlap(record.workspace, team.workspace) && this.terminals.status(record.id)?.activity === 'running') throw new Error('同じフォルダでClaude Codeが作業中です')
+    }
+    for (const other of this.teams.values()) {
+      if (!workspacesOverlap(other.workspace, team.workspace)) continue
+      if (other.children.some((child) => child !== except && !child.closed && child.execution?.mode !== 'research' && (other.execution ? child.execution?.phase !== 'accepted' : this.#childBusy(child)))) {
+        throw new Error('同じフォルダの作業・検証・判定が終わっていません。close で合格にするか、send で手直ししてください。')
+      }
+    }
+  }
+
+  #exTask(team, args) {
+    if (args.tier && args.tier !== 'low') throw new Error('EXの子は低枠のみです')
+    const mode = args.mode ?? 'write'
+    if (!['write', 'research'].includes(mode)) throw new Error('mode は write または research です')
+    const criteria = String(args.criteria ?? '').trim()
+    if (!criteria) throw new Error('criteria（完了条件）を指定してください')
+    if (!Array.isArray(args.checks)) throw new Error('checks に検証IDの配列を指定してください（検証なしは []）')
+    const registered = this.execution.checks(team.workspace)
+    const selected = args.checks.map((id) => {
+      const check = registered.find((item) => item.id === id)
+      if (!check) throw new Error(`検証「${id}」は登録されていません`)
+      return check
+    })
+    const checks = normalizeChecks([...selected, ...normalizeChecks(args.extraChecks ?? [])])
+    const maxRepairs = args.maxRepairs ?? 2
+    if (!Number.isInteger(maxRepairs) || maxRepairs < 0 || maxRepairs > 2) throw new Error('maxRepairs は0〜2です')
+    if (mode === 'research' && checks.length) throw new Error('調査専用の子はコマンド検証を実行しません。checks:[] を指定してください')
+    return { mode, criteria, checks, maxRepairs, repairs: 0, phase: 'working', startedAt: this.now() }
+  }
+
+  async #exVerify(team, child, text) {
+    child.execution.phase = 'verifying'
+    await this.#save()
+    this.#emit(team)
+    try {
+      if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return
+      if (team.execution.stopped) {
+        child.execution.phase = 'review'
+        this.#report(team, child, 'cancelled', 'EXの検証はユーザーにより停止されました。', { verified: true, byUser: true })
+        return
+      }
+      const run = await this.execution.verify({ id: child.id, folder: team.workspace, checks: child.execution.checks })
+      if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return
+      child.execution.verification = run
+      team.execution.metrics.verifications++
+      if (run.status === 'cancelled' || team.execution.stopped) {
+        child.execution.phase = 'review'
+        this.#report(team, child, 'cancelled', verificationReport(run), { verified: true, byUser: true })
+        return
+      }
+      const failed = run.checks.find((check) => check.status !== 'passed')
+      const repeated = failed && child.execution.failureKey === failed.failureKey
+      child.execution.failureKey = failed?.failureKey
+      // Automatic repair is explicitly enabled per check; infrastructure errors,
+      // cancellation, stale sources and timeouts always return to the parent.
+      if (!team.execution.stopped && run.status === 'failed' && failed?.autoRepair && failed.status === 'failed'
+        && failed.exitCode !== null && !failed.error && !LASTING.test(failed.tail) && !TRANSIENT.test(failed.tail)
+        && !repeated && child.execution.repairs < child.execution.maxRepairs) {
+        child.execution.repairs++
+        team.execution.metrics.repairs++
+        child.execution.phase = 'working'
+        await this.#send(team, { child: child.id, message: `[EX 自動差し戻し ${child.execution.repairs}/${child.execution.maxRepairs}]\n完了条件: ${child.execution.criteria}\n依頼の範囲内だけを修正してください。検証設定・完了条件を変えて通すことは禁止です。仕様判断や環境対応が必要なら、その問題を報告して終了してください。\n${verificationReport(run)}\n${failed.tail}`, executionRetry: true })
+        return
+      }
+      child.execution.phase = 'review'
+      this.#report(team, child, 'report', `${verificationReport(run)}\n\n完了条件: ${child.execution.criteria}\n\n子の報告:\n${text}`, { verified: true })
+    } catch (error) {
+      child.execution.phase = 'review'
+      this.#report(team, child, 'error', `EXの検証に失敗しました: ${error.message}`, { verified: true })
+    } finally { await this.#save(); this.#emit(team) }
   }
 
   // ---------------------------------------------------------------- the leader's tools
@@ -585,7 +720,10 @@ export class TeamManager extends EventEmitter {
     const task = String(args.task ?? '').trim()
     if (!title) throw new Error('title（業務のタイトル）を指定してください')
     if (!task) throw new Error('task（依頼の本文）を指定してください')
-    const tier = args.tier
+    this.guardExecution({ workspace: team.workspace, id: team.leaderId })
+    if (team.execution) this.#exRoom(team, null, args.mode === 'research')
+    const execution = team.execution ? this.#exTask(team, args) : null
+    const tier = team.execution ? 'low' : args.tier
     if (!TEAM_TIERS.includes(tier)) throw new Error('tier は "low" か "mid" で指定してください')
     const enabled = TEAM_PROVIDERS.filter((provider) => config[provider].enabled)
     let provider = args.provider && args.provider !== 'auto' ? args.provider : null
@@ -611,9 +749,10 @@ export class TeamManager extends EventEmitter {
       kind: provider === 'claude' ? 'agent' : 'thread', taskId: null, createdAt: now, updatedAt: now,
       closed: false, awaiting: true, pending: [], followups: [], reports: [], ...(args.tools === true ? { tools: true } : {}),
     }
+    if (execution) { child.execution = execution; team.execution.stopped = false }
     team.children.push(child)
     try {
-      await this.#startTask(team, child, task)
+      await this.#startTask(team, child, execution ? `${task}\n\n[EX 完了条件]\n${execution.criteria}\n実装後にアプリが検証します。範囲外の変更はせず、結果・変更箇所・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。` : task)
     } catch (error) {
       team.children = team.children.filter((entry) => entry !== child)
       this.#emit(team)
@@ -639,8 +778,8 @@ export class TeamManager extends EventEmitter {
         const value = this.catalog.data.models.find((entry) => entry.provider === catalogProvider && entry.id === child.model)?.value
           ?? JSON.stringify([catalogProvider, child.model])
         const thread = await this.threads.create({
-          workspace: team.workspace, model: value, effort: child.effort ?? '', permissionMode: 'danger-full-access',
-          team: { id: team.id, childId: child.id },
+          workspace: team.workspace, model: value, effort: child.effort ?? '', permissionMode: child.execution?.mode === 'research' ? 'read-only' : 'danger-full-access',
+          team: { id: team.id, childId: child.id, ...(child.execution ? { executionMode: child.execution.mode } : {}) },
         })
         taskId = child.taskId = thread.id
         if (!this.teams.has(team.id)) throw new Error('team was removed')
@@ -672,9 +811,29 @@ export class TeamManager extends EventEmitter {
 
   async #send(team, args) {
     const child = this.#child(team, args.child)
+    this.guardExecution({ id: team.leaderId, workspace: team.workspace })
+    if (team.execution && child.closed) this.#checkRoom(team)
+    const executionBefore = child.execution ? structuredClone(child.execution) : null
     const text = String(args.message ?? '').trim()
     if (!text) throw new Error('message（子に送る内容）を指定してください')
-    if (args.fresh === true) return this.#sendFresh(team, child, text)
+    if (team.execution) {
+      if (child.execution?.phase === 'verifying') throw new Error('検証中には指示を追加できません')
+      this.#exRoom(team, child, child.execution?.mode === 'research')
+      if (this.#childBusy(child)) throw new Error('EXの子は作業中です。完了を待ってください')
+      if (!args.executionRetry) {
+        team.execution.stopped = false
+        child.execution.repairs = 0
+        delete child.execution.failureKey
+      }
+      child.execution.phase = 'working'
+      delete child.execution.verification
+    }
+    if (args.fresh === true) {
+      try { return await this.#sendFresh(team, child, text) } catch (error) {
+        if (executionBefore) child.execution = executionBefore
+        throw error
+      }
+    }
     // A closed child takes a place again.
     const wasClosed = child.closed
     if (child.closed) this.#checkRoom(team)
@@ -689,6 +848,7 @@ export class TeamManager extends EventEmitter {
     } catch (error) {
       child.closed = wasClosed
       child.awaiting = false
+      if (executionBefore) child.execution = executionBefore
       throw error
     }
     // The turn may have ended while the steer was answered, with nothing left to send it then.
@@ -797,6 +957,7 @@ export class TeamManager extends EventEmitter {
       '使える枠:',
       ...this.#tierLines(config),
     ]
+    if (team.execution) lines.push('EX: 子は低枠のみ。完了条件 criteria と検証ID checks を指定して spawn。書き込み・検証・判定は直列です。', `登録済み検証: ${JSON.stringify(this.execution.checks(team.workspace))}`)
     if (!team.children.length) lines.push('子はまだいません。')
     for (const child of team.children) {
       const state = STATE_LABEL[this.#childState(child)] ?? this.#childState(child)
@@ -864,6 +1025,25 @@ export class TeamManager extends EventEmitter {
 
   async #close(team, args) {
     const child = this.#child(team, args.child)
+    if (team.execution && !child.closed) {
+      if (child.execution?.phase !== 'review') throw new Error('実行・検証が終わってから判定してください')
+      const run = child.execution.verification
+      if (args.accept !== false) {
+        if (!run || !['passed', 'unverified'].includes(run.status)) throw new Error('検証が成功していません。send で手直しするか accept:false と理由を指定して終了してください')
+        const snapshot = await sourceSnapshot(team.workspace)
+        if (child.execution.phase !== 'review' || child.execution.verification !== run) throw new Error('判定中に状態が変わりました')
+        if (snapshot.hash !== run.sourceHash) {
+          run.status = 'stale'
+          await this.#save(); this.#emit(team)
+          throw new Error('検証後に変更されています。send で再検証を依頼してください')
+        }
+        if (run.status === 'unverified' && !String(args.reason ?? '').trim()) throw new Error('検証なしでの合格には reason（確認した根拠）が必要です')
+      } else if (!String(args.reason ?? '').trim()) throw new Error('中止する理由を指定してください')
+      child.execution.phase = 'accepted'
+      child.execution.outcome = args.accept === false ? 'abandoned' : 'accepted'
+      child.execution.reason = String(args.reason ?? '')
+      child.execution.finishedAt = this.now()
+    }
     this.#cancelResume(child)
     child.closed = true
     child.awaiting = false
@@ -910,6 +1090,8 @@ export class TeamManager extends EventEmitter {
    */
   messageChild(teamId, childId, text) {
     const { team, child } = this.#agentChild(teamId, childId)
+    this.guardExecution({ id: child.taskId, workspace: team.workspace })
+    if (team.execution) throw new Error('EXの子への指示は親に伝えてください。検証と判定を迂回できません')
     const body = String(text ?? '').trim()
     if (!body) throw new Error('送る内容を書いてください')
     if (this.agents.running(child.taskId)) {
@@ -957,6 +1139,7 @@ export class TeamManager extends EventEmitter {
     const team = this.teams.get(teamId)
     const child = team?.children.find((entry) => entry.id === childId)
     if (!child || child.kind !== 'agent') throw new Error('この子は見つかりません')
+    if (child.execution?.phase === 'verifying') { team.execution.stopped = true; this.execution.cancel(child.id) }
     this.agents.stop(child.taskId)
     return { team: this.summary(team) }
   }
@@ -968,6 +1151,10 @@ export class TeamManager extends EventEmitter {
   async stopAll(teamId) {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
+    if (team.execution) {
+      team.execution.stopped = true
+      for (const child of team.children) this.execution.cancel(child.id)
+    }
     let stopped = 0
     for (const child of team.children) {
       // One waiting to go on after a passing failure stops here, unless a turn runs now: that one is stopped below.
@@ -1007,6 +1194,12 @@ export class TeamManager extends EventEmitter {
     const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren'].includes(key)))
     const before = this.#tierLines(this.config(team)).join('\n') + this.config(team).maxChildren
     const next = mergeTeamConfig(this.config(team), allowed)
+    if (team.execution) {
+      for (const provider of TEAM_PROVIDERS) {
+        next[provider].mid.enabled = false
+        if (next[provider].enabled && !next[provider].low.enabled) throw new Error('EXは低枠のみ使用できます')
+      }
+    }
     assertChildrenOn(next)
     team.config = next
     team.updatedAt = this.now()
@@ -1037,6 +1230,12 @@ export class TeamManager extends EventEmitter {
   // ---------------------------------------------------------------- reports to the leader
 
   #report(team, child, kind, text, extra = {}) {
+    if (team.execution && child.execution && !extra.verified && kind === 'report') {
+      const pending = this.#exVerify(team, child, text).finally(() => this.exPending.delete(pending))
+      this.exPending.add(pending)
+      return
+    }
+    if (team.execution && child.execution && kind !== 'approval') child.execution.phase = 'review'
     const body = String(text ?? '').trim() || '（返答の本文はありませんでした）'
     const at = this.now()
     if (kind !== 'approval') child.reports = [...child.reports, { at, kind, text: clip(body, REPORT_KEEP) }].slice(-REPORTS_KEPT)
@@ -1050,13 +1249,14 @@ export class TeamManager extends EventEmitter {
   }
 
   #leaderMessage(team, items) {
+    if (team.execution) team.execution.metrics.parentReports++
     return reportsMessage(team, items, (child) => this.#label(child))
   }
 
   /** What goes to the leader next: the first item waiting, and with batchReports those after it that fit one message. */
   #take(team) {
     const items = [team.queue.shift()]
-    if (!teamConfig(this.getSettings()).batchReports) return items
+    if (!team.execution && !teamConfig(this.getSettings()).batchReports) return items
     let size = items[0].text?.length ?? 0
     while (team.queue.length && size + (team.queue[0].text?.length ?? 0) <= BATCH_CHARS) {
       const item = team.queue.shift()
@@ -1068,6 +1268,9 @@ export class TeamManager extends EventEmitter {
 
   /** How much longer the waiting reports hold for those of children still working (REPORT_GATHER_MS); 0: they go now. */
   #gatherWait(team) {
+    if (team.execution && !team.queue.some((item) => item.kind === 'approval' || item.kind === 'error' || item.kind === 'cancelled' || !item.childId)) {
+      return team.children.some((child) => !child.closed && ['working', 'verifying'].includes(child.execution?.phase)) ? 1000 : 0
+    }
     if (!this.gatherMs || !teamConfig(this.getSettings()).batchReports) return 0
     // A child held up on an approval, or word from Agent Desk itself, goes at once.
     if (team.queue.some((item) => item.kind === 'approval' || !item.childId)) return 0
@@ -1242,6 +1445,7 @@ export class TeamManager extends EventEmitter {
     const found = this.#byTask(terminalId)
     if (!found || found.child) return
     const { team } = found
+    if (team.execution) { team.execution.metrics.parentTurns = (team.execution.metrics.parentTurns ?? 0) + 1; void this.#save() }
     const marks = input.team_marks.map(String)
     // A prompt without team marks is the user's own: its answer to the questions the leader asked.
     if (!marks.length) this.userWrote(terminalId)
@@ -1300,6 +1504,13 @@ export class TeamManager extends EventEmitter {
     const found = this.#byTask(threadId)
     if (!found?.child) return
     const { team, child } = found
+    if (child.execution?.mode === 'research') {
+      for (const pending of this.threads.pendingPermissions(threadId)) {
+        const deny = pending.options?.find((option) => option.kind === 'reject_once' || option.kind === 'reject_always')
+        if (deny) this.threads.respondPermission(pending.requestId, deny.optionId)
+      }
+      return
+    }
     for (const pending of this.threads.pendingPermissions(threadId)) {
       if ([...this.approvals.values()].some((entry) => entry.requestId === pending.requestId)) continue
       const approval = {
@@ -1346,6 +1557,13 @@ export class TeamManager extends EventEmitter {
   #onThreadFinished({ threadId, status }) {
     const found = this.#byTask(threadId)
     if (!found) return
+    if (found.team.execution) {
+      if (found.child) found.team.execution.metrics.childTurns++
+      const turn = this.threads.turns.get(threadId)?.at(-1)
+      const entries = found.team.execution.usage ?? []
+      found.team.execution.usage = [...entries, { role: found.child ? 'child' : 'parent', taskId: threadId, turnId: turn?.id, at: this.now(), usage: turn?.usage ?? null, status }].slice(-500)
+      void this.#save()
+    }
     if (!found.child) return this.#onLeaderFinished(found.team)
     const { team, child } = found
     const apiStopped = this.apiStopped.delete(child.id)
@@ -1377,6 +1595,7 @@ export class TeamManager extends EventEmitter {
 
   /** A GPT leader's turn ended: why, if Agent Desk stopped it; then the next report. */
   #onLeaderFinished(team) {
+    if (team.execution) { team.execution.metrics.parentTurns = (team.execution.metrics.parentTurns ?? 0) + 1; void this.#save() }
     if (this.apiStopped.delete(`leader:${team.id}`)) {
       team.queue.unshift({
         id: randomUUID(), childId: null, kind: 'notice', at: this.now(),
@@ -1413,6 +1632,7 @@ export class TeamManager extends EventEmitter {
     const found = this.#byTask(id)
     if (!found?.child) return
     const { team, child } = found
+    if (team.execution) team.execution.metrics.childTurns++
     const byUser = this.userStopped.delete(child.id)
     // A session being removed reports nothing: its record is dropped before its turn ends (claude-runner remove).
     if (!this.agents.get(id)) return
@@ -1494,6 +1714,7 @@ export class TeamManager extends EventEmitter {
       if (approval.childId === child.id) this.#dropApproval(approval)
     }
     this.#cancelResume(child)
+    this.execution.cancel(child.id)
     team.children = team.children.filter((entry) => entry !== child)
     team.queue = team.queue.filter((item) => item.childId !== child.id)
     void this.#save()

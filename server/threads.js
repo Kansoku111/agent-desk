@@ -286,6 +286,7 @@ export class ThreadManager extends EventEmitter {
     if (typeof patch.title === 'string' && patch.title.trim()) thread.title = patch.title.trim().slice(0, 120)
     if (typeof patch.archived === 'boolean') thread.archived = patch.archived
     if (patch.permissionMode !== undefined && patch.permissionMode !== thread.permissionMode) {
+      if (thread.team?.executionMode === 'research') throw new Error('EXの調査専用タスクは読み取り専用です')
       if (!PERMISSION_MODES.includes(patch.permissionMode)) throw new Error('不明な権限モードです')
       if (running) throw new Error('実行中は権限モードを変更できません')
       thread.permissionMode = patch.permissionMode
@@ -424,6 +425,7 @@ export class ThreadManager extends EventEmitter {
     this.#available(threadId, thread)
     this.#assertNotRestoring(thread)
     if (this.active.has(threadId)) throw new Error('このタスクはまだ作業中です')
+    this.executionGuard?.(thread)
 
     const turn = newTurn({ id: randomUUID(), text, images })
     if (messageId) turn.user.messageId = messageId
@@ -661,6 +663,7 @@ export class ThreadManager extends EventEmitter {
   async #restoreCheckpoint(threadId, turnId) {
     const { thread, turns, turn } = await this.#checkpointTurn(threadId, turnId)
     this.#available(threadId, thread)
+    this.executionGuard?.(thread)
     const result = await this.checkpoints.restore(thread.workspace, turn.checkpoint.before, `${thread.id}/${turn.id}/undo`)
     const files = result.restored.length + result.removed.length
     // `turns`: how many turns there were, so a message sent afterwards ends the chance to undo.
@@ -696,6 +699,7 @@ export class ThreadManager extends EventEmitter {
     if (!isUndoable(turns, turn)) {
       throw new Error('このあとに新しいメッセージを送ったか、別の時点に戻したため、取り消せません')
     }
+    this.executionGuard?.(thread)
     const result = await this.checkpoints.restore(thread.workspace, turn.restore.undo)
     // A partial undo keeps its record, so it can be tried again.
     if (result.error) return { files: result.restored.length + result.removed.length, error: result.error }

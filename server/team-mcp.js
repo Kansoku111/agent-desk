@@ -111,6 +111,27 @@ const TOOLS = [
     : []),
 ]
 
+if (process.env.AGENT_DESK_EXECUTION === '1') {
+  const spawn = TOOLS.find((tool) => tool.name === 'spawn')
+  spawn.description = 'Delegate one bounded EX work unit to the inexpensive child. The app verifies and performs limited repairs before reporting. Close the previous unit before starting another; end your turn instead of polling.'
+  spawn.inputSchema.properties.tier.enum = ['low']
+  Object.assign(spawn.inputSchema.properties, {
+    mode: { type: 'string', enum: ['write', 'research'], description: 'write (default): one writer through judgment; research: read-only investigation that may run in parallel, with checks:[] and no command execution for Claude Code.' },
+    criteria: { type: 'string', description: 'Explicit acceptance criteria, including scope and constraints.' },
+    checks: { type: 'array', items: { type: 'string' }, description: 'Registered verification IDs from status. [] explicitly means no registered checks.' },
+    extraChecks: { type: 'array', items: { type: 'object', properties: {
+      id: { type: 'string' }, command: { type: 'string' }, cwd: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1000, maximum: 1800000 },
+      autoRepair: { type: 'boolean', description: 'Only true when failure can be repaired within the implementation scope.' },
+    }, required: ['id', 'command'] } },
+    maxRepairs: { type: 'integer', minimum: 0, maximum: 2 },
+  })
+  spawn.inputSchema.required.push('criteria', 'checks')
+  Object.assign(TOOLS.find((tool) => tool.name === 'close').inputSchema.properties, {
+    accept: { type: 'boolean', description: 'Default true: accept verified work. false: abandon without accepting.' },
+    reason: { type: 'string', description: 'Required for abandonment or acceptance without command verification.' },
+  })
+}
+
 async function call(tool, args) {
   const response = await fetch(url, {
     method: 'POST',

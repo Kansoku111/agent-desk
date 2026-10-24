@@ -85,6 +85,7 @@ export interface TeamChild {
   updatedAt: number
   reports: number
   lastReport: { at: number; kind: string; text: string } | null
+  execution?: ExecutionWork
 }
 
 /** Sanitized CLI auth metadata only: no credentials or account identity. */
@@ -104,6 +105,21 @@ export interface ClaudeAuthConfirmation {
   acknowledgeUnknown?: boolean
 }
 
+export interface ExecutionCheck {
+  id: string
+  command: string
+  cwd?: string
+  timeoutMs?: number
+  autoRepair?: boolean
+}
+export interface ExecutionWork {
+  phase: 'working' | 'verifying' | 'review' | 'accepted'
+  criteria: string
+  repairs: number
+  outcome?: 'accepted' | 'abandoned'
+  verification?: { status: string; sourceHash?: string; record: string; checks: { id: string; status: string; log: string; exitCode: number | null }[] }
+}
+
 /** An agent team ("TM"): a Claude Code or GPT leader and its children. */
 export interface TeamSummary {
   id: string
@@ -113,6 +129,7 @@ export interface TeamSummary {
   leaderKind: 'terminal' | 'thread'
   /** The team's own settings: chosen when it started, changed in its panel since. */
   config?: TeamSettings
+  execution?: { leaderModel?: string; stopped: boolean; metrics: { childTurns: number; parentTurns?: number; parentReports: number; verifications: number; repairs: number } }
   createdAt: number
   updatedAt: number
   children: TeamChild[]

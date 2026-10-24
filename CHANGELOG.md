@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Execution mode (EX), next to TM: a separately configured parent/low-tier-child workflow with project verification commands, application-recorded logs and source fingerprints, bounded automatic repairs, explicit acceptance/abandonment, read-only parallel investigation, and serialized writes through review. Checks support cancellation and timeout; stale or failed results cannot be accepted. Available dsh usage and workflow counts are recorded without equating API prices with subscription usage. Existing TM choices and behavior remain unchanged outside overlapping EX workspace protection. See [docs/execution.md](docs/execution.md).
+
 - OpenCode Go: Settings → Accounts → "OpenCode Go" takes an OpenCode Go API key (checked against `https://opencode.ai/inference/go/v1/models`). While it is saved, dsh gets pi-ai's `opencode-go` route, so its models (GLM, Kimi, DeepSeek, Qwen and others, from pi-ai's catalog) show in the model picker; requests carry dsh's own User-Agent and an `x-opencode-session` header per conversation. No cost is shown (flat-rate subscription). Agent teams can use them as children ("OpenCode Go", child only, off by default).
 
 ## [0.1.2] - 2026-10-24

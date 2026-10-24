@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { instructionsSection } from './instructions-plugin.js'
 import { childPrompt, leaderPrompt, tierLines } from './teams-prompts.js'
+import { EXECUTION_PROMPT } from './execution.js'
 
 /** The leader's MCP server; its tools are mcp__agent-team__spawn and so on. */
 export const MCP_SERVER = 'agent-team'
@@ -53,6 +54,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
         args: [script],
         env: {
           AGENT_DESK_TEAM_URL: apiUrl, AGENT_DESK_TEAM_ID: team.id, AGENT_DESK_TEAM_SECRET: team.secret,
+          ...(team.execution ? { AGENT_DESK_EXECUTION: '1' } : {}),
           ...(guides.playbooks.length ? { AGENT_DESK_TEAM_PLAYBOOKS: '1' } : {}),
         },
       },
@@ -60,11 +62,12 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
   }, null, 2))
   const prompt = writeFile(dir, 'leader.md', withInstructions(leaderPrompt({
     workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: config.leanChildren, ...guides,
-  }), instructions))
+  }) + (team.execution ? EXECUTION_PROMPT : ''), instructions))
   return {
     args: [
       ...(config.leaderBypass ? ['--permission-mode', 'bypassPermissions'] : []),
       '--mcp-config', mcp,
+      ...(team.execution ? ['--disallowedTools', CHILD_DISALLOWED] : []),
       // The team's own tools never ask, whatever the permission mode.
       '--allowedTools', `mcp__${MCP_SERVER}`,
       '--append-system-prompt-file', prompt,
@@ -80,7 +83,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
 export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl, guides = NO_GUIDES }) {
   const prompt = writeFile(dir, 'leader.md', leaderPrompt({
     workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: config.leanChildren, ...guides,
-  }))
+  }) + (team.execution ? EXECUTION_PROMPT : ''))
   return {
     name: MCP_SERVER,
     command: node,
@@ -90,6 +93,7 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
       { name: 'AGENT_DESK_TEAM_ID', value: team.id },
       { name: 'AGENT_DESK_TEAM_SECRET', value: team.secret },
       { name: 'AGENT_DESK_TEAM_INSTRUCTIONS', value: prompt },
+      ...(team.execution ? [{ name: 'AGENT_DESK_EXECUTION', value: '1' }] : []),
       ...(guides.playbooks.length ? [{ name: 'AGENT_DESK_TEAM_PLAYBOOKS', value: '1' }] : []),
     ],
   }
@@ -106,6 +110,6 @@ export function childTurnArgs({ child, dir, instructions = '', lean = false }) {
   const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name, { background: true }), instructions))
   return [
     '--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt,
-    ...(lean ? ['--strict-mcp-config', '--no-chrome'] : ['--chrome']),
+    ...(child.execution?.mode === 'research' ? ['--tools', 'Read,Glob,Grep', '--strict-mcp-config', '--no-chrome'] : lean ? ['--strict-mcp-config', '--no-chrome'] : ['--chrome']),
   ]
 }

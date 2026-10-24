@@ -107,6 +107,7 @@ interface ThreadSelection {
 
 function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; active: boolean; selection: ThreadSelection }) {
   const leads = thread.team?.role === 'leader'
+  const execution = useStore((state) => state.server?.teams?.find((team) => team.leaderId === thread.id)?.execution)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
   const save = async () => {
@@ -145,7 +146,7 @@ function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; activ
             onClick={(event) => selection.enabled || event.ctrlKey || event.metaKey || event.shiftKey
               ? selection.toggle(thread.id, event.shiftKey)
               : navigate({ view: 'thread', id: thread.id })} title={leads ? `エージェントチーム（GPT）: ${thread.title}` : thread.title}>
-            {leads && <span className="cl-mark tm-mark small" aria-label="エージェントチーム">TM</span>}
+            {leads && <span className="cl-mark tm-mark small" aria-label={execution ? "実行モード" : "エージェントチーム"}>{execution ? "EX" : "TM"}</span>}
             <span className="thread-title">{thread.title}</span>
             <span className="thread-meta"><ThreadStatus thread={thread} /></span>
           </button>
@@ -252,7 +253,7 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
               ? selection.toggle(terminal.id, event.shiftKey)
               : navigate({ view: 'terminal', id: terminal.id })} title={`${leads ? 'エージェントチーム' : 'Claude Code'}: ${terminal.title}`}>
             {leads
-              ? <span className="cl-mark tm-mark small" aria-label="エージェントチーム">TM</span>
+              ? <span className="cl-mark tm-mark small" aria-label={team?.execution ? '実行モード' : 'エージェントチーム'}>{team?.execution ? 'EX' : 'TM'}</span>
               : <span className="cl-mark small" aria-label="Claude Code">CL</span>}
             <span className="thread-title">{terminal.title}</span>
             <span className="thread-meta"><TerminalStatus terminal={terminal} /></span>
@@ -442,6 +443,8 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
               <CheckSquare size={14} />
             </button>
           )}
+          <button type="button" className="icon-button small cl-button ex-button" title="実行モード"
+            aria-label={`${group.label} で実行モードを始める`} onClick={() => setState({ executionStart: group.path })}>EX</button>
           <button type="button" className="icon-button small cl-button tm-button" title="エージェントチームを始める（リーダーや子のモデルを選んでから始めます）"
             aria-label={`${group.label} でエージェントチームを始める`} onClick={() => setState({ teamStart: group.path })}>
             TM

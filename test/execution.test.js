@@ -1,0 +1,99 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { ExecutionVerifier, normalizeChecks, sourceSnapshot } from '../server/execution.js'
+
+async function fixture(t) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ex-'))
+  const folder = path.join(root, 'project')
+  await fs.mkdir(folder)
+  execFileSync('git', ['init', '-q', folder])
+  await fs.writeFile(path.join(folder, 'source.txt'), 'before')
+  await fs.writeFile(path.join(folder, '.gitignore'), 'output/\n')
+  const verifier = await new ExecutionVerifier({ dir: path.join(root, 'records') }).load()
+  t.after(async () => { await verifier.stop(); await fs.rm(root, { recursive: true, force: true }) })
+  return { folder, root, verifier }
+}
+
+test('EX supports plain project folders without Git and releases invalid requests', async (t) => {
+  const { root, verifier } = await fixture(t)
+  const folder = path.join(root, 'plain')
+  await fs.mkdir(folder)
+  await fs.writeFile(path.join(folder, 'main.js'), 'before')
+  const before = await sourceSnapshot(folder)
+  await fs.writeFile(path.join(folder, 'main.js'), 'after')
+  assert.notEqual((await sourceSnapshot(folder)).hash, before.hash)
+  await assert.rejects(verifier.verify({ id: 'same', folder, checks: [{ id: '', command: 'echo x' }] }))
+  assert.equal(verifier.active.size, 0)
+  const run = await verifier.verify({ id: 'same', folder, checks: [] })
+  assert.equal(run.status, 'unverified')
+})
+
+test('EX checks reject duplicate IDs, escaping paths and invalid timeout', () => {
+  assert.throws(() => normalizeChecks([{ id: 'x', command: 'echo x', cwd: '../' }]))
+  assert.throws(() => normalizeChecks([{ id: 'x', command: 'echo x' }, { id: 'x', command: 'echo y' }]))
+  assert.throws(() => normalizeChecks([{ id: 'x', command: 'echo x', timeoutMs: 0 }]))
+  assert.equal(normalizeChecks([{ id: 'x', command: 'echo x' }])[0].autoRepair, false)
+})
+
+test('EX snapshots include untracked content and ignore generated files', async (t) => {
+  const { folder } = await fixture(t)
+  const first = await sourceSnapshot(folder)
+  await fs.writeFile(path.join(folder, 'source.txt'), 'after')
+  assert.notEqual((await sourceSnapshot(folder)).hash, first.hash)
+  await fs.writeFile(path.join(folder, 'source.txt'), 'before')
+  await fs.mkdir(path.join(folder, 'output'))
+  await fs.writeFile(path.join(folder, 'output', 'generated.txt'), 'generated')
+  assert.equal((await sourceSnapshot(folder)).hash, first.hash)
+})
+
+test('EX persists checks per project and records actual command results', async (t) => {
+  const { folder, root, verifier } = await fixture(t)
+  const checks = [{ id: 'pass', command: 'node -e "console.log(123)"' }]
+  await verifier.configure(folder, checks)
+  const restored = await new ExecutionVerifier({ dir: path.join(root, 'records') }).load()
+  assert.equal(restored.checks(folder)[0].id, 'pass')
+  const run = await verifier.verify({ id: 'child', folder, checks })
+  assert.equal(run.status, 'passed')
+  assert.equal(run.checks[0].exitCode, 0)
+  assert.match(await fs.readFile(run.checks[0].log, 'utf8'), /123/)
+  assert.equal(JSON.parse(await fs.readFile(run.record, 'utf8')).sourceHash, run.sourceHash)
+})
+
+test('EX failure, timeout and empty checks are never reported as passing', async (t) => {
+  const { folder, verifier } = await fixture(t)
+  const fail = await verifier.verify({ id: 'a', folder, checks: [{ id: 'fail', command: 'node -e "process.exit(7)"' }] })
+  assert.equal(fail.status, 'failed')
+  assert.notEqual(fail.checks[0].exitCode, 0)
+  const empty = await verifier.verify({ id: 'b', folder, checks: [] })
+  assert.equal(empty.status, 'unverified')
+  const timeout = await verifier.verify({ id: 'c', folder, checks: [{ id: 'timeout', command: 'node -e "setTimeout(()=>{},60000)"', timeoutMs: 1000 }] })
+  assert.equal(timeout.status, 'failed')
+  assert.equal(timeout.checks[0].status, 'timeout')
+})
+
+test('EX modifications during verification stale the result', async (t) => {
+  const { folder, verifier } = await fixture(t)
+  const run = await verifier.verify({ id: 'a', folder, checks: [{ id: 'modify', command: `node -e "require('fs').writeFileSync('source.txt','changed')"` }] })
+  assert.equal(run.status, 'stale')
+})
+
+test('EX changes reverted during a command still invalidate verification', async (t) => {
+  const { folder, verifier } = await fixture(t)
+  const run = await verifier.verify({ id: 'a', folder, checks: [{ id: 'revert', command: `node -e "const fs=require('fs');fs.writeFileSync('source.txt','changed');fs.writeFileSync('source.txt','before')"` }] })
+  assert.equal(run.sourceHash, run.endHash)
+  assert.equal(run.status, 'stale')
+  assert.equal(run.ownerId, 'a')
+})
+
+test('EX cancellation terminates verification and prevents later checks', async (t) => {
+  const { folder, verifier } = await fixture(t)
+  const pending = verifier.verify({ id: 'a', folder, checks: [{ id: 'slow', command: 'node -e "setTimeout(()=>{},60000)"' }, { id: 'next', command: 'echo next' }] })
+  verifier.cancel('a')
+  const run = await pending
+  assert.equal(run.status, 'cancelled')
+  assert.equal(run.checks.length, 0)
+})

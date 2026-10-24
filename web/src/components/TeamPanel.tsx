@@ -8,6 +8,7 @@ import { effortLabel, relativeTime, resetLabel } from '../util'
 import { ChatGptLimits } from './ChatGptUsage'
 import { ConfirmDialog, Modal } from './Modal'
 import { TeamConfigDialog } from './TeamSettings'
+import { ExecutionChecksDialog } from './ExecutionSettings'
 import { claudeModelName } from './TerminalPickers'
 
 const STATE_LABEL: Record<TeamChildState, string> = {
@@ -22,12 +23,17 @@ const STATE_LABEL: Record<TeamChildState, string> = {
 }
 const PROVIDER_LABEL = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude API', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', local: 'ローカル' }
 
+const VERIFICATION_LABEL: Record<string, string> = { passed: '成功', failed: '失敗', stale: '再検証が必要', unverified: '未実行', cancelled: '停止', error: 'エラー' }
+
 const isActive = (state: TeamChildState) => state === 'running' || state === 'approval'
 /** What 全停止 stops: work under way, and work about to go on by itself. */
 const isStoppable = (state: TeamChildState) => isActive(state) || state === 'resuming'
 
 /** An idle child whose last turn ended in a report is waiting for the leader's audit. */
 export function stateLabel(child: TeamChild) {
+  if (child.execution?.phase === 'verifying') return '検証中'
+  if (child.execution?.phase === 'review') return '判定待ち'
+  if (child.execution?.outcome === 'abandoned') return '中止'
   if (child.state === 'idle' && child.lastReport?.kind === 'report') return '報告済み'
   return STATE_LABEL[child.state]
 }
@@ -108,8 +114,8 @@ export function BackToLeader({ teamId, childId }: { teamId: string; childId?: st
 /** In a leader's header: shows or hides the team panel once the leader started children. */
 export function TeamToggle({ team }: { team: TeamSummary | undefined }) {
   const open = useStore((state) => state.teamPanel)
-  if (!team?.children.length) return null
-  const running = team.children.filter((child) => isActive(child.state)).length
+  if (!team || (!team.children.length && !team.execution)) return null
+  const running = team.children.filter((child) => isActive(child.state) || child.execution?.phase === 'verifying').length
   return (
     <button
       type="button"
@@ -217,6 +223,7 @@ function ChildCard({ child }: { child: TeamChild }) {
         {child.modelName}{child.effort ? `・${effortLabel(child.effort)}` : ''}
         {child.pending > 0 && ` · 指示 ${child.pending} 件が待機中`}
       </div>
+      {child.execution?.verification && <div className="subagent-card-activity">検証: {VERIFICATION_LABEL[child.execution.verification.status] ?? child.execution.verification.status} · 差し戻し {child.execution.repairs}回</div>}
       {opens && <ChevronRight size={14} className="subagent-card-chev" />}
     </button>
   )
@@ -280,8 +287,8 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
   const [editing, setEditing] = useState(false)
   const [usage, setUsage] = useState(false)
   const [stopping, setStopping] = useState(false)
-  const running = team.children.filter((child) => isActive(child.state)).length
-  const stoppable = team.children.filter((child) => isStoppable(child.state)).length
+  const running = team.children.filter((child) => isActive(child.state) || child.execution?.phase === 'verifying').length
+  const stoppable = team.children.filter((child) => isStoppable(child.state) || child.execution?.phase === 'verifying').length
   const children = [...team.children].sort((a, b) => a.createdAt - b.createdAt)
   return (
     <>
@@ -289,7 +296,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
       <aside className="subagent-panel team-panel" aria-label="チーム">
         <div className="subagent-panel-head">
           <Users size={15} />
-          <span className="subagent-panel-title">チーム</span>
+          <span className="subagent-panel-title">{team.execution ? "実行モード" : "チーム"}</span>
           <span className="subagent-panel-count">{running > 0 ? `作業中 ${running} / ${children.length}` : `${children.length} 人`}</span>
           <button type="button" className="icon-button small" aria-label="パネルを閉じる" title="パネルを閉じる" onClick={() => setTeamPanel(false)}>
             <X size={15} />
@@ -300,8 +307,8 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
             <button type="button" className="button team-diagram-button" onClick={() => setDiagram(true)}>
               <Network size={14} /> 図を開く
             </button>
-            <button type="button" className="button team-diagram-button" onClick={() => setEditing(true)} title="子の枠のモデルと、同時に動かせる子の数を変える">
-              <SlidersHorizontal size={14} /> このチームの設定
+            <button type="button" className="button team-diagram-button" onClick={() => setEditing(true)} title={team.execution ? "プロジェクトの検証コマンドを設定" : "子の枠のモデルと、同時に動かせる子の数を変える"}>
+              <SlidersHorizontal size={14} /> {team.execution ? "検証設定" : "このチームの設定"}
             </button>
           </div>
           <div className="team-panel-actions">
@@ -318,7 +325,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
         </div>
       </aside>
       {diagram && <TeamDiagram team={team} onClose={() => setDiagram(false)} />}
-      {editing && <TeamConfigDialog team={team} onClose={() => setEditing(false)} />}
+      {editing && (team.execution ? <ExecutionChecksDialog workspace={team.workspace} onClose={() => setEditing(false)} /> : <TeamConfigDialog team={team} onClose={() => setEditing(false)} />)}
       {usage && <UsageDialog onClose={() => setUsage(false)} />}
       {stopping && (
         <ConfirmDialog title="作業中の子をすべて止めますか？" confirmLabel={`${running} 人を止める`} danger

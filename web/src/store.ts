@@ -36,6 +36,7 @@ export interface State {
   projectDialog: boolean
   /** The folder the team start dialog (TM) is open for. */
   teamStart: string | null
+  executionStart: string | null
   sidebarOpen: boolean
   toasts: Toast[]
   queued: Record<string, QueuedMessage[]>
@@ -161,6 +162,7 @@ let state: State = {
   settingsOpen: null,
   projectDialog: false,
   teamStart: null,
+  executionStart: null,
   sidebarOpen: !isNarrow(),
   toasts: [],
   queued: readQueued(),
@@ -570,8 +572,8 @@ function upsertTeam(team: TeamSummary) {
 
 /** Starts an agent team in a project (or My PC): its Claude Code leader opens to talk to. */
 /** Starts a team in the folder with the choices of the start dialog; its leader (Claude Code or GPT) opens. */
-export async function startTeam(workspace: string, choices: TeamSettings, authConfirmation?: ClaudeAuthConfirmation) {
-  const result = await act<{ team: TeamSummary; terminal?: TerminalSummary; thread?: ThreadSummary }>('team.create', { workspace, choices, authConfirmation })
+export async function startTeam(workspace: string, choices: TeamSettings, authConfirmation?: ClaudeAuthConfirmation, execution?: { leaderModel?: string }) {
+  const result = await act<{ team: TeamSummary; terminal?: TerminalSummary; thread?: ThreadSummary }>('team.create', { workspace, choices, authConfirmation, execution })
   if (!result) return false
   upsertTeam(result.team)
   if (result.thread) {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -233,6 +234,121 @@ async function setup(t, settings = {}, options = {}) {
     sent: () => threads.calls.filter((call) => call[0] === 'send' && call[1] === leader).map((call) => call[2]),
   }
 }
+
+async function setupExecution(t) {
+  const base = await setup(t, { leaderProvider: 'gpt' })
+  execFileSync('git', ['init', '-q', base.workspace])
+  await fs.writeFile(path.join(base.workspace, 'source.txt'), 'original')
+  const { team: view } = await base.manager.create({ workspace: base.workspace, execution: {} })
+  const team = base.manager.teams.get(view.id)
+  return { ...base, team, leader: team.leaderId, tool: (name, args = {}) => base.manager.call(team.id, team.secret, name, args) }
+}
+const exTask = { title: 'implement', task: 'do the bounded work', criteria: 'the test passes without unrelated changes', checks: [], tier: 'low', provider: 'gpt' }
+
+test('EX holds one writer through verification and parent judgment, then checks freshness', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(123)"' }])
+  await tool('spawn', { ...exTask, checks: ['test'] })
+  const child = team.children[0]
+  await assert.rejects(tool('spawn', exTask), /作業|判定/)
+  threads.finish(child.taskId, 'done')
+  assert.equal(child.execution.phase, 'verifying')
+  await assert.rejects(tool('close', { child: child.id }), /終わって/)
+  await Promise.all([...manager.exPending])
+  assert.equal(child.execution.verification.status, 'passed')
+  assert.equal(child.execution.phase, 'review')
+  assert.match(child.reports.at(-1).text, /EX 検証: passed/)
+  await fs.writeFile(path.join(workspace, 'source.txt'), 'external edit')
+  await assert.rejects(tool('close', { child: child.id }), /変更/)
+  assert.equal(child.execution.verification.status, 'stale')
+  await tool('close', { child: child.id, accept: false, reason: 'external edit needs a new plan' })
+  assert.equal(child.execution.outcome, 'abandoned')
+})
+
+test('EX retries explicitly repairable failures once, then escalates repeated evidence', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(123);process.exit(2)"', autoRepair: true }])
+  await tool('spawn', { ...exTask, checks: ['test'] })
+  const child = team.children[0]
+  threads.finish(child.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  assert.equal(child.execution.repairs, 1)
+  assert.equal(child.execution.phase, 'working')
+  assert.equal(child.reports.length, 0)
+  threads.finish(child.taskId, 'done again')
+  await Promise.all([...manager.exPending])
+  assert.equal(child.execution.repairs, 1)
+  assert.equal(child.execution.phase, 'review')
+  assert.equal(child.execution.verification.status, 'failed')
+  await assert.rejects(tool('close', { child: child.id }), /成功していません/)
+})
+
+test('EX requires acceptance criteria and checks, isolates research and preserves TM defaults', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await assert.rejects(tool('spawn', { ...exTask, criteria: '' }), /criteria/)
+  await assert.rejects(tool('spawn', { ...exTask, checks: ['missing'] }), /登録/)
+  await assert.rejects(tool('spawn', { ...exTask, tier: 'mid' }), /低枠/)
+  await tool('spawn', { ...exTask, mode: 'research' })
+  const research = team.children[0]
+  assert.equal(threads.threads.get(research.taskId).permissionMode, 'read-only')
+  await tool('spawn', exTask)
+  const writer = team.children[1]
+  assert.throws(() => manager.guardExecution({ id: 'ordinary', workspace }), /EX/)
+  manager.guardExecution({ id: team.leaderId, workspace })
+  threads.finish(writer.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  assert.equal(writer.execution.verification.status, 'unverified')
+  await assert.rejects(tool('close', { child: writer.id }), /根拠/)
+  await tool('close', { child: writer.id, reason: 'manually reviewed source' })
+  assert.equal(writer.execution.outcome, 'accepted')
+})
+
+test('EX stopAll before verification starts does not launch a command or auto-repair', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "process.exit(2)"', autoRepair: true }])
+  await tool('spawn', { ...exTask, checks: ['test'] })
+  const child = team.children[0]
+  let calls = 0
+  manager.execution.verify = async () => { calls++; throw new Error('must not execute') }
+  threads.finish(child.taskId, 'done')
+  await manager.stopAll(team.id)
+  await Promise.all([...manager.exPending])
+  assert.equal(calls, 0)
+  assert.equal(child.execution.repairs, 0)
+  assert.equal(child.execution.phase, 'review')
+  assert.equal(child.reports.at(-1).kind, 'cancelled')
+})
+
+test('EX failed send preserves the reviewed evidence and restart interrupts verification', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await tool('spawn', exTask)
+  const child = team.children[0]
+  threads.finish(child.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  const verification = structuredClone(child.execution.verification)
+  const send = threads.send
+  threads.send = async () => { throw new Error('send failed') }
+  await assert.rejects(tool('send', { child: child.id, message: 'fix' }), /send failed/)
+  assert.equal(child.execution.phase, 'review')
+  assert.deepEqual(child.execution.verification, verification)
+  threads.send = send
+  child.execution.phase = 'verifying'
+  manager.start()
+  assert.equal(child.execution.phase, 'review')
+  assert.equal(child.execution.verification, undefined)
+  assert.equal(child.reports.at(-1).kind, 'error')
+  assert.throws(() => manager.guardExecution({ id: 'other', workspace: path.join(workspace, 'nested') }), /EX/)
+})
+
+test('EX accepts an explicitly chosen API parent and records mode in launch tools', async (t) => {
+  const { manager, workspace } = await setupExecution(t)
+  const result = await manager.create({ workspace, execution: { leaderModel: '["anthropic","claude-haiku-5-5"]' } })
+  assert.equal(result.thread.model, '["anthropic","claude-haiku-5-5"]')
+  assert.equal(result.thread.title, '実行モード')
+  assert.equal(result.team.execution.metrics.childTurns, 0)
+  const mcp = manager.mcpServerFor({ team: { id: result.team.id, role: 'leader' } })
+  assert.ok(mcp.env.some((entry) => entry.name === 'AGENT_DESK_EXECUTION'))
+})
 
 test('team auth consent persists sanitized mode without changing providers and guards existing disabled children', async (t) => {
   const { manager, team, tool, terminals, leader, workspace } = await setup(t)

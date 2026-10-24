@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Info, Loader2, WifiOff } from 'lucide-reac
 import { Home } from './components/Home'
 import { ProjectDialog } from './components/ProjectDialog'
 import { TeamStartDialog } from './components/TeamSettings'
+import { ExecutionStartDialog } from './components/ExecutionSettings'
 import { Sidebar } from './components/Sidebar'
 import { ThreadView } from './components/ThreadView'
 import { AgentView } from './components/AgentView'
@@ -74,6 +75,7 @@ export function App() {
   const settingsOpen = useStore((state) => state.settingsOpen)
   const projectDialog = useStore((state) => state.projectDialog)
   const teamStart = useStore((state) => state.teamStart)
+  const executionStart = useStore((state) => state.executionStart)
   // The server restarts into the new version; the window reconnects to it.
   const updating = useStore((state) => state.server?.updates?.app?.phase === 'installing')
   const title = useStore((state) => {
@@ -144,6 +146,7 @@ export function App() {
       {settingsOpen && <Suspense fallback={null}><SettingsDialog tab={settingsOpen} /></Suspense>}
       {projectDialog && <ProjectDialog />}
       {teamStart && <TeamStartDialog key={teamStart} workspace={teamStart} />}
+      {executionStart && <ExecutionStartDialog key={executionStart} workspace={executionStart} />}
       <Toasts />
       <FileMenuHost />
     </div>
