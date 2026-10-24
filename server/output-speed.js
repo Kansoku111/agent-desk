@@ -1,13 +1,9 @@
-// Observed text throughput, not the provider's internal decoding speed. Never
-// divide billed usage by these timings: it may include hidden reasoning/tools.
+// Approximate received text throughput, never a provider decoding benchmark.
 export const OUTPUT_SPEED_META = 'agentDesk/outputSpeed'
 export const SPEED_INTERVAL_MS = 300
-export const SPEED_IDLE_MS = 2000
-const WINDOW_MS = 3000
-const MIN_SPAN_MS = 500
-const BUCKET_MS = 100
+const MIN_SPAN_MS = 1000
 
-/** Cheap, deliberately approximate token weights. Additive across chunk splits. */
+/** Additive even when a surrogate pair is split between chunks. */
 export function estimateOutputTokens(text) {
   let tokens = 0
   for (const char of text) {
@@ -17,82 +13,73 @@ export function estimateOutputTokens(text) {
   return tokens
 }
 
-/** One per turn. Only the small published snapshot is stored/sent to the UI. */
+/** One turn owner, but only the latest model response is measured/retained. */
 export class OutputSpeedMeter {
   constructor({ onChange = () => {}, now = () => performance.now() } = {}) {
     this.onChange = onChange
     this.now = now
-    this.samples = []
-    this.tokens = 0
-    this.elapsed = 0
-    this.lastAt = null
-    this.segmentTokens = 0
-    this.lastRate = null
     this.state = 'paused'
     this.timer = null
     this.published = null
+    this.firstAt = null
+    this.lastAt = null
+    this.tokens = 0
+    this.lastRate = null
+  }
+
+  start() {
+    if (this.state === 'done') return
+    clearInterval(this.timer)
+    this.timer = null
+    this.firstAt = this.lastAt = null
+    this.tokens = 0
+    this.lastRate = null
+    this.state = 'streaming'
+    this.#publish(null, 'streaming')
   }
 
   push(text) {
     if (this.state === 'done' || typeof text !== 'string' || !text.length) return
+    if (this.state !== 'streaming') this.start()
     const now = this.now()
-    if (this.lastAt === null || now - this.lastAt >= SPEED_IDLE_MS) {
-      // The first chunk has no known start time. Exclude its tokens rather than
-      // inventing a generation interval (also makes a single buffered reply N/A).
-      this.samples = [{ at: now, tokens: 0 }]
-      this.segmentTokens = 0
-    } else {
-      const tokens = estimateOutputTokens(text)
-      this.tokens += tokens
-      this.elapsed += Math.max(0, now - this.lastAt)
-      this.segmentTokens += tokens
-      const sample = { at: now, tokens: this.segmentTokens }
-      const last = this.samples.at(-1)
-      if (this.samples.length > 1 && Math.floor(last.at / BUCKET_MS) === Math.floor(now / BUCKET_MS)) {
-        this.samples[this.samples.length - 1] = sample
-      } else this.samples.push(sample)
-      // Keep one anchor at/before the rolling window. At most ~32 buckets.
-      while (this.samples.length > 2 && this.samples[1].at <= now - WINDOW_MS) this.samples.shift()
-    }
+    // The first batch has no observable generation interval; exclude it.
+    if (this.firstAt === null) this.firstAt = now
+    else this.tokens += estimateOutputTokens(text)
     this.lastAt = now
-    this.state = 'streaming'
     if (!this.timer) {
       this.timer = setInterval(() => this.tick(), SPEED_INTERVAL_MS)
       this.timer.unref?.()
     }
   }
 
-  tick() {
-    if (this.state !== 'streaming') return
-    if (this.now() - this.lastAt >= SPEED_IDLE_MS) return this.pause()
-    const first = this.samples[0], last = this.samples.at(-1)
-    if (last.at - first.at >= MIN_SPAN_MS) {
-      this.lastRate = (last.tokens - first.tokens) * 1000 / (last.at - first.at)
-      this.#publish(this.lastRate, 'streaming')
-    } else this.#publish(null, 'streaming')
+  #rate(until) {
+    // Eligibility is based on actual receive times, not a timer aging a burst.
+    if (this.firstAt === null || this.lastAt - this.firstAt < MIN_SPAN_MS) return null
+    return this.tokens * 1000 / (until - this.firstAt)
   }
 
-  pause() {
+  tick() {
+    if (this.state !== 'streaming' || this.lastAt === null) return
+    // Include silence within this response. An arbitrary idle timeout cannot
+    // distinguish slow generation from network buffering or a tool wait.
+    this.#publish(this.#rate(this.now()), 'streaming')
+  }
+
+  pause({ discard = false } = {}) {
     if (this.state === 'done') return
-    // Capture the latest received samples before closing the segment. Waiting
-    // after its last chunk never enters the denominator.
-    const first = this.samples[0], last = this.samples.at(-1)
-    if (first && last.at - first.at >= MIN_SPAN_MS) {
-      this.lastRate = (last.tokens - first.tokens) * 1000 / (last.at - first.at)
-    }
+    if (this.state === 'streaming') this.lastRate = this.#rate(this.lastAt)
+    if (discard) this.lastRate = null
     clearInterval(this.timer)
     this.timer = null
-    this.lastAt = null
-    this.samples = []
     this.state = 'paused'
-    this.#publish(this.lastRate, 'paused')
+    this.#publish(null, 'paused') // Never show a previous response during tools.
   }
 
   finish() {
     if (this.state === 'done') return
     this.pause()
     this.state = 'done'
-    this.#publish(this.elapsed >= MIN_SPAN_MS ? this.tokens * 1000 / this.elapsed : null, 'done')
+    this.#publish(this.lastRate, 'done')
   }
 
   #publish(rate, state) {

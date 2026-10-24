@@ -23,26 +23,26 @@ function fixture(t, notify = null) {
 
 const text = 'a'.repeat(100)
 
-test('stream attempts share one prompt average and only scalar metadata leaves dsh', async (t) => {
+test('stream attempts retain only the last response average and only scalar metadata leaves dsh', async (t) => {
   const f = fixture(t)
   f.frame({ type: 'start' })
   f.chunk({ type: 'text-delta', text })
-  f.at(500)
+  f.at(1000)
   f.chunk({ type: 'reasoning-delta', text })
   f.meter.tick()
   await f.record.outputTail
-  assert.equal(f.last().tokensPerSecond, 50)
+  assert.equal(f.last().tokensPerSecond, 25)
   assert.equal(f.last().state, 'streaming')
   f.chunk({ type: 'tool-call-delta', argumentsDelta: text.repeat(1000) })
   f.frame({ type: 'end' })
   f.at(60_000)
   f.frame({ type: 'start' })
   f.chunk({ type: 'text-delta', text })
-  f.at(60_500)
+  f.at(61_000)
   f.chunk({ type: 'text-delta', text: text.repeat(2) })
   f.frame({ type: 'end' })
   await finishOutputSpeed(f.record)
-  assert.deepEqual(f.last(), { tokensPerSecond: 75, state: 'done', estimated: true })
+  assert.deepEqual(f.last(), { tokensPerSecond: 50, state: 'done', estimated: true })
   for (const notification of f.updates) {
     assert.equal(notification.sessionId, 'owned-root-session')
     assert.equal(notification.update.content.text, '')
@@ -56,7 +56,7 @@ test('finishing awaits ordered notification delivery and ignores subsequent fram
   const pending = new Promise((resolve) => { release = resolve })
   const f = fixture(t, async () => pending)
   f.chunk({ type: 'text-delta', text })
-  f.at(500)
+  f.at(1000)
   f.chunk({ type: 'text-delta', text })
   let finished = false
   const completion = finishOutputSpeed(f.record).then(() => { finished = true })
@@ -73,7 +73,7 @@ test('finishing awaits ordered notification delivery and ignores subsequent fram
 test('failed metric delivery never fails a prompt or leaves a timer alive', async (t) => {
   const f = fixture(t, async () => { throw new Error('disconnected client') })
   f.chunk({ type: 'text-delta', text })
-  f.at(500)
+  f.at(1000)
   f.chunk({ type: 'text-delta', text })
   await finishOutputSpeed(f.record)
   assert.equal(f.meter.timer, null)

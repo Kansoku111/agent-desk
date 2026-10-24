@@ -297,14 +297,14 @@ function FileChanges({ turn, workspace }: { turn: Turn; workspace: string }) {
 
 /** The same compact readout while streaming and in the finished usage footer. */
 function OutputSpeed({ speed }: { speed: Turn['outputSpeed'] }) {
-  if (!speed || !Number.isFinite(speed.tokensPerSecond) || speed.tokensPerSecond <= 0) return null
+  if (!speed || speed.state === 'paused' || !Number.isFinite(speed.tokensPerSecond) || speed.tokensPerSecond <= 0) return null
   const state = speed.state
-  const detail = state === 'done' ? '受信した本文・思考テキストの平均速度（推定）' : '直近約3秒の受信テキスト速度（推定）'
+  const detail = 'この応答の平均出力速度（本文・受信できる思考から推定）'
   return (
     <span
       className={`output-speed ${state}`}
-      title={`${detail}。通信のまとめ送りやモデルのトークン分割により誤差があります。${state === 'paused' ? '現在は受信を一時停止しています。' : ''}`}
-      aria-label={`${state === 'done' ? '平均' : ''}推定出力速度 毎秒${speed.tokensPerSecond}トークン${state === 'paused' ? '、一時停止中' : ''}`}
+      title={`${detail}。通信のまとめ送りやモデルのトークン分割により誤差があります。`}
+      aria-label={`この応答の平均推定出力速度 毎秒${speed.tokensPerSecond}トークン`}
     >
       ≈ {speed.tokensPerSecond.toLocaleString('en-US', { maximumFractionDigits: 1 })} t/s
     </span>

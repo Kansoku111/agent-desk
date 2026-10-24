@@ -131,7 +131,7 @@ async function mockServer(reply, streamDelayMs = 0) {
 test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-local-llm-'))
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-local-llm-ws-'))
-  const mock = await mockServer('ローカルからの返事', 120)
+  const mock = await mockServer('ローカルからの返事', 180)
   const hook = path.join(home, 'offline-fetch.mjs')
   // Only the mock server is reachable from the app server; dsh talks to it directly.
   await fs.writeFile(hook, `const real = globalThis.fetch; globalThis.fetch = async (url, init) => {

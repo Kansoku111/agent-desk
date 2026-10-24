@@ -132,33 +132,59 @@ test('partial Claude text/thought events share the meter without duplicating the
   assert.equal(live.speed.timer, null, 'nested agent output does not start the parent meter')
   part({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: text } })
   part({ type: 'content_block_delta', delta: { type: 'signature_delta', signature: 'not-text' } })
-  now = 500
+  now = 1000
   part({ type: 'content_block_delta', delta: { type: 'text_delta', text } })
   live.speed.tick()
-  assert.equal(live.turn.outputSpeed.tokensPerSecond, 50)
+  assert.equal(live.turn.outputSpeed.tokensPerSecond, 25)
   assert.equal(live.turn.outputSpeed.state, 'streaming')
   assert.equal(live.turn.items.length, 0, 'partial timing events do not append duplicate content')
   part({ type: 'content_block_start', content_block: { type: 'tool_use' } })
-  assert.equal(live.turn.outputSpeed.state, 'paused')
+  assert.equal(live.turn.outputSpeed, undefined)
   assert.equal(live.speed.timer, null)
   part({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: text.repeat(1000) } })
   now = 60_000
   part({ type: 'content_block_delta', delta: { type: 'text_delta', text } })
-  now = 60_500
+  now = 61_000
   part({ type: 'content_block_delta', delta: { type: 'text_delta', text } })
   proc.write({ type: 'assistant', message: { id: 'answer', content: [{ type: 'text', text }] } })
   const ended = done()
   proc.write({ type: 'result', subtype: 'success', result: text })
-  assert.equal(live.turn.outputSpeed.state, 'paused')
+  assert.equal(live.turn.outputSpeed, undefined)
   assert.equal(live.speed.timer, null)
   proc.end(0)
   await ended
   assert.equal(live.turn.items.length, 1)
   assert.equal(live.turn.items[0].text, text)
-  assert.deepEqual(live.turn.outputSpeed, { tokensPerSecond: 50, state: 'done', estimated: true })
+  assert.deepEqual(live.turn.outputSpeed, { tokensPerSecond: 25, state: 'done', estimated: true })
   await runner.writes.get(session.id)
   const saved = JSON.parse(await fs.readFile(path.join(runner.dir, `${session.id}.json`), 'utf8'))
   assert.deepEqual(saved.turns[0].outputSpeed, live.turn.outputSpeed)
+})
+
+test('a text-free final Claude message does not inherit the previous response speed', async (t) => {
+  const { runner, spawned, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work' })
+  runner.run(session.id, 'test')
+  const [proc] = spawned
+  const live = runner.live.get(session.id)
+  let now = 0
+  live.speed.now = () => now
+  const part = (event) => proc.write({ type: 'stream_event', event })
+  part({ type: 'message_start' })
+  part({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'a'.repeat(100) } })
+  now = 1000
+  part({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'a'.repeat(100) } })
+  live.speed.tick()
+  assert.equal(live.turn.outputSpeed.tokensPerSecond, 25)
+  part({ type: 'message_stop' })
+  part({ type: 'message_start' })
+  part({ type: 'message_stop' })
+  const ended = done()
+  proc.write({ type: 'result', subtype: 'success', result: '' })
+  proc.end(0)
+  await ended
+  assert.equal(live.turn.outputSpeed, undefined)
+  assert.equal(live.speed.timer, null)
 })
 
 const inputLines = (proc) => proc.input.trim().split('\n').map((line) => JSON.parse(line))

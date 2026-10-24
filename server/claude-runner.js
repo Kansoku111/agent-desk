@@ -428,12 +428,13 @@ export class ClaudeRunner extends EventEmitter {
       // still owns transcript content, avoiding duplicate text/tool calls.
       const part = event.event
       if (!live.stopping && !live.ended) {
-        if (part?.type === 'content_block_delta') {
+        if (part?.type === 'message_start') live.speed.start()
+        else if (part?.type === 'content_block_delta') {
           if (part.delta?.type === 'text_delta') live.speed.push(part.delta.text)
           else if (part.delta?.type === 'thinking_delta') live.speed.push(part.delta.thinking)
-          else if (part.delta?.type === 'input_json_delta') live.speed.pause()
-        } else if (part?.type === 'message_stop'
-          || (part?.type === 'content_block_start' && part.content_block?.type === 'tool_use')) live.speed.pause()
+          else if (part.delta?.type === 'input_json_delta') live.speed.pause({ discard: true })
+        } else if (part?.type === 'message_stop') live.speed.pause()
+        else if (part?.type === 'content_block_start' && part.content_block?.type === 'tool_use') live.speed.pause({ discard: true })
       }
       return
     }

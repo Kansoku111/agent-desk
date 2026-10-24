@@ -19,12 +19,14 @@ export function beginOutputSpeed(record) {
 export function observeOutputSpeed(record, frame) {
   const meter = record && meters.get(record)
   if (!meter || !frame) return
-  if (frame.type === 'start' || frame.type === 'end') return meter.pause()
+  if (frame.type === 'start') return meter.start()
+  if (frame.type === 'end') return meter.pause()
   if (frame.type !== 'chunk') return
   const chunk = frame.chunk
   if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') meter.push(chunk.text)
-  else if (chunk?.type === 'tool-call-delta' || chunk?.type === 'finish'
-    || (chunk?.type === 'block-start' && chunk.block?.type === 'tool-call')) meter.pause()
+  else if (chunk?.type === 'finish') meter.pause()
+  else if (chunk?.type === 'tool-call-delta'
+    || (chunk?.type === 'block-start' && chunk.block?.type === 'tool-call')) meter.pause({ discard: true })
 }
 
 export async function finishOutputSpeed(record) {
