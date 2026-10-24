@@ -73,6 +73,16 @@ test('About separates OpenCode model additions and errors from the general model
   assert.doesNotMatch(other, /recentOpenCode|opencode\?\.error|models\.opencodeGo\?\.error/)
 })
 
+test('OpenCode cannot show a success check while definitions are missing or cannot be refreshed', async () => {
+  const source = await updatesCardSource()
+  const row = /<span className="update-name">OpenCode Go<\/span>([\s\S]*?)<\/div>/.exec(source)[1]
+  assert.match(row, /opencodeMissing\s*\?\s*`定義待ち \$\{opencodeMissing\}件`/)
+  assert.match(row, /!opencodeMissing && !opencode\?\.definitionError/)
+  assert.match(row, /AlertTriangle[\s\S]*?aria-label="モデル定義の同期が未完了"/)
+  assert.ok(row.indexOf('opencodeMissing ?') < row.indexOf('recentOpenCode.length'))
+  assert.match(source, /registry: 'OpenCode 公式カタログ'/)
+})
+
 test('About exposes one shared manual check for application and model updates', async () => {
   const source = await updatesCardSource()
   assert.match(source, /await\s+Promise\.all\(\[\s*act\('updates\.check'\),\s*act\('modelUpdate\.check'\)\s*\]\)/)

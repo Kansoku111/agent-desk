@@ -19,8 +19,8 @@ export function parseModelIds(body) {
 }
 
 export class OpenCodeGoModels {
-  constructor({ file, fetchImpl = fetch, installed = installedModels }) {
-    Object.assign(this, { file, fetchImpl, installed })
+  constructor({ file, fetchImpl = fetch, installed = installedModels, refreshDefinitions = null }) {
+    Object.assign(this, { file, fetchImpl, installed, refreshDefinitions })
     this.saved = null
     this.served = null
     this.hidden = []
@@ -48,7 +48,12 @@ export class OpenCodeGoModels {
     return this
   }
 
-  async #resolve(ids) {
+  async #resolve(ids, { refreshDefinitions = false, force = false } = {}) {
+    if (refreshDefinitions && this.refreshDefinitions) {
+      // Metadata failures must leave the valid live inventory visible as a
+      // partial sync, not hide new ids behind a supposedly successful check.
+      try { await this.refreshDefinitions(ids, { force }) } catch {}
+    }
     const installed = await this.installed()
     const live = new Set(ids)
     const served = [...installed.keys()].filter((id) => live.has(id)).sort()
@@ -68,7 +73,7 @@ export class OpenCodeGoModels {
       try {
         // Re-resolve cached ids too: a pi-ai update may have added definitions.
         if (this.saved && !this.failed && Date.now() - this.saved.fetchedAt < maxAgeMs) {
-          Object.assign(this, await this.#resolve(this.saved.ids))
+          Object.assign(this, await this.#resolve(this.saved.ids, { refreshDefinitions: true, force: maxAgeMs === 0 }))
           return JSON.stringify(this.served) !== before
         }
         const response = await this.fetchImpl(OPENCODE_GO_MODELS_URL, {
@@ -79,7 +84,7 @@ export class OpenCodeGoModels {
         const ids = response.ok ? parseModelIds(await response.json()) : null
         if (!ids) throw new Error('Unreadable model list')
         // Validate before replacing either memory or the persistent last-good list.
-        const resolved = await this.#resolve(ids)
+        const resolved = await this.#resolve(ids, { refreshDefinitions: true, force: maxAgeMs === 0 })
         const saved = { ids, fetchedAt: Date.now() }
         await writeJson(this.file, saved)
         this.saved = saved

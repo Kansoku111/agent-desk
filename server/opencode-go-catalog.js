@@ -32,6 +32,15 @@ export function canonicalOpenCodeCatalog(groups) {
   return data
 }
 
+/** Merge data-only additions; later sources win, with no protocol inference. */
+export function combineOpenCodeAdditions(...sources) {
+  const result = {}
+  for (const source of sources) for (const [api, group] of Object.entries(source ?? {})) {
+    result[api] = { ...result[api], ...group }
+  }
+  return result
+}
+
 export function openCodeModels(data) {
   return Object.values(data ?? {}).flatMap((group) => Object.values(group ?? {}))
     .filter((model) => (model?.type ?? 'chat') === 'chat' && typeof model?.id === 'string')

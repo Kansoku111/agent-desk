@@ -498,7 +498,7 @@ export interface ModelUpdate {
   /** The models the last release to bring any added. */
   lastAdded: { at: number; source: string; models: AddedModel[] } | null
   /** Every model Agent Desk adds to dsh's list now. */
-  models: (AddedModel & { source: 'bundled' | 'fetched' | 'account' })[]
+  models: (AddedModel & { source: 'bundled' | 'fetched' | 'account' | 'registry' })[]
   /** The ChatGPT account's model list, which Agent Desk follows (adds from it, flags retired models). */
   account: {
     /** 'ok'; 'signed-out' without a ChatGPT sign-in; 'error' when the list could not be read; null before the first try. */
@@ -516,6 +516,9 @@ export interface ModelUpdate {
     hidden: { id: string; name: string }[]
     /** Service ids still lacking a supported model definition. */
     missing: string[]
+    /** Last successful check of the supplemental official catalog. */
+    definitionCheckedAt?: number | null
+    definitionError?: boolean
   } | null
 }
 

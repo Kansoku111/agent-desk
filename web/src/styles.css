@@ -3438,6 +3438,10 @@ select:focus {
   color: var(--green);
 }
 
+.update-warning {
+  color: var(--amber);
+}
+
 .update-dot {
   flex: none;
   width: 7px;

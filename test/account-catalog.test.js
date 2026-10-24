@@ -75,11 +75,12 @@ test('old OpenCode Go snapshots cannot complete or undo a model-list refresh', a
  * discovery, with no provider requests or real credentials: only the free
  * key-validation endpoint is mocked.
  */
-async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false }, savedUpdates = null, afterAdded = null }) {
+async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false }, savedUpdates = null, afterAdded = null, registryBody = null }) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-account-catalog-'))
   const hook = path.join(home, 'offline-fetch.mjs')
   await fs.writeFile(hook, `globalThis.fetch = async (url) => {
     if (String(url) === ${JSON.stringify(probe)}) return new Response(${JSON.stringify(probeBody)}, { status: 200 });
+    if (String(url) === 'https://models.opencode.ai/api.json' && ${JSON.stringify(registryBody !== null)}) return Response.json(${JSON.stringify(registryBody)});
     throw new Error('offline account-catalog test');
   }`)
   await fs.writeFile(path.join(home, 'settings.json'), JSON.stringify(settings))
@@ -212,6 +213,45 @@ test('MiniMax M3.1 Flash appears in the real picker when the service lists the o
   assert.equal(models.find((model) => model.id === 'minimax-m3.1-flash').name, 'MiniMax M3.1 Flash')
   assert.deepEqual(added.modelUpdate.opencodeGo.missing, [])
   assert.equal(added.modelUpdate.lastAdded.models[0].name, 'MiniMax M3.1 Flash')
+})
+
+test('an unknown official model is added from structured metadata without a pi-ai release or alias patch', { timeout: 60_000 }, async (t) => {
+  const id = 'new-registry-model'
+  await keyRefreshesCatalog(t, {
+    provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
+    settings: { modelAutoUpdate: true },
+    probeBody: JSON.stringify({ data: [{ id: 'glm-5.3' }, { id }] }),
+    registryBody: { 'opencode-go': {
+      id: 'opencode-go', npm: '@ai-sdk/openai-compatible', api: 'https://opencode.ai/inference/go/openai/v1',
+      models: { [id]: {
+        id, name: 'New Registry Model', tool_call: true, reasoning: true,
+        reasoning_options: [{ type: 'effort', values: ['low', 'high'] }],
+        modalities: { input: ['text', 'image'], output: ['text'] },
+        limit: { context: 1000000, output: 64000 }, cost: { input: 1, output: 2 },
+      } },
+    } },
+    afterAdded: async ({ added }) => {
+      const models = added.catalog.models.filter((model) => model.provider === 'opencode-go')
+      assert.deepEqual(models.map((model) => model.id).sort(), ['glm-5.3', id])
+      assert.equal(models.find((model) => model.id === id).name, 'New Registry Model')
+      assert.deepEqual(added.modelUpdate.opencodeGo.missing, [])
+      assert.equal(added.modelUpdate.opencodeGo.definitionError, false)
+      assert.ok(added.modelUpdate.models.some((model) => model.id === id && model.source === 'registry'))
+      assert.ok(added.modelUpdate.lastAdded.models.some((model) => model.id === id))
+    },
+  })
+})
+
+test('a genuinely unsupported official id remains explicit in the update state rather than disappearing silently', { timeout: 45_000 }, async (t) => {
+  const added = await keyRefreshesCatalog(t, {
+    provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
+    settings: { modelAutoUpdate: true },
+    probeBody: JSON.stringify({ data: [{ id: 'glm-5.3' }, { id: 'no-supported-definition' }] }),
+    registryBody: { 'opencode-go': { id: 'opencode-go', models: {} } },
+  })
+  assert.deepEqual(added.modelUpdate.opencodeGo.missing, ['no-supported-definition'])
+  assert.equal(added.modelUpdate.opencodeGo.error, false)
+  assert.ok(!added.catalog.models.some((model) => model.id === 'no-supported-definition'))
 })
 
 test('OpenCode Go models the service no longer lists leave the picker', { timeout: 45_000 }, async (t) => {

@@ -24,7 +24,8 @@ import { localLlmSettings, localRoute } from './local-llm.js'
 import { teamConfig } from './team-config.js'
 import { readJson, UnmovableFileError, writeJson } from './json-file.js'
 import { catalogModelLimits, configuredModelCatalog, readOpenCodeCatalog } from './model-catalog.js'
-import { openCodeModels } from './opencode-go-catalog.js'
+import { combineOpenCodeAdditions, openCodeModels } from './opencode-go-catalog.js'
+import { OpenCodeGoRegistry } from './opencode-go-registry.js'
 import { SiwcModelCatalog } from './siwc-models.js'
 import { ModelCatalogUpdater } from './model-updates.js'
 import { installedModels, OpenCodeGoModels } from './opencode-go-models.js'
@@ -220,10 +221,23 @@ const modelUpdater = await new ModelCatalogUpdater({
   onCatalog: () => updateModelCatalog().then(() => {}),
   log: (...parts) => log('model update:', ...parts),
 }).load()
-/** The OpenCode Go models the service still lists, among the catalog's (see opencode-go-models.js). */
+const opencodeRegistry = await new OpenCodeGoRegistry({
+  file: path.join(paths.home, 'opencode-go-definitions.json'),
+  base: () => readOpenCodeCatalog(modelUpdater.fetched),
+}).load()
+/** pi-ai stays authoritative for known definitions; official metadata fills exact-id gaps. */
+const openCodeFetched = () => settings.modelAutoUpdate === false ? null : ({
+  ...modelUpdater.fetched,
+  providers: {
+    ...modelUpdater.fetched?.providers,
+    'opencode-go': combineOpenCodeAdditions(opencodeRegistry.groups, modelUpdater.fetched?.providers?.['opencode-go']),
+  },
+})
+/** The OpenCode Go models the service still lists, among the supported definitions. */
 const opencodeGoModels = await new OpenCodeGoModels({
   file: path.join(paths.home, 'opencode-go-models.json'),
-  installed: () => installedModels(modelUpdater.fetched),
+  installed: () => installedModels(openCodeFetched()),
+  refreshDefinitions: (ids, options) => opencodeRegistry.refresh(ids, options),
 }).load()
 let opencodeGoKeyed = false
 /** The saved OpenCode Go key, while models follow the service (the sync setting is on). */
@@ -245,6 +259,8 @@ let catalogAdditions = []
 const accountAvailability = () => (settings.modelAutoUpdate !== false ? codexLimits.availability : null)
 const modelUpdateState = () => ({
   ...modelUpdater.snapshot(),
+  lastAdded: [modelUpdater.snapshot().lastAdded, settings.modelAutoUpdate !== false ? opencodeRegistry.lastAdded : null]
+    .filter(Boolean).sort((a, b) => b.at - a.at)[0] ?? null,
   models: catalogAdditions,
   account: {
     status: codexLimits.status,
@@ -253,7 +269,11 @@ const modelUpdateState = () => ({
   },
   // The OpenCode Go list follows the service, while a key is saved and the sync is on.
   opencodeGo: opencodeGoKeyed && settings.modelAutoUpdate !== false
-    ? { checkedAt: opencodeGoModels.checkedAt, error: opencodeGoModels.failed, hidden: opencodeGoModels.hidden, missing: opencodeGoModels.missing }
+    ? {
+      checkedAt: opencodeGoModels.checkedAt, error: opencodeGoModels.failed,
+      hidden: opencodeGoModels.hidden, missing: opencodeGoModels.missing,
+      definitionCheckedAt: opencodeRegistry.checkedAt, definitionError: opencodeRegistry.failed,
+    }
     : null,
 })
 /** The catalog as the UI gets it: models the account's list no longer has are marked `retired`. */
@@ -265,17 +285,18 @@ async function syncModelCatalog() {
     result = await configuredModelCatalog(fromAccount, modelUpdater.fetched)
     configuredModels = result.definitions
     if (codexLimits.definitions.length) configuredModels['openai-codex'] = codexLimits.definitions
-    const goAdditions = modelUpdater.fetched?.providers?.['opencode-go'] ?? {}
+    const goAdditions = openCodeFetched()?.providers?.['opencode-go'] ?? {}
     const previous = await readJson(paths.opencodeGoCatalog, null)
     if (JSON.stringify(previous) !== JSON.stringify(goAdditions)) {
       await writeJson(paths.opencodeGoCatalog, goAdditions)
       result.changed = true
     }
     const shippedGo = await installedModels()
-    for (const model of openCodeModels(await readOpenCodeCatalog(modelUpdater.fetched))) {
+    const piGo = await installedModels(modelUpdater.fetched)
+    for (const model of openCodeModels(await readOpenCodeCatalog(openCodeFetched()))) {
       if (shippedGo.has(model.id)) continue
       result.added.push(`opencode-go/${model.id}`)
-      result.models.push({ provider: 'opencode-go', id: model.id, name: model.name, source: 'fetched' })
+      result.models.push({ provider: 'opencode-go', id: model.id, name: model.name, source: piGo.has(model.id) ? 'fetched' : 'registry' })
     }
   } catch (error) {
     result = { changed: false, added: [], models: [], skipped: [], warnings: [error.message] }
@@ -293,7 +314,7 @@ const catalogSignature = async (result) => JSON.stringify({
   // OpenCode Go's route is in the home patch only while its key is saved.
   opencodeGo: (await accounts()).opencodeGo.configured,
   opencodeGoModels: (await accounts()).opencodeGo.configured
-    ? opencodeGoServed() ?? [...(await installedModels(modelUpdater.fetched)).keys()].sort()
+    ? opencodeGoServed() ?? [...(await installedModels(openCodeFetched())).keys()].sort()
     : [],
   local: localLlmSettings(settings.localLlm),
 })

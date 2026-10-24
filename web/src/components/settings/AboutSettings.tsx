@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from 'react'
-import { Check, Copy, Download, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Download, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import { act, openExternal, toast, useStore } from '../../store'
 import type { PermissionMode, UpdateChannel, Updates } from '../../types'
 import { copyText, PERMISSION_INFO } from '../../util'
@@ -56,6 +56,7 @@ function UpdatesCard({ updates }: { updates: Updates }) {
   const recentModels = recent?.models.filter((model) => model.provider !== 'opencode-go') ?? []
   const recentOpenCode = recent?.models.filter((model) => model.provider === 'opencode-go') ?? []
   const opencode = models?.opencodeGo
+  const opencodeMissing = opencode?.missing?.length ?? 0
   const { dsh, codex, claude, app } = updates
 
   const check = async () => {
@@ -135,11 +136,16 @@ function UpdatesCard({ updates }: { updates: Updates }) {
             {!opencodeConfigured ? 'API キー未設定'
               : !autoSync ? '自動同期オフ'
                 : busy ? '確認中…'
-                  : recentOpenCode.length ? recentOpenCode.map((model) => model.name).join('、')
-                    : opencode?.checkedAt ? '' : '未確認'}
+                  : opencodeMissing ? `定義待ち ${opencodeMissing}件`
+                    : opencode?.definitionError ? 'モデル定義の更新確認に失敗'
+                      : recentOpenCode.length ? recentOpenCode.map((model) => model.name).join('、')
+                        : opencode?.checkedAt ? '' : '未確認'}
           </span>
           <span className="update-action">
-            {opencodeConfigured && autoSync && !busy && !models?.error && !opencode?.error && opencode?.checkedAt && <Latest />}
+            {opencodeConfigured && autoSync && !busy && (opencodeMissing > 0 || opencode?.definitionError) && (
+              <AlertTriangle size={15} className="update-warning" aria-label="モデル定義の同期が未完了" />
+            )}
+            {opencodeConfigured && autoSync && !busy && !models?.error && !opencode?.error && !opencodeMissing && !opencode?.definitionError && opencode?.checkedAt && <Latest />}
           </span>
           {opencodeConfigured && autoSync && opencode?.error && (
             <p className="form-error">OpenCode Go のモデル一覧を読み込めませんでした（前回の結果を使っています）</p>
@@ -202,6 +208,7 @@ function UpdatesCard({ updates }: { updates: Updates }) {
                   : models.opencodeGo.checkedAt ? `照合済み（${dateTime(models.opencodeGo.checkedAt)}）` : '未確認'}
                 {models.opencodeGo.hidden.length > 0 && <>　非表示: {models.opencodeGo.hidden.map((model) => model.name).join('、')}</>}
                 {models.opencodeGo.missing?.length > 0 && <>　定義待ち: {models.opencodeGo.missing.join('、')}</>}
+                {models.opencodeGo.definitionError && <>　公式モデル定義を更新できませんでした</>}
               </p>
             )}
             {models.models.length > 0 && (
@@ -210,7 +217,7 @@ function UpdatesCard({ updates }: { updates: Updates }) {
                   <li key={`${model.provider}/${model.id}`}>
                     <div>
                       <span>{model.name}</span>
-                      <code>{model.provider} · {model.id} · {({ fetched: '自動取得', bundled: '同梱', account: 'ChatGPT アカウントの一覧' })[model.source]}</code>
+                      <code>{model.provider} · {model.id} · {({ fetched: '自動取得', bundled: '同梱', account: 'ChatGPT アカウントの一覧', registry: 'OpenCode 公式カタログ' })[model.source]}</code>
                     </div>
                   </li>
                 ))}
