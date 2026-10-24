@@ -1520,6 +1520,26 @@ test('send with fresh starts the child over in a new conversation and drops the 
   assert.equal(gpt.reports.at(-1).text, 'fresh report')
 })
 
+for (const leanChildren of [true, false]) {
+  test(`startup choices override saved leanChildren=${!leanChildren} with ${leanChildren}`, async (t) => {
+    const { manager, workspace, team: existing, agents } = await setup(t, { leanChildren: !leanChildren })
+    const { team: view } = await manager.create({ workspace, choices: { leanChildren } })
+    const team = manager.teams.get(view.id)
+    assert.equal(view.config.leanChildren, leanChildren)
+    assert.equal(manager.summary(existing).config.leanChildren, !leanChildren)
+    for (const provider of ['claude', 'gpt']) {
+      await manager.call(team.id, team.secret, 'spawn', { title: provider, task: 'x', tier: 'low', provider })
+    }
+    const args = agents.calls.find((call) => call[0] === 'create')[1].args
+    assert.equal(args.includes('--strict-mcp-config'), leanChildren)
+    assert.equal(args.includes('--chrome'), !leanChildren)
+    const child = team.children[1]
+    assert.equal(manager.toolsFor({ id: child.taskId, team: { id: team.id, childId: child.id } }), !leanChildren)
+    const { team: next } = await manager.create({ workspace })
+    assert.equal(next.config.leanChildren, !leanChildren, 'creating a team does not mutate the saved defaults')
+  })
+}
+
 test('lean children start without the extra tools unless spawn asks for them', async (t) => {
   const { tool, team, manager, agents, terminals, leader } = await setup(t, { leanChildren: true })
   const args = terminals.records.get(leader).launch.args

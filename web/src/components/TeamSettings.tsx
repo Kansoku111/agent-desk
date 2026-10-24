@@ -292,6 +292,13 @@ function BypassSwitch({ config, onChange }: { config: Config; onChange: Change }
   )
 }
 
+function LeanChildrenSwitch({ config, onChange }: { config: Config; onChange: Change }) {
+  return (
+    <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成は必要な子にだけ渡します。"
+      checked={config.leanChildren === true} onChange={(value) => onChange({ leanChildren: value })} />
+  )
+}
+
 function Switch({ title, note, checked, onChange }: { title: string; note: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
     <div className="setting compact">
@@ -341,6 +348,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
         <LeaderSection server={server} config={draft} onChange={change} />
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
+          <LeanChildrenSwitch config={draft} onChange={change} />
         </section>
         {PROVIDERS.map((provider) => <ProviderCard key={provider} server={server} config={draft} provider={provider} onChange={change} />)}
         {!anyChildOn(draft) && <p className="team-warning">子に使うものを、少なくとも一つオンにしてください。オンにしたものだけが、リーダーから使えます。</p>}
@@ -436,8 +444,7 @@ export function TeamSettings() {
         <BypassSwitch config={config} onChange={save} />
         <Switch title="報告をまとめて渡す" note="近い時間に届いた報告を1ターンにまとめます。"
           checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />
-        <Switch title="子のツールを絞る" note="ブラウザ・画面操作・画像生成は必要な子にだけ渡します。"
-          checked={config.leanChildren === true} onChange={(value) => save({ leanChildren: value })} />
+        <LeanChildrenSwitch config={config} onChange={save} />
       </section>
       <TeamGuides policies={server.settings.teamPolicies ?? []} playbooks={server.settings.teamPlaybooks ?? []} />
       {apiSubagent && (
