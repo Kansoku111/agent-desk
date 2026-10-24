@@ -538,7 +538,9 @@ test('a message sent without the screen is pasted into Claude Code, then Enter f
   const { workspace, pty, manager } = await setup()
   const terminal = await manager.create({ workspace })
   const [proc] = pty.spawned
-  manager.sendMessage(terminal.id, 'one\ntwo')
+  // Claude Code reported its session a while ago: its input box is up.
+  manager.live.get(terminal.id).sessionAt = Date.now() - 5000
+  await manager.sendMessage(terminal.id, 'one\ntwo')
   assert.deepEqual(proc.written, ['one\ntwo'])
   await new Promise((resolve) => setTimeout(resolve, 250))
   assert.deepEqual(proc.written, ['one\ntwo', '\r'])
@@ -550,9 +552,28 @@ test('a message sent without the screen is pasted into Claude Code, then Enter f
   proc.emit('\x1b[?2004h')
   await settle()
   proc.written.length = 0
-  manager.sendMessage(terminal.id, 'a\nb')
+  await manager.sendMessage(terminal.id, 'a\nb')
   assert.deepEqual(proc.written, ['\x1b[200~a\nb\x1b[201~'])
-  assert.throws(() => manager.sendMessage('nope', 'x'), /動いていません/)
+  await assert.rejects(manager.sendMessage('nope', 'x'), /動いていません/)
+})
+
+test('a message sent while Claude Code starts waits for its input box, which would drop it', async () => {
+  const { workspace, pty, manager } = await setup()
+  const terminal = await manager.create({ workspace })
+  const [proc] = pty.spawned
+  const sent = manager.sendMessage(terminal.id, 'hello')
+  const file = manager.insertPath(terminal.id, 'C:\\a.png')
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.deepEqual(proc.written, [])
+  manager.live.get(terminal.id).sessionAt = Date.now() - 5000
+  await Promise.all([sent, file])
+  assert.deepEqual(proc.written, ['hello', 'C:\\a.png '])
+
+  // Claude Code ended before its box came up: the sender hears it.
+  const second = await manager.create({ workspace })
+  const waiting = manager.sendMessage(second.id, 'x')
+  pty.spawned[1].exit(1)
+  await assert.rejects(waiting, /動いていません/)
 })
 
 

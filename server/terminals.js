@@ -39,6 +39,8 @@ const SEND_ENTER_MS = 150
 const SEND_ENTER_MAX_MS = 1500
 const SEND_RETRY_MS = 1500
 const SEND_RETRIES = 2
+/** How often a message sent while Claude Code starts checks whether its input box is up. */
+const READY_POLL_MS = 200
 /**
  * How long Claude Code waits for the API's response headers before it sends
  * the request again (its own default is 180 s). A request sent on a connection
@@ -622,10 +624,23 @@ export class TerminalManager extends EventEmitter {
     if (claim || live.controller === client) this.#control(id, live, client)
   }
 
-  /** A message typed outside the terminal screen: pasted (keeping its line breaks) and sent with Enter. */
-  sendMessage(id, text) {
+  /**
+   * Waits until Claude Code has its input box up: what is pasted while it
+   * still starts is dropped, so a message sent right after a task opened was lost.
+   */
+  async #whenReady(id) {
     const live = this.live.get(id)
     if (!live?.alive) throw new Error('Claude Code が動いていません')
+    while (!this.status(id).ready) {
+      await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
+      if (!live.alive || this.live.get(id) !== live) throw new Error('Claude Code が動いていません')
+    }
+    return live
+  }
+
+  /** A message typed outside the terminal screen: pasted (keeping its line breaks) and sent with Enter. */
+  async sendMessage(id, text) {
+    const live = await this.#whenReady(id)
     if (typeof text !== 'string') return
     // A paste marker inside the text would end the paste early and send the rest as typed keys.
     if (text) live.proc.write(live.term.modes.bracketedPasteMode ? `\x1b[200~${text.replace(PASTE_MARKERS, '')}\x1b[201~` : text)
@@ -715,9 +730,8 @@ export class TerminalManager extends EventEmitter {
   }
 
   /** Types a file's path into Claude Code (an image from a phone, or pasted in the window). */
-  insertPath(id, file) {
-    const live = this.live.get(id)
-    if (!live?.alive) throw new Error('Claude Code が動いていません')
+  async insertPath(id, file) {
+    const live = await this.#whenReady(id)
     const text = /\s/.test(file) ? `"${file}"` : file
     live.proc.write(live.term.modes.bracketedPasteMode ? `\x1b[200~${text} \x1b[201~` : `${text} `)
   }

@@ -28,18 +28,18 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
     'terminal.conversation': ({ terminalId, epoch, since }) => terminals.conversation(terminalId, { epoch, since }),
     'terminal.dialog': async ({ terminalId }) => ({ dialog: await terminals.dialog(terminalId) }),
     'terminal.choose': ({ terminalId, key, label }) => terminals.choose(terminalId, key, label),
-    'terminal.send': ({ terminalId, text }) => {
-      terminals.sendMessage(terminalId, text)
+    'terminal.send': async ({ terminalId, text }) => {
+      await terminals.sendMessage(terminalId, text)
       // Something other than null: the page takes null as a failure.
       return { sent: true }
     },
     'terminal.resize': ({ terminalId, size, claim }, client) => {
       terminals.resize(terminalId, client, size, claim !== false)
     },
-    'terminal.insertFile': ({ terminalId, file }) => {
+    'terminal.insertFile': async ({ terminalId, file }) => {
       const saved = attachmentPath(paths.attachmentsDir, file)
       if (!saved) throw new Error('添付ファイルが見つかりません')
-      terminals.insertPath(terminalId, saved)
+      await terminals.insertPath(terminalId, saved)
       // Something other than null: the page takes null as a failure.
       return { inserted: true }
     },
