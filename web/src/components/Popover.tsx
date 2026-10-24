@@ -9,6 +9,8 @@ interface DropdownProps {
   align?: 'left' | 'right'
   width?: number
   className?: string
+  /** Pins the panel to the screen instead of its trigger's box, for a trigger inside a scrolling list that would clip it. */
+  fixed?: boolean
   /** Called when the panel closes, however it was closed. */
   onClose?: () => void
 }
@@ -18,7 +20,7 @@ const MENU_GAP = 6
 const MENU_EDGE = 8
 
 /** A trigger plus a floating panel that closes on outside click or Escape. */
-export function Dropdown({ trigger, children, placement = 'top', align = 'left', width, className, onClose }: DropdownProps) {
+export function Dropdown({ trigger, children, placement = 'top', align = 'left', width, className, fixed, onClose }: DropdownProps) {
   const [open, setOpen] = useState(false)
   const closed = useRef(onClose)
   closed.current = onClose
@@ -29,7 +31,7 @@ export function Dropdown({ trigger, children, placement = 'top', align = 'left',
   }, [open])
   // Where the panel actually fits: on a phone the composer can sit near the top of the screen, so a
   // `top` menu flips below the trigger, and either way it is capped to the room it has.
-  const [fit, setFit] = useState<{ side: 'top' | 'bottom'; room: number } | null>(null)
+  const [fit, setFit] = useState<{ side: 'top' | 'bottom'; room: number; at?: CSSProperties } | null>(null)
   const root = useRef<HTMLDivElement>(null)
   const menu = useRef<HTMLDivElement>(null)
 
@@ -55,16 +57,29 @@ export function Dropdown({ trigger, children, placement = 'top', align = 'left',
       panel.style.maxHeight = ''
       const other = placement === 'top' ? 'bottom' : 'top'
       const side = needed <= room[placement] || room[placement] >= room[other] ? placement : other
-      setFit((current) => (current?.side === side && current.room === room[side] ? current : { side, room: room[side] }))
+      // A pinned panel is placed from the trigger's screen position; a scroll under it would leave it behind, so it closes.
+      const at: CSSProperties | undefined = fixed
+        ? {
+          position: 'fixed',
+          ...(side === 'top' ? { bottom: window.innerHeight - anchor.top + MENU_GAP } : { top: anchor.bottom + MENU_GAP }),
+          ...(align === 'right' ? { right: document.documentElement.clientWidth - anchor.right } : { left: anchor.left }),
+        }
+        : undefined
+      setFit((current) => (current?.side === side && current.room === room[side] && !fixed ? current : { side, room: room[side], at }))
     }
     place()
     window.addEventListener('resize', place)
     window.visualViewport?.addEventListener('resize', place)
+    const onScroll = (event: Event) => {
+      if (!menu.current?.contains(event.target as Node)) setOpen(false)
+    }
+    if (fixed) window.addEventListener('scroll', onScroll, true)
     return () => {
       window.removeEventListener('resize', place)
       window.visualViewport?.removeEventListener('resize', place)
+      window.removeEventListener('scroll', onScroll, true)
     }
-  }, [open, placement])
+  }, [open, placement, align, fixed])
 
   useEffect(() => {
     if (!open) return
@@ -100,7 +115,7 @@ export function Dropdown({ trigger, children, placement = 'top', align = 'left',
         <div
           ref={menu}
           className={`menu menu-${fit?.side ?? placement} menu-${align}`}
-          style={{ ...(width ? { width } : null), ...(fit ? { '--menu-room': `${Math.max(fit.room, 120)}px` } : null) } as CSSProperties}
+          style={{ ...(width ? { width } : null), ...(fit ? { '--menu-room': `${Math.max(fit.room, 120)}px`, ...fit.at } : null) } as CSSProperties}
           role="menu"
           onKeyDown={(event) => {
             // An item's own keys (MenuItem `keys`) choose it, except while typing in the menu.

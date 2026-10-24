@@ -928,6 +928,13 @@ select:focus {
   list-style: none;
 }
 
+/* Five rows (34px each) show per project; the rest scroll. */
+.task-group ul.task-rows {
+  max-height: calc(34px * 5);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
 .task-group .thread-button {
   padding-left: 33px;
 }

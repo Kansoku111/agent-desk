@@ -156,6 +156,7 @@ function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; activ
           placement="bottom"
           align="right"
           width={180}
+          fixed
           className="thread-actions"
           trigger={({ toggle }) => (
             <button type="button" className="icon-button small" aria-label="タスクの操作" onClick={toggle}>
@@ -264,6 +265,7 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
           placement="bottom"
           align="right"
           width={180}
+          fixed
           className="thread-actions"
           trigger={({ toggle }) => (
             <button type="button" className="icon-button small" aria-label="タスクの操作" onClick={toggle}>
@@ -402,6 +404,11 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
     if (name.trim() && name.trim() !== group.label) await act('project.rename', { path: group.path, name: name.trim() })
   }
   const Icon = group.pc ? Monitor : open && hasRows ? FolderOpen : Folder
+  // Only the latest rows show; older ones scroll. An open task further down is scrolled into view.
+  const list = useRef<HTMLUListElement>(null)
+  useLayoutEffect(() => {
+    if (activeId && open) list.current?.querySelector<HTMLElement>('.thread-row.active')?.scrollIntoView({ block: 'nearest' })
+  }, [activeId, open])
   const { head, color } = useWheelColor(group.path, group.color)
   const tint = color >= 0 ? { '--group-hue': PROJECT_HUES[color] } as CSSProperties : undefined
   return (
@@ -505,7 +512,7 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
         </div>
       </div>
       {open && hasRows && (
-        <ul>
+        <ul className="task-rows" ref={list}>
           {draftHere && (
             <li className="thread-row active draft-row">
               <button
