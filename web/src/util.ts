@@ -358,6 +358,9 @@ function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary 
   if (name.includes('web') || name.includes('fetch') || name.includes('browse')) {
     return { icon: 'web', verb: 'Web', target: str(input.url ?? input.query ?? ''), detail: output ? { kind: 'code', text: output } : null }
   }
+  if (/team/.test(name)) {
+    return { icon: 'agent', verb: 'チーム', target: firstLine(str(input.description ?? input.prompt ?? input.name ?? '')), detail: output ? { kind: 'code', text: output } : null }
+  }
   if (name.includes('agent') || name.includes('subagent') || name === 'task') {
     const verb = name === 'subagent_claude' ? 'サブエージェント（Claude）' : name === 'subagent_gpt' ? 'サブエージェント（GPT）' : 'サブエージェント'
     return { icon: 'agent', verb, target: firstLine(str(input.description ?? input.prompt ?? '')), detail: output ? { kind: 'code', text: output } : null }
