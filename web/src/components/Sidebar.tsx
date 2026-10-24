@@ -37,6 +37,8 @@ let taskTreeScroll = 0
 
 /** Rows each project shows before "さらに表示", and the projects the user has opened up. */
 const VISIBLE_ROWS = 3
+/** The most a project lists, however far it is opened; older tasks are still found by searching. */
+const MAX_ROWS = 10
 const expandedGroups = new Set<string>()
 
 /** Opens the composer for a new task in one project (or My PC). */
@@ -346,6 +348,13 @@ function groupRows(group: Group) {
   ].sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/** The rows a group lists: the latest few, up to MAX_ROWS once opened up, all while searching, and the open task always. */
+function visibleRows(rows: ReturnType<typeof groupRows>, expanded: boolean, searching: boolean, activeId: string | null) {
+  if (searching) return rows
+  const limit = expanded ? MAX_ROWS : VISIBLE_ROWS
+  return rows.filter((row, index) => index < limit || row.id === activeId)
+}
+
 /**
  * Turning the mouse wheel over a group's header steps through the tints. The
  * new color shows at once and is saved when the wheel stops.
@@ -386,10 +395,12 @@ function useWheelColor(path: string, color: number) {
   return { head, color: shown }
 }
 
-function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching, selection }: {
+function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, activeId, searching, selection }: {
   group: Group
   collapsed: boolean
   onToggle: () => void
+  expanded: boolean
+  onExpand: () => void
   draftHere: boolean
   activeId: string | null
   searching: boolean
@@ -397,11 +408,9 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
 }) {
   const open = !collapsed || searching
   const rows = groupRows(group)
-  // The latest few tasks show; the button below opens the rest. Searching and selecting show all; the open task always shows.
-  const [expanded, setExpanded] = useState(() => expandedGroups.has(group.path))
-  const all = expanded || searching || selection.enabled
-  const shownRows = all ? rows : rows.filter((row, index) => index < VISIBLE_ROWS || row.id === activeId)
-  const hiddenCount = rows.length - shownRows.length
+  const shownRows = visibleRows(rows, expanded, searching, activeId)
+  // The button opens the rows past the first few, up to the cap.
+  const more = Math.min(rows.length, MAX_ROWS) - VISIBLE_ROWS
   const hasRows = rows.length > 0 || draftHere
   const remote = useRemote()
   const [renaming, setRenaming] = useState(false)
@@ -448,7 +457,7 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
           {rows.length > 0 && (
             <button type="button" className="icon-button small" disabled={selection.busy}
               title="このProjectの表示中のセッションを全選択" aria-label={`${group.label} のセッションを全選択`}
-              onClick={() => selection.group(rows.map((row) => row.id))}>
+              onClick={() => selection.group(shownRows.map((row) => row.id))}>
               <CheckSquare size={14} />
             </button>
           )}
@@ -531,16 +540,13 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
             : <TerminalRow key={row.id} terminal={row.terminal!} active={activeId === row.id} selection={selection} />))}
         </ul>
       )}
-      {open && rows.length > VISIBLE_ROWS && !searching && !selection.enabled && (
-        <button type="button" className="task-more" aria-expanded={expanded} onClick={() => {
-          if (expanded) expandedGroups.delete(group.path)
-          else expandedGroups.add(group.path)
-          setExpanded(!expanded)
-        }}>
+      {open && more > 0 && !searching && (
+        <button type="button" className="task-more" aria-expanded={expanded} onClick={onExpand}>
           {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          <span>{expanded ? '折りたたむ' : `さらに表示 (${hiddenCount})`}</span>
+          <span>{expanded ? '折りたたむ' : `さらに表示 (${more})`}</span>
         </button>
       )}
+
     </section>
   )
 }
@@ -562,6 +568,7 @@ export function Sidebar() {
   const [query, setQuery] = useState('')
   const [archived, setArchived] = useState(false)
   const [collapsed, setCollapsed] = useState(readCollapsed)
+  const [expandedPaths, setExpandedPaths] = useState(() => [...expandedGroups])
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const anchor = useRef<string | null>(null)
@@ -601,10 +608,12 @@ export function Sidebar() {
   }, [threads, terminals, workspaces, myPc, names, colors, needle, archived])
 
   // Search/archive changes cannot leave hidden tasks selected for deletion.
-  const availableIds = useMemo(() => new Set(groups.flatMap((group) => groupRows(group).map((row) => row.id))), [groups])
+  const activeId = route.view === 'thread' || route.view === 'terminal' ? route.id : null
+  const rowsOf = (group: Group) => visibleRows(groupRows(group), expandedPaths.includes(group.path), Boolean(needle), activeId)
+  const availableIds = new Set(groups.flatMap((group) => rowsOf(group).map((row) => row.id)))
   const selectedIds = selected.filter((id) => availableIds.has(id))
   const visibleIds = groups.filter((group) => needle || !collapsed.includes(group.path))
-    .flatMap((group) => groupRows(group).map((row) => row.id))
+    .flatMap((group) => rowsOf(group).map((row) => row.id))
   useEffect(() => {
     setSelected((current) => {
       const next = current.filter((id) => availableIds.has(id))
@@ -657,6 +666,12 @@ export function Sidebar() {
     else toast(`${ids.length}件のセッションを削除しました。Projectは保持されています。`, 'success')
   }
 
+  const expand = (path: string) => {
+    if (expandedGroups.has(path)) expandedGroups.delete(path)
+    else expandedGroups.add(path)
+    setExpandedPaths([...expandedGroups])
+  }
+
   const toggle = (path: string) => {
     const next = collapsed.includes(path) ? collapsed.filter((entry) => entry !== path) : [...collapsed, path]
     setCollapsed(next)
@@ -670,7 +685,6 @@ export function Sidebar() {
     accounts?.opencodeGo?.configured && 'OpenCode Go',
     accounts?.localLlm?.configured && 'ローカル LLM',
   ].filter(Boolean)
-  const activeId = route.view === 'thread' || route.view === 'terminal' ? route.id : null
   const archivedCount = threads.filter((thread) => thread.archived && !thread.team?.childId).length
     + terminals.filter((terminal) => terminal.archived).length
 
@@ -761,6 +775,8 @@ export function Sidebar() {
             group={group}
             collapsed={collapsed.includes(group.path)}
             onToggle={() => toggle(group.path)}
+            expanded={expandedPaths.includes(group.path)}
+            onExpand={() => expand(group.path)}
             draftHere={!archived && !needle && route.view === 'home' && draftWorkspace === group.path}
             activeId={activeId}
             searching={Boolean(needle)}
