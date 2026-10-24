@@ -8,6 +8,8 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import WebSocket from 'ws'
 import { Catalog } from '../server/catalog.js'
+import { readOpenCodeCatalog } from '../server/model-catalog.js'
+import { openCodeModels } from '../server/opencode-go-catalog.js'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const tick = () => new Promise((resolve) => setTimeout(resolve, 50))
@@ -42,12 +44,38 @@ test('catalog does not accept a runtime snapshot that predates a key change', as
   assert.ok(catalog.data.models.every((model) => model.provider !== 'deepseek-official'))
 })
 
+test('old OpenCode Go snapshots cannot complete or undo a model-list refresh', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-go-signature-'))
+  t.after(async () => {
+    await tick()
+    await fs.rm(home, { recursive: true, force: true })
+  })
+  const signature = (ids) => JSON.stringify({ opencodeGo: true, opencodeGoModels: ids })
+  const options = (ids) => [{ id: 'model', options: [{ group: 'opencode-go', options: ids.map((id) => ({ value: JSON.stringify(['opencode-go', id]), name: id })) }] }]
+  const catalog = await new Catalog(path.join(home, 'catalog.json'), signature(['glm-5.3', 'space-bunny'])).load()
+  catalog.learn(options(['space-bunny', 'glm-5.3']))
+  catalog.setSignature(signature(['glm-5.3']))
+  catalog.learn(options(['glm-5.3', 'space-bunny']))
+  assert.equal(catalog.stale, true)
+  catalog.learn(options(['glm-5.3']))
+  assert.equal(catalog.stale, false)
+  assert.equal(catalog.learn(options(['glm-5.3', 'space-bunny'])), false)
+  assert.deepEqual(catalog.data.models.map((model) => model.id), ['glm-5.3'])
+  // Re-enabling the full catalog must not accept the old narrowed snapshot either.
+  catalog.setSignature(signature(['glm-5.3', 'space-bunny']))
+  catalog.learn(options(['glm-5.3']))
+  assert.equal(catalog.stale, true)
+  catalog.setSignature(signature(['glm-5.3', 'glm-5.3-20261024']))
+  catalog.learn(options(['glm-5.3', 'glm-5.3-20261024']))
+  assert.equal(catalog.stale, false)
+})
+
 /**
  * Saves and removes a key through the real save handler, runtimes and
  * discovery, with no provider requests or real credentials: only the free
  * key-validation endpoint is mocked.
  */
-async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false } }) {
+async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false }, savedUpdates = null, afterAdded = null }) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-account-catalog-'))
   const hook = path.join(home, 'offline-fetch.mjs')
   await fs.writeFile(hook, `globalThis.fetch = async (url) => {
@@ -55,6 +83,7 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
     throw new Error('offline account-catalog test');
   }`)
   await fs.writeFile(path.join(home, 'settings.json'), JSON.stringify(settings))
+  if (savedUpdates) await fs.writeFile(path.join(home, 'model-updates.json'), JSON.stringify(savedUpdates))
   const child = spawn(process.execPath, ['--import', pathToFileURL(hook).href, 'server/index.js', '--no-open', '--port', '0'], {
     cwd: root, env: { ...process.env, AGENT_DESK_HOME: home },
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
@@ -121,6 +150,7 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
   const added = await waitFor((state) => models(state).length > 0)
   assert.equal(added.accounts[account].configured, true)
   assert.ok(models(added).every((model) => model.id && model.value))
+  if (afterAdded) await afterAdded({ request, waitFor, added })
   await request('account.removeKey', { provider })
   const removed = await waitFor((state) => models(state).length === 0)
   assert.equal(removed.accounts[account].configured, false)
@@ -139,6 +169,30 @@ test('saving and removing an OpenCode Go key adds and removes its catalog models
   // The models are pi-ai's opencode-go catalog, served through dsh.
   const ids = added.catalog.models.filter((model) => model.provider === 'opencode-go').map((model) => model.id)
   for (const id of ['glm-5.3', 'kimi-k3', 'qwen3.8-max']) assert.ok(ids.includes(id), ids.join(', '))
+})
+
+test('new OpenCode models reach the real picker and auto-sync off/on restores the correct catalogs', { timeout: 60_000 }, async (t) => {
+  const template = openCodeModels(await readOpenCodeCatalog()).find((model) => model.api === 'openai-completions')
+  const providers = { 'opencode-go': { 'openai-completions': {
+    'test-new-go': { ...template, id: 'test-new-go', name: 'Test New Go' },
+  } } }
+  const ids = (state) => state.catalog.models.filter((model) => model.provider === 'opencode-go').map((model) => model.id).sort()
+  await keyRefreshesCatalog(t, {
+    provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
+    probeBody: JSON.stringify({ data: [{ id: 'glm-5.3' }, { id: 'test-new-go' }] }),
+    settings: { modelAutoUpdate: true },
+    savedUpdates: { catalog: { format: 2, source: '99.0.0', providers } },
+    afterAdded: async ({ request, waitFor, added }) => {
+      assert.deepEqual(ids(added), ['glm-5.3', 'test-new-go'])
+      assert.ok(added.modelUpdate.models.some((model) => model.provider === 'opencode-go' && model.id === 'test-new-go'))
+      await request('settings.update', { patch: { modelAutoUpdate: false } })
+      const off = await waitFor((state) => ids(state).includes('space-bunny') && !ids(state).includes('test-new-go'))
+      assert.equal(off.modelUpdate.opencodeGo, null)
+      await request('settings.update', { patch: { modelAutoUpdate: true } })
+      const on = await waitFor((state) => JSON.stringify(ids(state)) === JSON.stringify(['glm-5.3', 'test-new-go']))
+      assert.deepEqual(on.modelUpdate.opencodeGo.missing, [])
+    },
+  })
 })
 
 test('OpenCode Go models the service no longer lists leave the picker', { timeout: 45_000 }, async (t) => {

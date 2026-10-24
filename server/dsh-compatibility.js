@@ -16,6 +16,7 @@ import { patchRetrySource } from './retry-patch.js'
 // the reverse order in which Node enters the hooks).
 const HOOKS = [
   { name: 'fast-mode', module: null },
+  { name: 'opencode-catalog', module: null },
   { name: 'steer', module: 'acp', patch: patchAcpSource },
   { name: 'retry', module: 'llm', patch: patchRetrySource },
   { name: 'goal', module: 'acp', patch: patchGoalSource },
@@ -139,6 +140,17 @@ export async function verifyDshCompatibility({ root = fileURLToPath(new URL('../
       sources[`fast-${api}`] = wrapperSource(url)
       sources[`api-${api}`] = source
     }
+    const { isOpenCodeCatalog } = await import('./opencode-catalog-hook.js')
+    const { openCodeModels } = await import('./opencode-go-catalog.js')
+    const goDir = path.join(path.dirname(modules.pi), 'dist', 'providers')
+    const goSource = await fs.readFile(path.join(goDir, 'opencode-go.models.js'), 'utf8')
+    const goUrl = pathToFileURL(path.join(goDir, 'data', 'opencode-go.json')).href
+    if (!isOpenCodeCatalog(goUrl) || !/import\s+\w+\s+from\s+["']\.\/data\/opencode-go\.json["']\s+with\s*\{\s*type:\s*["']json["']/.test(goSource)) {
+      throw new Error('opencode-catalog: model loader no longer imports the overlaid JSON catalog')
+    }
+    const goData = JSON.parse(await fs.readFile(new URL(goUrl), 'utf8'))
+    if (!openCodeModels(goData).length) throw new Error('opencode-catalog: no supported chat definitions')
+    sources['opencode-models'] = goSource
     await syntaxCheck(sources)
     await verifyActualHookChain(modules, sources)
 

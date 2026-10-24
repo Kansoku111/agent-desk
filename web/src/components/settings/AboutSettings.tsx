@@ -184,6 +184,7 @@ function UpdatesCard({ updates }: { updates: Updates }) {
                   ? '読み込めませんでした（前回の結果を使っています）'
                   : models.opencodeGo.checkedAt ? `照合済み（${dateTime(models.opencodeGo.checkedAt)}）` : '未確認'}
                 {models.opencodeGo.hidden.length > 0 && <>　非表示: {models.opencodeGo.hidden.map((model) => model.name).join('、')}</>}
+                {models.opencodeGo.missing?.length > 0 && <>　定義待ち: {models.opencodeGo.missing.join('、')}</>}
               </p>
             )}
             {models.models.length > 0 && (

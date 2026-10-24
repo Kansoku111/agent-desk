@@ -457,7 +457,7 @@ export interface Updates {
 }
 
 export interface AddedModel {
-  provider: 'openai-codex' | 'anthropic'
+  provider: 'openai-codex' | 'anthropic' | 'opencode-go'
   id: string
   name: string
 }
@@ -490,6 +490,8 @@ export interface ModelUpdate {
     error: boolean
     /** Catalog models the service no longer lists (hidden from the picker). */
     hidden: { id: string; name: string }[]
+    /** Service ids still lacking a supported model definition. */
+    missing: string[]
   } | null
 }
 

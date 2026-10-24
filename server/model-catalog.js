@@ -16,6 +16,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import extras from './catalog-extras.json' with { type: 'json' }
 import { GPT_PROVIDER, siwcCatalog } from './siwc-route.js'
+import { mergeOpenCodeCatalog } from './opencode-go-catalog.js'
 
 const MARKER = 'agentDeskAdded'
 
@@ -24,6 +25,8 @@ export const BUNDLED_SOURCE = /@([^@]+)$/.exec(extras.source ?? '')?.[1] ?? null
 
 /** Providers whose models come from the pi-ai catalog and can take custom models. */
 export const CUSTOM_MODEL_PROVIDERS = ['openai-codex', 'anthropic']
+/** OpenCode Go uses a data overlay because its route mixes wire protocols. */
+export const UPDATE_MODEL_PROVIDERS = [...CUSTOM_MODEL_PROVIDERS, 'opencode-go']
 
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,99}$/i
 
@@ -175,11 +178,20 @@ export async function shippedCatalog() {
       }
     }
     const provider = name.slice(0, -'.json'.length)
-    if (CUSTOM_MODEL_PROVIDERS.includes(provider)) {
+    if (UPDATE_MODEL_PROVIDERS.includes(provider)) {
       providers[provider] = provider === GPT_PROVIDER ? siwcCatalog(data) : data
     }
   }
   return { providers, keys }
+}
+
+/** The mixed-protocol catalog as the OpenCode Go runtime will read it. */
+export async function readOpenCodeCatalog(fetched = null) {
+  const [dir] = catalogDataDirs()
+  if (!dir) return {}
+  const original = JSON.parse(await fs.readFile(path.join(dir, 'opencode-go.json'), 'utf8'))
+  if (!knownLayout(original)) throw new Error('Unsupported model catalog layout: opencode-go')
+  return mergeOpenCodeCatalog(original, fetched?.providers?.['opencode-go'])
 }
 
 /** Context window and reply budget of every catalog model, by provider and id. */

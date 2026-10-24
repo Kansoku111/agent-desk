@@ -176,6 +176,34 @@ test('the updater reads a newer release once, keeps its models and reports the n
   }
 })
 
+test('OpenCode definitions are fetched, persisted and migrated even at the same pi-ai version', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'model-updates-go-'))
+  t.after(() => fs.rm(home, { recursive: true, force: true }))
+  const base = model('glm-5.3', {
+    name: 'GLM-5.3', provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/v1',
+  })
+  const shipped = { 'openai-completions': { 'glm-5.3': base } }
+  const go = { 'openai-completions': { 'chat:beam-free': { ...base, type: 'chat', id: 'beam-free', name: 'Beam Free' } } }
+  const archive = tgz([{ name: 'package/dist/providers/data/opencode-go.json', body: JSON.stringify(go) }])
+  // Existing installs already cached the current release without the Go file.
+  await fs.writeFile(path.join(home, 'model-updates.json'), JSON.stringify({ catalog: { source: '99.0.0', providers: {} } }))
+  let downloads = 0
+  const updater = await new ModelCatalogUpdater({
+    root: home, home, enabled: () => true, onCatalog: async () => {},
+    lookup: async () => ({ version: '99.0.0', tarball: 'https://example.test/models.tgz' }),
+    download: async () => { downloads++; return archive },
+    shipped: async () => ({ providers: { 'opencode-go': shipped }, keys }),
+  }).load()
+  const state = await updater.check()
+  assert.equal(state.error, null)
+  assert.equal(downloads, 1)
+  assert.equal(updater.fetched.providers['opencode-go']['openai-completions']['beam-free'].api, 'openai-completions')
+  assert.deepEqual(state.lastAdded.models, [{ provider: 'opencode-go', id: 'beam-free', name: 'Beam Free' }])
+  assert.ok((await readFetchedCatalog(home)).providers['opencode-go'])
+  await updater.check()
+  assert.equal(downloads, 1)
+})
+
 test('a failed lookup is reported and keeps what was fetched before', async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'model-updates-'))
   try {

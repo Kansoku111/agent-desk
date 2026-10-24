@@ -26,6 +26,7 @@ export function appPaths(home = defaultAppHome()) {
     threadsDir: path.join(home, 'threads'),
     attachmentsDir: path.join(home, 'attachments'),
     catalog: path.join(home, 'catalog.json'),
+    opencodeGoCatalog: path.join(home, 'opencode-go-catalog.json'),
     browserProfile: path.join(home, 'browser-profile'),
     runtimeCwd: path.join(home, 'runtime-cwd'),
     // "My PC": the working folder for tasks that belong to no project.

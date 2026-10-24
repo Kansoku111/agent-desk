@@ -30,7 +30,14 @@ function matchesSignature(signature, models) {
   if (!requirements || typeof requirements !== 'object') return true
   const matches = (name, provider) => typeof requirements[name] !== 'boolean'
     || models.some((model) => model.provider === provider) === requirements[name]
-  return matches('deepseek', 'deepseek-official') && matches('opencodeGo', 'opencode-go')
+  if (!matches('deepseek', 'deepseek-official') || !matches('opencodeGo', 'opencode-go')) return false
+  if (Array.isArray(requirements.opencodeGoModels)) {
+    const actual = models.filter((model) => model.provider === 'opencode-go').map((model) => model.id).sort()
+    // parseConfigOptions omits dated aliases from the UI catalog.
+    const expected = [...new Set(requirements.opencodeGoModels)].filter((id) => !/-\d{8}$/.test(id)).sort()
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) return false
+  }
+  return true
 }
 
 export class Catalog {
@@ -71,6 +78,9 @@ export class Catalog {
     let changed = false
     const models = parsed.models.filter((model) => PROVIDER_LABELS[model.provider])
     const current = models.length > 0 && matchesSignature(this.signature, models)
+    // A pending restart can leave old sessions emitting config options. They
+    // must neither replace an existing list nor mark the new signature current.
+    if (!current && this.data.models.length) return false
     if (models.length && JSON.stringify(models) !== JSON.stringify(this.data.models)) {
       this.data.models = models
       changed = true

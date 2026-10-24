@@ -55,7 +55,7 @@ async function fixture(t) {
   await fs.mkdir(path.join(root, 'server'))
   for (const file of ['scripts/check-dsh.mjs', ...[
     'dsh-compatibility.js', 'steer-patch.js', 'goal-patch.js', 'retry-patch.js', 'mcp-timeout-patch.js', 'fast-mode-hook.js', 'fast-mode.js',
-    'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js',
+    'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js',
   ].map((file) => `server/${file}`)]) {
     await fs.copyFile(path.join(project, file), path.join(root, file))
   }
@@ -96,6 +96,8 @@ async function fixture(t) {
     await put(`${pi}/dist/api/${api}.js`, 'export const stream = (model, context, options) => options?.onPayload?.({}, model); export const streamSimple = stream;')
     await put(`${pi}/dist/api/${api}.lazy.js`, `export const api = () => import("./${api}.js")`)
   }
+  await put(`${pi}/dist/providers/opencode-go.models.js`, 'import values from "./data/opencode-go.json" with { type: "json" }; export const OPENCODE_GO_MODELS = values')
+  await put(`${pi}/dist/providers/data/opencode-go.json`, JSON.stringify({ 'openai-completions': { 'chat:fixture': { id: 'fixture', type: 'chat' } } }))
   const retry = await put(`${pi}/dist/utils/retry.js`, 'export const isRetryableAssistantError = () => true')
   return { root, put, acp, llm, acpSource, llmSource, retry, pi }
 }
@@ -103,7 +105,7 @@ async function fixture(t) {
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
   const { acpSource, llmSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
-    'fast-mode-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js',
+    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js',
   ])
   assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource }), {
     acp: patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource))), llm: patchRetrySource(llmSource),
@@ -168,6 +170,13 @@ test('fast-mode missing payload interception cannot pass the update gate', async
   const { root, pi, put } = await fixture(t)
   await put(`${pi}/dist/api/openai-codex-responses.js`, 'export const stream = () => {}; export const streamSimple = stream')
   await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /fast-mode: openai-codex-responses no longer calls onPayload/)
+})
+
+test('OpenCode catalog loader drift blocks the update before runtime startup', async (t) => {
+  const { root, pi, put } = await fixture(t)
+  await put(`${pi}/dist/providers/opencode-go.models.js`, 'export const OPENCODE_GO_MODELS = {}')
+  await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /opencode-catalog: model loader no longer imports/)
+  await assert.rejects(fs.stat(path.join(root, 'runtime-started')))
 })
 
 test('fast-mode requires both callable stream exports', async (t) => {

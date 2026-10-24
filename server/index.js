@@ -23,10 +23,11 @@ import { createSettingsService, DEFAULT_SETTINGS, migrateSettings } from './sett
 import { localLlmSettings, localRoute } from './local-llm.js'
 import { teamConfig } from './team-config.js'
 import { readJson, UnmovableFileError, writeJson } from './json-file.js'
-import { catalogModelLimits, configuredModelCatalog } from './model-catalog.js'
+import { catalogModelLimits, configuredModelCatalog, readOpenCodeCatalog } from './model-catalog.js'
+import { openCodeModels } from './opencode-go-catalog.js'
 import { SiwcModelCatalog } from './siwc-models.js'
 import { ModelCatalogUpdater } from './model-updates.js'
-import { OpenCodeGoModels } from './opencode-go-models.js'
+import { installedModels, OpenCodeGoModels } from './opencode-go-models.js'
 import { resetPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
@@ -217,7 +218,10 @@ const modelUpdater = await new ModelCatalogUpdater({
   log: (...parts) => log('model update:', ...parts),
 }).load()
 /** The OpenCode Go models the service still lists, among the catalog's (see opencode-go-models.js). */
-const opencodeGoModels = await new OpenCodeGoModels({ file: path.join(paths.home, 'opencode-go-models.json') }).load()
+const opencodeGoModels = await new OpenCodeGoModels({
+  file: path.join(paths.home, 'opencode-go-models.json'),
+  installed: () => installedModels(modelUpdater.fetched),
+}).load()
 let opencodeGoKeyed = false
 /** The saved OpenCode Go key, while models follow the service (the sync setting is on). */
 async function opencodeGoKey() {
@@ -230,9 +234,7 @@ await opencodeGoKey()
 const opencodeGoServed = () => (settings.modelAutoUpdate !== false ? opencodeGoModels.served : null)
 /** Reads the service's list now (the shared 今すぐ確認) and applies it. */
 async function checkOpenCodeGoModels() {
-  const key = await opencodeGoKey()
-  if (key) await opencodeGoModels.refresh(key, { maxAgeMs: 0 })
-  await updateModelCatalog()
+  await updateModelCatalog({ forceOpenCode: true })
 }
 /** The bundled and fetched models Agent Desk currently adds to dsh's catalog. */
 let catalogAdditions = []
@@ -248,7 +250,7 @@ const modelUpdateState = () => ({
   },
   // The OpenCode Go list follows the service, while a key is saved and the sync is on.
   opencodeGo: opencodeGoKeyed && settings.modelAutoUpdate !== false
-    ? { checkedAt: opencodeGoModels.checkedAt, error: opencodeGoModels.failed, hidden: opencodeGoModels.hidden }
+    ? { checkedAt: opencodeGoModels.checkedAt, error: opencodeGoModels.failed, hidden: opencodeGoModels.hidden, missing: opencodeGoModels.missing }
     : null,
 })
 /** The catalog as the UI gets it: models the account's list no longer has are marked `retired`. */
@@ -260,6 +262,18 @@ async function syncModelCatalog() {
     result = await configuredModelCatalog(fromAccount, modelUpdater.fetched)
     configuredModels = result.definitions
     if (codexLimits.definitions.length) configuredModels['openai-codex'] = codexLimits.definitions
+    const goAdditions = modelUpdater.fetched?.providers?.['opencode-go'] ?? {}
+    const previous = await readJson(paths.opencodeGoCatalog, null)
+    if (JSON.stringify(previous) !== JSON.stringify(goAdditions)) {
+      await writeJson(paths.opencodeGoCatalog, goAdditions)
+      result.changed = true
+    }
+    const shippedGo = await installedModels()
+    for (const model of openCodeModels(await readOpenCodeCatalog(modelUpdater.fetched))) {
+      if (shippedGo.has(model.id)) continue
+      result.added.push(`opencode-go/${model.id}`)
+      result.models.push({ provider: 'opencode-go', id: model.id, name: model.name, source: 'fetched' })
+    }
   } catch (error) {
     result = { changed: false, added: [], models: [], skipped: [], warnings: [error.message] }
   }
@@ -275,7 +289,9 @@ const catalogSignature = async (result) => JSON.stringify({
   deepseek: (await accounts()).deepseek.configured,
   // OpenCode Go's route is in the home patch only while its key is saved.
   opencodeGo: (await accounts()).opencodeGo.configured,
-  opencodeGoModels: opencodeGoServed(),
+  opencodeGoModels: (await accounts()).opencodeGo.configured
+    ? opencodeGoServed() ?? [...(await installedModels(modelUpdater.fetched)).keys()].sort()
+    : [],
   local: localLlmSettings(settings.localLlm),
 })
 
@@ -539,9 +555,14 @@ async function restartRuntimesWhenIdle() {
   if (catalog.stale) threads.warmCatalog().catch((error) => log('model catalog refresh failed:', error.message.split('\n')[0]))
 }
 
-async function updateModelCatalog({ deferRuntimeEffects = false } = {}) {
-  // A key just saved reads the list at once; the periodic check below passes its own age.
-  await opencodeGoModels.refresh(await opencodeGoKey(), { maxAgeMs: 60_000 })
+let modelCatalogQueue = Promise.resolve()
+function updateModelCatalog(options = {}) {
+  const task = modelCatalogQueue.then(() => performModelCatalogUpdate(options))
+  modelCatalogQueue = task.catch(() => {})
+  return task
+}
+async function performModelCatalogUpdate({ deferRuntimeEffects = false, forceOpenCode = false } = {}) {
+  await opencodeGoModels.refresh(await opencodeGoKey(), { maxAgeMs: forceOpenCode ? 0 : 60_000 })
   const result = await syncModelCatalog()
   resetPricing()
   catalog.setSignature(await catalogSignature(result))

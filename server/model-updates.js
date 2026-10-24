@@ -1,11 +1,11 @@
 // Keeps the model list current without an Agent Desk release.
 //
-// New Claude and GPT models reach the pi-ai package (whose catalog dsh reads,
+// New Claude, GPT and OpenCode Go models reach the pi-ai package (whose catalog dsh reads,
 // see model-catalog.js) within days of their launch, while the pi-ai Agent
 // Desk installs stays on the version dsh was built against. Every few hours
 // the newest pi-ai release is looked up on npm; when it is newer than the one
 // last read, its tarball is downloaded and checked against the registry's
-// sha512, the two catalog files Agent Desk uses are read straight from it, and
+// sha512, the catalog files Agent Desk uses are read straight from it, and
 // the models the installed catalog lacks are kept in the data folder. Nothing
 // is installed: model-catalog.js adds the kept definitions like its bundled ones.
 //
@@ -20,7 +20,7 @@ import extras from './catalog-extras.json' with { type: 'json' }
 import { GPT_PROVIDER, siwcCatalog } from './siwc-route.js'
 import { compareVersions, isVersion, runNpm } from './update-checks.js'
 import { readJson, writeJson } from './json-file.js'
-import { BUNDLED_SOURCE, CUSTOM_MODEL_PROVIDERS, isModelId, shippedCatalog } from './model-catalog.js'
+import { BUNDLED_SOURCE, UPDATE_MODEL_PROVIDERS, isModelId, shippedCatalog } from './model-catalog.js'
 
 export const PI_AI_PACKAGE = '@earendil-works/pi-ai'
 
@@ -230,7 +230,7 @@ export class ModelCatalogUpdater extends EventEmitter {
     try {
       const release = await this.lookup({ cwd: this.root, npm: this.npm })
       const have = this.catalog?.source ?? BUNDLED_SOURCE
-      if (!have || compareVersions(release.version, have) > 0) await this.#read(release)
+      if (!have || compareVersions(release.version, have) > 0 || this.catalog?.format !== 2) await this.#read(release)
       this.#set({ phase: 'idle', checkedAt: Date.now(), latest: release.version })
       await this.#save()
     } catch (error) {
@@ -242,17 +242,18 @@ export class ModelCatalogUpdater extends EventEmitter {
 
   async #read(release) {
     const tgz = await this.download(release)
-    const wanted = new Set(CUSTOM_MODEL_PROVIDERS.map((provider) => `${CATALOG_PATH}/${provider}.json`))
+    const wanted = new Set(UPDATE_MODEL_PROVIDERS.map((provider) => `${CATALOG_PATH}/${provider}.json`))
     const files = readTarFiles(tgz, wanted)
     const { providers: shipped, keys } = await this.shipped()
     const providers = {}
-    for (const provider of CUSTOM_MODEL_PROVIDERS) {
+    for (const provider of UPDATE_MODEL_PROVIDERS) {
+      if (!shipped[provider]) continue
       const file = files.get(`${CATALOG_PATH}/${provider}.json`)
       if (!file) throw new Error(`pi-ai ${release.version} に ${provider} のモデル一覧がありません`)
       const { groups } = newerModels({ provider, data: JSON.parse(file.toString('utf8')), shipped: shipped[provider], keys })
       if (Object.keys(groups).length) providers[provider] = groups
     }
-    const next = { source: release.version, fetchedAt: Date.now(), providers }
+    const next = { format: 2, source: release.version, fetchedAt: Date.now(), providers }
     // What this release brings that Agent Desk did not offer before.
     const before = new Set([...modelIds(extras), ...modelIds(this.catalog)])
     const fresh = []
