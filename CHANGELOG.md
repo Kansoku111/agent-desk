@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The updates card gives OpenCode Go its own always-visible row, with its new models and read failures kept separate from the general model row. An unset API key or disabled auto-sync is shown in place instead of hiding the row.
 - OpenCode Go's model list follows the service: the saved key reads `/v1/models` (at once, then every six hours) and the picker keeps only the catalog models still listed there, so withdrawn ones (e.g. Space Bunny, Cat Jam Free, Step 5 Preview Free) disappear. New model definitions are read from verified pi-ai releases and overlaid in memory when dsh starts; installed packages are never modified. Concurrent refreshes are serialized, inconsistent replies retain the last verified list, and old runtime snapshots cannot mark a newer catalog current. It is part of the model sync in Settings → About → 更新: the automatic-sync switch controls it, 今すぐ確認 reads it, and 同期の詳細 shows the last check, read failures, hidden models and service ids still awaiting a supported definition.
 - EX remembers parent/child model selections as soon as they change, even when the dialog is cancelled or launch fails. Selections are saved on the app and restored across browsers, phones and app restarts; legacy browser-only choices migrate only if no app-side choice exists. TM settings remain separate.
 

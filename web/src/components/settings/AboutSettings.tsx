@@ -49,9 +49,13 @@ function UpdatesCard({ updates }: { updates: Updates }) {
   const models = useStore((state) => state.server?.modelUpdate)
   const autoSync = useStore((state) => state.server?.settings.modelAutoUpdate) !== false
   const signedIn = useStore((state) => state.server?.accounts.chatgpt.signedIn)
+  const opencodeConfigured = useStore((state) => state.server?.accounts.opencodeGo?.configured)
   const [checking, setChecking] = useState(false)
   const busy = checking || updates.checking || models?.phase === 'checking'
   const recent = models?.lastAdded && Date.now() - models.lastAdded.at < RECENT_MODELS_MS ? models.lastAdded : null
+  const recentModels = recent?.models.filter((model) => model.provider !== 'opencode-go') ?? []
+  const recentOpenCode = recent?.models.filter((model) => model.provider === 'opencode-go') ?? []
+  const opencode = models?.opencodeGo
   const { dsh, codex, claude, app } = updates
 
   const check = async () => {
@@ -125,19 +129,32 @@ function UpdatesCard({ updates }: { updates: Updates }) {
             {claude.error && <p className="form-error">{claude.error}</p>}
           </div>
         )}
+        <div className="update-row">
+          <span className="update-name">OpenCode Go</span>
+          <span className="update-versions">
+            {!opencodeConfigured ? 'API キー未設定'
+              : !autoSync ? '自動同期オフ'
+                : busy ? '確認中…'
+                  : recentOpenCode.length ? recentOpenCode.map((model) => model.name).join('、')
+                    : opencode?.checkedAt ? '' : '未確認'}
+          </span>
+          <span className="update-action">
+            {opencodeConfigured && autoSync && !busy && !models?.error && !opencode?.error && opencode?.checkedAt && <Latest />}
+          </span>
+          {opencodeConfigured && autoSync && opencode?.error && (
+            <p className="form-error">OpenCode Go のモデル一覧を読み込めませんでした（前回の結果を使っています）</p>
+          )}
+        </div>
         {models && (
           <div className="update-row">
             <span className="update-name">モデル</span>
             <span className="update-versions">
-              {models.phase === 'checking' ? '確認中…' : recent ? recent.models.map((model) => model.name).join('、') : models.checkedAt ? '' : '未確認'}
+              {models.phase === 'checking' ? '確認中…' : recentModels.length ? recentModels.map((model) => model.name).join('、') : models.checkedAt ? '' : '未確認'}
             </span>
-            <span className="update-action">{!busy && !models.error && models.account?.status !== 'error' && !models.opencodeGo?.error && models.checkedAt && <Latest />}</span>
+            <span className="update-action">{!busy && !models.error && models.account?.status !== 'error' && models.checkedAt && <Latest />}</span>
             {models.error && <p className="form-error">{models.error}</p>}
             {autoSync && signedIn && models.account?.status === 'error' && (
               <p className="form-error">ChatGPT のモデル一覧を読み込めませんでした（前回の結果を使っています）</p>
-            )}
-            {models.opencodeGo?.error && (
-              <p className="form-error">OpenCode Go のモデル一覧を読み込めませんでした（前回の結果を使っています）</p>
             )}
           </div>
         )}

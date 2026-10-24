@@ -48,6 +48,31 @@ test('About keeps synchronization diagnostics in native details collapsed by def
   assert.doesNotMatch(details[2], /今すぐ確認|modelUpdate\.check/, 'details must not introduce a second manual check')
 })
 
+test('About shows OpenCode Go as its own update row even without an API key or auto-sync', async () => {
+  const source = await updatesCardSource()
+  const row = /<div className="update-row">\s*<span className="update-name">OpenCode Go<\/span>([\s\S]*?)<\/div>/.exec(source)
+  assert.ok(row, 'OpenCode Go must be visible in the update list, not only in collapsed sync details')
+  assert.match(row[1], /!opencodeConfigured\s*\?\s*'API キー未設定'/)
+  assert.match(row[1], /!autoSync\s*\?\s*'自動同期オフ'/)
+  assert.match(row[1], /busy\s*\?\s*'確認中…'/)
+  assert.match(row[1], /opencode\?\.checkedAt/)
+  assert.match(row[1], /opencodeConfigured && autoSync && !busy/)
+  assert.match(row[1], /opencode\?\.error/)
+  assert.match(source, /\)\}\s*<div className="update-row">\s*<span className="update-name">OpenCode Go/)
+})
+
+test('About separates OpenCode model additions and errors from the general model row', async () => {
+  const source = await updatesCardSource()
+  assert.match(source, /const recentModels = recent\?\.models\.filter\(\(model\) => model\.provider !== 'opencode-go'\)/)
+  assert.match(source, /const recentOpenCode = recent\?\.models\.filter\(\(model\) => model\.provider === 'opencode-go'\)/)
+  const go = /<span className="update-name">OpenCode Go<\/span>([\s\S]*?)<\/div>/.exec(source)[1]
+  const other = /<span className="update-name">モデル<\/span>([\s\S]*?)<\/div>/.exec(source)[1]
+  assert.match(go, /recentOpenCode\.map/)
+  assert.doesNotMatch(go, /recentModels\.map/)
+  assert.match(other, /recentModels\.map/)
+  assert.doesNotMatch(other, /recentOpenCode|opencode\?\.error|models\.opencodeGo\?\.error/)
+})
+
 test('About exposes one shared manual check for application and model updates', async () => {
   const source = await updatesCardSource()
   assert.match(source, /await\s+Promise\.all\(\[\s*act\('updates\.check'\),\s*act\('modelUpdate\.check'\)\s*\]\)/)
