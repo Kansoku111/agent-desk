@@ -13,8 +13,12 @@
 .ab-report summary .muted { font-size: 11px; }
 .ab-report[open] summary { margin-bottom: 16px; }
 .ab-model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.ab-model-grid label { display: grid; gap: 6px; font-size: 12px; }
-.ab-model-grid select { width: 100%; min-width: 0; }
+.ab-field { display: grid; gap: 6px; min-width: 0; font-size: 12px; }
+.ab-field .dropdown { display: flex; }
+.ab-picker { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 13px; text-align: left; }
+.ab-picker span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ab-picker:hover:not(:disabled), .ab-picker.active { background: var(--bg-hover); }
+.ab-picker:disabled { opacity: 0.5; }
 .ab-switches { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 18px 0; font-size: 13px; }
 .ab-switches label { display: flex; align-items: center; gap: 6px; }
 .ab-input { width: 100%; resize: vertical; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }

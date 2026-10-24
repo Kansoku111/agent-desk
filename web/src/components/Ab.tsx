@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-react'
+import { ChevronDown, Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-react'
 import { act, navigate, setState, useStore } from '../store'
-import type { AbConfig, AbJob, AbRun } from '../types'
-import { isModelVisible, providerReady } from '../model-selection'
+import type { AbConfig, AbJob, AbRun, AppState } from '../types'
+import { providerReady, visibleModels } from '../model-selection'
 import { Modal, ConfirmDialog } from './Modal'
+import { byNewest, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
+import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { Markdown, CopyButton } from './Markdown'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import type { AuthConsentState } from '../team-auth-consent'
@@ -12,8 +14,59 @@ export const AB_PHASE: Record<string, string> = { consulting: '2社に相談中'
 const ACTIVE = ['consulting', 'judging', 'preparing', 'implementing', 'reviewing']
 const ROLE: Record<string, string> = { a: '相談 A', b: '相談 B', leader: '判断・報告', instructions: '実装指示', implementer: '実装', direct: 'リーダー実装', reviewer: 'レビュー' }
 const FIELDS = [['a', '相談 A'], ['b', '相談 B'], ['leader', '判断・報告リーダー'], ['implementer', '実装用モデル']] as const
-const PROVIDER: Record<string, string> = { 'openai-codex': 'ChatGPT', anthropic: 'Claude API', 'deepseek-official': 'DeepSeek API', 'opencode-go': 'OpenCode Go', 'local-llm': 'ローカル LLM' }
-const CLAUDE = [{ value: 'claude:opus', name: 'Claude Code · Opus' }, { value: 'claude:sonnet', name: 'Claude Code · Sonnet' }, { value: 'claude:haiku', name: 'Claude Code · Haiku' }]
+const CLAUDE_CODE = [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:sonnet', name: 'Sonnet' }, { value: 'claude:haiku', name: 'Haiku' }]
+
+interface ModelGroup { id: string; heading: string; note: string; models: { value: string; name: string }[] }
+
+/** The models a field offers, grouped and named as in the composer's model menu. */
+function modelGroups(server: AppState): ModelGroup[] {
+  const byProvider = new Map<string, { value: string; name: string; id: string }[]>()
+  for (const model of visibleModels(server)) {
+    if (model.retired || !providerReady(server, model.provider)) continue
+    byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model])
+  }
+  const order = [...new Set([...PROVIDER_ORDER, ...byProvider.keys()])].filter((provider) => byProvider.has(provider))
+  return [
+    { id: 'claude-code', heading: 'Claude Code', note: '', models: CLAUDE_CODE },
+    ...order.map((provider) => ({
+      id: provider, heading: server.catalog.providers[provider] ?? provider, note: PROVIDER_NOTE[provider] ?? '',
+      models: byProvider.get(provider)!.sort(byNewest),
+    })),
+  ]
+}
+
+function ModelField({ label, value, groups, disabled, onChange }: {
+  label: string; value: string; groups: ModelGroup[]; disabled: boolean; onChange: (value: string) => void
+}) {
+  const name = groups.flatMap((group) => group.models).find((model) => model.value === value)?.name ?? 'モデルを選択'
+  return <div className="ab-field">
+    <span>{label}</span>
+    <Dropdown
+      placement="bottom"
+      width={300}
+      trigger={({ toggle, open }) => (
+        <button type="button" className={`ab-picker ${open ? 'active' : ''}`} aria-label={`${label}: ${name}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={toggle}>
+          <span>{name}</span>
+          <ChevronDown size={13} />
+        </button>
+      )}
+    >
+      {(close) => (
+        <div className="menu-scroll">
+          {groups.map((group, index) => (
+            <div key={group.id}>
+              {index > 0 && <MenuDivider />}
+              <MenuHeading>{group.heading}<span className="menu-heading-note">{group.note}</span></MenuHeading>
+              {group.models.map((model) => (
+                <MenuItem key={model.value} label={model.name} selected={model.value === value} onSelect={() => { onChange(model.value); close() }} />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </Dropdown>
+  </div>
+}
 
 function ImplementationOptions({ config, change, disabled = false }: { config: Pick<AbConfig, 'delegate' | 'review'>; change: (patch: Partial<AbConfig>) => void; disabled?: boolean }) {
   return <div className="ab-switches">
@@ -42,9 +95,8 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   }
   const close = () => setState({ abStart: null })
   if (!server) return null
-  const available = server.catalog.models.filter((model) => !model.retired && isModelVisible(server, model) && providerReady(server, model.provider))
-  const models = [...CLAUDE, ...available.map((model) => ({ value: model.value, name: `${model.name} · ${PROVIDER[model.provider] ?? model.provider}` }))]
-  const valid = (value: string) => models.some((model) => model.value === value)
+  const groups = modelGroups(server)
+  const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
   const required = config ? [config.a, config.b, config.leader, ...(config.delegate ? [config.implementer] : [])] : []
   const usesClaude = config ? [config.a, config.b, config.leader, config.implementer].some((value) => value.startsWith('claude:')) : false
   const ready = config && required.every(valid) && text.trim() && (!usesClaude || auth.ready)
@@ -60,13 +112,9 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   return <Modal title="AB" onClose={close} width={700} className="team-start-modal">
     <div className="team-start-body">
       {config ? <>
-        <div className="ab-model-grid">{FIELDS.map(([key, label]) => <label key={key}>{label}
-          <select aria-label={label} value={valid(config[key]) ? config[key] : ''} disabled={busy} onChange={(event) => change({ [key]: event.target.value })}>
-            <option value="">モデルを選択</option>
-            <optgroup label="Claude Code">{CLAUDE.map((model) => <option key={model.value} value={model.value}>{model.name}</option>)}</optgroup>
-            <optgroup label="API / サブスクリプション">{models.slice(CLAUDE.length).map((model) => <option key={model.value} value={model.value}>{model.name}</option>)}</optgroup>
-          </select>
-        </label>)}</div>
+        <div className="ab-model-grid">{FIELDS.map(([key, label]) => (
+          <ModelField key={key} label={label} value={valid(config[key]) ? config[key] : ''} groups={groups} disabled={busy} onChange={(value) => change({ [key]: value })} />
+        ))}</div>
         <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
         <ImplementationOptions config={config} change={change} disabled={busy} />
         <textarea className="ab-input" aria-label="相談内容" placeholder="相談したいこと" value={text} disabled={busy} onChange={(event) => setText(event.target.value)} rows={6} maxLength={100000} />
@@ -96,7 +144,7 @@ export function AbView({ id }: { id: string }) {
   const [options, setOptions] = useState({ delegate: run?.config.delegate ?? true, review: run?.config.review ?? true })
   useEffect(() => { if (run) setOptions({ delegate: run.config.delegate, review: run.config.review }) }, [id, run?.config.delegate, run?.config.review])
   if (!run || !server) return <div className="empty-state">ABが見つかりません</div>
-  const modelName = (value: string) => CLAUDE.find((entry) => entry.value === value)?.name ?? server.catalog.models.find((entry) => entry.value === value)?.name ?? value
+  const modelName = (value: string) => CLAUDE_CODE.find((entry) => entry.value === value)?.name ?? server.catalog.models.find((entry) => entry.value === value)?.name ?? value
   const action = async (method: string, input: object = {}) => {
     setBusy(true)
     try { return await act(method, { runId: id, ...input }) } finally { setBusy(false) }

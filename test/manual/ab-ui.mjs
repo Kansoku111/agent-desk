@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events'
 import { WebSocketServer } from 'ws'
 import { DEFAULT_SETTINGS } from '../../server/settings.js'
 import { AbManager } from '../../server/ab.js'
+import { PROVIDER_LABELS } from '../../server/catalog.js'
 import { createAbHandlers } from '../../server/rpc-handlers-ab.js'
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ab-ui-'))
 const workspace = path.join(dir, 'project')
@@ -40,7 +41,7 @@ const state = {
   app: { version: 'test', dshVersion: 'test', platform: 'win32', dataDir: dir, myPc: workspace, uiBuild: 'fixture', remote: false },
   settings: { ...structuredClone(DEFAULT_SETTINGS), workspaces: [workspace] },
   accounts: { chatgpt: { signedIn: true }, codex: { signedIn: false }, claude: { configured: true }, deepseek: { configured: false }, claudeAdmin: { configured: false }, error: null },
-  catalog: { providers: {}, models: [
+  catalog: { providers: PROVIDER_LABELS, models: [
     { value: config.a, id: 'claude-test', name: 'Claude（テスト）', provider: 'anthropic' },
     { value: config.b, id: 'gpt-test', name: 'GPT（テスト）', provider: 'openai-codex' },
     { value: config.implementer, id: 'haiku-test', name: 'Haiku（テスト）', provider: 'anthropic' },
@@ -59,6 +60,8 @@ ab.on('notify', (event) => { notifications.push(event); broadcast({ event: 'noti
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1')
   if (url.pathname === '/fixture/notifications') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(notifications)); return }
+  // A server-state change the page re-renders for (usage broadcasts happen on their own in the app).
+  if (url.pathname === '/fixture/poke') { broadcast({ event: 'usage', usage: { ...state.usage, tick: Date.now() } }); res.end('ok'); return }
   if (url.pathname === '/fixture/calls') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(calls)); return }
   if (url.pathname === '/fixture/shutdown') {
     await ab.shutdown(); res.end('stopped'); for (const socket of wss.clients) socket.terminate(); wss.close(); server.close();

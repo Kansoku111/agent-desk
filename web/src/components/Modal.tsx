@@ -9,18 +9,23 @@ export function Modal({ title, onClose, children, width = 520, className }: {
   className?: string
 }) {
   const panel = useRef<HTMLDivElement>(null)
+  // Callers pass a fresh onClose on every render. Depending on it re-ran the effect with each
+  // re-render (any server update): focus jumped back to the panel, which closed an open menu
+  // and cut off typing. Focus moves in once, when the dialog opens.
+  const close = useRef(onClose)
+  close.current = onClose
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null
     panel.current?.focus()
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') close.current()
     }
     document.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('keydown', onKey)
       previous?.focus?.()
     }
-  }, [onClose])
+  }, [])
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div
