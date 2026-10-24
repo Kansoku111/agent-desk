@@ -195,6 +195,25 @@ test('new OpenCode models reach the real picker and auto-sync off/on restores th
   })
 })
 
+test('MiniMax M3.1 Flash appears in the real picker when the service lists the official paid id', { timeout: 45_000 }, async (t) => {
+  const template = openCodeModels(await readOpenCodeCatalog()).find((model) => model.api === 'openai-completions')
+  const legacy = { ...template, id: 'minimax-m3.1-flash-free', name: 'MiniMax M3.1 Flash Free' }
+  const added = await keyRefreshesCatalog(t, {
+    provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
+    probeBody: JSON.stringify({ data: [{ id: 'glm-5.3' }, { id: 'minimax-m3.1-flash' }] }),
+    settings: { modelAutoUpdate: true },
+    savedUpdates: {
+      catalog: { format: 2, source: '1.4.0', providers: { 'opencode-go': { 'openai-completions': { [legacy.id]: legacy } } } },
+      lastAdded: { at: Date.now(), source: '1.4.0', models: [{ provider: 'opencode-go', id: legacy.id, name: legacy.name }] },
+    },
+  })
+  const models = added.catalog.models.filter((model) => model.provider === 'opencode-go')
+  assert.deepEqual(models.map((model) => model.id).sort(), ['glm-5.3', 'minimax-m3.1-flash'])
+  assert.equal(models.find((model) => model.id === 'minimax-m3.1-flash').name, 'MiniMax M3.1 Flash')
+  assert.deepEqual(added.modelUpdate.opencodeGo.missing, [])
+  assert.equal(added.modelUpdate.lastAdded.models[0].name, 'MiniMax M3.1 Flash')
+})
+
 test('OpenCode Go models the service no longer lists leave the picker', { timeout: 45_000 }, async (t) => {
   const live = ['glm-5.3', 'kimi-k3', 'qwen3.8-max', 'hy3']
   const added = await keyRefreshesCatalog(t, {

@@ -18,22 +18,20 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import extras from './catalog-extras.json' with { type: 'json' }
 import { GPT_PROVIDER, siwcCatalog } from './siwc-route.js'
+import { canonicalOpenCodeCatalog, canonicalOpenCodeModel } from './opencode-go-catalog.js'
 import { compareVersions, isVersion, runNpm } from './update-checks.js'
 import { readJson, writeJson } from './json-file.js'
 import { BUNDLED_SOURCE, UPDATE_MODEL_PROVIDERS, isModelId, shippedCatalog } from './model-catalog.js'
 
 export const PI_AI_PACKAGE = '@earendil-works/pi-ai'
 
-/** Normalize old on-disk GPT update caches before exposing them. */
+/** Normalize old provider definitions before exposing saved update caches. */
 function routedUpdates(catalog) {
-  if (!catalog?.providers?.[GPT_PROVIDER]) return catalog
-  return {
-    ...catalog,
-    providers: {
-      ...catalog.providers,
-      [GPT_PROVIDER]: siwcCatalog(catalog.providers[GPT_PROVIDER]),
-    },
-  }
+  if (!catalog?.providers) return catalog
+  const providers = { ...catalog.providers }
+  if (providers[GPT_PROVIDER]) providers[GPT_PROVIDER] = siwcCatalog(providers[GPT_PROVIDER])
+  if (providers['opencode-go']) providers['opencode-go'] = canonicalOpenCodeCatalog(providers['opencode-go'])
+  return { ...catalog, providers }
 }
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
@@ -129,6 +127,7 @@ export function newerModels({ provider, data, shipped, keys }) {
     data = siwcCatalog(data)
     shipped = siwcCatalog(shipped)
   }
+  if (provider === 'opencode-go') data = canonicalOpenCodeCatalog(data)
   const baseUrls = new Set(Object.values(shipped).flatMap((group) => Object.values(group).map((model) => model.baseUrl)))
   const known = (id) => Object.values(shipped).some((group) => group[id])
   for (const [api, group] of Object.entries(data)) {
@@ -183,7 +182,9 @@ export class ModelCatalogUpdater extends EventEmitter {
     if (isVersion(saved.catalog?.source) && saved.catalog.providers && typeof saved.catalog.providers === 'object') this.catalog = routedUpdates(saved.catalog)
     this.state.checkedAt = saved.checkedAt ?? null
     this.state.latest = saved.latest ?? null
-    this.state.lastAdded = saved.lastAdded ?? null
+    this.state.lastAdded = saved.lastAdded?.models
+      ? { ...saved.lastAdded, models: saved.lastAdded.models.map(canonicalOpenCodeModel) }
+      : null
     return this
   }
 

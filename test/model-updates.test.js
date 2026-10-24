@@ -204,6 +204,29 @@ test('OpenCode definitions are fetched, persisted and migrated even at the same 
   assert.equal(downloads, 1)
 })
 
+test('old MiniMax Free definitions and update announcements migrate without a package download', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'model-updates-minimax-'))
+  t.after(() => fs.rm(home, { recursive: true, force: true }))
+  const legacy = model('minimax-m3.1-flash-free', {
+    name: 'MiniMax M3.1 Flash Free', provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/v1',
+  })
+  await fs.writeFile(path.join(home, 'model-updates.json'), JSON.stringify({
+    catalog: { format: 2, source: '1.4.0', providers: { 'opencode-go': { 'openai-completions': { [legacy.id]: legacy } } } },
+    lastAdded: { at: Date.now(), source: '1.4.0', models: [{ provider: 'opencode-go', id: legacy.id, name: legacy.name }] },
+  }))
+  const updater = await new ModelCatalogUpdater({ home, root: home, enabled: () => true, onCatalog: async () => {} }).load()
+  const defs = updater.fetched.providers['opencode-go']['openai-completions']
+  assert.equal(defs['minimax-m3.1-flash-free'], undefined)
+  assert.equal(defs['minimax-m3.1-flash'].name, 'MiniMax M3.1 Flash')
+  assert.deepEqual(updater.snapshot().lastAdded.models, [{ provider: 'opencode-go', id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash' }])
+  assert.equal((await readFetchedCatalog(home)).providers['opencode-go']['openai-completions']['minimax-m3.1-flash'].id, 'minimax-m3.1-flash')
+  const latest = newerModels({
+    provider: 'opencode-go', data: { 'openai-completions': { [`chat:${legacy.id}`]: legacy } },
+    shipped: { 'openai-completions': { 'glm-5.3': { ...legacy, id: 'glm-5.3' } } }, keys,
+  })
+  assert.deepEqual(latest.models, [{ id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash' }])
+})
+
 test('a failed lookup is reported and keeps what was fetched before', async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'model-updates-'))
   try {

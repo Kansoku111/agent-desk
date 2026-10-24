@@ -2,6 +2,36 @@
 // merge runs in the server and the runtime loader; installed packages stay untouched.
 export const OPENCODE_GO_PROVIDER = 'opencode-go'
 
+// pi-ai 1.4.0 still uses the retired free-preview id. The documented Go model
+// is minimax-m3.1-flash on the same Chat Completions route. This is an explicit
+// correction, not a general rule stripping "-free" from arbitrary model ids.
+// https://opencode.ai/v2/docs/console/go/#endpoints
+export function canonicalOpenCodeModel(model) {
+  if (model?.provider !== OPENCODE_GO_PROVIDER || model.id !== 'minimax-m3.1-flash-free'
+    || (model.api !== undefined && model.api !== 'openai-completions') || (model.type ?? 'chat') !== 'chat') return model
+  return {
+    ...model,
+    id: 'minimax-m3.1-flash',
+    name: 'MiniMax M3.1 Flash',
+    ...(model.cost ? { cost: { input: 0.15, output: 0.60, cacheRead: 0.015, cacheWrite: 0 } } : {}),
+  }
+}
+
+/** Correct both typed and bare-id package/cache layouts; native definitions win. */
+export function canonicalOpenCodeCatalog(groups) {
+  const data = structuredClone(groups ?? {})
+  for (const group of Object.values(data)) {
+    for (const [key, model] of Object.entries(group ?? {})) {
+      const corrected = canonicalOpenCodeModel(model)
+      if (corrected === model || ![model.id, `chat:${model.id}`].includes(key)) continue
+      const native = group[corrected.id] ?? group[`chat:${corrected.id}`]
+      delete group[key]
+      if (!native) group[key.startsWith('chat:') ? `chat:${corrected.id}` : corrected.id] = corrected
+    }
+  }
+  return data
+}
+
 export function openCodeModels(data) {
   return Object.values(data ?? {}).flatMap((group) => Object.values(group ?? {}))
     .filter((model) => (model?.type ?? 'chat') === 'chat' && typeof model?.id === 'string')
@@ -9,6 +39,7 @@ export function openCodeModels(data) {
 
 /** Only new chat definitions of a protocol/endpoint the installed catalog already uses. */
 export function mergeOpenCodeCatalog(original, additions) {
+  additions = canonicalOpenCodeCatalog(additions)
   const data = structuredClone(original)
   const known = new Set(openCodeModels(data).map((model) => model.id))
   const typed = Object.values(data).some((group) => Object.keys(group).some((key) => key.startsWith('chat:')))
@@ -32,5 +63,5 @@ export function mergeOpenCodeCatalog(original, additions) {
       known.add(id)
     }
   }
-  return data
+  return canonicalOpenCodeCatalog(data)
 }
