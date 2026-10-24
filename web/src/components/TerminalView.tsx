@@ -9,7 +9,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, openExternal, request, setState, uploadAttachment, useRemote, useStore } from '../store'
-import { getDraft, useDraft } from '../drafts'
+import { getDraft, useDraft, useImeField } from '../drafts'
 import type { Attachment, TerminalSummary } from '../types'
 import { copyText, workspaceLabel } from '../util'
 import { ConfirmDialog } from './Modal'
@@ -244,6 +244,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
   onSent: () => void
 }) {
   const [text, setText] = useDraft(`terminal:${terminalId}`)
+  const ime = useImeField()
   const file = useRef<HTMLInputElement>(null)
   const arrow = (code: string) => (term?.modes.applicationCursorKeysMode ? `\x1bO${code}` : `\x1b[${code}`)
   const keys: { label: ReactNode; title: string; data: () => string }[] = [
@@ -261,7 +262,8 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
   const [sending, setSending] = useState(false)
   const submit = async () => {
     if (sending || uploading > 0) return
-    const sent = text
+    // Read from the store: the IME's last text settles into it as the button is pressed.
+    const sent = getDraft(`terminal:${terminalId}`)
     if (attachments.length) {
       // The files go in first, so their paths come before the message.
       setSending(true)
@@ -371,6 +373,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
           event.target.value = ''
         }} />
         <textarea
+          {...ime.fieldProps}
           value={text}
           rows={1}
           placeholder="Claude に送るメッセージ"
@@ -403,7 +406,11 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
           )
           : (
             <button type="button" className="terminal-send" aria-label="送信" disabled={sending || uploading > 0}
-              onPointerDown={(event) => event.preventDefault()} onClick={() => void submit()}>
+              onPointerDown={(event) => {
+                event.preventDefault()
+                ime.confirm()
+              }}
+              onClick={() => void submit()}>
               <Send size={16} />
             </button>
           )}

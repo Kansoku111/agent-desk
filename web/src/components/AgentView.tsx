@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowDown, Clock3, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, Send, Square, X } from 'lucide-react'
 import { act, isTouch, setState, teamChildOf, useRemote, useStore } from '../store'
-import { getDraft, useDraft } from '../drafts'
+import { getDraft, useDraft, useImeField } from '../drafts'
 import { workspaceLabel } from '../util'
 import { BackToLeader, StateIcon, stateLabel } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
@@ -26,6 +26,7 @@ export function AgentView({ taskId }: { taskId: string }) {
   const stick = useRef(true)
   const [showJump, setShowJump] = useState(false)
   const [text, setText] = useDraft(`agent:${taskId}`)
+  const ime = useImeField()
   const [sending, setSending] = useState(false)
 
   useLayoutEffect(() => {
@@ -40,7 +41,8 @@ export function AgentView({ taskId }: { taskId: string }) {
   const working = child.state === 'running'
   const followups = child.followups ?? []
   const submit = async () => {
-    const body = text.trim()
+    // Read from the store: the IME's last text settles into it as the button is pressed.
+    const body = getDraft(`agent:${taskId}`).trim()
     if (!body || sending) return
     setSending(true)
     const result = await act('team.message', { teamId: team.id, childId: child.id, text: body })
@@ -142,6 +144,7 @@ export function AgentView({ taskId }: { taskId: string }) {
             )}
             <div className="terminal-input">
               <textarea
+                {...ime.fieldProps}
                 value={text}
                 rows={1}
                 placeholder={working ? 'フォローアップを入力（作業が終わったら送信します）' : `子「${child.name}」に送るメッセージ（返事はリーダーにも届きます）`}
@@ -160,7 +163,11 @@ export function AgentView({ taskId }: { taskId: string }) {
                 }}
               />
               <button type="button" className="terminal-send" aria-label="送信" title={working ? '送信待ちに追加' : '送信'} disabled={sending || !text.trim()}
-                onPointerDown={(event) => event.preventDefault()} onClick={() => void submit()}>
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  ime.confirm()
+                }}
+                onClick={() => void submit()}>
                 <Send size={16} />
               </button>
             </div>
