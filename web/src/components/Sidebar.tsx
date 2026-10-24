@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   Archive, ArchiveRestore, ArrowLeft, Folder, FolderOpen, FolderPlus, Loader2, Monitor, MoreHorizontal, PanelLeftClose, Pencil, Plus,
-  CheckSquare, Copy, Search, Settings, SquarePen, Trash2, X,
+  CheckSquare, ChevronDown, ChevronUp, Copy, Search, Settings, SquarePen, Trash2, X,
 } from 'lucide-react'
 import { act, getState, isNarrow, navigate, request, setState, startTerminal, toast, useRemote, useStore } from '../store'
 import { selectThreadRange } from '../thread-selection'
@@ -34,6 +34,10 @@ function writeCollapsed(paths: string[]) {
 
 // The sidebar unmounts when closed, so its scroll position lives here to survive reopening.
 let taskTreeScroll = 0
+
+/** Rows each project shows before "さらに表示", and the projects the user has opened up. */
+const VISIBLE_ROWS = 3
+const expandedGroups = new Set<string>()
 
 /** Opens the composer for a new task in one project (or My PC). */
 function newTaskIn(workspace: string) {
@@ -156,7 +160,6 @@ function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; activ
           placement="bottom"
           align="right"
           width={180}
-          fixed
           className="thread-actions"
           trigger={({ toggle }) => (
             <button type="button" className="icon-button small" aria-label="タスクの操作" onClick={toggle}>
@@ -265,7 +268,6 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
           placement="bottom"
           align="right"
           width={180}
-          fixed
           className="thread-actions"
           trigger={({ toggle }) => (
             <button type="button" className="icon-button small" aria-label="タスクの操作" onClick={toggle}>
@@ -395,6 +397,11 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
 }) {
   const open = !collapsed || searching
   const rows = groupRows(group)
+  // The latest few tasks show; the button below opens the rest. Searching and selecting show all; the open task always shows.
+  const [expanded, setExpanded] = useState(() => expandedGroups.has(group.path))
+  const all = expanded || searching || selection.enabled
+  const shownRows = all ? rows : rows.filter((row, index) => index < VISIBLE_ROWS || row.id === activeId)
+  const hiddenCount = rows.length - shownRows.length
   const hasRows = rows.length > 0 || draftHere
   const remote = useRemote()
   const [renaming, setRenaming] = useState(false)
@@ -404,11 +411,6 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
     if (name.trim() && name.trim() !== group.label) await act('project.rename', { path: group.path, name: name.trim() })
   }
   const Icon = group.pc ? Monitor : open && hasRows ? FolderOpen : Folder
-  // Only the latest rows show; older ones scroll. An open task further down is scrolled into view.
-  const list = useRef<HTMLUListElement>(null)
-  useLayoutEffect(() => {
-    if (activeId && open) list.current?.querySelector<HTMLElement>('.thread-row.active')?.scrollIntoView({ block: 'nearest' })
-  }, [activeId, open])
   const { head, color } = useWheelColor(group.path, group.color)
   const tint = color >= 0 ? { '--group-hue': PROJECT_HUES[color] } as CSSProperties : undefined
   return (
@@ -512,7 +514,7 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
         </div>
       </div>
       {open && hasRows && (
-        <ul className="task-rows" ref={list}>
+        <ul>
           {draftHere && (
             <li className="thread-row active draft-row">
               <button
@@ -524,10 +526,20 @@ function TaskGroup({ group, collapsed, onToggle, draftHere, activeId, searching,
               </button>
             </li>
           )}
-          {rows.map((row) => (row.thread
+          {shownRows.map((row) => (row.thread
             ? <ThreadRow key={row.id} thread={row.thread} active={activeId === row.id} selection={selection} />
             : <TerminalRow key={row.id} terminal={row.terminal!} active={activeId === row.id} selection={selection} />))}
         </ul>
+      )}
+      {open && rows.length > VISIBLE_ROWS && !searching && !selection.enabled && (
+        <button type="button" className="task-more" aria-expanded={expanded} onClick={() => {
+          if (expanded) expandedGroups.delete(group.path)
+          else expandedGroups.add(group.path)
+          setExpanded(!expanded)
+        }}>
+          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          <span>{expanded ? '折りたたむ' : `さらに表示 (${hiddenCount})`}</span>
+        </button>
       )}
     </section>
   )
@@ -774,3 +786,4 @@ export function Sidebar() {
     </aside>
   )
 }
+ 
