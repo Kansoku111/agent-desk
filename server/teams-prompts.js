@@ -59,7 +59,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       ? [
         '',
         '## The user\'s policy for this team',
-        'The user wrote this for how you lead: which provider and tier suits what, how to split and word tasks, how to audit. Follow it within the rules above; it does not make a provider or tier available that the list above turns off.',
+        'The user wrote this for how you lead: which provider and tier suits what, how to split and word tasks, how to audit. Follow it. Where it says how to choose a tier or provider, it replaces the general descriptions of the tiers above; it does not make a provider or tier available that the list above turns off.',
         `<team_policy>\n${policy}\n</team_policy>`,
       ]
       : []),
