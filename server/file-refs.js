@@ -38,33 +38,76 @@ export function isRunnable(file) {
  * @returns {{ file: string, line: number | null }[]}
  */
 export function referenceCandidates(ref, workspace) {
-  let text = String(ref ?? '').trim().replace(/^[`'"<(]+|[`'">),.;:]+$/g, '')
-  if (!text || text.length > 1024 || /[\0\r\n]/.test(text)) return []
-  if (/^file:\/\//i.test(text)) {
-    try {
-      const url = new URL(text)
-      if (url.hostname && url.hostname.toLowerCase() !== 'localhost') return []
-      text = fileURLToPath(text)
-    } catch {
-      return []
+  // Decoration around a path: quotes, backticks, brackets, trailing punctuation.
+  // A `)` is only decoration when it has no `(` to close, so `New folder (2)` survives.
+  const raw = String(ref ?? '').trim()
+  let text = raw.replace(/^[`'"<]+/, '')
+  const stripTail = (value) => {
+    for (;;) {
+      const next = value.replace(/[`'">,.;:]+$/, '')
+      if (next !== value) value = next
+      else if (value.endsWith(')') && value.split(')').length > value.split('(').length) value = value.slice(0, -1)
+      else return value
     }
   }
-  if (/^https?:|^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return []
-  try {
-    text = decodeURIComponent(text)
-  } catch {}
-  if (/^[\\/]{2}/.test(text)) return []
-  if (text === '~' || text.startsWith('~/') || text.startsWith('~\\')) text = path.join(os.homedir(), text.slice(1))
-  // Git Bash style (/c/Users/...) on Windows.
-  if (process.platform === 'win32' && /^\/[a-z]\//i.test(text)) text = `${text[1]}:${text.slice(2)}`
-  const forms = [{ text, line: null }]
-  const withLine = /^(.*?)(?::(\d+)(?::\d+)?|#L(\d+)(?:-L?\d+)?)$/.exec(text)
-  if (withLine && withLine[1]) forms.push({ text: withLine[1], line: Number(withLine[2] ?? withLine[3]) })
+  // The name as written (only quotes and backticks around it removed) comes before the decorated-away
+  // reading, so a real "report)" is not turned into "report".
+  const literal = text.replace(/[`'">]+$/, '')
+  if (!literal || literal.length > 1024 || /[\0\r\n]/.test(literal)) return []
+  text = stripTail(text)
+  // A leading `(` is decoration in "(src/a.ts)" but part of the name in "(1) a.txt": try the literal name first.
+  const starts = []
+  for (const base of [literal, text]) {
+    starts.push(base)
+    if (base.startsWith('(')) starts.push(stripTail(base.replace(/^\(+/, '')))
+  }
+  const texts = []
+  for (let start of new Set(starts)) {
+    if (!start) continue
+    let decode = true
+    if (/^file:\/\//i.test(start)) {
+      // fileURLToPath decodes once; a second decode would turn %2520 into a space.
+      try {
+        const url = new URL(start)
+        if (url.hostname && url.hostname.toLowerCase() !== 'localhost') return []
+        start = fileURLToPath(start)
+        decode = false
+      } catch {
+        return []
+      }
+    }
+    if (/^https?:|^[a-z][a-z0-9+.-]*:\/\//i.test(start)) return []
+    // The path as written comes first; a URL-encoded reading is only a fallback.
+    const variants = [start]
+    if (decode) {
+      try {
+        const decoded = decodeURIComponent(start)
+        if (decoded !== start) variants.push(decoded)
+      } catch {}
+    }
+    texts.push(...variants)
+  }
+  if (texts.some((value) => /^[\\/]{2}/.test(value))) return []
   const base = workspace ? path.resolve(workspace) : null
   const candidates = []
-  for (const form of forms) {
-    if (path.isAbsolute(form.text)) candidates.push({ file: path.normalize(form.text), line: form.line })
-    else if (base) candidates.push({ file: path.resolve(base, form.text), line: form.line })
+  const seen = new Set()
+  for (let value of texts) {
+    if (value === '~' || value.startsWith('~/') || value.startsWith('~\\')) value = path.join(os.homedir(), value.slice(1))
+    // Git Bash style (/c/Users/...) on Windows.
+    if (process.platform === 'win32' && /^\/[a-z]\//i.test(value)) value = `${value[1]}:${value.slice(2)}`
+    const forms = [{ text: value, line: null }]
+    const withLine = /^(.*?)(?::(\d+)(?::\d+)?|#L(\d+)(?:-L?\d+)?)$/.exec(value)
+    if (withLine && withLine[1]) forms.push({ text: withLine[1], line: Number(withLine[2] ?? withLine[3]) })
+    for (const form of forms) {
+      let file
+      if (path.isAbsolute(form.text)) file = path.normalize(form.text)
+      else if (base) file = path.resolve(base, form.text)
+      else continue
+      const key = `${file}\0${form.line}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      candidates.push({ file, line: form.line })
+    }
   }
   return candidates
 }

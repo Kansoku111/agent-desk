@@ -17,6 +17,10 @@ function fakePool(act) {
       this.liveSessions.add(sessionId)
       return { sessionId, configOptions: [] }
     },
+    async resumeSession(sessionId) {
+      this.liveSessions.add(sessionId)
+      return { configOptions: [] }
+    },
     async setOption() {
       return []
     },
@@ -109,6 +113,83 @@ test('a turn can be undone, the agent is told, and the undo can be taken back', 
   await manager.send(thread.id, { text: 'again' })
   await settled(manager, thread.id)
   assert.doesNotMatch(prompts[2], /Agent Desk/)
+})
+
+test('undoing the latest of two restores still tells the agent about the one that stays, once', async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-restore-twice-'))
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  const workspace = path.join(base, 'work')
+  await fs.mkdir(workspace)
+  await fs.writeFile(path.join(workspace, 'a.txt'), 'a0')
+  await fs.writeFile(path.join(workspace, 'b.txt'), 'b0')
+  const file = (name) => fs.readFile(path.join(workspace, name), 'utf8')
+  const act = async (text) => {
+    if (text === 'T1') await fs.writeFile(path.join(workspace, 'a.txt'), 'a1')
+    if (text === 'T2') await fs.writeFile(path.join(workspace, 'b.txt'), 'b1')
+  }
+  const open = async (pool) => {
+    const manager = new ThreadManager({
+      paths: {
+        threadsIndex: path.join(base, 'threads.json'),
+        threadsDir: path.join(base, 'threads'),
+        attachmentsDir: path.join(base, 'attachments'),
+        dshHome: path.join(base, 'dsh-home'),
+        runtimeCwd: path.join(base, 'runtime'),
+      },
+      pool,
+      catalog: { learn: () => false },
+      getAccounts: async () => ({}),
+      getTurnUsage: async () => null,
+      checkpoints: new Checkpoints({ root: path.join(base, 'checkpoints') }),
+    })
+    await manager.load()
+    return manager
+  }
+  const notes = (prompt) => prompt.match(/\[Context from Agent Desk\] Since your last reply/g)?.length ?? 0
+
+  const first = fakePool(act)
+  const manager = await open(first.pool)
+  let closed = false
+  t.after(() => closed || manager.shutdown())
+  const thread = await manager.create({ workspace, model: '["test","model"]' })
+  await manager.send(thread.id, { text: 'T1' })
+  await settled(manager, thread.id)
+  await manager.send(thread.id, { text: 'T2' })
+  const [t1, t2] = await settled(manager, thread.id)
+  assert.equal(await file('a.txt'), 'a1')
+  assert.equal(await file('b.txt'), 'b1')
+
+  // Undoing both restores, newest first, leaves nothing to tell.
+  await manager.restoreCheckpoint(thread.id, t2.id)
+  await manager.restoreCheckpoint(thread.id, t1.id)
+  await manager.undoRestore(thread.id, t1.id)
+  await manager.undoRestore(thread.id, t2.id)
+  assert.equal(await file('a.txt'), 'a1')
+  assert.equal(await file('b.txt'), 'b1')
+  assert.equal(manager.threads.get(thread.id).restoreNote, undefined)
+
+  // Undoing only the latest one leaves T2 undone, and the note for it stays.
+  await manager.restoreCheckpoint(thread.id, t2.id)
+  await manager.restoreCheckpoint(thread.id, t1.id)
+  assert.equal(await file('a.txt'), 'a0')
+  await manager.undoRestore(thread.id, t1.id)
+  assert.equal(await file('a.txt'), 'a1')
+  assert.equal(await file('b.txt'), 'b0')
+  await manager.shutdown()
+  closed = true
+
+  // The note survives a reload from disk, and goes out with the next message only.
+  const second = fakePool(act)
+  const reloaded = await open(second.pool)
+  t.after(() => reloaded.shutdown())
+  await reloaded.send(thread.id, { text: 'look' })
+  await settled(reloaded, thread.id)
+  assert.match(second.prompts[0], /before an earlier request of theirs \("T2"\)/)
+  assert.equal(notes(second.prompts[0]), 1)
+  await reloaded.send(thread.id, { text: 'again' })
+  await settled(reloaded, thread.id)
+  assert.equal(notes(second.prompts[1]), 0)
+  assert.equal(await file('b.txt'), 'b0')
 })
 
 test('restoreNoteText names a later request by its first line', () => {

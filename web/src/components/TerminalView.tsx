@@ -12,6 +12,7 @@ import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, ope
 import { getDraft, useDraft, useImeField } from '../drafts'
 import type { Attachment, TerminalSummary } from '../types'
 import { copyText, workspaceLabel } from '../util'
+import { sendTerminalMessage } from '../terminal-send'
 import { ConfirmDialog } from './Modal'
 import { Dropdown, MenuItem } from './Popover'
 import { BackToLeader, TeamPanel, TeamToggle, useLedTeam } from './TeamPanel'
@@ -278,28 +279,17 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
       }
       setAttachments([])
     }
-    if (sent) {
-      // A paste keeps line breaks in the message; Enter then sends it.
-      if (term) {
-        term.paste(sent)
-        setTimeout(() => sendInput(terminalId, '\r'), 60)
-      } else {
-        // The screen is not open here: the server pastes the message and sends it.
-        setSending(true)
-        // A server from before the change answers null even when it sent the message.
-        const sentOk = await request('terminal.send', { terminalId, text: sent }).then(() => true, (error: unknown) => {
-          toast(error instanceof Error ? error.message : String(error), 'error')
-          return false
-        })
-        setSending(false)
-        if (!sentOk) return
-      }
+    // The server pastes the message (line breaks kept) and presses Enter, and answers whether it took it; it waits for the file paths to be taken first.
+    setSending(true)
+    const delivered = await sendTerminalMessage({
+      send: (text) => request('terminal.send', { terminalId, text }),
+      read: () => getDraft(`terminal:${terminalId}`),
       // What was typed while the message was on its way is the next one.
-      if (getDraft(`terminal:${terminalId}`) === sent) setText('')
-    } else {
-      // The server presses Enter (and again if Claude Code did not take it); it waits for the file paths to be taken first.
-      request('terminal.send', { terminalId, text: '' }).catch(() => {})
-    }
+      clear: () => setText(''),
+      fail: (message) => toast(message, 'error'),
+    }, sent)
+    setSending(false)
+    if (!delivered) return
     onSent()
   }
   /** Photos and other files wait here (shown above the field), then go to Claude Code as their path on the PC when sent. */

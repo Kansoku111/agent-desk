@@ -29,7 +29,7 @@ import { ModelCatalogUpdater } from './model-updates.js'
 import { resetPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
-import { fetchChatGptUsage, normalizeCodexRateLimits } from './chatgpt-usage.js'
+import { ChatGptUsage } from './chatgpt-usage.js'
 import { AUTH_REQUIRED } from './claude-auth.js'
 import { mergeClaudeLimits, readSavedClaudeLimits } from './claude-limits.js'
 import { CODEX_VERSION, CodexAppServer } from './codex-app-server.js'
@@ -441,17 +441,19 @@ terminals.on('turn-finished', () => {
 
 // The ChatGPT subscription's remaining allowance (5-hour / weekly windows).
 let chatgptUsage = null
+const chatgptUsageTracker = new ChatGptUsage(codexApp, usage => {
+  chatgptUsage = usage
+  broadcast('chatgptUsage', { usage })
+})
 let usageTimer = null
 codexApp.on('login', state => {
   broadcast('codexLogin', { codexLogin: state }, { localOnly: true })
   if (state.phase === 'done') void refreshChatGptUsage()
 })
 codexApp.on('account', () => { void accounts().then(next => broadcast('accounts', { accounts: next })) })
-codexApp.on('rateLimits', body => { chatgptUsage = normalizeCodexRateLimits(body); broadcast('chatgptUsage', { usage: chatgptUsage }) })
+codexApp.on('rateLimits', body => { chatgptUsageTracker.update(body) })
 async function refreshChatGptUsage() {
-  chatgptUsage = await fetchChatGptUsage(codexApp)
-  broadcast('chatgptUsage', { usage: chatgptUsage })
-  return chatgptUsage
+  return chatgptUsageTracker.refresh()
 }
 threads.on('turn-finished', ({ threadId }) => {
   // Images may be requested by GPT or Claude; these limits belong to the separate Codex account.

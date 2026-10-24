@@ -31,9 +31,17 @@ export function normalizeUsage(body, now = Date.now()) {
     fetchedAt: now
   }
 }
+// A notification carries one bucket; never display another model's quota as Codex.
+function codexLimits(body) {
+  const limits = body?.rateLimitsByLimitId?.codex ?? body?.rateLimits
+  return limits && (limits.limitId == null || limits.limitId === 'codex') ? limits : null
+}
+
 export function normalizeCodexRateLimits(body, now = Date.now()) {
-  const limits = body?.rateLimitsByLimitId?.codex ?? body?.rateLimits ?? {}
-  const window = entry => entry ? {
+  const limits = codexLimits(body) ?? {}
+  // A null duration is unknown, not a zero-hour window.
+  const window = entry => entry && Number.isFinite(entry.usedPercent)
+    && Number.isFinite(entry.windowDurationMins) && entry.windowDurationMins > 0 ? {
     used_percent: entry.usedPercent,
     limit_window_seconds: entry.windowDurationMins * 60,
     reset_at: entry.resetsAt
@@ -47,17 +55,53 @@ export function normalizeCodexRateLimits(body, now = Date.now()) {
     }
   }, now)
 }
-export async function fetchChatGptUsage(codex) {
-  try {
-    const body = await codex.rateLimits()
-    return body ? normalizeCodexRateLimits(body) : {
-      status: 'signed-out',
-      message: CODEX_SIGNIN_HINT
-    }
-  } catch {
-    return {
-      status: 'error',
-      message: 'Codex の利用上限を取得できませんでした。設定 → アカウントの Codex 接続を確認してください。'
-    }
+// Rolling notifications are sparse: null means unavailable, not a deletion.
+function available(previous, patch) {
+  return { ...previous, ...Object.fromEntries(Object.entries(patch ?? {}).filter(([, value]) => value != null)) }
+}
+
+/** Keeps the last full Codex snapshot so rolling updates cannot erase its windows or metadata. */
+export class ChatGptUsage {
+  constructor(codex, changed = () => {}) {
+    this.codex = codex
+    this.changed = changed
+    this.snapshot = null
   }
+
+  publish(usage) {
+    this.changed(usage)
+    return usage
+  }
+
+  update(body, now = Date.now()) {
+    const patch = codexLimits(body)
+    if (!patch) return null
+    const next = available(this.snapshot, patch)
+    for (const key of ['primary', 'secondary']) {
+      if (patch[key]) next[key] = available(this.snapshot?.[key], patch[key])
+    }
+    this.snapshot = next
+    return this.publish(normalizeCodexRateLimits({ rateLimits: next }, now))
+  }
+
+  async refresh() {
+    let usage
+    try {
+      const body = await this.codex.rateLimits()
+      // A full read is authoritative, including null values and sign-out.
+      this.snapshot = codexLimits(body)
+      usage = body ? normalizeCodexRateLimits(body) : { status: 'signed-out', message: CODEX_SIGNIN_HINT }
+    } catch {
+      this.snapshot = null
+      usage = {
+        status: 'error',
+        message: 'Codex の利用上限を取得できませんでした。設定 → アカウントの Codex 接続を確認してください。'
+      }
+    }
+    return this.publish(usage)
+  }
+}
+
+export async function fetchChatGptUsage(codex) {
+  return new ChatGptUsage(codex).refresh()
 }

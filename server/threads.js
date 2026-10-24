@@ -664,7 +664,11 @@ export class ThreadManager extends EventEmitter {
     turn.restore = { at: Date.now(), undo: result.undo, files, turns: turns.length }
     for (const later of turns.slice(turns.indexOf(turn))) later.revertedBy ??= turn.id
     // The agent remembers its edits; the next message tells it they are gone.
-    if (files) thread.restoreNote = { turnId: turn.id, request: turn.user.text ?? '', first: turns[0] === turn }
+    // An unsent earlier note is kept underneath, so undoing this restore brings it back.
+    if (files) {
+      const previous = thread.restoreNote
+      thread.restoreNote = { turnId: turn.id, request: turn.user.text ?? '', first: turns[0] === turn, ...(previous && { previous }) }
+    }
     thread.updatedAt = Date.now()
     this.#saveIndex()
     this.#saveTurns(threadId)
@@ -694,7 +698,11 @@ export class ThreadManager extends EventEmitter {
     if (result.error) return { files: result.restored.length + result.removed.length, error: result.error }
     delete turn.restore
     for (const entry of turns) if (entry.revertedBy === turn.id) delete entry.revertedBy
-    if (thread.restoreNote?.turnId === turn.id) delete thread.restoreNote
+    if (thread.restoreNote?.turnId === turn.id) {
+      const { previous } = thread.restoreNote
+      if (previous) thread.restoreNote = previous
+      else delete thread.restoreNote
+    }
     this.#saveIndex()
     this.#saveTurns(threadId)
     // Once the files changed, finish recording the restore even during close.
