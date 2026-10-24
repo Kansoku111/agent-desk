@@ -20,6 +20,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import readline from 'node:readline'
 import { normalizeClaudeLimits } from './claude-limits.js'
+import { OutputSpeedMeter } from './output-speed.js'
 import { readJson, writeJson } from './json-file.js'
 import { INHERITED_MARKERS, findClaude, launchCommand } from './terminals.js'
 
@@ -240,7 +241,7 @@ export class ClaudeRunner extends EventEmitter {
 
     const args = [
       ...(record.started ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
-      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages', '--include-partial-messages',
       // Nobody is there to answer a permission prompt: what would ask is denied, and the report says so.
       '--permission-prompts', 'none',
       ...(record.model ? ['--model', record.model] : []),
@@ -257,6 +258,12 @@ export class ClaudeRunner extends EventEmitter {
       // Its commands running in the background (task id → description), and the waits on them.
       background: new Map(), answered: false, wake: null, backgroundCap: null, cutBackground: null,
     }
+    live.speed = new OutputSpeedMeter({ onChange: (speed) => {
+      if (speed) turn.outputSpeed = speed
+      else delete turn.outputSpeed
+      if (this.live.get(id) !== live || this.closing) return
+      this.emit('turn', { id, turn })
+    } })
     live.exited = new Promise((resolve) => { live.markExited = resolve })
 
     if (this.preflight) {
@@ -412,6 +419,22 @@ export class ClaudeRunner extends EventEmitter {
       return
     }
     if (!event || typeof event !== 'object') return
+    if (event.type === 'stream_event') {
+      // Nested agents may stream concurrently; they are not this turn's model.
+      if (event.parent_tool_use_id) return
+      // Partial events are used only for timing. The final assistant message
+      // still owns transcript content, avoiding duplicate text/tool calls.
+      const part = event.event
+      if (!live.stopping && !live.ended) {
+        if (part?.type === 'content_block_delta') {
+          if (part.delta?.type === 'text_delta') live.speed.push(part.delta.text)
+          else if (part.delta?.type === 'thinking_delta') live.speed.push(part.delta.thinking)
+          else if (part.delta?.type === 'input_json_delta') live.speed.pause()
+        } else if (part?.type === 'message_stop'
+          || (part?.type === 'content_block_start' && part.content_block?.type === 'tool_use')) live.speed.pause()
+      }
+      return
+    }
     if (event.type === 'system' && event.subtype === 'init') {
       record.started = true
       record.modelInUse = event.model ?? record.modelInUse
@@ -424,6 +447,7 @@ export class ClaudeRunner extends EventEmitter {
     }
     if (event.type === 'system' && event.subtype === 'background_tasks_changed') return this.#onBackground(live, event.tasks)
     if (event.type === 'result') {
+      live.speed.pause()
       live.result = event
       live.denials.push(...(Array.isArray(event.permission_denials) ? event.permission_denials : []))
       this.#answered(live)
@@ -452,6 +476,7 @@ export class ClaudeRunner extends EventEmitter {
   }
 
   #onExit(record, live, code, error) {
+    live.speed.finish()
     if (this.live.get(record.id) === live) this.live.delete(record.id)
     clearTimeout(live.grace)
     clearTimeout(live.wake)
@@ -529,6 +554,7 @@ export class ClaudeRunner extends EventEmitter {
     const live = this.live.get(id)
     if (!live) return false
     live.stopping = true
+    live.speed.pause()
     this.#kill(live)
     return true
   }

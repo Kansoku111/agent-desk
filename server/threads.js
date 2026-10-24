@@ -15,6 +15,7 @@ import {
   sameFolder, shortMessage, validateMessageId,
 } from './thread-utils.js'
 import { turnUsage } from './usage.js'
+import { OUTPUT_SPEED_META } from './output-speed.js'
 export { carryoverText, describeError, isUndoable, restoreNoteText } from './thread-utils.js'
 
 const TURN_EMIT_MS = 60
@@ -108,6 +109,7 @@ export class ThreadManager extends EventEmitter {
     let repriced = false
     for (const turn of turns) {
       if (turn.status === 'running' && !this.active.has(threadId)) {
+        if (turn.outputSpeed) delete turn.outputSpeed
         settleTurn(turn, {
           status: 'error',
           error: { message: 'アプリの終了により中断されました。' },
@@ -527,6 +529,9 @@ export class ThreadManager extends EventEmitter {
         : { status: 'error', error: describeError(error, thread, active.runtime) }
     }
     active.phase = 'finishing'
+    // Only the stream-side bridge can supply an active-interval average. If it
+    // disappeared on failure, don't relabel a stale rolling rate as an average.
+    if (turn.outputSpeed?.state !== 'done') delete turn.outputSpeed
     await snapshot
     // A steer may have reached the runtime just before prompt settled. Include
     // its receipt and all after-work in done, before admitting the next turn.
@@ -924,6 +929,11 @@ export class ThreadManager extends EventEmitter {
     const active = this.active.get(threadId)
     if (!active) return
     active.cancelled = true
+    if (active.turn.outputSpeed?.state === 'streaming') {
+      active.turn.outputSpeed = { ...active.turn.outputSpeed, state: 'paused' }
+      this.#saveTurns(threadId)
+      if (!this.stopping && !this.removing.has(threadId)) this.#emitTurn(threadId, active.turn, true)
+    }
     this.#resolvePermissions(threadId, null)
     const thread = this.threads.get(threadId)
     if (active.runtime && thread?.sessionId && active.phase === 'prompting') {
@@ -942,6 +952,22 @@ export class ThreadManager extends EventEmitter {
     if (active?.phase === 'starting') return
     const turn = active?.turn ?? this.turns.get(threadId)?.at(-1)
     if (!turn) return
+    if (Object.hasOwn(update._meta ?? {}, OUTPUT_SPEED_META)) {
+      // Standard ACP chunks are committed whole messages. Only the extension
+      // produced at the real stream boundary is authoritative for live speed.
+      if (!active || active.phase !== 'prompting') return
+      const speed = update._meta[OUTPUT_SPEED_META]
+      if (speed === null) delete turn.outputSpeed
+      else {
+        if (!Number.isFinite(speed?.tokensPerSecond) || speed.tokensPerSecond <= 0
+          || speed.estimated !== true || !['streaming', 'paused', 'done'].includes(speed.state)) return
+        if (active.cancelled && speed.state === 'streaming') return
+        turn.outputSpeed = { tokensPerSecond: speed.tokensPerSecond, state: speed.state, estimated: true }
+      }
+      this.#saveTurns(threadId)
+      this.#emitTurn(threadId, turn)
+      return // Empty carrier updates must never create transcript items.
+    }
     const side = applyUpdate(turn, update)
     if (side.usage) {
       thread.usage = side.usage
@@ -959,6 +985,7 @@ export class ThreadManager extends EventEmitter {
     if (!thread || !active || active.cancelled) {
       return Promise.resolve({ outcome: { outcome: 'cancelled' } })
     }
+    if (active.turn.outputSpeed?.state === 'streaming') active.turn.outputSpeed = { ...active.turn.outputSpeed, state: 'paused' }
     const requestId = randomUUID()
     const turn = active.turn
     const toolCallId = params.toolCall?.toolCallId

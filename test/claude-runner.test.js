@@ -65,7 +65,7 @@ test('a turn is one claude -p run: the prompt on stdin, its events folded into t
   const [proc] = spawned
   assert.equal(proc.file, '/usr/bin/claude')
   assert.deepEqual(proc.args, [
-    '--session-id', session.sessionId, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
+    '--session-id', session.sessionId, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages', '--include-partial-messages',
     '--permission-prompts', 'none', '--model', 'haiku', '--effort', 'low', '--append-system-prompt-file', 'child.md',
   ])
   assert.equal(proc.options.cwd, '/work')
@@ -116,6 +116,49 @@ test('the token counts Claude Code reports with its result go out with the finis
   spawned[0].end(0)
   await ended
   assert.deepEqual(finished[0].usage, { input: 10, output: 5, cacheRead: 100, cacheWrite: 7, costUsd: 0.02 })
+})
+
+test('partial Claude text/thought events share the meter without duplicating the final transcript', async (t) => {
+  const { runner, spawned, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work' })
+  runner.run(session.id, 'test')
+  const [proc] = spawned
+  const live = runner.live.get(session.id)
+  let now = 0
+  live.speed.now = () => now
+  const part = (event) => proc.write({ type: 'stream_event', event })
+  const text = 'a'.repeat(100)
+  proc.write({ type: 'stream_event', parent_tool_use_id: 'nested-agent', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: text.repeat(1000) } } })
+  assert.equal(live.speed.timer, null, 'nested agent output does not start the parent meter')
+  part({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: text } })
+  part({ type: 'content_block_delta', delta: { type: 'signature_delta', signature: 'not-text' } })
+  now = 500
+  part({ type: 'content_block_delta', delta: { type: 'text_delta', text } })
+  live.speed.tick()
+  assert.equal(live.turn.outputSpeed.tokensPerSecond, 50)
+  assert.equal(live.turn.outputSpeed.state, 'streaming')
+  assert.equal(live.turn.items.length, 0, 'partial timing events do not append duplicate content')
+  part({ type: 'content_block_start', content_block: { type: 'tool_use' } })
+  assert.equal(live.turn.outputSpeed.state, 'paused')
+  assert.equal(live.speed.timer, null)
+  part({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: text.repeat(1000) } })
+  now = 60_000
+  part({ type: 'content_block_delta', delta: { type: 'text_delta', text } })
+  now = 60_500
+  part({ type: 'content_block_delta', delta: { type: 'text_delta', text } })
+  proc.write({ type: 'assistant', message: { id: 'answer', content: [{ type: 'text', text }] } })
+  const ended = done()
+  proc.write({ type: 'result', subtype: 'success', result: text })
+  assert.equal(live.turn.outputSpeed.state, 'paused')
+  assert.equal(live.speed.timer, null)
+  proc.end(0)
+  await ended
+  assert.equal(live.turn.items.length, 1)
+  assert.equal(live.turn.items[0].text, text)
+  assert.deepEqual(live.turn.outputSpeed, { tokensPerSecond: 50, state: 'done', estimated: true })
+  await runner.writes.get(session.id)
+  const saved = JSON.parse(await fs.readFile(path.join(runner.dir, `${session.id}.json`), 'utf8'))
+  assert.deepEqual(saved.turns[0].outputSpeed, live.turn.outputSpeed)
 })
 
 const inputLines = (proc) => proc.input.trim().split('\n').map((line) => JSON.parse(line))

@@ -253,6 +253,12 @@ export interface SteerItem {
 
 export type TurnItem = ToolItem | TextItem | NoticeItem | PlanItem | SteerItem
 
+export interface OutputSpeed {
+  tokensPerSecond: number
+  state: 'streaming' | 'paused' | 'done'
+  estimated: true
+}
+
 export interface Turn {
   id: string
   startedAt: number
@@ -263,6 +269,8 @@ export interface Turn {
   user: { text: string; images: ImageRef[] }
   items: TurnItem[]
   usage?: TurnUsage
+  /** Approximate received text throughput; never a provider decoding benchmark. */
+  outputSpeed?: OutputSpeed
   /** Workspace snapshots around the turn; `changed` counts the files the turn changed. */
   checkpoint?: { before?: string; after?: string; changed?: number; error?: string }
   /** Set when the files were put back to before this turn. */

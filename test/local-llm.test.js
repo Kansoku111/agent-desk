@@ -99,7 +99,7 @@ test('teams can use local models as children', () => {
 })
 
 /** A tiny OpenAI-compatible server: one model that answers every request with the same text. */
-async function mockServer(reply) {
+async function mockServer(reply, streamDelayMs = 0) {
   const requests = []
   const server = http.createServer(async (req, res) => {
     let body = ''
@@ -113,7 +113,10 @@ async function mockServer(reply) {
     if (req.method === 'POST' && req.url === '/v1/chat/completions') {
       const base = { id: 'c1', object: 'chat.completion.chunk', created: 0, model: 'mock-model:1b' }
       res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: reply }, finish_reason: null }] })}\n\n`)
+      for (const content of streamDelayMs ? [...reply] : [reply]) {
+        res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })}\n\n`)
+        if (streamDelayMs) await new Promise((resolve) => setTimeout(resolve, streamDelayMs))
+      }
       res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } })}\n\n`)
       res.end('data: [DONE]\n\n')
       return
@@ -128,7 +131,7 @@ async function mockServer(reply) {
 test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-local-llm-'))
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-local-llm-ws-'))
-  const mock = await mockServer('ローカルからの返事')
+  const mock = await mockServer('ローカルからの返事', 120)
   const hook = path.join(home, 'offline-fetch.mjs')
   // Only the mock server is reachable from the app server; dsh talks to it directly.
   await fs.writeFile(hook, `const real = globalThis.fetch; globalThis.fetch = async (url, init) => {
@@ -170,9 +173,11 @@ test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) =
   ws = new WebSocket(`ws://127.0.0.1:${info.port}/ws?t=${info.token}`, { origin })
   const replies = new Map()
   let sequence = 0, helloResolve
+  const speeds = []
   const hello = new Promise((resolve) => { helloResolve = resolve })
   ws.on('message', (raw) => {
     const frame = JSON.parse(String(raw))
+    if (frame.event === 'turn' && frame.turn?.outputSpeed) speeds.push(frame.turn.outputSpeed)
     if (frame.event === 'hello') helloResolve(frame.state)
     if (replies.has(frame.id)) { replies.get(frame.id)(frame); replies.delete(frame.id) }
   })
@@ -207,6 +212,11 @@ test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) =
   const { thread } = await request('thread.create', { workspace, model: model.value, effort: '', permissionMode: 'read-only', text: 'こんにちは' })
   const done = await waitFor(() => request('thread.get', { threadId: thread.id }), (next) => JSON.stringify(next).includes('ローカルからの返事') && !next.thread?.busy, 'the local reply')
   assert.ok(done)
+  assert.ok(speeds.some((speed) => speed.state === 'streaming' && speed.tokensPerSecond > 0), `live speed must cross SSE → dsh → ACP → WebSocket: ${JSON.stringify({ speeds, turns: done.turns })}`)
+  const speed = done.turns.at(-1).outputSpeed
+  assert.equal(speed.state, 'done')
+  assert.equal(speed.estimated, true)
+  assert.ok(speed.tokensPerSecond > 0 && Number.isFinite(speed.tokensPerSecond))
   const chat = mock.requests.find((entry) => entry.url === '/v1/chat/completions')
   assert.equal(chat.headers.authorization, 'Bearer local')
   const body = JSON.parse(chat.body)

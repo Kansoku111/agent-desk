@@ -1573,6 +1573,21 @@ select:focus {
   font-variant-numeric: tabular-nums;
 }
 
+.output-speed {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.output-speed.paused {
+  color: var(--text-subtle);
+}
+
+.usage-line .output-speed {
+  margin-left: 4px;
+}
+
 .turn-status {
   display: flex;
   align-items: center;

@@ -11,6 +11,7 @@ import { patchAcpSource } from '../server/steer-patch.js'
 import { patchGoalSource } from '../server/goal-patch.js'
 import { patchMcpTimeoutSource } from '../server/mcp-timeout-patch.js'
 import { patchRetrySource } from '../server/retry-patch.js'
+import { patchOutputSpeedSource } from '../server/output-speed-patch.js'
 
 const project = fileURLToPath(new URL('../', import.meta.url))
 
@@ -56,6 +57,7 @@ async function fixture(t) {
   for (const file of ['scripts/check-dsh.mjs', ...[
     'dsh-compatibility.js', 'steer-patch.js', 'goal-patch.js', 'retry-patch.js', 'mcp-timeout-patch.js', 'fast-mode-hook.js', 'fast-mode.js',
     'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js',
+    'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js',
   ].map((file) => `server/${file}`)]) {
     await fs.copyFile(path.join(project, file), path.join(root, file))
   }
@@ -105,10 +107,10 @@ async function fixture(t) {
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
   const { acpSource, llmSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
-    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js',
+    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js',
   ])
   assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource }), {
-    acp: patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource))), llm: patchRetrySource(llmSource),
+    acp: patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource)))), llm: patchRetrySource(llmSource),
   })
 })
 
@@ -132,6 +134,7 @@ for (const [name, field, change] of [
   ['steer', 'acp', (source) => source.replace('a prompt is already in flight for this session', 'upstream changed admission')],
   ['goal', 'acp', (source) => source.replace('settleAfterQuiescence(inflight) {', 'upstreamSettlement(inflight) {')],
   ['retry', 'llm', (source) => source.replace('function classifyPiAiError(message)', 'function upstreamClassifier(message)')],
+  ['output-speed', 'acp', (source) => source.replace('requestSignal?.removeEventListener', 'requestSignal?.upstreamRemoveEventListener')],
 ]) {
   test(`fresh verify rejects changed upstream ${name} fixture instead of accepting model-only success`, async (t) => {
     const f = await fixture(t)

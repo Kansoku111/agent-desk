@@ -295,8 +295,24 @@ function FileChanges({ turn, workspace }: { turn: Turn; workspace: string }) {
   )
 }
 
+/** The same compact readout while streaming and in the finished usage footer. */
+function OutputSpeed({ speed }: { speed: Turn['outputSpeed'] }) {
+  if (!speed || !Number.isFinite(speed.tokensPerSecond) || speed.tokensPerSecond <= 0) return null
+  const state = speed.state
+  const detail = state === 'done' ? '受信した本文・思考テキストの平均速度（推定）' : '直近約3秒の受信テキスト速度（推定）'
+  return (
+    <span
+      className={`output-speed ${state}`}
+      title={`${detail}。通信のまとめ送りやモデルのトークン分割により誤差があります。${state === 'paused' ? '現在は受信を一時停止しています。' : ''}`}
+      aria-label={`${state === 'done' ? '平均' : ''}推定出力速度 毎秒${speed.tokensPerSecond}トークン${state === 'paused' ? '、一時停止中' : ''}`}
+    >
+      ≈ {speed.tokensPerSecond.toLocaleString('en-US', { maximumFractionDigits: 1 })} t/s
+    </span>
+  )
+}
+
 /** Tokens the turn used, and the estimated cost of API models. */
-function UsageLine({ usage, taskCost }: { usage: TurnUsage; taskCost: number | null }) {
+function UsageLine({ usage, taskCost, speed }: { usage: TurnUsage; taskCost: number | null; speed: Turn['outputSpeed'] }) {
   const inputTotal = usage.input + usage.cacheRead + usage.cacheWrite
   const detail = [
     `リクエスト ${usage.requests} 回`,
@@ -315,6 +331,7 @@ function UsageLine({ usage, taskCost }: { usage: TurnUsage; taskCost: number | n
       <span>入力 {formatTokens(inputTotal)}</span>
       {usage.cacheRead > 0 && <span className="usage-sub">（キャッシュ {formatTokens(usage.cacheRead)}）</span>}
       <span>· 出力 {formatTokens(usage.output)}</span>
+      <OutputSpeed speed={speed} />
       {usage.cost !== null && <span className="usage-cost">· 約 {formatUsd(usage.cost)}</span>}
       {usage.cost !== null && taskCost !== null && taskCost > usage.cost && (
         <span className="usage-sub">（このタスク累計 {formatUsd(taskCost)}）</span>
@@ -384,6 +401,7 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
         <div className="working">
           <span className="shimmer">{pending.length ? '承認を待っています' : '作業中'}</span>
           <span className="working-time"><Elapsed since={turn.startedAt} /></span>
+          <OutputSpeed speed={turn.outputSpeed} />
         </div>
       )}
 
@@ -402,7 +420,8 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
         <div className="turn-status"><X size={13} /> 停止しました</div>
       )}
       {turn.status === 'error' && turn.error && <TurnError error={turn.error} />}
-      {!running && turn.usage && <UsageLine usage={turn.usage} taskCost={taskCost} />}
+      {!running && turn.usage && <UsageLine usage={turn.usage} taskCost={taskCost} speed={turn.outputSpeed} />}
+      {!running && !turn.usage && turn.outputSpeed && <div className="usage-line"><OutputSpeed speed={turn.outputSpeed} /></div>}
       {!running && <RestoreControls threadId={threadId} turn={turn} busy={threadBusy} undoable={undoable} />}
     </section>
   )

@@ -15,6 +15,7 @@
 - **モデル設定:** dsh のホーム設定に経路を書き込みます。`openai-codex` は保存済みモデル選択との互換性のための内部キーで、実際の GPT API は `openai-responses`、送信先は `https://api.openai.com/v1` です。専用の資格情報参照とリクエストhookが、Agent Deskの公式SIWC tokenだけを送信直前に注入・排他更新します。旧Codex grantは認証に使いません。`anthropic` は従来のAPIキー経路です。
 - **画像・Codex利用上限:** bundled Codex 0.164.0 app-serverとstdio JSON-RPCで通信し、別のChatGPT managed sign-inを使います。専用 `codex-home` と空のcwdを持ち、ユーザーの `~/.codex` は使いません。
 - **会話記録:** ACP はセッション再開時に履歴を返さないため、画面用の記録は Agent Desk が保存します。
+- **出力速度:** `≈ … t/s` は本文・見える思考テキストの推定受信速度です。現行 DSH の ACP `chunk` は応答確定後の文章なので計測には使わず、所有するルート Agent の `agent/assistant-stream` を読み込み時フックで観測し、数値だけを ACP の拡張メタデータで渡します（インストール済みパッケージは変更しません）。チームの Claude Code 子は `--include-partial-messages` の差分を同じ計測器へ渡します。直近約3秒を300ms間隔で更新し、最初の塊・ツール・承認・2秒以上の受信間隔は計測から除外します。完了後は観測区間の平均だけを保存します。隠れた思考やツール引数を含み得る課金トークン数で実測扱いに補正しません。一括応答・過去の履歴・通常の CL 端末には速度を捏造しません。
 - **モデル一覧:** GPTは公式SIWCのアカウント別 `models[].slug/display_name/visibility` と能力情報を使います。未接続時の既定値・他providerの定義はpi-ai/`server/catalog-extras.json`/更新カタログを元にし、追加分を含むモデル定義をアプリ所有のDSHホーム設定に書きます。node_modulesのカタログJSONを起動時に書き換える方式は廃止しました。アカウント切替時は別アカウントのキャッシュを使わず、未提供の旧モデルは再選択が必要です。
 
 ## データの保存場所
