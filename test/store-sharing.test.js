@@ -5,6 +5,7 @@ import ts from 'typescript'
 import { Outbox, readQueues } from '../web/src/outbox.ts'
 import { RpcClient } from '../web/src/rpc-client.ts'
 import { notificationRoute, notificationText } from '../web/src/notification.ts'
+import * as turnUpdates from '../web/src/turn-updates.ts'
 
 async function fixture() {
   const source = await fs.readFile(new URL('../web/src/store.ts', import.meta.url), 'utf8')
@@ -14,6 +15,7 @@ async function fixture() {
     if (name === 'react') return {}
     if (name === './outbox') return { Outbox, readQueues }
     if (name === './rpc-client') return { RpcClient }
+    if (name === './turn-updates') return turnUpdates
     if (name === './notification') return { notificationRoute, notificationText }
     throw new Error(`unexpected import: ${name}`)
   }
@@ -67,6 +69,35 @@ const turn = () => ({
     { type: 'tool', id: 'tool', name: 'edit', status: 'in_progress', input: { path: 'a.txt', old_string: 'old', new_string: 'new' } },
   ],
 })
+
+for (const event of ['turnSpeed', 'agentTurnSpeed']) {
+  test(`${event} updates speed, skips unchanged or missing turns, and removes speed`, async () => {
+    const { store, frame } = await fixture()
+    const field = event === 'turnSpeed' ? 'turns' : 'agentTurns'
+    const send = (speed, turnId = 'turn', id = 'task') => frame({ event, ...(event === 'turnSpeed' ? { threadId: id } : { id }), turnId, speed })
+    const previous = turn()
+    const other = { ...turn(), id: 'other' }
+    store.setState({ [field]: { task: [previous, other] } })
+    const initial = store.getState()
+    send(null)
+    send(null, 'missing')
+    send(null, 'turn', 'unloaded')
+    assert.equal(store.getState(), initial)
+    const speed = { tokensPerSecond: 12, state: 'streaming', estimated: true }
+    send(speed)
+    const updated = store.getState()
+    assert.deepEqual(updated[field].task[0].outputSpeed, speed)
+    assert.equal(updated[field].task[0].items, previous.items)
+    assert.equal(updated[field].task[1], other)
+    assert.equal(Object.hasOwn(previous, 'outputSpeed'), false)
+    send(speed)
+    assert.equal(store.getState(), updated)
+    send(null)
+    assert.equal(Object.hasOwn(store.getState()[field].task[0], 'outputSpeed'), false)
+    assert.equal(store.getState()[field].task[1], other)
+    assert.deepEqual(updated[field].task[0].outputSpeed, speed)
+  })
+}
 
 for (const event of ['turn', 'agentTurn']) {
   test(`${event} preserves only unchanged objects and exposes nested, metadata, and item-order updates to memo`, async () => {
