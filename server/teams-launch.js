@@ -61,7 +61,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
     },
   }, null, 2))
   const prompt = writeFile(dir, 'leader.md', withInstructions(leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: config.leanChildren, ...guides,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: !team.execution && config.leanChildren, ...guides,
   }) + (team.execution ? EXECUTION_PROMPT : ''), instructions))
   return {
     args: [
@@ -82,7 +82,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
  */
 export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl, guides = NO_GUIDES }) {
   const prompt = writeFile(dir, 'leader.md', leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: config.leanChildren, ...guides,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: !team.execution && config.leanChildren, ...guides,
   }) + (team.execution ? EXECUTION_PROMPT : ''))
   return {
     name: MCP_SERVER,
@@ -110,6 +110,7 @@ export function childTurnArgs({ child, dir, instructions = '', lean = false }) {
   const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name, { background: true }), instructions))
   return [
     '--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt,
-    ...(child.execution?.mode === 'research' ? ['--tools', 'Read,Glob,Grep', '--strict-mcp-config', '--no-chrome'] : lean ? ['--strict-mcp-config', '--no-chrome'] : ['--chrome']),
+    ...(child.execution?.mode === 'research' ? ['--tools', 'Read,Glob,Grep'] : []),
+    ...(lean ? ['--strict-mcp-config', '--no-chrome'] : ['--chrome']),
   ]
 }

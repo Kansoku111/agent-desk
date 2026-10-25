@@ -139,7 +139,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       choices.leaderProvider = leader.startsWith('claude:') ? 'claude' : 'gpt'
       choices.leader = { model: leader.startsWith('claude:') ? leader.slice(7) : 'opus', effort: leaderEffort || null }
       choices.gptLeader = { model: null, effort: leaderEffort || null }
-      choices.leanChildren = true
+      choices.leanChildren = false
       choices.batchReports = true
       choices.maxChildren = 6
       choices.policy = null

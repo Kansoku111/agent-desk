@@ -267,6 +267,28 @@ for (const parent of ['claude', 'gpt']) for (const provider of ['claude', 'gpt']
   })
 }
 
+for (const provider of ['claude', 'gpt']) for (const mode of ['write', 'research']) {
+  test(`eco ${provider} ${mode} children get extra tools even with saved lean settings`, async (t) => {
+    const f = await setupExecution(t)
+    // Also covers existing eco teams created before extra tools became unconditional.
+    f.team.config.leanChildren = true
+    await f.tool('spawn', { ...exTask, provider, mode })
+    const child = f.team.children.at(-1)
+    assert.equal(child.tools, undefined, 'the parent need not request tools explicitly')
+    assert.equal(f.manager.toolsFor({ team: { id: f.team.id, childId: child.id } }), true)
+    if (provider === 'claude') {
+      const args = f.agents.calls.find((call) => call[0] === 'create')[1].args
+      assert.equal(args.includes('--chrome'), true)
+      assert.equal(args.includes('--no-chrome'), false)
+      assert.equal(args.includes('--strict-mcp-config'), false)
+      assert.equal(args.includes('--tools'), mode === 'research')
+      if (mode === 'research') assert.equal(args[args.indexOf('--tools') + 1], 'Read,Glob,Grep')
+    } else {
+      assert.equal(f.threads.threads.get(child.taskId).permissionMode, mode === 'research' ? 'read-only' : 'danger-full-access')
+    }
+  })
+}
+
 function conflictDetails(error, { workspace, blockerWorkspace, relation }) {
   assert.ok(error instanceof Error)
   assert.ok(error.message.includes(`対象フォルダ: ${JSON.stringify(workspace)}`), error.message)

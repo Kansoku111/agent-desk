@@ -22,6 +22,18 @@ test('a Claude child and leader get the custom instructions in their one appende
   assert.match(promptOf(args), /<user_instructions>\nコミット判断はあなたで行ってください。\n<\/user_instructions>/)
 })
 
+test('eco leader prompts do not request opt-in tools even with saved lean settings', () => {
+  const options = {
+    team: { id: 'eco', secret: 's', workspace: 'C:/work', execution: {} },
+    config: teamConfig({ leanChildren: true }), models: [], dir: dir(),
+    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
+  }
+  assert.doesNotMatch(promptOf(leaderLaunch(options).args), /`spawn` with `tools: true`/)
+  const server = leaderMcpServer(options)
+  const file = server.env.find(({ name }) => name === 'AGENT_DESK_TEAM_INSTRUCTIONS').value
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /`spawn` with `tools: true`/)
+})
+
 test('without custom instructions a child prompt has no instructions section', () => {
   assert.doesNotMatch(promptOf(childTurnArgs({ child: { id: 'c2', name: 'B' }, dir: dir() })), /user_instructions/)
 })

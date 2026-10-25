@@ -413,7 +413,9 @@ export class TeamManager extends EventEmitter {
 
   /** A child without the browser, desktop and image tools (its MCP servers): the team keeps children lean and its spawn did not ask for them. */
   #lean(team, child) {
-    return child.execution?.mode === 'research' || (this.config(team).leanChildren && !child.tools)
+    // Eco children always receive extra tools, including in teams saved with leanChildren enabled.
+    if (team.execution) return false
+    return this.config(team).leanChildren && !child.tools
   }
 
   /** Whether a dsh task's session gets the browser, desktop and image tools (index.js mcpServersFor). */
