@@ -340,8 +340,10 @@ function UsageLine({ usage, taskCost, speed }: { usage: TurnUsage; taskCost: num
   )
 }
 
-export const TurnView = memo(function TurnView({ turn, workspace, taskCost = null, threadId, threadBusy, undoable }: {
+export const TurnView = memo(function TurnView({ turn, workspace, taskCost = null, threadId, threadBusy, undoable, hideUser = false }: {
   turn: Turn
+  /** Leave out the request bubble, when the request is shown elsewhere. */
+  hideUser?: boolean
   workspace: string
   taskCost?: number | null
   threadId: string
@@ -374,7 +376,7 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
 
   return (
     <section className="turn">
-      <UserBubble text={turn.user.text} images={turn.user.images} />
+      {!hideUser && <UserBubble text={turn.user.text} images={turn.user.images} />}
 
       {notices.map((item) => <Notice key={item.id} item={item as NoticeItem} />)}
       {/* Folded steps still show what the user added during the turn. */}
