@@ -7,6 +7,8 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { DELIVERY_CHECK_MS, DELIVERY_GIVE_UP_MS, LEADER_SETTLE_MS, MCP_SERVER, PREFIX, REPORT_PREVIEW, REPORT_GATHER_MS, RESUME_DELAY_MS, TeamManager, TYPING_QUIET_MS, describeTool, transientError } from '../server/teams.js'
 import { assertChildrenOn, mergeTeamConfig, teamConfig, TEAM_DEFAULTS } from '../server/team-config.js'
+import { AbRunner } from '../server/ab-runner.js'
+import { createMcpServerList } from '../server/mcp-servers.js'
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -244,6 +246,78 @@ async function setupExecution(t, options = {}) {
   return { ...base, team, leader: team.leaderId, tool: (name, args = {}) => base.manager.call(team.id, team.secret, name, args) }
 }
 const exTask = { title: 'implement', task: 'do the bounded work', criteria: 'the test passes without unrelated changes', checks: [], tier: 'low', provider: 'gpt' }
+
+const GUIDES = {
+  policies: [{ id: 'p1', name: 'TMの方針', text: 'TM専用の方針本文' }],
+  playbooks: [{ id: 'b1', name: 'TM専用の手順', description: 'TM専用の場面', body: 'TM専用の手順本文' }],
+}
+
+for (const parent of ['claude', 'gpt', 'claudeApi']) {
+  test(`TM guides stay out of eco ${parent} parents, including restored teams and direct API calls`, async (t) => {
+    const guides = structuredClone(GUIDES)
+    const f = await setup(t, { policy: 'p1', leaderProvider: parent === 'claude' ? 'claude' : 'gpt' }, { guides: () => guides })
+    const { manager } = f
+    const { team: eco } = await manager.create({
+      workspace: f.workspace, execution: parent === 'claudeApi' ? { leaderModel: '["anthropic","claude-haiku-5-5"]' } : {},
+    })
+    const promptFor = async (team) => {
+      const record = { team: { id: team.id, role: 'leader' } }
+      if (team.leaderKind === 'terminal') {
+        const { args } = manager.launchFor(record)
+        const mcp = JSON.parse(await fs.readFile(args[args.indexOf('--mcp-config') + 1], 'utf8'))
+        return { env: mcp.mcpServers['agent-team'].env, prompt: await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8') }
+      }
+      const env = Object.fromEntries(manager.mcpServerFor(record).env.map(({ name, value }) => [name, value]))
+      return { env, prompt: await fs.readFile(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8') }
+    }
+    for (const restored of [false, true]) {
+      if (restored) await manager.load()
+      const tmTeam = manager.teams.get(f.team.id)
+      const ecoTeam = manager.teams.get(eco.id)
+      // Even a saved eco with a selected TM policy must not read it.
+      assert.equal(ecoTeam.config.policy, 'p1')
+      const tm = await promptFor(tmTeam)
+      assert.match(tm.prompt, /<team_policy>\nTM専用の方針本文\n<\/team_policy>/)
+      assert.match(tm.prompt, /"TM専用の手順": TM専用の場面/)
+      assert.equal(tm.env.AGENT_DESK_TEAM_PLAYBOOKS, '1')
+      const ex = await promptFor(ecoTeam)
+      assert.doesNotMatch(ex.prompt, /team_policy|Playbooks|TM専用/)
+      assert.equal(ex.env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
+      assert.equal(ex.env.AGENT_DESK_EXECUTION, '1')
+      guides.playbooks[0].body = restored ? '更新済みの手順本文' : 'TM専用の手順本文'
+      assert.match(await f.tool('playbook', { name: 'TM専用の手順' }), new RegExp(guides.playbooks[0].body))
+      for (const name of ['TM専用の手順', 'unknown']) {
+        await assert.rejects(manager.call(eco.id, ecoTeam.secret, 'playbook', { name }), /unknown tool: playbook/)
+      }
+    }
+  })
+}
+
+test('AB Claude and dsh jobs never receive TM guides or its MCP server', async (t) => {
+  const f = await setup(t, { policy: 'p1', leaderProvider: 'gpt' }, { guides: () => structuredClone(GUIDES) })
+  f.agents.live = new Map()
+  f.threads.active = new Map()
+  const runner = new AbRunner({ threads: f.threads, agents: f.agents, instructions: () => '通常のカスタム指示' })
+  const getServers = createMcpServerList({ paths: {}, getSettings: () => ({}), getTeams: () => f.manager })
+  for (const model of ['claude:sonnet', '["openai-codex","gpt-6.1-sol"]']) for (const writable of [false, true]) {
+    const handle = await runner.start({ runId: 'R', jobId: 'J', model, workspace: f.workspace,
+      writable, lean: true, instructions: 'AB専用の指示', text: 'ABの依頼' })
+    if (handle.kind === 'claude') {
+      const { args } = f.agents.sessions.get(handle.id)
+      assert.match(args[args.indexOf('--append-system-prompt') + 1], /AB専用の指示\n\n通常のカスタム指示/)
+      assert.doesNotMatch(args.join('\n'), /TM専用|team_policy|Playbooks|agent-team/)
+      assert.ok(!args.includes('--mcp-config'))
+    } else {
+      const thread = f.threads.threads.get(handle.id)
+      assert.equal(thread.team, undefined)
+      assert.equal(f.manager.mcpServerFor(thread), null)
+      assert.deepEqual(getServers(thread), [])
+      const message = f.threads.calls.findLast(([op, id]) => op === 'send' && id === handle.id)[2]
+      assert.doesNotMatch(message, /TM専用|team_policy|Playbooks/)
+    }
+    await runner.remove(handle)
+  }
+})
 
 for (const parent of ['claude', 'gpt']) for (const provider of ['claude', 'gpt']) for (const defaults of [false, true]) {
   test(`eco forwards independent efforts into ${parent} parent and ${provider} child launches (defaults=${defaults})`, async (t) => {

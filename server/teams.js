@@ -752,8 +752,11 @@ export class TeamManager extends EventEmitter {
       case 'ask_user': return this.#askUser(team, input)
       case 'close': return this.#close(team, input)
       case 'verify': return this.#reverify(team, input)
+      // TM only; reject direct calls and calls from an already-running eco MCP too.
       // Read when called: a playbook changed since the leader started is read as it is now.
-      case 'playbook': return readPlaybook(this.guides().playbooks, input.name)
+      case 'playbook':
+        if (team.execution) throw new Error('unknown tool: playbook')
+        return readPlaybook(this.guides().playbooks, input.name)
       default: throw new Error(`unknown tool: ${tool}`)
     }
   }

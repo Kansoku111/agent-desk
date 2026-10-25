@@ -1,4 +1,4 @@
-// The user's own words for team leaders (設定 → エージェントチーム): named
+// The user's own words for TM leaders only, not eco or AB (設定 → エージェントチーム): named
 // policies, one of which a team starts with and its leader reads in full in
 // its standing instructions, and playbooks, of which the leader's
 // instructions list only the name and when to use them; it opens one with

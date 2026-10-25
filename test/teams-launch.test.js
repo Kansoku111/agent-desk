@@ -34,6 +34,29 @@ test('eco leader prompts do not request opt-in tools even with saved lean settin
   assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /`spawn` with `tools: true`/)
 })
 
+test('eco leaders ignore TM policy and playbooks even when explicitly supplied', () => {
+  const options = {
+    team: { id: 'eco', secret: 's', workspace: 'C:/work', execution: {} },
+    config: teamConfig({ policy: 'p1' }), models: [], dir: dir(),
+    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
+    instructions: '通常のカスタム指示',
+    guides: { policy: 'TM専用の方針', playbooks: [{ name: 'TM専用の手順', description: 'TM専用の場面' }] },
+  }
+  const { args } = leaderLaunch(options)
+  const prompt = promptOf(args)
+  assert.doesNotMatch(prompt, /team_policy|Playbooks|TM専用/)
+  assert.match(prompt, /通常のカスタム指示/)
+  const mcp = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'))
+  assert.equal(mcp.mcpServers['agent-team'].env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
+  assert.equal(mcp.mcpServers['agent-team'].env.AGENT_DESK_EXECUTION, '1')
+
+  const server = leaderMcpServer(options)
+  const env = Object.fromEntries(server.env.map(({ name, value }) => [name, value]))
+  assert.doesNotMatch(fs.readFileSync(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8'), /team_policy|Playbooks|TM専用/)
+  assert.equal(env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
+  assert.equal(env.AGENT_DESK_EXECUTION, '1')
+})
+
 test('without custom instructions a child prompt has no instructions section', () => {
   assert.doesNotMatch(promptOf(childTurnArgs({ child: { id: 'c2', name: 'B' }, dir: dir() })), /user_instructions/)
 })

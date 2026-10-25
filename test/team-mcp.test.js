@@ -164,6 +164,21 @@ test('a GPT leader\'s MCP server gives the leader instructions as its own', asyn
   }
 })
 
+test('eco MCP rejects playbook calls even with a stale TM playbook flag', async () => {
+  const desk = await fakeDesk(() => [200, { ok: true, text: 'TM-only body' }])
+  const mcp = startMcp(desk.url, { AGENT_DESK_EXECUTION: '1', AGENT_DESK_TEAM_PLAYBOOKS: '1' })
+  try {
+    const listed = await mcp.request('tools/list', {})
+    assert.ok(!listed.result.tools.some((tool) => tool.name === 'playbook'))
+    const read = await mcp.request('tools/call', { name: 'playbook', arguments: { name: '改修' } })
+    assert.equal(read.error.code, -32602)
+    assert.deepEqual(desk.calls, [])
+  } finally {
+    await mcp.close()
+    desk.close()
+  }
+})
+
 test('the playbook tool is listed only when the user has playbooks', async () => {
   const desk = await fakeDesk((call) => [200, { ok: true, text: `# Playbook: ${call.args.name}` }])
   const mcp = startMcp(desk.url, { AGENT_DESK_TEAM_PLAYBOOKS: '1' })

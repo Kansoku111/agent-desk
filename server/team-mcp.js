@@ -8,7 +8,7 @@
 // Environment: AGENT_DESK_TEAM_URL, AGENT_DESK_TEAM_ID, AGENT_DESK_TEAM_SECRET;
 // AGENT_DESK_TEAM_INSTRUCTIONS names a file of standing instructions given as
 // the server's `instructions` (dsh adds them to the system prompt);
-// AGENT_DESK_TEAM_PLAYBOOKS adds the `playbook` tool.
+// AGENT_DESK_TEAM_PLAYBOOKS adds the `playbook` tool for TM only, never eco.
 import fs from 'node:fs'
 import readline from 'node:readline'
 
@@ -101,8 +101,8 @@ const TOOLS = [
     description: 'End a child whose work you accepted (it stops and frees its place). You can still `send` it more work later.',
     inputSchema: { type: 'object', properties: { child }, required: ['child'] },
   },
-  // Only when the user has playbooks (AGENT_DESK_TEAM_PLAYBOOKS): otherwise it is not in any turn.
-  ...(process.env.AGENT_DESK_TEAM_PLAYBOOKS
+  // TM only, even if an older eco launch still supplies the playbook flag.
+  ...(process.env.AGENT_DESK_EXECUTION !== '1' && process.env.AGENT_DESK_TEAM_PLAYBOOKS
     ? [{
       name: 'playbook',
       description: 'Read one of the user\'s playbooks in full (your instructions list them by name).',

@@ -46,6 +46,8 @@ ${section}` : prompt
  * `launch`). The files are written each time: the server's port may have changed.
  */
 export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, instructions = '', guides = NO_GUIDES }) {
+  // Policy and playbooks belong to TM, not eco (including previously saved teams).
+  if (team.execution) guides = NO_GUIDES
   const mcp = writeFile(dir, 'mcp.json', JSON.stringify({
     mcpServers: {
       [MCP_SERVER]: {
@@ -81,6 +83,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
  * time a session starts: the server's port may have changed.
  */
 export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl, guides = NO_GUIDES }) {
+  if (team.execution) guides = NO_GUIDES
   const prompt = writeFile(dir, 'leader.md', leaderPrompt({
     workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: !team.execution && config.leanChildren, ...guides,
   }) + (team.execution ? EXECUTION_PROMPT : ''))
