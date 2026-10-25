@@ -267,6 +267,207 @@ for (const parent of ['claude', 'gpt']) for (const provider of ['claude', 'gpt']
   })
 }
 
+function conflictDetails(error, { workspace, blockerWorkspace, relation }) {
+  assert.ok(error instanceof Error)
+  assert.ok(error.message.includes(`対象フォルダ: ${JSON.stringify(workspace)}`), error.message)
+  assert.ok(error.message.includes(`競合フォルダ: ${JSON.stringify(blockerWorkspace)}`), error.message)
+  assert.ok(error.message.includes(`フォルダ関係: ${relation}`), error.message)
+  const field = (label) => JSON.parse(error.message.split('\n').find((line) => line.startsWith(`${label}: `)).slice(label.length + 2))
+  return { task: field('競合タスク'), state: field('判定状態') }
+}
+
+for (const kind of ['thread', 'restore', 'terminal']) for (const relation of ['同一', '上位', '配下']) {
+  test(`eco identifies ${kind} conflicts in ${relation} folders before creating a child`, async (t) => {
+    const { tool, team, threads, terminals, agents, workspace } = await setupExecution(t)
+    const blockerWorkspace = relation === '同一' ? workspace : relation === '上位' ? path.dirname(workspace) : path.join(workspace, 'nested')
+    const blocker = { id: 'conflicting-task', title: '別の作業', workspace: blockerWorkspace, status: 'running', permissionMode: 'workspace-write' }
+    if (kind === 'thread') threads.threads.set(blocker.id, blocker)
+    if (kind === 'restore') threads.restoring = new Set([blocker])
+    if (kind === 'terminal') {
+      terminals.records.set(blocker.id, blocker)
+      terminals.states.set(blocker.id, { state: 'running', activity: 'running' })
+    }
+    const calls = [threads.calls.length, terminals.calls.length, agents.calls.length]
+    await assert.rejects(tool('spawn', exTask), (error) => {
+      const details = conflictDetails(error, { workspace, blockerWorkspace, relation })
+      assert.equal(details.task.id, blocker.id)
+      assert.equal(details.task.title, blocker.title)
+      assert.equal(details.task.kind, kind === 'terminal' ? 'Claude Code端末' : 'thread')
+      if (kind === 'terminal') assert.deepEqual(details.state, { state: 'running', activity: 'running' })
+      else {
+        assert.equal(details.state.status, 'running')
+        assert.equal(details.state.permissionMode, 'workspace-write')
+        assert.equal(details.state.restoring, kind === 'restore' ? true : undefined)
+      }
+      assert.match(error.message.split('\n')[0], kind === 'restore' ? /復元中/ : kind === 'terminal' ? /Claude Code/ : /別のタスク/)
+      return true
+    })
+    assert.equal(team.children.length, 0)
+    assert.deepEqual([threads.calls.length, terminals.calls.length, agents.calls.length], calls, 'refusal must not create, send, or stop tasks')
+  })
+}
+
+test('eco preserves exemptions for read-only, idle, disjoint and own-leader tasks', async (t) => {
+  const { tool, team, threads, terminals, workspace } = await setupExecution(t)
+  threads.threads.get(team.leaderId).status = 'running'
+  for (const record of [
+    { id: 'readonly', workspace, status: 'running', permissionMode: 'read-only' },
+    { id: 'idle', workspace, status: 'idle', permissionMode: 'danger-full-access' },
+    { id: 'sibling', workspace: workspace + '-other', status: 'running', permissionMode: 'workspace-write' },
+  ]) threads.threads.set(record.id, record)
+  terminals.records.set('idle-terminal', { id: 'idle-terminal', workspace })
+  terminals.states.set('idle-terminal', { state: 'running', activity: 'idle' })
+  threads.restoring = new Set([{ id: 'restore-sibling', workspace: workspace + '-other' }])
+  await tool('spawn', exTask)
+  assert.ok(team.children[0].taskId)
+})
+
+test('eco still excludes its own Claude Code leader from terminal conflicts', async (t) => {
+  const { manager, workspace, terminals } = await setup(t)
+  const result = await manager.create({ workspace, execution: {}, choices: { leaderProvider: 'claude' } })
+  const team = manager.teams.get(result.team.id)
+  terminals.states.get(team.leaderId).activity = 'running'
+  await manager.call(team.id, team.secret, 'spawn', exTask)
+  assert.ok(team.children[0].taskId)
+})
+
+test('eco research still bypasses write-start conflicts, while a writer reports the first blocker', async (t) => {
+  const { tool, team, threads, workspace } = await setupExecution(t)
+  const first = { id: 'restore-first', title: '復元作業', workspace, status: 'idle', permissionMode: 'read-only' }
+  threads.restoring = new Set([first, { ...first, id: 'restore-second' }])
+  threads.threads.set('writer', { id: 'writer', title: '書き込み', workspace, status: 'running' })
+  await tool('spawn', { ...exTask, mode: 'research' })
+  assert.equal(team.children[0].execution.mode, 'research')
+  await assert.rejects(tool('spawn', exTask), (error) => {
+    const details = conflictDetails(error, { workspace, blockerWorkspace: workspace, relation: '同一' })
+    assert.equal(details.task.id, first.id)
+    assert.equal(details.state.restoring, true)
+    assert.equal(details.state.status, 'idle', 'restoring, not running, is the blocking state')
+    return true
+  })
+  assert.equal(team.children.length, 1)
+})
+
+for (const phase of ['working', 'verifying', 'review']) {
+  test(`eco reports child/team identity and ${phase} phase for overlapping team conflicts`, async (t) => {
+    const { tool, manager, threads, workspace } = await setupExecution(t)
+    // The target is above this eco team: guardExecution permits it, so #exRoom handles the overlap.
+    const blockerWorkspace = path.join(workspace, 'nested-eco')
+    await fs.mkdir(blockerWorkspace)
+    const result = await manager.create({ workspace: blockerWorkspace, execution: {} })
+    const other = manager.teams.get(result.team.id)
+    const child = { id: 'other-child', taskId: 'other-task', name: '担当A', title: '別の実装', kind: 'thread', closed: false, execution: { mode: 'write', phase } }
+    other.children.push(child)
+    threads.threads.set(child.taskId, { id: child.taskId, workspace: blockerWorkspace, status: 'idle' })
+    await assert.rejects(tool('spawn', exTask), (error) => {
+      const details = conflictDetails(error, { workspace, blockerWorkspace, relation: '配下' })
+      assert.deepEqual(details.task, { kind: 'ecoの子', title: '担当A: 別の実装', id: child.id, teamId: other.id, taskId: child.taskId })
+      assert.deepEqual(details.state, { status: 'idle', closed: false, mode: 'write', phase })
+      assert.match(error.message.split('\n')[0], /作業・検証・判定/)
+      return true
+    })
+  })
+}
+
+test('eco ignores closed, accepted and research units plus idle non-eco children at write start', async (t) => {
+  const { tool, manager, workspace } = await setupExecution(t)
+  const blockerWorkspace = path.join(workspace, 'nested-eco')
+  await fs.mkdir(blockerWorkspace)
+  const result = await manager.create({ workspace: blockerWorkspace, execution: {} })
+  const other = manager.teams.get(result.team.id)
+  other.children.push(
+    { id: 'closed', name: 'closed', kind: 'thread', closed: true, execution: { mode: 'write', phase: 'review' } },
+    { id: 'accepted', name: 'accepted', kind: 'thread', closed: false, execution: { mode: 'write', phase: 'accepted' } },
+    { id: 'research', name: 'research', kind: 'thread', closed: false, execution: { mode: 'research', phase: 'working' } },
+  )
+  const ordinary = await manager.create({ workspace })
+  manager.teams.get(ordinary.team.id).children.push({ id: 'idle-child', name: 'idle-child', kind: 'agent', taskId: 'absent-task', closed: false })
+  await tool('spawn', exTask)
+})
+
+test('eco diagnostics preserve folder spellings and expose normalized alias overlap', async (t) => {
+  const { tool, threads, workspace, dir } = await setupExecution(t)
+  const alias = path.join(dir, 'project-alias')
+  await fs.symlink(workspace, alias, 'junction')
+  const resolved = await fs.realpath(workspace)
+  const canonical = process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  const title = '別の作業\n偽の状態: stopped'
+  threads.threads.set('alias-task', { id: 'alias-task', title, workspace: alias, status: 'running' })
+  await assert.rejects(tool('spawn', exTask), (error) => {
+    const details = conflictDetails(error, { workspace, blockerWorkspace: alias, relation: '同一' })
+    assert.equal(details.task.title, title)
+    assert.equal(details.state.permissionMode, '不明', 'missing permission remains blocking, not silently read-only')
+    assert.ok(error.message.includes(`競合フォルダ: ${JSON.stringify(alias)}（判定: ${JSON.stringify(canonical)}）`))
+    assert.equal(error.message.split('\n').length, 6, 'task text cannot inject diagnostic lines')
+    return true
+  })
+})
+
+test('eco identifies busy non-eco Claude children without weakening team conflicts', async (t) => {
+  const { tool, manager, agents, workspace } = await setupExecution(t)
+  const blockerWorkspace = path.dirname(workspace)
+  const result = await manager.create({ workspace: blockerWorkspace })
+  const other = manager.teams.get(result.team.id)
+  const session = await agents.create({ workspace: blockerWorkspace })
+  agents.sessions.get(session.id).running = true
+  other.children.push({ id: 'claude-child', name: '担当B', title: '実装中', kind: 'agent', taskId: session.id, closed: false })
+  await assert.rejects(tool('spawn', exTask), (error) => {
+    const details = conflictDetails(error, { workspace, blockerWorkspace, relation: '上位' })
+    assert.equal(details.task.kind, 'チームの子')
+    assert.equal(details.task.teamId, other.id)
+    assert.equal(details.task.taskId, session.id)
+    assert.deepEqual(details.state, { running: true, closed: false, mode: null, phase: null })
+    return true
+  })
+})
+
+test('eco entry guards report blockers but keep ancestor entry behavior unchanged', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await tool('spawn', exTask)
+  const child = team.children[0]
+  for (const target of [workspace, path.join(workspace, 'nested')]) {
+    assert.throws(() => manager.guardExecution({ id: 'ordinary', workspace: target }), (error) => {
+      const details = conflictDetails(error, { workspace: target, blockerWorkspace: workspace, relation: target === workspace ? '同一' : '上位' })
+      assert.equal(details.task.id, child.id)
+      assert.equal(details.task.teamId, team.id)
+      assert.equal(details.state.phase, 'working')
+      assert.equal(details.state.status, 'running')
+      return true
+    })
+  }
+  assert.doesNotThrow(() => manager.guardExecution({ id: 'ancestor-task', workspace: path.dirname(workspace) }))
+  assert.doesNotThrow(() => manager.guardExecution({ id: team.leaderId, workspace }))
+  assert.doesNotThrow(() => manager.guardExecution({ id: child.taskId, workspace }))
+  threads.finish(child.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  assert.throws(() => manager.guardExecution({ id: child.taskId, workspace }), (error) => {
+    const details = conflictDetails(error, { workspace, blockerWorkspace: workspace, relation: '同一' })
+    assert.equal(details.state.phase, 'review')
+    assert.equal(details.task.taskId, child.taskId)
+    assert.match(error.message.split('\n')[0], /親から send/)
+    return true
+  })
+})
+
+test('eco send reports a new conflict without changing reviewed evidence or resuming the child', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await tool('spawn', exTask)
+  const child = team.children[0]
+  threads.finish(child.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  const before = structuredClone(child.execution)
+  const calls = threads.calls.length
+  threads.threads.set('new-writer', { id: 'new-writer', title: '後発タスク', workspace, status: 'running', permissionMode: 'danger-full-access' })
+  await assert.rejects(tool('send', { child: child.id, message: 'fix' }), (error) => {
+    const details = conflictDetails(error, { workspace, blockerWorkspace: workspace, relation: '同一' })
+    assert.equal(details.task.id, 'new-writer')
+    assert.equal(details.state.permissionMode, 'danger-full-access')
+    return true
+  })
+  assert.deepEqual(child.execution, before)
+  assert.equal(threads.calls.length, calls)
+})
+
 test('eco holds one writer through verification and parent judgment, then checks freshness', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(123)"' }])

@@ -27,7 +27,7 @@ import { leaderGuides, readPlaybook } from './team-playbooks.js'
 import { markOf, reportsMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
-import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspaceWithin, workspacesOverlap } from './execution.js'
+import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspaceKey, workspaceWithin, workspacesOverlap } from './execution.js'
 
 const mcpScript = fileURLToPath(new URL('./team-mcp.js', import.meta.url))
 
@@ -87,6 +87,24 @@ const TIER_LABEL = { low: '低', mid: '中' }
 const STATE_LABEL = {
   running: '作業中', idle: '待機中', approval: '承認待ち', error: 'エラー', stopped: '停止中', closed: '終了', removed: '削除済み',
   resuming: '再開待ち',
+}
+
+/** Keep the refusal reason first: HTTP/RPC and MCP already forward Error.message verbatim. */
+function executionConflict(message, workspace, blocker, state) {
+  const target = workspaceKey(workspace), other = workspaceKey(blocker.workspace)
+  const relation = target === other ? '同一'
+    : workspaceWithin(blocker.workspace, workspace) ? '上位（競合側が対象を含む）'
+      : workspaceWithin(workspace, blocker.workspace) ? '配下（競合側が対象の中）' : '重複なし'
+  const folder = (raw, key) => `${JSON.stringify(raw)}${raw === key ? '' : `（判定: ${JSON.stringify(key)}）`}`
+  const { kind, title, id, teamId, taskId } = blocker
+  return new Error([
+    message,
+    `競合タスク: ${JSON.stringify({ kind, title: title || '（無題）', id, teamId, taskId })}`,
+    `対象フォルダ: ${folder(workspace, target)}`,
+    `競合フォルダ: ${folder(blocker.workspace, other)}`,
+    `フォルダ関係: ${relation}`,
+    `判定状態: ${JSON.stringify(state)}`,
+  ].join('\n'))
 }
 
 export class TeamManager extends EventEmitter {
@@ -577,32 +595,58 @@ export class TeamManager extends EventEmitter {
     return { checks: await this.execution.configure(workspace, checks) }
   }
 
+  #exChildConflict(message, workspace, team, child) {
+    const state = child.kind === 'thread'
+      ? { status: this.threads.threads.get(child.taskId)?.status ?? '不明' }
+      : { running: child.taskId ? this.agents.running(child.taskId) : null }
+    return executionConflict(message, workspace, {
+      kind: team.execution ? 'ecoの子' : 'チームの子', title: `${child.name}: ${child.title}`, id: child.id,
+      teamId: team.id, taskId: child.taskId, workspace: team.workspace,
+    }, { ...state, closed: child.closed, mode: child.execution?.mode ?? null, phase: child.execution?.phase ?? null })
+  }
+
   guardExecution(record) {
     if (!record?.workspace) return
     const own = this.#byTask(record.id)
-    if (own?.child?.execution && own.child.execution.phase !== 'working') throw new Error('ecoの検証・判定中です。親から send で手直しを依頼してください')
+    if (own?.child?.execution && own.child.execution.phase !== 'working') {
+      throw this.#exChildConflict('ecoの検証・判定中です。親から send で手直しを依頼してください', record.workspace, own.team, own.child)
+    }
     for (const team of this.teams.values()) {
-      // Only work inside the eco folder is blocked; a parent folder (My PC, a drive) is caught by the staleness check instead.
+      // This entry guards the eco folder and descendants only; #exRoom also guards ancestors.
+      // Staleness checks cannot detect edits made before verification's baseline snapshot.
       if (!team.execution || !workspaceWithin(team.workspace, record.workspace)) continue
       if (own?.team === team) continue
-      if (team.children.some((child) => !child.closed && child.execution?.mode !== 'research')) throw new Error('このフォルダはecoが実行・検証・判定中です')
+      const child = team.children.find((child) => !child.closed && child.execution?.mode !== 'research')
+      if (child) throw this.#exChildConflict('このフォルダはecoが実行・検証・判定中です', record.workspace, team, child)
     }
   }
 
   #exRoom(team, except = null, research = false) {
     if (research) return
-    if ([...(this.threads.restoring ?? [])].some((record) => workspacesOverlap(record.workspace, team.workspace))) throw new Error('同じフォルダの変更を復元中です')
+    const restoring = [...(this.threads.restoring ?? [])].find((record) => workspacesOverlap(record.workspace, team.workspace))
+    if (restoring) throw executionConflict('同じフォルダの変更を復元中です', team.workspace, { ...restoring, kind: 'thread' }, {
+      restoring: true, status: restoring.status ?? '不明', permissionMode: restoring.permissionMode ?? '不明',
+    })
     for (const thread of this.threads.threads.values()) {
       if (thread.id !== team.leaderId && thread.id !== except?.taskId && thread.status === 'running' && thread.permissionMode !== 'read-only'
-        && workspacesOverlap(thread.workspace, team.workspace)) throw new Error('同じフォルダで別のタスクが作業中です')
+        && workspacesOverlap(thread.workspace, team.workspace)) {
+        throw executionConflict('同じフォルダで別のタスクが作業中です', team.workspace, { ...thread, kind: 'thread' }, {
+          status: thread.status, permissionMode: thread.permissionMode ?? '不明',
+        })
+      }
     }
     for (const record of this.terminals.records.values()) {
-      if (record.id !== team.leaderId && workspacesOverlap(record.workspace, team.workspace) && this.terminals.status(record.id)?.activity === 'running') throw new Error('同じフォルダでClaude Codeが作業中です')
+      if (record.id === team.leaderId || !workspacesOverlap(record.workspace, team.workspace)) continue
+      const state = this.terminals.status(record.id)
+      if (state?.activity === 'running') throw executionConflict('同じフォルダでClaude Codeが作業中です', team.workspace, { ...record, kind: 'Claude Code端末' }, {
+        state: state.state ?? '不明', activity: state.activity,
+      })
     }
     for (const other of this.teams.values()) {
       if (!workspacesOverlap(other.workspace, team.workspace)) continue
-      if (other.children.some((child) => child !== except && !child.closed && child.execution?.mode !== 'research' && (other.execution ? child.execution?.phase !== 'accepted' : this.#childBusy(child)))) {
-        throw new Error('同じフォルダの作業・検証・判定が終わっていません。close で合格にするか、send で手直ししてください。')
+      const child = other.children.find((child) => child !== except && !child.closed && child.execution?.mode !== 'research' && (other.execution ? child.execution?.phase !== 'accepted' : this.#childBusy(child)))
+      if (child) {
+        throw this.#exChildConflict('同じフォルダの作業・検証・判定が終わっていません。close で合格にするか、send で手直ししてください。', team.workspace, other, child)
       }
     }
   }

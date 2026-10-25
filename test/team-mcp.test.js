@@ -90,6 +90,27 @@ test('the team MCP server lists its tools and forwards calls with the team secre
   }
 })
 
+test('eco MCP preserves multiline conflict details in tool errors', async () => {
+  const diagnostic = [
+    '同じフォルダで別のタスクが作業中です',
+    '競合タスク: {"kind":"thread","title":"別の作業","id":"writer-1"}',
+    '対象フォルダ: "F:\\\\project\\\\nested"',
+    '競合フォルダ: "F:\\\\project"',
+    'フォルダ関係: 上位（競合側が対象を含む）',
+    '判定状態: {"status":"running","permissionMode":"workspace-write"}',
+  ].join('\n')
+  const desk = await fakeDesk(() => [200, { ok: false, error: diagnostic }])
+  const mcp = startMcp(desk.url, { AGENT_DESK_EXECUTION: '1' })
+  try {
+    const failed = await mcp.request('tools/call', { name: 'spawn', arguments: { title: '実装', task: '範囲内の作業', criteria: '完了条件', checks: [] } })
+    assert.equal(failed.result.isError, true)
+    assert.equal(failed.result.content[0].text, diagnostic)
+  } finally {
+    await mcp.close()
+    desk.close()
+  }
+})
+
 test('EX MCP exposes required acceptance criteria, low tier and explicit abandonment', async () => {
   const mcp = startMcp('http://127.0.0.1:9/api/team', { AGENT_DESK_EXECUTION: '1' })
   try {
