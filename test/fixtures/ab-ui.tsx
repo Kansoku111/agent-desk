@@ -40,7 +40,7 @@ const store = await import('../../web/src/store')
 const { AbStartDialog, AbView } = await import('../../web/src/components/Ab')
 const { ExecutionStartDialog } = await import('../../web/src/components/ExecutionSettings')
 const run = { id: 'run', workspace: 'C:\\fixture', title: 'Fixture', text: 'original', images: [image], config, phase: 'completed', revision: 1, plan: 'plan', jobs: [], messages: [{ text: 'follow-up', images: [image] }], createdAt: 1, updatedAt: 1 }
-const server: any = { settings: { agentTeams: {}, modelVisibility: {} }, accounts: { chatgpt: { signedIn: true }, claude: { configured: false }, deepseek: { configured: false } }, catalog: { models: [{ value: model, id: 'fixture', provider: 'openai-codex', name: 'Fixture GPT' }], providers: { 'openai-codex': 'ChatGPT' }, fallbackEfforts: [], effortsByModel: { [model]: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] } }, ab: [run] }
+const server: any = { app: { remote: false }, openTargets: { terminal: true }, settings: { agentTeams: {}, modelVisibility: {} }, accounts: { chatgpt: { signedIn: true }, claude: { configured: false }, deepseek: { configured: false } }, catalog: { models: [{ value: model, id: 'fixture', provider: 'openai-codex', name: 'Fixture GPT' }], providers: { 'openai-codex': 'ChatGPT' }, fallbackEfforts: [], effortsByModel: { [model]: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] } }, ab: [run] }
 store.setState({ server })
 store.connect()
 const root = createRoot(document.getElementById('root')!)
@@ -59,6 +59,20 @@ const paste = async () => {
   await tick()
 }
 const select = async (label: string, value: string) => { const element = document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!; element.value = value; element.dispatchEvent(new Event('change', { bubbles: true })); await tick() }
+const openMenu = async () => {
+  const trigger = [...document.querySelectorAll<HTMLButtonElement>('.ab-header button')].find((button) => button.textContent?.trim() === '開く')
+  check(trigger, 'AB open menu trigger')
+  trigger!.click(); await tick()
+  const menu = document.querySelector<HTMLElement>('.ab-header [role="menu"]')
+  check(menu, 'AB open menu panel')
+  return { trigger: trigger!, menu: menu! }
+}
+const choose = async (label: string) => {
+  const { menu } = await openMenu()
+  const item = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((entry) => entry.textContent?.includes(label))
+  check(item, `AB open menu item: ${label}`)
+  item!.click(); await tick()
+}
 const api = {
   requests, render,
   async run() {
@@ -150,6 +164,33 @@ const api = {
     await render('eco')
     check(document.querySelector<HTMLSelectElement>('[aria-label="親の推論レベル"]')!.value === 'high' && document.querySelector<HTMLSelectElement>('[aria-label="子の推論レベル"]')!.value === 'low', 'eco restored efforts')
     passed.push('eco independent effort persistence / execution payload / ordered pending saves / duplicate start')
+    await render('view')
+    const { trigger, menu } = await openMenu()
+    const header = document.querySelector('.ab-header')!.getBoundingClientRect()
+    const triggerRect = trigger.getBoundingClientRect()
+    const menuRect = menu.getBoundingClientRect()
+    check(triggerRect.left >= header.left && triggerRect.right <= header.right + 0.5, 'AB open trigger inside header')
+    check(menuRect.left >= 0 && menuRect.right <= innerWidth && menuRect.top >= 0 && menuRect.bottom <= innerHeight, 'AB open menu fits viewport')
+    const labels = [...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)
+    check(labels.join('/') === 'ターミナル/ビルドして再起動', 'AB open menu reuses terminal / restart items')
+    const beforeOpen = count('workspace.open')
+    ;[...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.includes('ターミナル'))!.click()
+    await tick()
+    const opened = requests.filter((request) => request.type === 'workspace.open')
+    check(opened.length === beforeOpen + 1 && opened.at(-1).path === 'C:\\fixture' && opened.at(-1).target === 'terminal', 'AB open terminal sends run workspace / terminal')
+    check(!document.querySelector('.ab-header [role="menu"]'), 'AB open menu closes after terminal')
+    const opensAfterTerminal = count('workspace.open')
+    await choose('ビルドして再起動')
+    check(store.getState().restartConfirm === true, 'AB restart asks for confirmation')
+    check(count('workspace.open') === opensAfterTerminal && count('app.restart') === 0 && count('restart') === 0, 'AB restart does not run anything yet')
+    store.setState({ restartConfirm: false })
+    store.setState({ server: { ...server, app: { ...server.app, remote: true } } })
+    await render('view')
+    check(![...document.querySelectorAll('.ab-header button')].some((button) => button.textContent?.trim() === '開く'), 'AB open menu hidden on remote')
+    store.setState({ server })
+    await render('view')
+    check([...document.querySelectorAll('.ab-header button')].some((button) => button.textContent?.trim() === '開く'), 'AB open menu shown on local')
+    passed.push('AB open menu: terminal target / restart confirmation only / hidden on remote')
     return passed
   },
 }

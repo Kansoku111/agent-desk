@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-react'
-import { act, loadAgentTurns, loadThread, navigate, setState, useStore } from '../store'
+import { act, loadAgentTurns, loadThread, navigate, setState, useRemote, useStore } from '../store'
 import type { AbConfig, AbJob, AbRun, AppState, Turn } from '../types'
+import { OpenInMenu } from './ThreadView'
 import { TurnView } from './TurnView'
 import { providerReady, visibleModels } from '../model-selection'
 import { effortLabel } from '../util'
@@ -196,6 +197,7 @@ function Report({ job, workspace, modelName, open = false }: { job: AbJob; works
 export function AbView({ id }: { id: string }) {
   const server = useStore((state) => state.server)
   const run = server?.ab?.find((entry) => entry.id === id)
+  const remote = useRemote()
   const draft = useAbDraft()
   const [busy, setBusy] = useState(false)
   const [removing, setRemoving] = useState(false)
@@ -215,6 +217,7 @@ export function AbView({ id }: { id: string }) {
   return <div className="ab-view">
     <header className="ab-header"><button className="icon-button" aria-label="サイドバーを開く" onClick={() => setState({ sidebarOpen: true })}><PanelLeftOpen size={18} /></button><span className="cl-mark tm-mark">AB</span><h2>{run.title}</h2>
       <span className="ab-phase">{ACTIVE.includes(run.phase) && <Loader2 size={14} className="spin" />}{AB_PHASE[run.phase] ?? run.phase}</span>
+      {!remote && <OpenInMenu workspace={run.workspace} />}
       {(ACTIVE.includes(run.phase) || running) && <button className="icon-button" aria-label="ABを停止" disabled={busy} onClick={() => void action('ab.stop')}><Square size={16} /></button>}
       <button className="icon-button" aria-label="ABを削除" disabled={busy} onClick={() => setRemoving(true)}><Trash2 size={16} /></button>
     </header>
