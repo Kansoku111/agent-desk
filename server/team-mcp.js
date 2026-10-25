@@ -117,7 +117,7 @@ if (process.env.AGENT_DESK_EXECUTION === '1') {
   spawn.inputSchema.properties.tier.enum = ['low']
   Object.assign(spawn.inputSchema.properties, {
     mode: { type: 'string', enum: ['write', 'research'], description: 'write (default): one writer through judgment; research: read-only investigation that may run in parallel, with checks:[] and no command execution for Claude Code.' },
-    criteria: { type: 'string', description: 'Explicit acceptance criteria, including scope and constraints.' },
+    criteria: { type: 'string', description: 'Explicit acceptance criteria, including scope, constraints and what you will inspect yourself before acceptance. Define them before delegating; tests alone do not prove the request is satisfied.' },
     checks: { type: 'array', items: { type: 'string' }, description: 'Registered verification IDs from status. [] explicitly means no registered checks.' },
     extraChecks: { type: 'array', items: { type: 'object', properties: {
       id: { type: 'string' }, command: { type: 'string' }, cwd: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1000, maximum: 1800000 },
@@ -134,8 +134,9 @@ if (process.env.AGENT_DESK_EXECUTION === '1') {
   })
   Object.assign(TOOLS.find((tool) => tool.name === 'close').inputSchema.properties, {
     accept: { type: 'boolean', description: 'Default true: accept verified work. false: abandon without accepting.' },
-    reason: { type: 'string', description: 'Required for abandonment or acceptance without command verification.' },
+    reason: { type: 'string', description: 'Required. For acceptance: what you inspected, how it meets the request and criteria, and any limits. Test success alone is not a review. For research: what report evidence you checked. For abandonment: why.' },
   })
+  TOOLS.find((tool) => tool.name === 'close').inputSchema.required.push('reason')
 }
 
 async function call(tool, args) {

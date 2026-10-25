@@ -28,6 +28,7 @@ import { markOf, reportsMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
 import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspaceKey, workspaceWithin, workspacesOverlap } from './execution.js'
+import { ExecutionReview } from './execution-review.js'
 
 const mcpScript = fileURLToPath(new URL('./team-mcp.js', import.meta.url))
 
@@ -157,6 +158,7 @@ export class TeamManager extends EventEmitter {
     this.userStopped = new Set()
     this.writes = Promise.resolve()
     this.execution = new ExecutionVerifier({ dir: path.join(dir, 'execution'), now })
+    this.executionReview = new ExecutionReview({ dir: path.join(dir, 'execution', 'reviews') })
     this.exPending = new Set()
     threads.executionGuard = (record) => this.guardExecution(record)
     terminals.executionGuard = (record) => this.guardExecution(record)
@@ -685,6 +687,7 @@ export class TeamManager extends EventEmitter {
   }
 
   async #exVerify(team, child, text, { repair = true } = {}) {
+    if (repair) child.execution.childReport = text
     child.execution.phase = 'verifying'
     await this.#save()
     this.#emit(team)
@@ -724,8 +727,16 @@ export class TeamManager extends EventEmitter {
         await this.#send(team, { child: child.id, message: `[eco 自動差し戻し ${child.execution.repairs}/${child.execution.maxRepairs}]\n完了条件: ${child.execution.criteria}\n依頼の範囲内だけを修正してください。検証設定・完了条件を変えて通すことは禁止です。仕様判断や環境対応が必要なら、その問題を報告して終了してください。\n${verificationReport(run)}\n${failed.tail}`, executionRetry: true })
         return
       }
+      const review = await this.executionReview.report({ folder: team.workspace, execution: child.execution, run, childReport: child.execution.childReport ?? text })
+      if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return
+      child.execution.review = { record: review.record, patch: review.patch, warning: review.warning }
+      await writeJson(run.record, run)
       child.execution.phase = 'review'
-      this.#report(team, child, 'report', `${verificationReport(run)}\n\n完了条件: ${child.execution.criteria}\n\n子の報告:\n${text}`, { verified: true })
+      if (team.execution.stopped) {
+        this.#report(team, child, 'cancelled', review.text, { verified: true, review: true, byUser: true })
+        return
+      }
+      this.#report(team, child, 'report', review.text, { verified: true, review: true })
     } catch (error) {
       child.execution.phase = 'review'
       this.#report(team, child, 'error', `ecoの検証に失敗しました: ${error.message}`, { verified: true })
@@ -831,9 +842,11 @@ export class TeamManager extends EventEmitter {
       kind: provider === 'claude' ? 'agent' : 'thread', taskId: null, createdAt: now, updatedAt: now,
       closed: false, awaiting: true, pending: [], followups: [], reports: [], ...(args.tools === true ? { tools: true } : {}),
     }
-    if (execution) { child.execution = execution; team.execution.stopped = false }
+    if (execution) { child.execution = { ...execution, task }; team.execution.stopped = false }
     team.children.push(child)
     try {
+      if (execution?.mode === 'write') child.execution.baseline = await this.executionReview.start(team.workspace, child.id)
+      if (team.execution?.stopped) throw new Error('ecoは作業開始前に停止されました')
       await this.#startTask(team, child, execution ? `${task}\n\n[eco 完了条件]\n${execution.criteria}\n実装後にアプリが検証します。範囲外の変更はせず、結果・変更箇所・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。` : task)
     } catch (error) {
       team.children = team.children.filter((entry) => entry !== child)
@@ -896,12 +909,13 @@ export class TeamManager extends EventEmitter {
     this.guardExecution({ id: team.leaderId, workspace: team.workspace })
     if (team.execution && child.closed) this.#checkRoom(team)
     const executionBefore = child.execution ? structuredClone(child.execution) : null
+    const wasClosed = child.closed
     const text = String(args.message ?? '').trim()
     if (!text) throw new Error('message（子に送る内容）を指定してください')
     if (team.execution) {
       if (child.execution?.phase === 'verifying') throw new Error('検証中には指示を追加できません')
       this.#exRoom(team, child, child.execution?.mode === 'research')
-      if (this.#childBusy(child)) throw new Error('ecoの子は作業中です。完了を待ってください')
+      if (this.#childBusy(child) || (child.execution?.phase === 'working' && !args.executionRetry)) throw new Error('ecoの子は作業中です。完了を待ってください')
       if (!args.executionRetry) {
         team.execution.stopped = false
         child.execution.repairs = 0
@@ -909,15 +923,33 @@ export class TeamManager extends EventEmitter {
       }
       child.execution.phase = 'working'
       delete child.execution.verification
+      delete child.execution.review
+      if (!args.executionRetry) {
+        if (wasClosed) {
+          // Reserve the writer before the asynchronous snapshot, just as spawn does.
+          child.closed = false
+          child.execution.task = text
+          child.execution.instructions = []
+          delete child.execution.childReport
+          if (child.execution.mode === 'write') child.execution.baseline = await this.executionReview.start(team.workspace, child.id)
+          if (team.execution.stopped) {
+            child.closed = wasClosed
+            child.execution = executionBefore
+            throw new Error('ecoは作業開始前に停止されました')
+          }
+        } else {
+          child.execution.instructions = [...(child.execution.instructions ?? []), text]
+        }
+      }
     }
     if (args.fresh === true) {
       try { return await this.#sendFresh(team, child, text) } catch (error) {
+        child.closed = wasClosed
         if (executionBefore) child.execution = executionBefore
         throw error
       }
     }
     // A closed child takes a place again.
-    const wasClosed = child.closed
     if (child.closed) this.#checkRoom(team)
     const body = `[リーダーから]\n${text}`
     child.closed = false
@@ -1121,11 +1153,14 @@ export class TeamManager extends EventEmitter {
           await this.#save(); this.#emit(team)
           throw new Error('検証後に変更されています。send で再検証を依頼してください')
         }
-        if (run.status === 'unverified' && !String(args.reason ?? '').trim()) throw new Error('検証なしでの合格には reason（確認した根拠）が必要です')
-      } else if (!String(args.reason ?? '').trim()) throw new Error('中止する理由を指定してください')
+      }
+      const reason = String(args.reason ?? '').trim()
+      if (!reason) throw new Error(args.accept === false
+        ? '中止する理由を指定してください'
+        : '合格には reason（親が確認した箇所・結果と合格の根拠）が必要です。テスト成功だけではなく、依頼・完了条件と変更内容を照合してください')
       child.execution.phase = 'accepted'
       child.execution.outcome = args.accept === false ? 'abandoned' : 'accepted'
-      child.execution.reason = String(args.reason ?? '')
+      child.execution.reason = reason
       child.execution.finishedAt = this.now()
     }
     this.#cancelResume(child)
@@ -1324,7 +1359,8 @@ export class TeamManager extends EventEmitter {
     const at = this.now()
     if (kind !== 'approval') child.reports = [...child.reports, { at, kind, text: clip(body, REPORT_KEEP) }].slice(-REPORTS_KEPT)
     child.updatedAt = at
-    const shown = body.length > REPORT_PREVIEW ? `${body.slice(0, REPORT_PREVIEW)}…\n（続きは read_report で読めます）` : body
+    const preview = extra.review ? REPORT_KEEP : REPORT_PREVIEW
+    const shown = body.length > preview ? `${body.slice(0, preview)}…\n（続きは read_report で読めます）` : body
     team.queue.push({ id: randomUUID(), childId: child.id, kind, text: shown, at, ...extra })
     team.updatedAt = at
     void this.#save()

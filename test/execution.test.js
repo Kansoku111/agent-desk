@@ -86,6 +86,10 @@ test('EX source mutation permission defaults off and the parent may correct revi
   assert.match(EXECUTION_PROMPT, /While a unit awaits judgment and all children are idle, you may make a small scoped correction/)
   assert.match(EXECUTION_PROMPT, /after any edit, call verify/)
   assert.doesNotMatch(EXECUTION_PROMPT, /or a verified result awaits judgment/)
+  assert.match(EXECUTION_PROMPT, /what you will inspect for acceptance/)
+  assert.match(EXECUTION_PROMPT, /Test success alone is never sufficient/)
+  assert.match(EXECUTION_PROMPT, /reason is required even when checks pass or the task is research/)
+  assert.match(EXECUTION_PROMPT, /for UI inspect the actual screen and interaction/)
 })
 
 test('EX attributes changes per check instead of allowing any change when a formatter is present', async (t) => {

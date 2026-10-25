@@ -584,6 +584,93 @@ test('eco holds one writer through verification and parent judgment, then checks
   assert.equal(child.execution.outcome, 'abandoned')
 })
 
+test('eco delivers actual review evidence beyond the ordinary preview and persists acceptance reasons', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(1)"' }])
+  await tool('spawn', { ...exTask, task: '依頼の範囲を確認して直す。'.repeat(120), checks: ['test'] })
+  const child = team.children[0]
+  await fs.writeFile(path.join(workspace, 'source.txt'), 'actual change not in child report')
+  threads.finish(child.taskId, '子は差分の詳細を省略した')
+  await Promise.all([...manager.exPending])
+  const delivered = threads.calls.filter((call) => call[0] === 'send' && call[1] === team.leaderId).at(-1)[2]
+  assert.ok(delivered.length > REPORT_PREVIEW)
+  assert.match(delivered, /\+actual change not in child report/)
+  assert.match(delivered, /M "source.txt"/)
+  assert.match(delivered, /eco 検証: passed/)
+  assert.match(delivered, /子は差分の詳細を省略した/)
+  assert.match(delivered, /完了条件:/)
+  await assert.rejects(tool('close', { child: child.id, reason: '  ' }), /根拠/)
+  await tool('close', { child: child.id, reason: ' source.txtの実際の変更を依頼と照合して確認した ' })
+  assert.equal(child.execution.reason, 'source.txtの実際の変更を依頼と照合して確認した')
+  const saved = JSON.parse(await fs.readFile(manager.file, 'utf8'))
+  assert.match(JSON.stringify(saved), /source.txtの実際の変更を依頼と照合して確認した/)
+})
+
+test('eco keeps the work-unit baseline through send/fresh and resets it for work after close', async (t) => {
+  const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  await tool('spawn', exTask)
+  const child = team.children[0]
+  const baseline = structuredClone(child.execution.baseline)
+  await fs.writeFile(path.join(workspace, 'source.txt'), 'first change')
+  threads.finish(child.taskId, 'first report')
+  await Promise.all([...manager.exPending])
+  await tool('send', { child: child.id, message: '二回目の修正。元の範囲を保つ', fresh: true })
+  assert.deepEqual(child.execution.baseline, baseline)
+  await fs.writeFile(path.join(workspace, 'source.txt'), 'second change')
+  threads.finish(child.taskId, 'second report')
+  await Promise.all([...manager.exPending])
+  let patch = await fs.readFile(child.execution.review.patch, 'utf8')
+  assert.match(patch, /-original/)
+  assert.match(patch, /\+second change/)
+  assert.match(child.reports.at(-1).text, /二回目の修正。元の範囲を保つ/)
+  await tool('close', { child: child.id, reason: '累積差分を依頼と照合した' })
+  await tool('send', { child: child.id, message: '新しい依頼' })
+  assert.notEqual(child.execution.baseline.commit, baseline.commit)
+  assert.equal(child.execution.task, '新しい依頼')
+  assert.deepEqual(child.execution.instructions, [])
+  await fs.writeFile(path.join(workspace, 'source.txt'), 'third change')
+  threads.finish(child.taskId, 'third report')
+  await Promise.all([...manager.exPending])
+  patch = await fs.readFile(child.execution.review.patch, 'utf8')
+  assert.match(patch, /-second change/)
+  assert.doesNotMatch(patch, /-original/)
+})
+
+test('eco does not launch a child if stopped while capturing its initial review baseline', async (t) => {
+  const { tool, team, manager, threads } = await setupExecution(t)
+  let release
+  manager.executionReview.start = () => new Promise((resolve) => { release = resolve })
+  const before = threads.calls.length
+  const pending = tool('spawn', exTask)
+  assert.equal(typeof release, 'function')
+  await manager.stopAll(team.id)
+  release({ error: 'test baseline' })
+  await assert.rejects(pending, /開始前に停止/)
+  assert.equal(team.children.length, 0)
+  assert.equal(threads.calls.length, before)
+})
+
+test('eco reserves a resumed writer during baseline capture and restores evidence if stopped', async (t) => {
+  const { tool, team, manager, threads } = await setupExecution(t)
+  await tool('spawn', exTask)
+  const child = team.children[0]
+  threads.finish(child.taskId, 'done')
+  await Promise.all([...manager.exPending])
+  await tool('close', { child: child.id, reason: '変更内容を確認' })
+  const previous = structuredClone(child.execution)
+  let release
+  manager.executionReview.start = () => new Promise((resolve) => { release = resolve })
+  const pending = tool('send', { child: child.id, message: 'next work' })
+  assert.equal(typeof release, 'function')
+  await assert.rejects(tool('spawn', exTask), /作業|判定/)
+  await assert.rejects(tool('send', { child: child.id, message: 'duplicate' }), /作業中/)
+  await manager.stopAll(team.id)
+  release({ error: 'test baseline' })
+  await assert.rejects(pending, /開始前に停止/)
+  assert.equal(child.closed, true)
+  assert.deepEqual(child.execution, previous)
+})
+
 test('eco retries explicitly repairable failures once, then escalates repeated evidence', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(123);process.exit(2)"', autoRepair: true }])
@@ -594,11 +681,16 @@ test('eco retries explicitly repairable failures once, then escalates repeated e
   assert.equal(child.execution.repairs, 1)
   assert.equal(child.execution.phase, 'working')
   assert.equal(child.reports.length, 0)
+  assert.deepEqual(child.execution.instructions ?? [], [])
+  await fs.writeFile(path.join(workspace, 'source.txt'), 'repair attempt')
   threads.finish(child.taskId, 'done again')
   await Promise.all([...manager.exPending])
   assert.equal(child.execution.repairs, 1)
   assert.equal(child.execution.phase, 'review')
   assert.equal(child.execution.verification.status, 'failed')
+  const patch = await fs.readFile(child.execution.review.patch, 'utf8')
+  assert.match(patch, /-original/)
+  assert.match(patch, /\+repair attempt/)
   await assert.rejects(tool('close', { child: child.id }), /成功していません/)
 })
 
@@ -622,7 +714,7 @@ test('eco requires acceptance criteria and checks, isolates research and preserv
   assert.equal(writer.execution.outcome, 'accepted')
 })
 
-test('eco research reports skip verification and close without a reason', async (t) => {
+test('eco research reports skip verification but still require the parent review reason', async (t) => {
   const { tool, team, manager, threads } = await setupExecution(t)
   manager.execution.verify = async () => { throw new Error('research must not be verified') }
   await tool('spawn', { ...exTask, mode: 'research' })
@@ -631,7 +723,8 @@ test('eco research reports skip verification and close without a reason', async 
   assert.equal(manager.exPending.size, 0)
   assert.equal(research.execution.phase, 'review')
   assert.match(research.reports.at(-1).text, /found it/)
-  await tool('close', { child: research.id })
+  await assert.rejects(tool('close', { child: research.id }), /根拠/)
+  await tool('close', { child: research.id, reason: '調査報告の参照先を依頼と照合した' })
   assert.equal(research.execution.outcome, 'accepted')
 })
 
@@ -649,8 +742,13 @@ test('eco verify tool re-verifies the current files without a child turn', async
   await Promise.all([...manager.exPending])
   assert.equal(child.execution.verification.status, 'passed')
   assert.equal(manager.summary(team).execution.metrics.childTurns, turns)
-  await tool('close', { child: child.id })
+  await assert.rejects(tool('close', { child: child.id }), /根拠/)
+  assert.match(await fs.readFile(child.execution.review.patch, 'utf8'), /\+parent edit/)
+  assert.match(await fs.readFile(child.execution.review.record, 'utf8'), /子の報告:\ndone/)
+  const reason = 'source.txtの修正と元の原因を照合し、依頼範囲内であることを確認'
+  await tool('close', { child: child.id, reason })
   assert.equal(child.execution.outcome, 'accepted')
+  assert.equal(child.execution.reason, reason)
   await assert.rejects(tool('verify', { child: child.id }), /判定待ち/)
 })
 

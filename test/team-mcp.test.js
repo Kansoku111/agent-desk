@@ -120,7 +120,11 @@ test('EX MCP exposes required acceptance criteria, low tier and explicit abandon
     assert.ok(spawn.inputSchema.required.includes('checks'))
     assert.deepEqual(spawn.inputSchema.properties.tier.enum, ['low'])
     assert.deepEqual(spawn.inputSchema.properties.mode.enum, ['write', 'research'])
-    assert.equal(result.tools.find((tool) => tool.name === 'close').inputSchema.properties.accept.type, 'boolean')
+    const close = result.tools.find((tool) => tool.name === 'close')
+    assert.equal(close.inputSchema.properties.accept.type, 'boolean')
+    assert.ok(close.inputSchema.required.includes('reason'))
+    assert.match(close.inputSchema.properties.reason.description, /what you inspected/)
+    assert.match(spawn.inputSchema.properties.criteria.description, /inspect yourself/)
   } finally { await mcp.close() }
 })
 

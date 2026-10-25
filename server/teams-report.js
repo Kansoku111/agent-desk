@@ -16,7 +16,9 @@ function parts(team, item, labelOf, rest) {
   const head = `${PREFIX} #${markOf(item)}`
   const [lines, next] = {
     report: [[`${head} ${who}から${unasked ? '追加の' : ''}報告が届きました${rest}${unasked}`, task, '---', item.text, '---'],
-      '合格なら close、直してほしい点や追加の作業は send で同じ子に送ってください。'],
+      team.execution
+        ? '依頼・完了条件と変更内容（調査は報告の根拠）を確認し、合格なら確認箇所・結果を reason に書いて close。テスト成功だけでは合格にしないでください。修正は send。'
+        : '合格なら close、直してほしい点や追加の作業は send で同じ子に送ってください。'],
     error: [[`${head} ${who}がエラーで止まりました${rest}${unasked}`, task, '---', item.text, '---'],
       '止まった子を続けるなら send で指示を送ってください（例: 「続けて」）。'],
     cancelled: item.byUser

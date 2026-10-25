@@ -53,7 +53,7 @@ export class Checkpoints {
    * Records the workspace as it is now.
    * @param {string} workspace
    * @param {string | null} ref  name that keeps the snapshot (e.g. `<thread>/<turn>/before`)
-   * @returns {Promise<{ commit: string, warning: string | null }>}
+   * @returns {Promise<{ commit: string, warning: string | null, omitted: string[] }>}
    */
   async snapshot(workspace, ref = null) {
     const repo = await this.#repo(workspace)
@@ -64,6 +64,19 @@ export class Checkpoints {
   async changes(workspace, from, to) {
     const repo = await this.#repo(workspace)
     return this.#exclusive(repo, () => this.#diff(repo, from, to))
+  }
+
+  /** Actual review evidence, including additions, deletions, binary files and links. */
+  async reviewDiff(workspace, from, to, omitted = []) {
+    const repo = await this.#repo(workspace)
+    return this.#exclusive(repo, async () => {
+      const scope = ['--', '.', ...omitted.map((file) => `:(exclude,literal)${file}`)]
+      const names = (await git(repo, ['diff', '--name-status', '-z', '--no-renames', from, to, ...scope])).split('\0')
+      const files = []
+      for (let index = 0; index + 1 < names.length; index += 2) files.push({ status: names[index], path: names[index + 1] })
+      const patch = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, to, ...scope])
+      return { files, patch }
+    })
   }
 
   /**
@@ -199,8 +212,9 @@ export class Checkpoints {
     // A snapshot cut off by a timeout or a crash leaves the index locked.
     await fs.rm(path.join(repo.gitDir, 'index.lock'), { force: true })
     let warning = null
+    let large = []
     try {
-      const large = await largeFiles(repo)
+      large = await largeFiles(repo)
       if (large.length) {
         await git(repo, ['rm', '--cached', '--force', '--quiet', '--ignore-unmatch', '--pathspec-from-file=-', '--pathspec-file-nul'], {
           input: nulJoin(large),
@@ -227,7 +241,7 @@ export class Checkpoints {
     const tree = (await git(repo, ['write-tree'])).trim()
     const commit = (await git(repo, ['commit-tree', tree, '-m', 'Agent Desk checkpoint'])).trim()
     if (ref) await git(repo, ['update-ref', `refs/agent-desk/${ref}`, commit])
-    return { commit, warning }
+    return { commit, warning, omitted: large }
   }
 
   async #diff(repo, from, to) {
