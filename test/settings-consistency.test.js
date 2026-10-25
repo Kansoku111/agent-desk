@@ -73,6 +73,28 @@ test('workspace mutation and RPC patch share one queue and use the latest commit
   assert.equal(h.notices.length, 3)
 })
 
+test('explicit no-change result discards the draft and skips save, publication and effects', async () => {
+  let writes = 0
+  let effects = 0
+  const h = setup(async candidate => { writes++; return candidate })
+  const before = h.live
+  const result = await h.service.mutate(candidate => {
+    candidate.workspaces.push('discarded')
+    candidate.agentTeams.extra = { nested: true }
+    return false
+  }, { afterCommit: () => { effects++ } })
+  assert.strictEqual(result.settings, before)
+  assert.strictEqual(h.live, before)
+  assert.deepEqual(h.live.workspaces, [])
+  assert.equal(h.live.agentTeams.extra, undefined)
+  assert.equal(writes, 0)
+  assert.equal(effects, 0)
+  assert.deepEqual(h.notices, [])
+  await h.service.update({ theme: 'light' })
+  assert.equal(h.live.theme, 'light')
+  assert.equal(writes, 1)
+})
+
 test('failed internal save does not drop an already queued update', async () => {
   let writes = 0
   const h = setup(async candidate => {

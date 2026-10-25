@@ -5,10 +5,10 @@
 `server/settings.js` の `createSettingsService` が実行時の設定コミットを直列化する。RPC全体や `saveSettings` に別のキューを重ねない。
 
 - `update(patch)`: 受信時に入力をコピーし、処理開始時の最新確定状態から候補を作成・検証する。
-- `mutate(work, options)`: 内部ハンドラー専用。最新確定状態を深くコピーした候補に、既存の入力検証と変更を適用する。外部から持ち込んだ参照も保存前にコピーする。
+- `mutate(work, options)`: 内部ハンドラー専用。最新確定状態を深くコピーした候補に、既存の入力検証と変更を適用する。外部から持ち込んだ参照も保存前にコピーする。`work` が明示的に `false` を返した場合は候補を破棄し、保存・公開・副作用を省略する。変更要否もキュー内で判断する。
 - 共通の確定順序は **候補作成 → 検証 → 保存 → 公開 → 副作用**。保存は projectColors の補完を含む保存済みスナップショットを返す。
 - 検証・保存失敗では公開状態と成功通知を変更しない。失敗してもキューは継続する。
-- 保存後の通知・副作用失敗は `settingsCommitted: true` を持つエラーにし、既存RPCのエラーメッセージにも「設定は保存済み」と記す。保存済み設定をロールバックしない。
+- 保存後の通知・副作用失敗は `settingsCommitted: true` を持つエラーにし、既存RPCのエラーメッセージにも「設定は保存済み」と記す。保存済み設定をロールバックしない。サービス外の保存後処理にも `afterSettingsCommit(work)` で同じエラー表現を適用する。保存そのものや保存前の処理はこのヘルパーで包まない。
 - `work` / `afterCommit` から同じキューの `update` / `mutate` を待たない。生の `getSettings()` は読み取り専用として扱う。
 
 ## 更新経路の棚卸し
@@ -22,11 +22,11 @@
 | `thread.create` | 設定部分は移行済み。タスク作成・初回送信後、候補の既定値・履歴を保存して通知1回。保存失敗時もタスク作成成功を返し警告する既存契約を維持 |
 | `thread.update` | 設定部分は移行済み。スレッド更新後、候補の既定値を保存。従来どおり設定通知なし |
 | `thread.remove` | 設定部分は移行済み。候補へプロジェクトを保持して保存・通知後にタスク削除。以前のRPC外側キューの対象漏れも共通経路で解消 |
-| `terminal.create` | 設定部分は移行済み。端末作成後、未登録フォルダのみ候補へ追加して保存・通知 |
+| `terminal.create` | 設定部分は移行済み。端末作成後、My PC以外はキュー内の最新候補で履歴を判定し、未登録フォルダのみ追加して保存・通知。登録済みなら保存・通知なし |
 | `team.create` | 設定部分は移行済み。チーム作成後、履歴と次回設定を候補へコピーして保存・通知 |
-| `account.setWorkspace` / `account.setKey` 経由の `setAnthropicWorkspace` | 設定部分は移行済み。既存のID・キー検証を維持。候補保存・通知後にhome patchと必要な再起動 |
+| `account.setWorkspace` / `account.setKey` 経由の `setAnthropicWorkspace` | 設定部分は移行済み。既存のID・キー検証を維持。候補保存・通知後にhome patchと必要な再起動。`account.setWorkspace` の後続accounts取得・通知失敗も保存済みエラーとして区別 |
 | `remote.set` | 既に保存後変更だった経路を共通化。補完済みスナップショット全体を公開。保存・通知後にlistener操作。操作失敗は保存済みエラー |
-| `localLlm.set` / `localLlm.remove` | 設定部分は既に `settings.update` 経由。資格情報操作→設定保存→accounts通知の順序は変更しない |
+| `localLlm.set` / `localLlm.remove` | 設定部分は既に `settings.update` 経由。資格情報操作→設定保存→accounts通知の順序は変更しない。保存後のaccounts取得・通知失敗も保存済みエラーとして区別 |
 | 起動時の設定読み込み・移行・teamConfig/defaultEffort補完・色補完 | リクエスト受付前の初期化。色補完保存も保存済みスナップショットを採用。実行時キューとは並行しない |
 
 `terminal-helpers.js` の同名 `settings` はCLI専用設定、`terminals.js` の `settingsFile` は別ファイルであり、アプリの公開設定の更新ではない。チーム・実行モデル・資格情報の専用ストアもこの共通設定ファイルとは別。

@@ -215,6 +215,17 @@ export function planSettingsUpdate(current, patch, now) {
   return { settings: next, effects }
 }
 
+// Only wrap effects after a successful settings commit, never the save itself.
+export async function afterSettingsCommit(work) {
+  try {
+    return await work()
+  } catch (cause) {
+    const error = new Error(`設定は保存済みですが、反映処理に失敗しました: ${cause?.message ?? cause}`, { cause })
+    error.settingsCommitted = true
+    throw error
+  }
+}
+
 /**
  * Dependency-injected settings.update service. saveSettings may return a
  * decorated candidate (e.g. project colors), but must not mutate live settings.
@@ -249,14 +260,10 @@ export function createSettingsService({
   // explicit both to callers and in the message sent across the wire.
   const commit = async (candidate, { notify = true, afterCommit = () => {} } = {}) => {
     const saved = await saveSettings(candidate) ?? candidate
-    try {
+    await afterSettingsCommit(async () => {
       publishSettings(saved, { notify })
       await afterCommit(saved)
-    } catch (cause) {
-      const error = new Error(`設定は保存済みですが、反映処理に失敗しました: ${cause?.message ?? cause}`, { cause })
-      error.settingsCommitted = true
-      throw error
-    }
+    })
     return { settings: saved }
   }
   return {
@@ -265,7 +272,9 @@ export function createSettingsService({
     mutate(work, options) {
       return run(async () => {
         const candidate = structuredClone(getSettings())
-        await work(candidate)
+        // Explicit false means no change, decided against the latest state on
+        // this queue. Skip persistence, publication and effects in that case.
+        if (await work(candidate) === false) return { settings: getSettings() }
         // Do not retain references supplied by an external resource (e.g. a team).
         return commit(structuredClone(candidate), options)
       })

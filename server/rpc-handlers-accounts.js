@@ -6,6 +6,7 @@ import { SiwcClient } from './siwc-client.js'
 import { isWorkspaceId } from './dsh-config.js'
 import { anthropicKeyProblem, checkAnthropicKey, checkDeepSeekKey, checkOpenCodeGoKey } from './key-check.js'
 import { discoverLocalModels, normalizeBaseUrl } from './local-llm.js'
+import { afterSettingsCommit } from './settings.js'
 
 /** The credential refs of the API keys set in 設定 → アカウント, by provider. */
 const KEY_REFS = { anthropic: ANTHROPIC_REF, deepseek: DEEPSEEK_REF, opencodeGo: OPENCODE_GO_REF }
@@ -23,15 +24,19 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
       const models = await discoverModels(url, typed || (await credentials.read()).refs[LOCAL_LLM_REF] || null)
       if (typed) await credentials.setRef(LOCAL_LLM_REF, typed)
       const { settings } = await updateSettings({ localLlm: { baseURL: url, models } })
-      broadcast('accounts', { accounts: await accounts() })
-      return { settings, models }
+      return afterSettingsCommit(async () => {
+        broadcast('accounts', { accounts: await accounts() })
+        return { settings, models }
+      })
     },
 
     'localLlm.remove': async () => {
       await credentials.unsetRef(LOCAL_LLM_REF)
       const { settings } = await updateSettings({ localLlm: { baseURL: null, models: [] } })
-      broadcast('accounts', { accounts: await accounts() })
-      return { settings }
+      return afterSettingsCommit(async () => {
+        broadcast('accounts', { accounts: await accounts() })
+        return { settings }
+      })
     },
 
     'account.setKey': async ({ provider, key, force }) => {
@@ -89,9 +94,11 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
         if (check.status === 'invalid') throw new Error('API キーの認証に失敗しました。キーを確認してください。')
       }
       await setAnthropicWorkspace(next)
-      const accountsNow = await accounts()
-      broadcast('accounts', { accounts: accountsNow })
-      return { check, accounts: accountsNow }
+      return afterSettingsCommit(async () => {
+        const accountsNow = await accounts()
+        broadcast('accounts', { accounts: accountsNow })
+        return { check, accounts: accountsNow }
+      })
     },
 
     'account.removeKey': async ({ provider }) => {

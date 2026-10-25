@@ -3,14 +3,15 @@
 import { attachmentPath } from './attachments.js'
 
 /** Handlers for terminals and teams; index.js merges them into the request table. */
-export function createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }) {
+export function createTerminalHandlers({ paths, mutateSettings, terminals, teams, agents }) {
   return {
     // Claude Code tasks. `size` is the viewer's terminal in characters ({ cols, rows }).
     'terminal.create': async ({ workspace, size }) => {
       const terminal = await terminals.create({ workspace, size })
-      if (terminal.workspace !== paths.myPc && !getSettings().workspaces.includes(terminal.workspace)) {
+      if (terminal.workspace !== paths.myPc) {
         await mutateSettings(candidate => {
-          if (!candidate.workspaces.includes(terminal.workspace)) candidate.workspaces.unshift(terminal.workspace)
+          if (candidate.workspaces.includes(terminal.workspace)) return false
+          candidate.workspaces.unshift(terminal.workspace)
         })
       }
       return { terminal }

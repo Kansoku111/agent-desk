@@ -91,6 +91,50 @@ for (const type of ['terminal.create', 'team.create']) {
   })
 }
 
+test('terminal.create restores history after a queued removal commits', async () => {
+  let live = { ...structuredClone(DEFAULT_SETTINGS), workspaces: ['folder'] }
+  const events = []
+  let releaseSave
+  let saving
+  const started = new Promise(resolve => { saving = resolve })
+  const blocked = new Promise(resolve => { releaseSave = resolve })
+  const service = createSettingsService({
+    getSettings: () => live,
+    saveSettings: async candidate => {
+      events.push('save')
+      if (events.length === 1) { saving(); await blocked }
+      return candidate
+    },
+    publishSettings: saved => { live = saved; events.push('notice') },
+  })
+  const deps = { paths: { myPc: '__my_pc__' }, getSettings: () => live, mutateSettings: (...args) => service.mutate(...args) }
+  const removal = createWorkspaceHandlers(deps)['workspace.remove']({ path: 'folder' })
+  await started
+  const terminal = { workspace: 'folder' }
+  let created
+  const resourceCreated = new Promise(resolve => { created = resolve })
+  const creation = createTerminalHandlers({ ...deps, terminals: { create: async () => { created(); return terminal } } })['terminal.create']({ workspace: 'folder' })
+  await resourceCreated
+  assert.deepEqual(live.workspaces, ['folder'])
+  releaseSave()
+  await removal
+  assert.deepEqual(await creation, { terminal })
+  assert.deepEqual(live.workspaces, ['folder'])
+  assert.deepEqual(events, ['save', 'notice', 'save', 'notice'])
+})
+
+for (const workspace of ['folder', '__my_pc__']) {
+  test(`terminal.create skips saving and notifying for existing history or My PC: ${workspace}`, async () => {
+    const h = setup()
+    h.live.workspaces.push('folder')
+    const terminal = { workspace }
+    const handlers = createTerminalHandlers({ ...h.deps, terminals: { create: async () => terminal } })
+    assert.deepEqual(await handlers['terminal.create']({ workspace }), { terminal })
+    assert.deepEqual(h.live.workspaces, ['folder'])
+    assert.deepEqual(h.events, [])
+  })
+}
+
 test('team defaults do not share nested references with the created resource', async () => {
   const h = setup()
   const config = { nested: { value: 1 } }
