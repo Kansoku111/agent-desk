@@ -7,7 +7,6 @@ export type Theme = 'system' | 'light' | 'dark'
 export interface AbConfig {
   a: string; b: string; leader: string; implementer: string
   lean: boolean; delegate: boolean; review: boolean
-  permissionMode: 'workspace-write' | 'danger-full-access'
 }
 export interface AbJob {
   id: string; role: string; model: string; status: string; report: string; error?: string

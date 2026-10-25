@@ -21,8 +21,6 @@
 .ab-picker:disabled { opacity: 0.5; }
 .ab-switches { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 18px 0; font-size: 13px; }
 .ab-switches label { display: flex; align-items: center; gap: 6px; }
-.ab-switches > .ab-field { flex-basis: 100%; }
-.ab-field > .muted { margin: 0; }
 .ab-input { width: 100%; resize: vertical; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
 .ab-approval { border-top: 1px solid var(--border); padding-top: 4px; }
 .ab-followup { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin: 24px 0; }

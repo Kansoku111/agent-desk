@@ -28,7 +28,7 @@ runner.start = async (input) => {
     timers.delete(input.jobId)
     runner.emit('finished', { runId: input.runId, jobId: input.jobId,
       status: fail ? 'error' : 'completed', text: report, error: fail ? 'fixture: implementation interrupted' : undefined,
-      denials: input.writable && input.permissionMode !== 'danger-full-access' ? denials : [] })
+      denials: input.writable ? denials : [] })
   }, 600))
   return { id: input.jobId, kind: 'fake' }
 }

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { AB_CONSULT, abPermissionMode } from './ab.js'
+import { AB_CONSULT, abJobPermission } from './ab.js'
 import { describeTool } from './teams-prompts.js'
 
 export function abClaudeArgs({ writable, lean, instructions }) {
@@ -73,7 +73,7 @@ export class AbRunner extends EventEmitter {
       }
       return { kind: 'claude', id: session.id }
     }
-    const thread = await this.threads.create({ workspace, model, permissionMode: writable ? abPermissionMode(input.permissionMode) : 'read-only',
+    const thread = await this.threads.create({ workspace, model, permissionMode: abJobPermission(writable),
       ab: { runId, jobId, writable, lean } })
     this.owned.set(thread.id, owner)
     try {

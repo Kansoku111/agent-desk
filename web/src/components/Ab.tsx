@@ -68,27 +68,10 @@ function ModelField({ label, value, groups, disabled, onChange }: {
   </div>
 }
 
-function ImplementationPermission({ value, change, disabled = false }: { value: AbConfig['permissionMode']; change: (value: AbConfig['permissionMode']) => void; disabled?: boolean }) {
-  const choices = [{ value: 'workspace-write', name: 'ワークスペース内' }, { value: 'danger-full-access', name: 'フルアクセス（サンドボックスなし）' }] as const
-  const name = choices.find((entry) => entry.value === value)?.name ?? choices[0].name
-  return <div className="ab-field">
-    <span>DSHの実装権限</span>
-    <Dropdown placement="bottom" width={300} trigger={({ toggle, open }) => (
-      <button type="button" className={`ab-picker ${open ? 'active' : ''}`} aria-label={`DSHの実装権限: ${name}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={toggle}>
-        <span>{name}</span><ChevronDown size={13} />
-      </button>
-    )}>
-      {(close) => <>{choices.map((entry) => <MenuItem key={entry.value} label={entry.name} selected={value === entry.value} onSelect={() => { change(entry.value); close() }} />)}</>}
-    </Dropdown>
-    {value === 'danger-full-access' && <p className="muted">作業フォルダ外にもアクセスできます。相談・レビューは読み取り専用のままです。</p>}
-  </div>
-}
-
-function ImplementationOptions({ config, change, disabled = false }: { config: Pick<AbConfig, 'delegate' | 'review' | 'permissionMode'>; change: (patch: Partial<AbConfig>) => void; disabled?: boolean }) {
+function ImplementationOptions({ config, change, disabled = false }: { config: Pick<AbConfig, 'delegate' | 'review'>; change: (patch: Partial<AbConfig>) => void; disabled?: boolean }) {
   return <div className="ab-switches">
     <label><input type="checkbox" checked={config.delegate} disabled={disabled} onChange={(event) => change({ delegate: event.target.checked })} /> 実装用モデルに委託</label>
     <label><input type="checkbox" checked={config.review} disabled={disabled || !config.delegate} onChange={(event) => change({ review: event.target.checked })} /> 委託後にリーダーがレビュー</label>
-    <ImplementationPermission value={config.permissionMode} change={(permissionMode) => change({ permissionMode })} disabled={disabled} />
   </div>
 }
 
@@ -158,9 +141,8 @@ export function AbView({ id }: { id: string }) {
   const [busy, setBusy] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [retrying, setRetrying] = useState<string | null>(null)
-  const [retryPermission, setRetryPermission] = useState<AbConfig['permissionMode']>('workspace-write')
-  const [options, setOptions] = useState({ delegate: run?.config.delegate ?? true, review: run?.config.review ?? true, permissionMode: run?.config.permissionMode ?? 'workspace-write' })
-  useEffect(() => { if (run) setOptions({ delegate: run.config.delegate, review: run.config.review, permissionMode: run.config.permissionMode ?? 'workspace-write' }) }, [id, run?.config.delegate, run?.config.review, run?.config.permissionMode])
+  const [options, setOptions] = useState({ delegate: run?.config.delegate ?? true, review: run?.config.review ?? true })
+  useEffect(() => { if (run) setOptions({ delegate: run.config.delegate, review: run.config.review }) }, [id, run?.config.delegate, run?.config.review])
   if (!run || !server) return <div className="empty-state">ABが見つかりません</div>
   const modelName = (value: string) => CLAUDE_CODE.find((entry) => entry.value === value)?.name ?? server.catalog.models.find((entry) => entry.value === value)?.name ?? value
   const action = async (method: string, input: object = {}) => {
@@ -169,7 +151,6 @@ export function AbView({ id }: { id: string }) {
   }
   const running = run.jobs.some((job) => ['running', 'stopping'].includes(job.status))
   const canRetry = run.retryJobId && (['error', 'stopped', 'interrupted', 'needs-attention'].includes(run.phase) || (run.phase === 'reviewed' && run.warning)) && !running
-  const retryJob = run.jobs.find((job) => job.id === retrying)
   const latest = run.jobs.filter((job) => ['leader', 'implementer', 'direct', 'reviewer'].includes(job.role) && job.report).at(-1)
   return <div className="ab-view">
     <header className="ab-header"><button className="icon-button" aria-label="サイドバーを開く" onClick={() => setState({ sidebarOpen: true })}><PanelLeftOpen size={18} /></button><span className="cl-mark tm-mark">AB</span><h2>{run.title}</h2>
@@ -190,18 +171,10 @@ export function AbView({ id }: { id: string }) {
         <div className="ab-followup"><textarea className="ab-input" aria-label="追加相談" placeholder="案への修正・追加の条件" value={text} onChange={(event) => setText(event.target.value)} rows={3} maxLength={100000} disabled={busy} /><button className="button" disabled={busy || !text.trim()} onClick={async () => { if (await action('ab.revise', { text })) setText('') }}>リーダーに送る</button></div>
       </section>}
       {['completed', 'needs-attention'].includes(run.phase) && run.config.delegate && !run.jobs.some((job) => job.role === 'reviewer' && job.status === 'completed') && <p className="muted">リーダーレビュー未実施</p>}
-      {canRetry && <button className="button" disabled={busy} onClick={() => {
-        // A stage the sandbox itself blocked would only fail the same way again.
-        const blocked = run.jobs.find((job) => job.id === run.retryJobId)?.blockers?.length
-        setRetryPermission(blocked ? 'danger-full-access' : run.config.permissionMode ?? 'workspace-write')
-        setRetrying(run.retryJobId!)
-      }}>この段階を再試行</button>}
+      {canRetry && <button className="button" disabled={busy} onClick={() => setRetrying(run.retryJobId!)}>この段階を再試行</button>}
       {['error', 'stopped', 'interrupted'].includes(run.phase) && <button className="button" onClick={() => setState({ abStart: run.workspace })}>新しい相談</button>}
     </div>
-    {retrying && <ConfirmDialog title="この段階を再試行" body={<>
-      <p>変更済みのファイルは残し、同じ担当・承認済みの案で続けます。担当が現在の差分を確認してから再開します。</p>
-      {retryJob?.writable && <ImplementationPermission value={retryPermission} change={setRetryPermission} disabled={busy} />}
-    </>} confirmLabel="再試行" onClose={() => setRetrying(null)} onConfirm={() => void action('ab.retry', { jobId: retrying, ...(retryJob?.writable ? { permissionMode: retryPermission } : {}) })} />}
+    {retrying && <ConfirmDialog title="この段階を再試行" body={<p>変更済みのファイルは残し、同じ担当・承認済みの案で続けます。担当が現在の差分を確認してから再開します。</p>} confirmLabel="再試行" onClose={() => setRetrying(null)} onConfirm={() => void action('ab.retry', { jobId: retrying })} />}
     {removing && <ConfirmDialog title="ABを削除" body={<p>実行中の作業を停止し、相談と各担当の記録を削除します。プロジェクトのファイルは削除しません。</p>} confirmLabel="削除" danger onClose={() => setRemoving(false)} onConfirm={() => void action('ab.remove')} />}
   </div>
 }
