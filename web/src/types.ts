@@ -15,10 +15,10 @@ export interface AbJob {
   denials?: string[]; blockers?: string[]; stopError?: string; writable?: boolean; permissionMode?: PermissionMode
 }
 export interface AbRun {
-  id: string; workspace: string; title: string; text: string; config: AbConfig
+  id: string; workspace: string; title: string; text: string; images?: ImageRef[]; config: AbConfig
   phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string; warning?: string; retryJobId?: string
   archived?: boolean
-  messages: (string | { text: string; afterJobId?: string })[]; createdAt: number; updatedAt: number
+  messages: (string | { text: string; images?: ImageRef[]; afterJobId?: string })[]; createdAt: number; updatedAt: number
 }
 
 export interface ThreadSummary {

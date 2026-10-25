@@ -5039,3 +5039,7 @@ button.team-node:disabled {
 .team-guide-text {
   min-height: 110px;
 }
+
+.ex-model-row { display: flex; gap: 8px; min-width: 0; }
+.ex-model-row .ex-effort { flex: 0 0 96px; width: 96px; }
+.ab-followup > div { min-width: 0; width: 100%; }

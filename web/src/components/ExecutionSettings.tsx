@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { act, setState, startTeam, useStore } from '../store'
 import type { ExecutionCheck, TeamProvider, TeamSettings } from '../types'
 import { executionModelSelection } from '../model-selection'
+import { effortLabel, pickableEfforts } from '../util'
+import { claudeEfforts } from './TerminalPickers'
 import { Modal } from './Modal'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import type { AuthConsentState } from '../team-auth-consent'
@@ -14,11 +16,11 @@ const providers: { id: TeamProvider; name: string; catalog?: string }[] = [
 ]
 
 const CHOICE_KEY = 'agent-desk.execution-models'
-const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku' }
+const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '' }
 function readChoice() {
   try {
     const value = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? 'null')
-    if (typeof value?.leader === 'string' && providers.some((entry) => entry.id === value.provider) && typeof value.model === 'string') return value as typeof DEFAULT_CHOICE
+    if (typeof value?.leader === 'string' && providers.some((entry) => entry.id === value.provider) && typeof value.model === 'string') return { ...DEFAULT_CHOICE, ...value, leaderEffort: typeof value.leaderEffort === 'string' ? value.leaderEffort : '', childEffort: typeof value.childEffort === 'string' ? value.childEffort : '' } as typeof DEFAULT_CHOICE
   } catch { /* use the defaults */ }
   return DEFAULT_CHOICE
 }
@@ -67,7 +69,10 @@ export function ExecutionChecksDialog({ workspace, onClose }: { workspace: strin
 export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const server = useStore((state) => state.server)
   const [choice, setChoice] = useState(readChoice)
-  const { leader, provider, model } = choice
+  const { leader, provider, model, leaderEffort, childEffort } = choice
+  const latest = useRef(choice)
+  const saves = useRef(Promise.resolve<unknown>(true))
+  const startingRef = useRef(false)
   const [modelsReady, setModelsReady] = useState(false)
   useEffect(() => {
     let alive = true
@@ -78,41 +83,62 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       // selection saved from another device. This never starts a model.
       const restored = result.models ? result : await act<{ models: typeof DEFAULT_CHOICE }>('execution.setModels', { models: readChoice(), onlyIfUnset: true })
       if (!alive || !restored?.models) return
-      setChoice(restored.models)
+      latest.current = { ...DEFAULT_CHOICE, ...restored.models }
+      setChoice(latest.current)
       setModelsReady(true)
     })()
     return () => { alive = false }
   }, [])
   const changeModels = (patch: Partial<typeof DEFAULT_CHOICE>) => {
-    const next = { ...choice, ...patch }
+    const next = { ...latest.current, ...patch }
+    const levels = effortOptions(next)
+    if (!levels.leader.includes(next.leaderEffort)) next.leaderEffort = ''
+    if (!levels.child.includes(next.childEffort)) next.childEffort = ''
+    latest.current = next
     setChoice(next)
     try { localStorage.setItem(CHOICE_KEY, JSON.stringify(next)) } catch { /* server persistence remains available */ }
-    void act('execution.setModels', { models: next })
+    saves.current = saves.current.then(() => act('execution.setModels', { models: next }))
   }
   const [checks, setChecks] = useChecks(workspace)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const [starting, setStarting] = useState(false)
   const close = () => setState({ executionStart: null })
+  const effortOptions = (value: typeof DEFAULT_CHOICE) => {
+    const levels = (model: string) => {
+      if (!server || !model) return []
+      if (model.startsWith('claude:')) return claudeEfforts(server, model.slice(7))
+      // Unknown capability means default only, not a guessed generic effort.
+      return pickableEfforts(server.catalog.effortsByModel[model] ?? []).map((entry) => entry.value)
+    }
+    const selected = server ? executionModelSelection(server, value.provider, value.leader, value.model) : null
+    const child = value.provider === 'claude' ? (selected?.model ? `claude:${selected.model}` : '') : selected?.childModels.find((entry) => entry.id === selected.model)?.value ?? ''
+    return { leader: levels(selected?.leader ?? ''), child: levels(child) }
+  }
+  const levels = effortOptions(choice)
   const selection = server ? executionModelSelection(server, provider, leader, model) : null
   useEffect(() => {
     if (!modelsReady || !selection) return
-    if ((leader && !selection.leader) || (model && !selection.model)) {
-      setChoice((current) => ({ ...current, leader: selection.leader, model: selection.model }))
+    if ((leader && !selection.leader) || (model && !selection.model) || (leaderEffort && !levels.leader.includes(leaderEffort)) || (childEffort && !levels.child.includes(childEffort))) {
+      changeModels({ leader: selection.leader, model: selection.model })
     }
-  }, [modelsReady, selection?.leader, selection?.model, leader, model])
+  }, [modelsReady, selection?.leader, selection?.model, leader, model, leaderEffort, childEffort, levels.leader.join(), levels.child.join()])
   if (!server?.settings.agentTeams || !selection) return null
   const { leaderModels, childModels } = selection
   const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude')
   const start = async () => {
-    if (!modelsReady || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)) return
+    if (startingRef.current || !modelsReady || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)) return
+    startingRef.current = true
     setStarting(true)
+    const current = { ...latest.current }
     try {
+      if (!await saves.current) return
+      const { leader, provider, model, leaderEffort, childEffort } = current
       if (!await act('execution.configure', { workspace, checks })) return
       const choices = structuredClone(server.settings.agentTeams!) as TeamSettings
-      for (const item of providers) choices[item.id] = { enabled: item.id === provider, low: { enabled: true, model: item.id === provider ? model : null, effort: null }, mid: { enabled: false, model: null, effort: null } }
+      for (const item of providers) choices[item.id] = { enabled: item.id === provider, low: { enabled: true, model: item.id === provider ? model : null, effort: item.id === provider ? childEffort || null : null }, mid: { enabled: false, model: null, effort: null } }
       choices.leaderProvider = leader.startsWith('claude:') ? 'claude' : 'gpt'
-      choices.leader = { model: leader.startsWith('claude:') ? leader.slice(7) : 'opus', effort: null }
-      choices.gptLeader = { model: null, effort: null }
+      choices.leader = { model: leader.startsWith('claude:') ? leader.slice(7) : 'opus', effort: leaderEffort || null }
+      choices.gptLeader = { model: null, effort: leaderEffort || null }
       choices.leanChildren = true
       choices.batchReports = true
       choices.maxChildren = 6
@@ -120,23 +146,24 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       if (await startTeam(workspace, choices, usesClaude ? auth.confirmation : undefined, leader.startsWith('claude:') ? {} : { leaderModel: leader })) {
         close()
       }
-    } finally { setStarting(false) }
+    } finally { startingRef.current = false; setStarting(false) }
   }
+  const effortSelect = (key: 'leaderEffort' | 'childEffort', values: string[], label: string) => <select aria-label={label} className="ex-effort" disabled={!modelsReady || starting} value={choice[key]} onChange={(event) => changeModels({ [key]: event.target.value })}><option value="">既定</option>{values.map((value) => <option key={value} value={value}>{effortLabel(value)}</option>)}</select>
   return <Modal title="エコモード" onClose={close} width={620} className="team-start-modal">
     <div className="team-start-body">
       <section className="account-card ex-models">
-        <label>親<select disabled={!modelsReady || starting} value={modelsReady ? selection.leader : ''} onChange={(e) => changeModels({ leader: e.target.value })}>
+        <label>親<div className="ex-model-row"><select disabled={!modelsReady || starting} value={modelsReady ? selection.leader : ''} onChange={(e) => changeModels({ leader: e.target.value })}>
           <option value="">モデルを選択</option>
           <optgroup label="Claude Code"><option value="claude:opus">Opus</option><option value="claude:sonnet">Sonnet</option></optgroup>
           <optgroup label="API / サブスクリプション">{leaderModels.map((entry) => <option key={entry.value} value={entry.value}>{entry.name} · {entry.provider === 'anthropic' ? 'API' : 'ChatGPT'}</option>)}</optgroup>
-        </select></label>
+        </select>{effortSelect('leaderEffort', levels.leader, '親の推論レベル')}</div></label>
         <label>子<select disabled={!modelsReady || starting} value={provider} onChange={(e) => changeModels({ provider: e.target.value as TeamProvider, model: e.target.value === 'claude' ? 'haiku' : '' })}>
           {providers.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
         </select></label>
-        <label>子のモデル<select disabled={!modelsReady || starting} value={modelsReady ? selection.model : ''} onChange={(e) => changeModels({ model: e.target.value })}>
+        <label>子のモデル<div className="ex-model-row"><select disabled={!modelsReady || starting} value={modelsReady ? selection.model : ''} onChange={(e) => changeModels({ model: e.target.value })}>
           <option value="">モデルを選択</option>
           {provider === 'claude' ? <><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></> : <>{childModels.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</>}
-        </select></label>
+        </select>{effortSelect('childEffort', levels.child, '子の推論レベル')}</div></label>
       </section>
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}

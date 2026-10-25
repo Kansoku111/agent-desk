@@ -11,6 +11,7 @@ import { byNewest, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { Markdown, CopyButton } from './Markdown'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
+import { AbImages, AbInput, useAbDraft } from './AbInput'
 import type { AuthConsentState } from '../team-auth-consent'
 
 export const AB_PHASE: Record<string, string> = { consulting: '2社に相談中', judging: '判断中', 'awaiting-approval': '案を確認', preparing: '実装指示を作成中', implementing: '実装中', reviewing: 'レビュー中', completed: '実装担当の報告', reviewed: 'レビュー報告', 'needs-attention': '要確認', stopped: '停止', interrupted: '中断', error: 'エラー' }
@@ -53,6 +54,7 @@ function ModelField({ label, value, groups, disabled, onChange, effort, efforts,
     <span>{label}</span>
     <div className="ab-model-controls"><Dropdown
       placement="bottom"
+      portal
       width={300}
       trigger={({ toggle, open }) => (
         <button type="button" className={`ab-picker ${open ? 'active' : ''}`} aria-label={`${label}: ${name}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={toggle}>
@@ -75,7 +77,7 @@ function ModelField({ label, value, groups, disabled, onChange, effort, efforts,
         </div>
       )}
     </Dropdown>
-    <Dropdown width={160} className="ab-effort-menu" trigger={({ toggle, open }) => (
+    <Dropdown portal width={160} className="ab-effort-menu" trigger={({ toggle, open }) => (
       <button type="button" className="ab-effort" aria-label={`${label}の推論レベル: ${effort ? effortLabel(effort) : '既定'}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled || !value} onClick={toggle}>
         <span>{effort ? effortLabel(effort) : '既定'}</span><ChevronDown size={12} />
       </button>
@@ -98,7 +100,7 @@ function ImplementationOptions({ config, change, disabled = false }: { config: P
 export function AbStartDialog({ workspace }: { workspace: string }) {
   const server = useStore((state) => state.server)
   const [config, setConfig] = useState<AbConfig | null>(null)
-  const [text, setText] = useState('')
+  const draft = useAbDraft()
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const [busy, setBusy] = useState(false)
   const saves = useRef(Promise.resolve<unknown>(null))
@@ -127,16 +129,16 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
   const required = config ? [config.a, config.b, config.leader, ...(config.delegate ? [config.implementer] : [])] : []
   const usesClaude = config ? [config.a, config.b, config.leader, config.implementer].some((value) => value.startsWith('claude:')) : false
-  const ready = config && required.every(valid) && text.trim() && (!usesClaude || auth.ready)
-  const start = async () => {
-    if (!ready || busy) return
+  const ready = config && required.every(valid) && draft.ready && (!usesClaude || auth.ready)
+  const start = () => draft.submit(Boolean(ready), async () => {
     setBusy(true)
     try {
       await saves.current
-      const result = await act<{ run: AbRun }>('ab.create', { workspace, text, config, authConfirmation: usesClaude ? auth.confirmation : undefined })
+      const result = await act<{ run: AbRun }>('ab.create', { workspace, text: draft.text, images: draft.images, config, authConfirmation: usesClaude ? auth.confirmation : undefined })
       if (result) { close(); navigate({ view: 'ab', id: result.run.id }) }
+      return result
     } finally { setBusy(false) }
-  }
+  })
   return <Modal title="AB" onClose={close} width={700} className="team-start-modal">
     <div className="team-start-body">
       {config ? <>
@@ -148,7 +150,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
         ))}</div>
         <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
         <ImplementationOptions config={config} change={change} disabled={busy} />
-        <textarea className="ab-input" aria-label="相談内容" placeholder="相談したいこと" value={text} disabled={busy} onChange={(event) => setText(event.target.value)} rows={6} maxLength={100000} />
+        <AbInput draft={draft} label="相談内容" placeholder="相談したいこと" disabled={busy} rows={6} onSubmit={() => void start()} />
         {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
       </> : <Loader2 className="spin" size={20} />}
     </div>
@@ -168,7 +170,7 @@ function Report({ job, workspace, modelName, open = false }: { job: AbJob; works
 export function AbView({ id }: { id: string }) {
   const server = useStore((state) => state.server)
   const run = server?.ab?.find((entry) => entry.id === id)
-  const [text, setText] = useState('')
+  const draft = useAbDraft()
   const [busy, setBusy] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [retrying, setRetrying] = useState<string | null>(null)
@@ -182,6 +184,7 @@ export function AbView({ id }: { id: string }) {
   }
   const running = run.jobs.some((job) => ['running', 'stopping'].includes(job.status))
   const canRetry = run.retryJobId && (['error', 'stopped', 'interrupted', 'needs-attention'].includes(run.phase) || (run.phase === 'reviewed' && run.warning)) && !running
+  const followup = () => draft.submit(!busy && !running && ['awaiting-approval', 'completed', 'reviewed', 'needs-attention'].includes(run.phase), () => action('ab.revise', { text: draft.text, images: draft.images }))
   const latest = run.jobs.filter((job) => ['leader', 'implementer', 'direct', 'reviewer'].includes(job.role) && job.report).at(-1)
   return <div className="ab-view">
     <header className="ab-header"><button className="icon-button" aria-label="サイドバーを開く" onClick={() => setState({ sidebarOpen: true })}><PanelLeftOpen size={18} /></button><span className="cl-mark tm-mark">AB</span><h2>{run.title}</h2>
@@ -190,19 +193,19 @@ export function AbView({ id }: { id: string }) {
       <button className="icon-button" aria-label="ABを削除" disabled={busy} onClick={() => setRemoving(true)}><Trash2 size={16} /></button>
     </header>
     <div className="ab-content">
-      <section className="ab-question"><CopyButton text={run.text} /><Markdown text={run.text} workspace={run.workspace} /></section>
+      <section className="ab-question"><CopyButton text={run.text} /><Markdown text={run.text} workspace={run.workspace} /><AbImages images={run.images} /></section>
       <div className="ab-consultations">{run.jobs.filter((job) => ['a', 'b'].includes(job.role)).map((job) => <Report key={job.id} job={job} workspace={run.workspace} modelName={modelName(job.model)} />)}</div>
       {run.error && <p role="alert" className="error-text">{run.error}</p>}
       {run.warning && <p role="alert" className="error-text">{run.warning}</p>}
       {abTimeline(run).filter((entry) => entry.kind !== 'job' || !['a', 'b'].includes(entry.job.role)).map((entry) => entry.kind === 'message'
-        ? <section className="ab-question" key={entry.key}><Markdown text={entry.text} workspace={run.workspace} /></section>
+        ? <section className="ab-question" key={entry.key}><Markdown text={entry.text} workspace={run.workspace} /><AbImages images={entry.images} /></section>
         : <Report key={entry.key} job={entry.job} workspace={run.workspace} modelName={modelName(entry.job.model)} open={entry.job.id === latest?.id} />)}
       {run.phase === 'awaiting-approval' && !running && <section className="ab-approval">
         <ImplementationOptions config={options} change={(patch) => setOptions((current) => ({ ...current, ...patch }))} disabled={busy} />
         <button className="button primary" disabled={busy || (options.delegate && !run.config.implementer)} onClick={() => void action('ab.approve', { revision: run.revision, ...options })}>この案に同意して実装</button>
 
       </section>}
-      {['awaiting-approval', 'completed', 'reviewed', 'needs-attention'].includes(run.phase) && !running && <div className="ab-followup"><textarea className="ab-input" aria-label="追加相談" placeholder="案への修正・追加の条件" value={text} onChange={(event) => setText(event.target.value)} rows={3} maxLength={100000} disabled={busy} /><button className="button" disabled={busy || !text.trim()} onClick={async () => { if (await action('ab.revise', { text })) setText('') }}>リーダーに送る</button></div>}
+      {['awaiting-approval', 'completed', 'reviewed', 'needs-attention'].includes(run.phase) && !running && <div className="ab-followup"><AbInput draft={draft} label="追加相談" placeholder="案への修正・追加の条件" rows={3} disabled={busy || draft.busy} onSubmit={() => void followup()} /><button className="button" disabled={busy || !draft.ready} onClick={() => void followup()}>リーダーに送る</button></div>}
       {['completed', 'needs-attention'].includes(run.phase) && run.config.delegate && !run.jobs.some((job) => job.role === 'reviewer' && job.status === 'completed') && <p className="muted">リーダーレビュー未実施</p>}
       {canRetry && <button className="button" disabled={busy} onClick={() => setRetrying(run.retryJobId!)}>この段階を再試行</button>}
       {['error', 'stopped', 'interrupted'].includes(run.phase) && <button className="button" onClick={() => setState({ abStart: run.workspace })}>新しい相談</button>}

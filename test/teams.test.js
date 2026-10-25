@@ -245,6 +245,28 @@ async function setupExecution(t, options = {}) {
 }
 const exTask = { title: 'implement', task: 'do the bounded work', criteria: 'the test passes without unrelated changes', checks: [], tier: 'low', provider: 'gpt' }
 
+for (const parent of ['claude', 'gpt']) for (const provider of ['claude', 'gpt']) {
+  test(`eco forwards independent efforts into ${parent} parent and ${provider} child launches`, async (t) => {
+    const f = await setup(t)
+    const choices = structuredClone(f.team.config)
+    choices.leaderProvider = parent
+    choices.leader = { model: 'sonnet', effort: 'high' }
+    choices.gptLeader = { model: 'gpt-6.1-sol', effort: 'high' }
+    choices.claude = { enabled: provider === 'claude', low: { enabled: true, model: 'haiku', effort: 'low' }, mid: { enabled: false, model: null, effort: null } }
+    choices.gpt = { enabled: provider === 'gpt', low: { enabled: true, model: 'gpt-6-luna', effort: 'low' }, mid: { enabled: false, model: null, effort: null } }
+    const { team: view, terminal, thread } = await f.manager.create({ workspace: f.workspace, choices, execution: {} })
+    if (parent === 'claude') assert.equal(f.terminals.records.get(terminal.id).effort, 'high')
+    else assert.equal(f.threads.threads.get(thread.id).effort, 'high')
+    const team = f.manager.teams.get(view.id)
+    await f.manager.call(team.id, team.secret, 'spawn', { ...exTask, provider })
+    const child = team.children.at(-1)
+    assert.ok(child?.taskId)
+    if (provider === 'claude') assert.equal(f.agents.sessions.get(child.taskId).effort, 'low')
+    else assert.equal(f.threads.threads.get(child.taskId).effort, 'low')
+    assert.equal(team.config[parent === 'claude' ? 'leader' : 'gptLeader'].effort, 'high')
+  })
+}
+
 test('eco holds one writer through verification and parent judgment, then checks freshness', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(123)"' }])

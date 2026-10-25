@@ -95,7 +95,10 @@ export function normalizeExecutionModels(value) {
     || typeof value.leader !== 'string' || value.leader.length > 500
     || typeof value.model !== 'string' || value.model.length > 200) throw new Error('ecoのモデル選択が不正です')
   // Empty strings are intentional: a provider may have been selected before its model.
-  return { leader: value.leader, provider: value.provider, model: value.model }
+  const leaderEffort = value.leaderEffort ?? ''
+  const childEffort = value.childEffort ?? ''
+  if ([leaderEffort, childEffort].some((effort) => typeof effort !== 'string' || effort.length > 100)) throw new Error('ecoの推論レベルが不正です')
+  return { leader: value.leader, provider: value.provider, model: value.model, leaderEffort, childEffort }
 }
 
 export class ExecutionVerifier {

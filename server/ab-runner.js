@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { AB_CONSULT, abJobPermission } from './ab.js'
+import { claudeImageBlocks } from './ab-images.js'
 import { describeTool } from './teams-prompts.js'
 
 export function abClaudeArgs({ writable, lean, instructions }) {
@@ -10,8 +11,9 @@ export function abClaudeArgs({ writable, lean, instructions }) {
 }
 
 export class AbRunner extends EventEmitter {
-  constructor({ threads, agents, instructions = () => '', guard = () => {}, stopTimeoutMs = 10_000 }) {
+  constructor({ threads, agents, instructions = () => '', guard = () => {}, stopTimeoutMs = 10_000, attachmentsDir }) {
     super()
+    this.attachmentsDir = attachmentsDir
     this.threads = threads
     this.agents = agents
     this.instructions = instructions
@@ -59,14 +61,15 @@ export class AbRunner extends EventEmitter {
     })
   }
   async start(input) {
-    const { runId, jobId, model, effort = '', workspace, text, writable, lean, instructions } = input
+    const { runId, jobId, model, effort = '', workspace, text, images = [], writable, lean, instructions } = input
     this.guard({ workspace })
     const owner = { runId, jobId, writable, denials: [], deniedIds: new Set() }
     if (model.startsWith('claude:')) {
+      const blocks = await claudeImageBlocks(this.attachmentsDir, images)
       const session = await this.agents.create({ workspace, model: model.slice(7), effort: effort || null,
         args: abClaudeArgs({ writable, lean, instructions: `${instructions}\n\n${this.instructions()}` }) })
       this.owned.set(session.id, owner)
-      try { this.agents.run(session.id, text) } catch (error) {
+      try { this.agents.run(session.id, text, { images, blocks }) } catch (error) {
         this.owned.delete(session.id)
         await this.agents.remove(session.id)
         throw error
@@ -78,7 +81,7 @@ export class AbRunner extends EventEmitter {
     this.owned.set(thread.id, owner)
     try {
       // Consultation user content is not rewritten or prefixed by a leader.
-      await this.threads.send(thread.id, { text: instructions === AB_CONSULT ? text : `${instructions}\n\n${text}` })
+      await this.threads.send(thread.id, { images, text: instructions === AB_CONSULT ? text : `${instructions}\n\n${text}` })
     } catch (error) {
       this.owned.delete(thread.id)
       await this.threads.remove(thread.id)

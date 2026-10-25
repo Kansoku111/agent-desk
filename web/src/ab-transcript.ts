@@ -1,6 +1,6 @@
-import type { AbJob, AbRun } from './types'
+import type { AbJob, AbRun, ImageRef } from './types'
 
-type Entry = { kind: 'job'; job: AbJob; key: string } | { kind: 'message'; text: string; key: string }
+type Entry = { kind: 'job'; job: AbJob; key: string } | { kind: 'message'; text: string; images?: ImageRef[]; key: string }
 
 /** Job anchors avoid ambiguous timestamp ties. Old strings preceded successive leader revisions. */
 export function abTimeline(run: Pick<AbRun, 'jobs' | 'messages'>): Entry[] {
@@ -10,7 +10,7 @@ export function abTimeline(run: Pick<AbRun, 'jobs' | 'messages'>): Entry[] {
   let leader = 0
   const add = (index: number) => {
     const message = run.messages[index]
-    entries.push({ kind: 'message', text: typeof message === 'string' ? message : message.text, key: `message-${index}` })
+    entries.push({ kind: 'message', text: typeof message === 'string' ? message : message.text, ...(typeof message === 'string' || !message.images?.length ? {} : { images: message.images }), key: `message-${index}` })
     emitted.add(index)
   }
   for (const job of run.jobs) {
@@ -27,8 +27,10 @@ export function abTimeline(run: Pick<AbRun, 'jobs' | 'messages'>): Entry[] {
   return entries
 }
 
+const imageMarkdown = (images: ImageRef[] = []) => images.map((image) => `![${image.name || '添付画像'}](/attachments/${encodeURIComponent(image.file)})`).join('\n')
+
 export function abMarkdown(run: AbRun): string {
-  return [`# ${run.title}`, `## ユーザー\n\n${run.text}`, ...abTimeline(run).map((entry) => entry.kind === 'message'
-    ? `## ユーザー\n\n${entry.text}`
+  return [`# ${run.title}`, `## ユーザー\n\n${run.text}\n\n${imageMarkdown(run.images)}`, ...abTimeline(run).map((entry) => entry.kind === 'message'
+    ? `## ユーザー\n\n${entry.text}\n\n${imageMarkdown(entry.images)}`
     : `## ${entry.job.role} — ${entry.job.model}${entry.job.effort ? ` (${entry.job.effort})` : ''}\n\n${[entry.job.report, entry.job.error, entry.job.stopError].filter(Boolean).join('\n\n') || '報告なし'}`)].join('\n\n')
 }

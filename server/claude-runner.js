@@ -48,7 +48,7 @@ const CUT_OFF = 'Agent Desk が終了したため、作業が途中で止まり�
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text)
 
 /** A message for stdin: one stream-json line, with the uuid Claude Code gives back when it takes the message. */
-const userLine = (text, uuid) => `${JSON.stringify({ type: 'user', message: { role: 'user', content: String(text) }, parent_tool_use_id: null, session_id: '', ...(uuid ? { uuid } : {}) })}\n`
+const userLine = (text, uuid) => `${JSON.stringify({ type: 'user', message: { role: 'user', content: Array.isArray(text) ? text : String(text) }, parent_tool_use_id: null, session_id: '', ...(uuid ? { uuid } : {}) })}\n`
 
 /** The token counts Claude Code reports at the end of a turn (cost is Claude Code's own estimate). */
 function resultUsage(result) {
@@ -225,7 +225,7 @@ export class ClaudeRunner extends EventEmitter {
   }
 
   /** Starts a turn on `text`. Throws when the session is working already. */
-  run(id, text) {
+  run(id, text, { images = [], blocks = [] } = {}) {
     const record = this.records.get(id)
     if (!record) throw new Error('このセッションは見つかりません')
     if (this.live.has(id)) throw new Error('作業中です。終わってから送ってください')
@@ -234,11 +234,12 @@ export class ClaudeRunner extends EventEmitter {
     const now = this.now()
     const turn = {
       id: randomUUID(), startedAt: now, endedAt: null, status: 'running', stopReason: null, error: null,
-      user: { text: String(text), images: [] }, items: [],
+      user: { text: String(text), images }, items: [],
     }
     record.turns = [...record.turns, turn].slice(-TURNS_KEPT)
     record.updatedAt = now
 
+    const content = blocks.length ? [...(text ? [{ type: 'text', text: String(text) }] : []), ...blocks] : text
     const args = [
       ...(record.started ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
       '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages', '--include-partial-messages',
@@ -274,7 +275,7 @@ export class ClaudeRunner extends EventEmitter {
       void this.#save(record)
       this.emit('session', this.summary(record))
       this.emit('turn', { id, turn })
-      void this.#startChecked(record, live, { claude, command, spawnOptions, text })
+      void this.#startChecked(record, live, { claude, command, spawnOptions, text: content })
       return this.summary(record)
     }
 
@@ -289,7 +290,7 @@ export class ClaudeRunner extends EventEmitter {
     void this.#save(record)
     this.emit('session', this.summary(record))
     this.emit('turn', { id, turn })
-    this.#attach(record, live, proc, text)
+    this.#attach(record, live, proc, content)
     return this.summary(record)
   }
 

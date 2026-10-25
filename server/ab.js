@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { readJson, writeJson } from './json-file.js'
+import { abContextImages } from './ab-images.js'
 import { EFFORTS as CLAUDE_EFFORTS } from './terminal-helpers.js'
 
 const ROLES = ['a', 'b', 'leader', 'implementer']
@@ -36,12 +37,13 @@ const RUNNING = new Set(['running', 'stopping'])
 const RETRY_PHASE = { instructions: 'preparing', implementer: 'implementing', direct: 'implementing', reviewer: 'reviewing' }
 
 export class AbManager extends EventEmitter {
-  constructor({ dir, runner, validateModel = () => {}, authorize = async () => {} }) {
+  constructor({ dir, runner, validateModel = () => {}, authorize = async () => {}, validateImages = async (images) => { if (images.length) throw new Error('Image attachments not configured'); return [] } }) {
     super()
     this.dir = dir
     this.runner = runner
     this.validateModel = validateModel
     this.authorize = authorize
+    this.validateImages = validateImages
     this.runs = new Map()
     this.config = { ...AB_DEFAULTS }
     this.locks = new Map()
@@ -100,13 +102,14 @@ export class AbManager extends EventEmitter {
     if (!run) throw new Error('ABが見つかりません')
     return run
   }
-  async create({ workspace, text, config = this.config, authConfirmation }) {
-    if (typeof text !== 'string' || !text.trim() || text.length > 100000) throw new Error('相談文を入力してください（10万文字以内）')
+  async create({ workspace, text = '', config = this.config, authConfirmation, images = [] }) {
+    if (!Array.isArray(images) || typeof text !== 'string' || (!text.trim() && !images.length) || text.length > 100000) throw new Error('相談文を入力してください（10万文字以内）')
     if (typeof workspace !== 'string' || !path.isAbsolute(workspace) || !(await fs.stat(workspace).catch(() => null))?.isDirectory()) throw new Error('作業フォルダが見つかりません')
     config = abConfig(config)
     for (const key of ['a', 'b', 'leader', ...(config.delegate ? ['implementer'] : [])]) this.validateModel(config[key])
+    images = await this.validateImages(images, config)
     await this.authorize({ workspace, config, authConfirmation })
-    const run = { id: randomUUID(), workspace: path.resolve(workspace), title: text.trim().split('\n')[0].slice(0, 80), text, config,
+    const run = { id: randomUUID(), workspace: path.resolve(workspace), title: text.trim().split('\n')[0].slice(0, 80) || '画像の相談', text, images, config,
       phase: 'consulting', revision: 0, plan: '', jobs: [], messages: [], createdAt: Date.now(), updatedAt: Date.now() }
     this.runs.set(run.id, run)
     await this.save(run)
@@ -126,14 +129,14 @@ export class AbManager extends EventEmitter {
   job(run, role, model, text, instructions, writable = false, effort = run.config.efforts[ROLES.includes(role) ? role : 'leader']) {
     const job = { id: randomUUID(), role, model, effort, text, instructions, writable,
       permissionMode: abJobPermission(writable),
-      status: 'running', report: '', createdAt: Date.now() }
+      images: abContextImages(run), status: 'running', report: '', createdAt: Date.now() }
     run.jobs.push(job)
     return job
   }
   async launch(run, job) {
     try {
       const handle = await this.runner.start({ runId: run.id, jobId: job.id, workspace: run.workspace, model: job.model, effort: job.effort ?? '',
-        text: job.text, instructions: job.instructions, writable: job.writable, lean: run.config.lean, permissionMode: job.permissionMode })
+        text: job.text, images: await this.validateImages(job.images ?? abContextImages(run), run.config), instructions: job.instructions, writable: job.writable, lean: run.config.lean, permissionMode: job.permissionMode })
       job.handle = handle
       await this.save(run)
     } catch (error) {
@@ -214,7 +217,7 @@ export class AbManager extends EventEmitter {
       const reports = ['a', 'b'].map((role) => run.jobs.find((entry) => entry.role === role))
       if (!reports.every((entry) => entry?.status === 'completed')) { await this.save(run); return }
       await this.next(run, 'judging', 'leader', run.config.leader,
-        JSON.stringify({ originalRequest: run.text, reports: reports.map((entry) => ({ role: entry.role, report: entry.report })) }), JUDGE)
+        JSON.stringify({ originalRequest: run.text, originalImages: run.images ?? [], reports: reports.map((entry) => ({ role: entry.role, report: entry.report })) }), JUDGE)
     } else if (job.role === 'leader') {
       run.plan = job.report
       run.revision++
@@ -226,7 +229,7 @@ export class AbManager extends EventEmitter {
     } else if (job.role === 'implementer' || job.role === 'direct') {
       if (job.role === 'implementer' && run.config.review) {
         await this.next(run, 'reviewing', 'reviewer', run.config.leader,
-          JSON.stringify({ originalRequest: run.text, approvedPlan: run.approvedPlan, implementationReport: job.report }),
+          JSON.stringify({ originalRequest: run.text, originalImages: run.images ?? [], approvedPlan: run.approvedPlan, implementationReport: job.report }),
           '承認済みの案に対する実装をレビューしてください。報告を鵜呑みにせず必要な差分・コードを読み、検証結果と完了条件を照合してください。ファイルは変更せず、合否・根拠・必要な修正を報告してください。テストの未実行は明記してください。')
       } else {
         run.phase = run.warning ? 'needs-attention' : 'completed'
@@ -249,6 +252,7 @@ export class AbManager extends EventEmitter {
       if (run.phase !== 'awaiting-approval' || revision !== run.revision || run.jobs.some((job) => RUNNING.has(job.status))) throw new Error('最新の案を確認してから承認してください')
       if (typeof delegate !== 'boolean' || typeof review !== 'boolean') throw new Error('実装方式を選択してください')
       this.validateModel(delegate ? run.config.implementer : run.config.leader)
+      await this.validateImages(abContextImages(run), { ...run.config, delegate, review })
       run.config.delegate = delegate
       run.config.review = review
       delete run.error
@@ -259,28 +263,30 @@ export class AbManager extends EventEmitter {
       run.approvedRevision = revision
       if (delegate) {
         await this.next(run, 'preparing', 'instructions', run.config.leader,
-          JSON.stringify({ originalRequest: run.text, approvedPlan: run.approvedPlan }),
+          JSON.stringify({ originalRequest: run.text, originalImages: run.images ?? [], approvedPlan: run.approvedPlan }),
           'ユーザーがこの案の実装を承認しました。実装担当へ渡す自己完結した指示文だけを作成してください。目的、設計、関連ファイル、制約、変更しない範囲、完了条件、検証方法を含め、不要な相談履歴は渡さないでください。あなた自身は実装しません。')
       } else {
         await this.next(run, 'implementing', 'direct', run.config.leader,
-          JSON.stringify({ originalRequest: run.text, approvedPlan: run.approvedPlan }), IMPLEMENT, true)
+          JSON.stringify({ originalRequest: run.text, originalImages: run.images ?? [], approvedPlan: run.approvedPlan }), IMPLEMENT, true)
       }
       return { run: this.summary(run) }
     })
   }
-  revise({ id, text }) {
+  revise({ id, text = '', images = [] }) {
     return this.lock(id, async () => {
       const run = this.require(id)
       if (!['awaiting-approval', 'completed', 'reviewed', 'needs-attention'].includes(run.phase)
         || run.jobs.some((job) => RUNNING.has(job.status))) throw new Error('実行中の作業がないときだけ追加相談できます')
-      if (typeof text !== 'string' || !text.trim() || text.length > 100000) throw new Error('追加の指示を入力してください')
-      run.messages.push({ text, afterJobId: run.jobs.at(-1)?.id })
+      if (!Array.isArray(images) || typeof text !== 'string' || (!text.trim() && !images.length) || text.length > 100000) throw new Error('追加の指示を入力してください')
+      images = await this.validateImages(images, run.config)
+      await this.validateImages([...new Map([...abContextImages(run), ...images].map((image) => [image.file, image])).values()], run.config)
+      run.messages.push({ text, images, afterJobId: run.jobs.at(-1)?.id })
       // Invalidate approval immediately, even if consultation fails or the app exits.
       delete run.approvedRevision
       delete run.retryJobId
       delete run.error
       await this.next(run, 'judging', 'leader', run.config.leader,
-        JSON.stringify({ originalRequest: run.text, approvedPlan: run.approvedPlan, previousPlan: run.plan,
+        JSON.stringify({ originalRequest: run.text, originalImages: run.images ?? [], approvedPlan: run.approvedPlan, previousPlan: run.plan,
           reports: run.jobs.map(({ id, role, report, error, createdAt }) => ({ id, role, report, error, createdAt })),
           conversation: run.messages }),
         JUDGE + '\n追加相談への回答を行い、必要な修正は再承認できる自己完結した更新案として提示してください。過去の実装・レビューと追加会話を考慮し、完了済み操作の重複を避けてください。過去の承認は今回の変更を許可しません。')

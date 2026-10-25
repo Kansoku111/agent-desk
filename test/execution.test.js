@@ -18,17 +18,28 @@ async function fixture(t) {
   return { folder, root, verifier }
 }
 
+test('EX legacy saved models restore default efforts and invalid effort types are rejected', async (t) => {
+  const { root } = await fixture(t)
+  const dir = path.join(root, 'legacy')
+  await fs.mkdir(dir)
+  const models = { leader: 'claude:sonnet', provider: 'claude', model: 'haiku' }
+  await fs.writeFile(path.join(dir, 'models.json'), JSON.stringify({ models }))
+  const restored = await new ExecutionVerifier({ dir }).load()
+  assert.deepEqual(await restored.modelSelection(), { ...models, leaderEffort: '', childEffort: '' })
+  for (const patch of [{ leaderEffort: 1 }, { childEffort: [] }, { childEffort: 'x'.repeat(101) }]) await assert.rejects(restored.configureModels({ ...models, ...patch }), /推論レベル/)
+})
+
 test('EX remembers model selection before a task starts, across restart and reads during a save', async (t) => {
   const { root, verifier } = await fixture(t)
   assert.equal(await verifier.modelSelection(), null)
-  const choice = { leader: 'claude:sonnet', provider: 'claudeApi', model: 'claude-haiku-5-5' }
+  const choice = { leader: 'claude:sonnet', provider: 'claudeApi', model: 'claude-haiku-5-5', leaderEffort: '', childEffort: '' }
   const pending = verifier.configureModels(choice)
   const reread = verifier.modelSelection()
   choice.model = 'mutated-after-save'
   await pending
   assert.equal((await reread).model, 'claude-haiku-5-5')
   const restored = await new ExecutionVerifier({ dir: path.join(root, 'records') }).load()
-  assert.deepEqual(await restored.modelSelection(), { leader: 'claude:sonnet', provider: 'claudeApi', model: 'claude-haiku-5-5' })
+  assert.deepEqual(await restored.modelSelection(), { leader: 'claude:sonnet', provider: 'claudeApi', model: 'claude-haiku-5-5', leaderEffort: '', childEffort: '' })
   const copy = await restored.modelSelection()
   copy.leader = 'changed'
   assert.equal((await restored.modelSelection()).leader, 'claude:sonnet')
@@ -36,8 +47,8 @@ test('EX remembers model selection before a task starts, across restart and read
 
 test('EX model saves are ordered and legacy browser migration never overwrites another device', async (t) => {
   const { verifier } = await fixture(t)
-  const first = { leader: 'claude:sonnet', provider: 'claudeApi', model: '' }
-  const last = { ...first, model: 'claude-haiku-5-5' }
+  const first = { leader: 'claude:sonnet', provider: 'claudeApi', model: '', leaderEffort: 'high', childEffort: 'low' }
+  const last = { ...first, model: 'claude-haiku-5-5', leaderEffort: 'medium', childEffort: 'high' }
   const one = verifier.configureModels(first)
   const two = verifier.configureModels(last)
   const migration = verifier.configureModels({ leader: 'claude:opus', provider: 'claude', model: 'haiku' }, true)

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { abImages, assertAbImageModels } from './ab-images.js'
 // Agent Desk server: serves the UI, owns the dsh ACP runtimes, and talks to
 // the UI over one authenticated WebSocket. Binds to 127.0.0.1, plus this PC's
 // Tailscale addresses when remote access (phones) is turned on.
@@ -438,9 +439,14 @@ teams = await new TeamManager({
 
 const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'),
   preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
-const abRunner = new AbRunner({ threads, agents: abAgents, instructions: () => settings.customInstructions,
+const abRunner = new AbRunner({ threads, agents: abAgents, attachmentsDir: paths.attachmentsDir, instructions: () => settings.customInstructions,
   guard: (record) => teams.guardExecution(record) })
 const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner,
+  validateImages: async (images, config) => {
+    const saved = await abImages(paths.attachmentsDir, images)
+    if (saved.length) assertAbImageModels(config, catalog.data.models)
+    return saved
+  },
   validateModel: (value) => {
     if (['claude:opus', 'claude:sonnet', 'claude:haiku'].includes(value)) return
     if (!catalog.data.models.some((model) => model.value === value && !model.retired && settings.modelVisibility?.[value] !== false)) throw new Error('ABのモデルを選び直してください')
