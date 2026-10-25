@@ -551,7 +551,7 @@ export interface AppState {
   codexLogin?: LoginState
   chatgptUsage: ChatGptUsage | null
   claudeLimits: ClaudeLimits | null
-  openTargets: { files: boolean; terminal: boolean }
+  openTargets: { terminal: boolean }
   permissionModes: PermissionMode[]
   updates: Updates
   modelUpdate: ModelUpdate

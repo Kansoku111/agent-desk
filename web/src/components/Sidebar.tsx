@@ -3,7 +3,7 @@ import {
   Archive, ArchiveRestore, ArrowLeft, Folder, FolderOpen, FolderPlus, Loader2, Monitor, MoreHorizontal, PanelLeftClose, Pencil, Plus,
   CheckSquare, ChevronDown, ChevronUp, Copy, Search, Settings, SquarePen, Trash2, X,
 } from 'lucide-react'
-import { act, getState, isNarrow, navigate, request, setState, startTerminal, toast, useRemote, useStore } from '../store'
+import { act, getState, isNarrow, navigate, request, setState, startTerminal, toast, useStore } from '../store'
 import { selectThreadRange } from '../thread-selection'
 import { threadMarkdown } from '../thread-transcript'
 import { abMarkdown } from '../ab-transcript'
@@ -460,7 +460,6 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
   // The button opens the rows past the first few, up to the cap.
   const more = Math.min(rows.length, MAX_ROWS) - VISIBLE_ROWS
   const hasRows = rows.length > 0 || draftHere
-  const remote = useRemote()
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(group.label)
   const saveName = async () => {
@@ -545,16 +544,6 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
                       setRenaming(true)
                     }}
                   />
-                  {!remote && (
-                    <MenuItem
-                      icon={<FolderOpen size={14} />}
-                      label="フォルダを開く"
-                      onSelect={() => {
-                        close()
-                        void act('workspace.open', { path: group.path, target: 'files' })
-                      }}
-                    />
-                  )}
                   {rows.length === 0 && (
                     <MenuItem
                       icon={<X size={14} />}

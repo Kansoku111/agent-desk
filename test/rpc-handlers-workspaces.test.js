@@ -21,6 +21,11 @@ function setup() {
   return { get settings() { return settings }, handlers }
 }
 
+test('workspace.open rejects the removed Explorer action', async () => {
+  const { handlers } = setup()
+  await assert.rejects(handlers['workspace.open']({ path: os.tmpdir(), target: 'files' }), /この環境では開けません/)
+})
+
 test('workspace.add refuses an empty path instead of adding the server folder', async () => {
   const h = setup()
   const { handlers } = h

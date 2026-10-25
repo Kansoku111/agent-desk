@@ -65,47 +65,31 @@ async function showFolderPicker({ title = 'フォルダーを選択', initial = 
   }
 }
 
-function findWindowsTerminal() {
-  if (!isWin || !process.env.LOCALAPPDATA) return null
-  const candidate = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'wt.exe')
-  return fs.existsSync(candidate) ? candidate : null
-}
-
 /** Which "open in" targets exist on this machine. */
 export function openTargets() {
-  return {
-    files: true,
-    terminal: isWin || isMac,
-  }
+  return { terminal: isWin || isMac }
 }
 
-export async function openIn(target, dir) {
-  if (!fs.existsSync(dir)) throw new Error(`フォルダが見つかりません: ${dir}`)
-  const detached = { detached: true, stdio: 'ignore' }
-  if (target === 'files') {
-    if (isWin) openFront(dir, false)
-    else spawn(isMac ? 'open' : 'xdg-open', [dir], detached).unref()
-    return
+export async function openIn(target, dir, { platform = process.platform, runCommand = run } = {}) {
+  if (target !== 'terminal' || !['win32', 'darwin'].includes(platform)) throw new Error('この環境では開けません')
+  if (typeof dir !== 'string' || !path.isAbsolute(dir) || !fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`フォルダが見つかりません: ${dir}`)
   }
-  if (target === 'terminal') {
-    if (isWin) {
-      const wt = findWindowsTerminal()
-      if (wt) {
-        spawn(wt, ['-d', dir], detached).unref()
-      } else {
-        spawn('powershell.exe', ['-NoExit', '-Command', 'Set-Location -LiteralPath $env:AGENT_DESK_DIR'], {
-          ...detached,
-          env: { ...process.env, AGENT_DESK_DIR: dir },
-        }).unref()
-      }
-      return
+  try {
+    if (platform === 'win32') {
+      // A detached Node console process can have no visible window. ShellExecute
+      // via Start-Process explicitly creates one, using the user's default host.
+      const script = fileURLToPath(new URL('./open-terminal.ps1', import.meta.url))
+      await runCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
+        windowsHide: true, timeout: 15_000,
+        env: { ...process.env, AGENT_DESK_TERMINAL_DIR: dir },
+      })
+    } else {
+      await runCommand('open', ['-a', 'Terminal', dir], { timeout: 15_000 })
     }
-    if (isMac) {
-      spawn('open', ['-a', 'Terminal', dir], detached).unref()
-      return
-    }
+  } catch (error) {
+    throw new Error(`ターミナルを開けませんでした: ${error.stderr?.trim() || error.message}`)
   }
-  throw new Error('この環境では開けません')
 }
 
 /**

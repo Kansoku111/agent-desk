@@ -41,14 +41,6 @@ export function OpenInMenu({ workspace }: { workspace: string }) {
     >
       {(close) => (
         <>
-          <MenuItem
-            icon={<FolderOpen size={14} />}
-            label="エクスプローラー"
-            onSelect={() => {
-              close()
-              void act('workspace.open', { path: workspace, target: 'files' })
-            }}
-          />
           {targets?.terminal && (
             <MenuItem
               icon={<SquareTerminal size={14} />}
