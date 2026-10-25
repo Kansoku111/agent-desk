@@ -9,7 +9,7 @@ import { isProjectColor } from './project-colors.js'
 import { gitInfo, openExternal, openFile, openIn, pickFolder } from './system.js'
 
 /** Handlers for workspaces and projects; index.js merges them into the request table. */
-export function createWorkspaceHandlers({ paths, getSettings, saveSettings, broadcast }) {
+export function createWorkspaceHandlers({ paths, getSettings, mutateSettings }) {
 
   /** Where the folder picker starts: next to the most recent project, else the home folder. */
   function suggestedParent() {
@@ -17,19 +17,30 @@ export function createWorkspaceHandlers({ paths, getSettings, saveSettings, broa
     return recent ? path.dirname(recent) : os.homedir()
   }
 
-  async function addWorkspace(dir) {
+  async function addWorkspace(dir, project) {
     // path.resolve('') would be the server's own folder, so an empty path is refused.
     const text = String(dir ?? '').trim().replace(/^"(.*)"$/, '$1').trim()
     if (!text) throw new Error('フォルダを指定してください')
     const resolved = path.resolve(text)
     const stat = await fsp.stat(resolved).catch(() => null)
     if (!stat?.isDirectory()) throw new Error(`フォルダが見つかりません: ${resolved}`)
-    if (resolved === paths.myPc) return resolved
-    getSettings().workspaces = [resolved, ...getSettings().workspaces.filter((entry) => entry !== resolved)].slice(0, 30)
-    getSettings().lastWorkspace = resolved
-    await saveSettings()
-    broadcast('settings', { settings: getSettings() })
+    if (resolved === paths.myPc) {
+      if (project) throw new Error('My PC のフォルダはプロジェクトにできません')
+      return resolved
+    }
+    await mutateSettings(candidate => {
+      candidate.workspaces = [resolved, ...candidate.workspaces.filter((entry) => entry !== resolved)].slice(0, 30)
+      candidate.lastWorkspace = resolved
+      if (project) rename(candidate, resolved, project.name)
+    })
     return resolved
+  }
+
+  function rename(candidate, dir, name) {
+    const label = String(name ?? '').trim().slice(0, 80)
+    candidate.projectNames ??= {}
+    if (label && label !== path.basename(dir)) candidate.projectNames[dir] = label
+    else delete candidate.projectNames[dir]
   }
 
   return {
@@ -46,44 +57,29 @@ export function createWorkspaceHandlers({ paths, getSettings, saveSettings, broa
     }),
 
     'project.create': async ({ name, path: dir }) => {
-      const resolved = await addWorkspace(dir)
-      if (resolved === paths.myPc) throw new Error('My PC のフォルダはプロジェクトにできません')
-      const label = String(name ?? '').trim().slice(0, 80)
-      getSettings().projectNames = { ...getSettings().projectNames }
-      if (label && label !== path.basename(resolved)) getSettings().projectNames[resolved] = label
-      else delete getSettings().projectNames[resolved]
-      await saveSettings()
-      broadcast('settings', { settings: getSettings() })
+      const resolved = await addWorkspace(dir, { name })
       return { path: resolved }
     },
 
     'project.rename': async ({ path: dir, name }) => {
-      const label = String(name ?? '').trim().slice(0, 80)
-      getSettings().projectNames = { ...getSettings().projectNames }
-      if (label && label !== path.basename(dir)) getSettings().projectNames[dir] = label
-      else delete getSettings().projectNames[dir]
-      await saveSettings()
-      broadcast('settings', { settings: getSettings() })
-      return { settings: getSettings() }
+      return mutateSettings(candidate => rename(candidate, dir, name))
     },
 
     'project.color': async ({ path: dir, color }) => {
       if (typeof dir !== 'string' || !dir) throw new Error('プロジェクトが見つかりません')
       if (!isProjectColor(color)) throw new Error('この色は選べません')
-      getSettings().projectColors = { ...getSettings().projectColors, [dir]: color }
-      await saveSettings()
-      broadcast('settings', { settings: getSettings() })
-      return { settings: getSettings() }
+      return mutateSettings(candidate => {
+        candidate.projectColors = { ...candidate.projectColors, [dir]: color }
+      })
     },
 
     'workspace.remove': async ({ path: dir }) => {
-      getSettings().workspaces = getSettings().workspaces.filter((entry) => entry !== dir)
-      getSettings().projectNames = Object.fromEntries(Object.entries(getSettings().projectNames ?? {}).filter(([key]) => key !== dir))
-      getSettings().projectColors = Object.fromEntries(Object.entries(getSettings().projectColors ?? {}).filter(([key]) => key !== dir))
-      if (getSettings().lastWorkspace === dir) getSettings().lastWorkspace = getSettings().workspaces[0] ?? null
-      await saveSettings()
-      broadcast('settings', { settings: getSettings() })
-      return { settings: getSettings() }
+      return mutateSettings(candidate => {
+        candidate.workspaces = candidate.workspaces.filter((entry) => entry !== dir)
+        candidate.projectNames = Object.fromEntries(Object.entries(candidate.projectNames ?? {}).filter(([key]) => key !== dir))
+        candidate.projectColors = Object.fromEntries(Object.entries(candidate.projectColors ?? {}).filter(([key]) => key !== dir))
+        if (candidate.lastWorkspace === dir) candidate.lastWorkspace = candidate.workspaces[0] ?? null
+      })
     },
 
     'workspace.open': ({ path: dir, target }) => openIn(target, dir),

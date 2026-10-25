@@ -116,22 +116,16 @@ try {
 }
 // Saved by an older version, the team settings lack newer fields (the GPT leader's).
 settings.agentTeams = teamConfig(settings.agentTeams)
-let settingsWrites = Promise.resolve()
-const saveSettings = (candidate = settings) => {
-  // Build a detached snapshot: a failed write must not publish an update or
-  // even add project colors to the live object. Legacy callers still save live.
+// Runtime writes are serialized by settingsService; startup writes finish before
+// requests are accepted. Persistence never changes the published snapshot.
+const saveSettings = async (candidate) => {
   const saved = structuredClone(candidate)
   const colors = assignProjectColors(saved.projectColors ?? {}, [paths.myPc, ...saved.workspaces])
   if (colors) saved.projectColors = colors
-  const operation = settingsWrites.then(async () => {
-    await writeJson(paths.settings, saved)
-    if (candidate === settings && colors) settings.projectColors = colors
-    return saved
-  })
-  settingsWrites = operation.catch(() => {})
-  return operation
+  await writeJson(paths.settings, saved)
+  return saved
 }
-if (!settingsKept && assignProjectColors(settings.projectColors ?? {}, [paths.myPc, ...settings.workspaces])) await saveSettings()
+if (!settingsKept && assignProjectColors(settings.projectColors ?? {}, [paths.myPc, ...settings.workspaces])) settings = await saveSettings(settings)
 // The provider default ('') is no longer offered; medium is the default level.
 if (!settings.defaultEffort) settings.defaultEffort = 'medium'
 await fsp.mkdir(paths.myPc, { recursive: true })
@@ -644,10 +638,11 @@ updates.on('state', (state) => broadcast('updates', { updates: state }))
 modelUpdater.on('state', () => broadcast('modelUpdate', { modelUpdate: modelUpdateState() }))
 
 async function setAnthropicWorkspace(workspaceId) {
-  settings.anthropicWorkspaceId = workspaceId
-  await saveSettings()
-  broadcast('settings', { settings })
-  if (await applyHomePatch()) await restartRuntimesWhenIdle()
+  await settingsService.mutate(candidate => { candidate.anthropicWorkspaceId = workspaceId }, {
+    afterCommit: async () => {
+      if (await applyHomePatch()) await restartRuntimesWhenIdle()
+    },
+  })
 }
 
 pool.on('exit', ({ mode, code, wasReady }) => {
@@ -710,9 +705,9 @@ async function fullState(client) {
 const settingsService = createSettingsService({
   getSettings: () => settings,
   saveSettings,
-  publishSettings: (saved) => {
+  publishSettings: (saved, { notify }) => {
     settings = saved
-    broadcast('settings', { settings })
+    if (notify) broadcast('settings', { settings })
   },
   applyHomePatch,
   applyFastMode,
@@ -729,9 +724,10 @@ const restartApp = createAppRestarter({
   handoff: () => ({ port: server.address().port, token, windows: countClients(false) }),
 })
 
+const mutateSettings = (...args) => settingsService.mutate(...args)
 const handlers = {
-  ...createThreadHandlers({ paths, threads, teams, subagents, getSettings, saveSettings, broadcast }),
-  ...createWorkspaceHandlers({ paths, getSettings, saveSettings, broadcast }),
+  ...createThreadHandlers({ paths, threads, teams, subagents, mutateSettings }),
+  ...createWorkspaceHandlers({ paths, getSettings, mutateSettings }),
   ...createAccountHandlers({
     appVersion: APP_VERSION, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost,
     updateModelCatalog, refreshChatGptUsage, getChatgptUsage: () => chatgptUsage, refreshUsageHistory, usageState,
@@ -741,7 +737,7 @@ const handlers = {
     threads, catalog, catalogState, updates, modelUpdater, modelUpdateState,
     updateModelCatalog, refreshCodexModels, checkOpenCodeGoModels,
   }),
-  ...createTerminalHandlers({ paths, getSettings, saveSettings, broadcast, terminals, teams, agents }),
+  ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
 
   ...createAbHandlers(ab),
 
@@ -757,18 +753,17 @@ const handlers = {
   },
 
   'remote.set': async ({ enabled }) => {
-    // Saved from a copy: when the write fails, the live settings and the listener stay as they were.
-    const candidate = { ...settings, remoteAccess: Boolean(enabled) }
-    await saveSettings(candidate)
-    settings.remoteAccess = candidate.remoteAccess
-    broadcast('settings', { settings })
-    if (settings.remoteAccess) {
-      await remote.start()
-    } else {
-      disconnectRemote()
-      await remote.stop()
-      scheduleIdleExit()
-    }
+    await mutateSettings(candidate => { candidate.remoteAccess = Boolean(enabled) }, {
+      afterCommit: async (saved) => {
+        if (saved.remoteAccess) {
+          await remote.start()
+        } else {
+          disconnectRemote()
+          await remote.stop()
+          scheduleIdleExit()
+        }
+      },
+    })
     return { remoteAccess: remoteState() }
   },
   'remote.rotate': async () => {
@@ -797,17 +792,8 @@ for (const type of ['thread.send', 'thread.steer', 'thread.update', 'thread.remo
   }
 }
 
-// Legacy project/account handlers also mutate settings. They share the same
-// commit queue as settings.update, so publishing a validated candidate cannot
-// overwrite a project or default selected while its disk write was in flight.
-// Admission checks above run inside the queue, not before its possible wait.
-for (const type of [
-  'thread.create', 'thread.update', 'terminal.create', 'team.create', 'workspace.pick', 'workspace.add', 'workspace.remove',
-  'project.create', 'project.rename', 'project.color', 'account.setKey', 'account.setWorkspace', 'remote.set',
-]) {
-  const handler = handlers[type]
-  handlers[type] = (...args) => settingsService.run(() => handler(...args))
-}
+// Settings mutations own their queue in settingsService, including thread.remove.
+// Do not wrap whole RPCs on that queue: they may await a settings commit themselves.
 
 // ------------------------------------------------------------------ HTTP
 

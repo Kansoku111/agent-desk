@@ -3,15 +3,15 @@
 import { attachmentPath } from './attachments.js'
 
 /** Handlers for terminals and teams; index.js merges them into the request table. */
-export function createTerminalHandlers({ paths, getSettings, saveSettings, broadcast, terminals, teams, agents }) {
+export function createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }) {
   return {
     // Claude Code tasks. `size` is the viewer's terminal in characters ({ cols, rows }).
     'terminal.create': async ({ workspace, size }) => {
       const terminal = await terminals.create({ workspace, size })
       if (terminal.workspace !== paths.myPc && !getSettings().workspaces.includes(terminal.workspace)) {
-        getSettings().workspaces.unshift(terminal.workspace)
-        await saveSettings()
-        broadcast('settings', { settings: getSettings() })
+        await mutateSettings(candidate => {
+          if (!candidate.workspaces.includes(terminal.workspace)) candidate.workspaces.unshift(terminal.workspace)
+        })
       }
       return { terminal }
     },
@@ -64,10 +64,10 @@ export function createTerminalHandlers({ paths, getSettings, saveSettings, broad
     'team.create': async ({ workspace, size, choices, authConfirmation, execution }) => {
       const result = await teams.create({ workspace, size, choices, authConfirmation, execution })
       const folder = result.team.workspace
-      if (folder !== paths.myPc && !getSettings().workspaces.includes(folder)) getSettings().workspaces.unshift(folder)
-      if (!execution) getSettings().agentTeams = result.team.config
-      await saveSettings()
-      broadcast('settings', { settings: getSettings() })
+      await mutateSettings(candidate => {
+        if (folder !== paths.myPc && !candidate.workspaces.includes(folder)) candidate.workspaces.unshift(folder)
+        if (!execution) candidate.agentTeams = structuredClone(result.team.config)
+      })
       return result
     },
     'team.update': ({ teamId, patch, authConfirmation }) => teams.updateConfig(teamId, patch, authConfirmation),

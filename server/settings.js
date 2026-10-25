@@ -91,7 +91,7 @@ function assertBoolean(value, name) {
  */
 export function planSettingsUpdate(current, patch, now) {
   assertRecord(patch, 'patch')
-  const next = { ...current }
+  const next = structuredClone(current)
   const effects = { homePatch: false, fastMode: false, modelCatalog: false, restart: false, channel: false, modelCheck: false }
 
   if (owns(patch, 'modelVisibility')) {
@@ -230,8 +230,8 @@ export function createSettingsService({
   onChannelChange = () => {}, checkModelUpdate = () => {}, onBackgroundError = () => {}, now = Date.now,
 }) {
   let pending = Promise.resolve()
-  // Other settings mutators must read and change live state inside this work,
-  // not before enqueueing. Work must not await a nested run/update on this queue.
+  // Only settings commits own this queue. Candidate creation belongs inside it,
+  // never at request receipt; nested update/mutate waits would deadlock.
   const run = (work) => {
     const operation = pending.then(work)
     pending = operation.catch(() => {})
@@ -244,34 +244,56 @@ export function createSettingsService({
       onBackgroundError(error)
     }
   }
+  // The caller must install the saved snapshot synchronously before announcing it.
+  // Keep the existing RPC error shape (message), but make a committed failure
+  // explicit both to callers and in the message sent across the wire.
+  const commit = async (candidate, { notify = true, afterCommit = () => {} } = {}) => {
+    const saved = await saveSettings(candidate) ?? candidate
+    try {
+      publishSettings(saved, { notify })
+      await afterCommit(saved)
+    } catch (cause) {
+      const error = new Error(`設定は保存済みですが、反映処理に失敗しました: ${cause?.message ?? cause}`, { cause })
+      error.settingsCommitted = true
+      throw error
+    }
+    return { settings: saved }
+  }
   return {
-    run,
+    // Trusted internal mutators validate and edit a detached draft on this queue.
+    // Never call update/mutate from inside work or afterCommit.
+    mutate(work, options) {
+      return run(async () => {
+        const candidate = structuredClone(getSettings())
+        await work(candidate)
+        // Do not retain references supplied by an external resource (e.g. a team).
+        return commit(structuredClone(candidate), options)
+      })
+    },
     async update(patch) {
       // Capture a caller-owned patch before it waits, but plan against the most
       // recent successful commit, not the state when the request was enqueued.
       assertRecord(patch, 'patch')
       const captured = structuredClone(patch)
       return run(async () => {
-        const { settings: candidate, effects } = planSettingsUpdate(getSettings(), captured, now())
-        const saved = await saveSettings(candidate) ?? candidate
-        publishSettings(saved)
-
-        if (effects.fastMode) await applyFastMode()
-        let restart = effects.restart
-        if (effects.modelCatalog) {
-          const result = await updateModelCatalog()
-          restart ||= Boolean(result?.restartRequired)
-        }
-        if (effects.homePatch) {
-          const patched = await applyHomePatch()
-          restart ||= Boolean(patched)
-        }
-        if (restart) await restartRuntimesWhenIdle()
-        // These checks retain their background behavior. A later network fetch
-        // may legitimately require another catalog refresh after this commit.
-        if (effects.channel) onChannelChange()
-        if (effects.modelCheck) launch(checkModelUpdate)
-        return { settings: saved }
+        const { settings: candidate, effects } = planSettingsUpdate(structuredClone(getSettings()), captured, now())
+        return commit(candidate, { afterCommit: async () => {
+          if (effects.fastMode) await applyFastMode()
+          let restart = effects.restart
+          if (effects.modelCatalog) {
+            const result = await updateModelCatalog()
+            restart ||= Boolean(result?.restartRequired)
+          }
+          if (effects.homePatch) {
+            const patched = await applyHomePatch()
+            restart ||= Boolean(patched)
+          }
+          if (restart) await restartRuntimesWhenIdle()
+          // These checks retain their background behavior. A later network fetch
+          // may legitimately require another catalog refresh after this commit.
+          if (effects.channel) onChannelChange()
+          if (effects.modelCheck) launch(checkModelUpdate)
+        } })
       })
     },
   }

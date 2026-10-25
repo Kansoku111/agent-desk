@@ -20,6 +20,8 @@
 
 OpenCode Go は提供中のIDを `/inference/go/v1/models` から取得し、pi-aiの定義と照合します。定義が足りない場合は [OpenCode の構造化カタログ](https://models.opencode.ai/api.json)から、IDが完全一致し、通信方式・接続先・トークン上限などを検証できるものだけ補完します。モデル名や `-free` の有無から別IDを推測しません。補完定義は `opencode-go-definitions.json` に保存し、取得失敗時は直近の有効な定義を保持します。未対応IDや定義取得の失敗が残るときは更新画面に警告を出し、同期完了のチェックを付けません。
 
+設定更新の確定順序・更新経路と保証しないリソース境界は [設定更新の整合性](settings-consistency.md) を参照してください。
+
 ## データの保存場所
 
 | OS | 場所 |

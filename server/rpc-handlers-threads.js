@@ -6,7 +6,7 @@ import path from 'node:path'
 import { IMAGE_TYPES, isImageFile, isOtherFile, MAX_ATTACHMENT_BYTES, otherFileId } from './attachments.js'
 
 /** Handlers for thread tasks; index.js merges them into the request table. */
-export function createThreadHandlers({ paths, threads, teams, subagents, getSettings, saveSettings, broadcast }) {
+export function createThreadHandlers({ paths, threads, teams, subagents, mutateSettings }) {
 
   async function saveImages(images) {
     const saved = []
@@ -34,17 +34,19 @@ export function createThreadHandlers({ paths, threads, teams, subagents, getSett
         await threads.remove(thread.id)
         throw error
       }
-      getSettings().lastWorkspace = thread.workspace
-      if (model) getSettings().defaultModel = model
-      getSettings().defaultEffort = effort || getSettings().defaultEffort
-      getSettings().defaultPermissionMode = permissionMode ?? getSettings().defaultPermissionMode
-      if (thread.workspace !== paths.myPc && !getSettings().workspaces.includes(thread.workspace)) getSettings().workspaces.unshift(thread.workspace)
       try {
-        await saveSettings()
-        broadcast('settings', { settings: getSettings() })
+        await mutateSettings(candidate => {
+          candidate.lastWorkspace = thread.workspace
+          if (model) candidate.defaultModel = model
+          candidate.defaultEffort = effort || candidate.defaultEffort
+          candidate.defaultPermissionMode = permissionMode ?? candidate.defaultPermissionMode
+          if (thread.workspace !== paths.myPc && !candidate.workspaces.includes(thread.workspace)) candidate.workspaces.unshift(thread.workspace)
+        })
       } catch (error) {
         // The task is already running. An error here would leave the draft to be sent again as a second task.
-        console.warn('[agent-desk] task created; saving settings failed:', error.message)
+        console.warn(error.settingsCommitted
+          ? '[agent-desk] task created; settings saved but effects failed:'
+          : '[agent-desk] task created; saving settings failed:', error.message)
       }
       return { thread: threads.summary(threads.threads.get(thread.id)) }
     },
@@ -65,10 +67,11 @@ export function createThreadHandlers({ paths, threads, teams, subagents, getSett
 
     'thread.update': async ({ threadId, ...patch }) => {
       const thread = await threads.update(threadId, patch)
-      if (patch.model) getSettings().defaultModel = patch.model
-      if (patch.effort !== undefined) getSettings().defaultEffort = patch.effort
-      if (patch.permissionMode) getSettings().defaultPermissionMode = patch.permissionMode
-      await saveSettings()
+      await mutateSettings(candidate => {
+        if (patch.model) candidate.defaultModel = patch.model
+        if (patch.effort !== undefined) candidate.defaultEffort = patch.effort
+        if (patch.permissionMode) candidate.defaultPermissionMode = patch.permissionMode
+      }, { notify: false })
       return { thread }
     },
 
@@ -76,16 +79,15 @@ export function createThreadHandlers({ paths, threads, teams, subagents, getSett
       // Some older projects only survive through their tasks (the recent-project
       // list used to be capped). Preserve that project before its last task goes.
       const thread = threads.threads.get(threadId)
-      if (thread && thread.workspace !== paths.myPc && !getSettings().workspaces.includes(thread.workspace)) {
-        getSettings().workspaces.push(thread.workspace)
-      }
-      // Persist even on a retry after a failed settings write; never destroy the
-      // only durable reference to a project before this save succeeds.
-      if (thread) {
-        await saveSettings()
-        broadcast('settings', { settings: getSettings() })
-      }
-      return threads.remove(threadId)
+      // Never destroy the only durable reference to a project before this save succeeds.
+      if (!thread) return threads.remove(threadId)
+      let result
+      await mutateSettings(candidate => {
+        if (thread.workspace !== paths.myPc && !candidate.workspaces.includes(thread.workspace)) {
+          candidate.workspaces.push(thread.workspace)
+        }
+      }, { afterCommit: async () => { result = await threads.remove(threadId) } })
+      return result
     },
 
     'checkpoint.preview': ({ threadId, turnId }) => threads.checkpointPreview(threadId, turnId),

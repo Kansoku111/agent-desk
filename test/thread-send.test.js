@@ -6,6 +6,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { createThreadHandlers } from '../server/rpc-handlers-threads.js'
 import { ThreadManager } from '../server/threads.js'
+import { createSettingsService } from '../server/settings.js'
 import { fixture } from './helpers/thread-manager.js'
 
 test('two sends that arrive together start one turn; the other is refused', async (t) => {
@@ -99,14 +100,18 @@ test('a summary for a new session is kept when the prompt that would carry it fa
 test('a task whose settings cannot be saved is still reported as created, and its first message is sent once', async (t) => {
   const f = await fixture(t)
   const settings = { workspaces: [], lastWorkspace: null, defaultModel: null, defaultEffort: '', defaultPermissionMode: 'workspace-write' }
+  const before = structuredClone(settings)
+  const service = createSettingsService({
+    getSettings: () => settings,
+    saveSettings: async () => { throw new Error('EPERM: settings file is locked') },
+    publishSettings: () => { assert.fail('must not publish after a failed save') },
+  })
   const handlers = createThreadHandlers({
     paths: f.paths,
     threads: f.manager,
     teams: { userWrote() {} },
     subagents: { list: async () => [] },
-    getSettings: () => settings,
-    saveSettings: async () => { throw new Error('EPERM: settings file is locked') },
-    broadcast() {},
+    mutateSettings: (...args) => service.mutate(...args),
   })
   const warn = t.mock.method(console, 'warn', () => {})
   const { thread } = await handlers['thread.create']({ workspace: f.base, model: '["test","model"]', text: 'hello', images: [] })
@@ -115,4 +120,6 @@ test('a task whose settings cannot be saved is still reported as created, and it
   assert.equal(f.manager.threads.get(thread.id).id, thread.id)
   assert.equal(warn.mock.calls.length, 1)
   assert.match(warn.mock.calls[0].arguments[0], /saving settings failed/)
+  assert.match(warn.mock.calls[0].arguments[1], /settings file is locked/)
+  assert.deepEqual(settings, before)
 })

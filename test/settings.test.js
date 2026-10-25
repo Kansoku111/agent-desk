@@ -201,44 +201,44 @@ test('concurrent updates plan from the last commit, capture patches and preserve
   assert.deepEqual(h.writes[1], h.live)
 })
 
-test('run waits for a pending update save and changes the published settings, not the old object', async () => {
+test('mutate waits for a pending update and persists a draft of the latest snapshot', async () => {
   const saving = deferred()
   const finishSave = deferred()
   const h = harness({}, { save: async () => { saving.resolve(); await finishSave.promise } })
   const before = h.live
   const update = h.service.update({ theme: 'light' })
   await saving.promise
-  const mutation = h.service.run(() => {
+  const mutation = h.service.mutate(candidate => {
     h.events.push('other-mutation')
-    assert.notStrictEqual(h.live, before)
-    assert.equal(h.live.theme, 'light')
-    h.live.workspaces = ['F:\\workspace']
-    h.live.lastWorkspace = 'F:\\workspace'
-    return 'mutated'
+    assert.notStrictEqual(candidate, before)
+    assert.notStrictEqual(candidate, h.live)
+    assert.equal(candidate.theme, 'light')
+    candidate.workspaces = ['F:\\workspace']
+    candidate.lastWorkspace = 'F:\\workspace'
   })
   await Promise.resolve()
   assert.deepEqual(h.events, ['save'])
   assert.deepEqual(h.live.workspaces, [])
   finishSave.resolve()
   const [, result] = await Promise.all([update, mutation])
-  assert.equal(result, 'mutated')
+  assert.strictEqual(result.settings, h.live)
   assert.equal(h.live.theme, 'light')
   assert.deepEqual(h.live.workspaces, ['F:\\workspace'])
   assert.equal(h.live.lastWorkspace, 'F:\\workspace')
-  assert.deepEqual(h.events, ['save', 'publish', 'other-mutation'])
+  assert.deepEqual(h.events, ['save', 'publish', 'other-mutation', 'save', 'publish'])
 })
 
 test('update waits for a running mutator and plans from all its final changes', async () => {
   const started = deferred()
   const finishMutation = deferred()
   const h = harness()
-  const mutation = h.service.run(async () => {
+  const mutation = h.service.mutate(async candidate => {
     h.events.push('other-start')
     started.resolve()
     await finishMutation.promise
-    h.live.workspaces = ['F:\\workspace']
-    h.live.lastWorkspace = 'F:\\workspace'
-    h.live.projectNames = { 'F:\\workspace': 'Custom project' }
+    candidate.workspaces = ['F:\\workspace']
+    candidate.lastWorkspace = 'F:\\workspace'
+    candidate.projectNames = { 'F:\\workspace': 'Custom project' }
     h.events.push('other-finish')
   })
   await started.promise
@@ -252,21 +252,24 @@ test('update waits for a running mutator and plans from all its final changes', 
   assert.deepEqual(h.live.workspaces, ['F:\\workspace'])
   assert.equal(h.live.lastWorkspace, 'F:\\workspace')
   assert.deepEqual(h.live.projectNames, { 'F:\\workspace': 'Custom project' })
-  assert.deepEqual(h.writes[0], h.live)
-  assert.deepEqual(h.events, ['other-start', 'other-finish', 'save', 'publish'])
+  assert.deepEqual(h.writes.at(-1), h.live)
+  assert.deepEqual(h.events, ['other-start', 'other-finish', 'save', 'publish', 'save', 'publish'])
 })
 
-test('failed run work rejects its caller without poisoning run or update', async () => {
+test('failed mutation work rejects its caller without poisoning mutate or update', async () => {
   const h = harness()
-  const failure = h.service.run(() => { throw new Error('other mutation failed') })
-  const next = h.service.run(() => { h.live.notifications = false; return 42 })
+  const failure = h.service.mutate(candidate => {
+    candidate.notifications = false
+    throw new Error('other mutation failed')
+  })
+  const next = h.service.mutate(candidate => { candidate.notifications = false })
   const update = h.service.update({ theme: 'light' })
   await assert.rejects(failure, /other mutation failed/)
-  assert.equal(await next, 42)
+  assert.equal((await next).settings.notifications, false)
   await update
   assert.equal(h.live.notifications, false)
   assert.equal(h.live.theme, 'light')
-  assert.deepEqual(h.events, ['save', 'publish'])
+  assert.deepEqual(h.events, ['save', 'publish', 'save', 'publish'])
 })
 
 test('the queue includes runtime effects, not just disk writes', async () => {
