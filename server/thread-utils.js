@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises'
-import path from 'node:path'
 import { SIWC_LIMIT_TEXT } from './siwc-usage-error.js'
 
 function validateMessageId(messageId) {
@@ -83,12 +82,6 @@ export function restoreNoteText({ request, first }) {
   ].join('\n')
 }
 
-function sameFolder(a, b) {
-  const left = path.resolve(a)
-  const right = path.resolve(b)
-  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
-}
-
 function clipText(text, max) {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
@@ -132,4 +125,4 @@ export function describeError(error, thread, runtime) {
   return { message, detail: `${raw}${stderr}`.slice(0, 4000) }
 }
 
-export { assertDirectory, normalizeMessage, receiptStatus, sameFolder, shortMessage, validateMessageId }
+export { assertDirectory, normalizeMessage, receiptStatus, shortMessage, validateMessageId }

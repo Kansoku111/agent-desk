@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { test } from 'node:test'
 import { deferred, fixture, pending, tick } from './helpers/thread-manager.js'
 
@@ -19,6 +20,98 @@ async function idleSession(f) {
   const done = f.manager.active.get(f.thread.id).done
   f.finish.resolve()
   await done
+}
+
+const overlappingWorkspaces = [
+  {
+    name: 'symlink or junction alias',
+    operation: 'restoreCheckpoint',
+    async setup(f) {
+      const target = path.join(f.base, 'real-workspace')
+      const alias = path.join(f.base, 'workspace-alias')
+      await fs.mkdir(target)
+      await fs.symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir')
+      return { targetWorkspace: target, activeWorkspace: alias, activeFile: path.join(target, 'active.txt') }
+    },
+  },
+  {
+    name: 'parent restore while child workspace is active',
+    operation: 'restoreCheckpoint',
+    async setup(f) {
+      const parent = path.join(f.base, 'parent')
+      const child = path.join(parent, 'child')
+      await fs.mkdir(child, { recursive: true })
+      return { targetWorkspace: parent, activeWorkspace: child, activeFile: path.join(child, 'active.txt') }
+    },
+  },
+  {
+    name: 'child undo while parent workspace is active',
+    operation: 'undoRestore',
+    async setup(f) {
+      const parent = path.join(f.base, 'parent')
+      const child = path.join(parent, 'child')
+      await fs.mkdir(child, { recursive: true })
+      return { targetWorkspace: child, activeWorkspace: parent, activeFile: path.join(child, 'active.txt') }
+    },
+  },
+]
+
+for (const scenario of overlappingWorkspaces) {
+  test(`${scenario.operation} rejects active overlapping workspace: ${scenario.name}`, async (t) => {
+    let activeFile
+    let restoreCalls = 0
+    const f = await fixture(t, {
+      checkpointsEnabled: () => false,
+      checkpoints: {
+        async restore() {
+          restoreCalls++
+          await fs.writeFile(activeFile, 'restored checkpoint')
+          return { restored: ['active.txt'], removed: [], undo: 'mock-undo', error: null }
+        },
+        async forget() {},
+      },
+    })
+    const { targetWorkspace, activeWorkspace, activeFile: file } = await scenario.setup(f)
+    activeFile = file
+    await fs.writeFile(activeFile, 'unsaved active work')
+    const target = await f.manager.create({ workspace: targetWorkspace, model: '["test","model"]' })
+    const turn = checkpointTurn(f, target.id)
+    if (scenario.operation === 'undoRestore') turn.restore = { at: Date.now(), undo: 'mock-undo', turns: 1 }
+    const active = await f.manager.create({ workspace: activeWorkspace, model: '["test","model"]' })
+    await f.manager.send(active.id, { text: 'active work' })
+    await f.started.promise
+
+    const outcome = await f.manager[scenario.operation](target.id, turn.id).then(
+      () => ({ blocked: false }),
+      (error) => ({ blocked: /同じフォルダ/.test(error.message) }),
+    )
+    assert.deepEqual({ outcome, restoreCalls, activeFile: await fs.readFile(activeFile, 'utf8') }, {
+      outcome: { blocked: true }, restoreCalls: 0, activeFile: 'unsaved active work',
+    })
+  })
+}
+
+for (const otherName of ['sibling', 'project-old']) {
+  test(`restore allows an active non-overlapping sibling workspace (${otherName})`, async (t) => {
+    let restoreCalls = 0
+    const f = await fixture(t, {
+      checkpointsEnabled: () => false,
+      checkpoints: {
+        async restore() { restoreCalls++; return { restored: [], removed: [], undo: 'mock-undo', error: null } },
+        async forget() {},
+      },
+    })
+    const targetWorkspace = path.join(f.base, 'project')
+    const activeWorkspace = path.join(f.base, otherName)
+    await Promise.all([fs.mkdir(targetWorkspace), fs.mkdir(activeWorkspace)])
+    const target = await f.manager.create({ workspace: targetWorkspace, model: '["test","model"]' })
+    const turn = checkpointTurn(f, target.id)
+    const active = await f.manager.create({ workspace: activeWorkspace, model: '["test","model"]' })
+    await f.manager.send(active.id, { text: 'active work' })
+    await f.started.promise
+    assert.deepEqual(await f.manager.restoreCheckpoint(target.id, turn.id), { files: 0, error: null })
+    assert.equal(restoreCalls, 1)
+  })
 }
 
 for (const operation of ['closeSession', 'setOption']) {
@@ -55,7 +148,7 @@ for (const operation of ['closeSession', 'setOption']) {
   })
 }
 
-test('restore fences sibling sends and sibling restores in the same workspace', async (t) => {
+test('restore fences sends and other restores in an overlapping workspace', async (t) => {
   const entered = deferred()
   const release = deferred()
   const f = await fixture(t, { checkpointsEnabled: () => false, checkpoints: {
@@ -63,15 +156,22 @@ test('restore fences sibling sends and sibling restores in the same workspace', 
     async forget() {},
   } })
   const turn = checkpointTurn(f)
-  const sibling = await f.manager.create({ workspace: f.base, model: '["test","model"]' })
+  const nested = path.join(f.base, 'nested')
+  await fs.mkdir(nested)
+  const sibling = await f.manager.create({ workspace: nested, model: '["test","model"]' })
   const siblingTurn = checkpointTurn(f, sibling.id)
   const restoring = f.manager.restoreCheckpoint(f.thread.id, turn.id)
   await entered.promise
   assert.equal(f.manager.busy, true)
-  await assert.rejects(f.manager.send(sibling.id, { text: 'must wait' }), /復元中/)
-  await assert.rejects(f.manager.restoreCheckpoint(sibling.id, siblingTurn.id), /復元中/)
-  assert.equal(f.calls.sessions, 0)
+  const sending = f.manager.send(sibling.id, { text: 'must wait' }).then(
+    () => ({ blocked: false }), (error) => ({ blocked: /復元中/.test(error.message) }),
+  )
+  const sendOutcome = await sending
+  const otherRestore = f.manager.restoreCheckpoint(sibling.id, siblingTurn.id).then(
+    () => ({ blocked: false }), (error) => ({ blocked: /復元中/.test(error.message) }),
+  )
   release.resolve()
+  assert.deepEqual({ sendOutcome, restoreOutcome: await otherRestore }, { sendOutcome: { blocked: true }, restoreOutcome: { blocked: true } })
   assert.deepEqual(await restoring, { files: 1, error: null })
   assert.equal(f.manager.busy, false)
   assert.equal((await f.manager.send(sibling.id, { text: 'after restore' })).status, 'accepted')
@@ -91,17 +191,19 @@ test('send rechecks the workspace restore fence after account validation', async
     },
   })
   const turn = checkpointTurn(f)
-  const sibling = await f.manager.create({ workspace: f.base, model: '["test","model"]' })
+  const nested = path.join(f.base, 'nested')
+  await fs.mkdir(nested)
+  const sibling = await f.manager.create({ workspace: nested, model: '["test","model"]' })
   const sending = f.manager.send(sibling.id, { text: 'must not run during restore' })
-  const rejected = assert.rejects(sending, /復元中/)
+  const outcome = sending.then(() => ({ blocked: false }), (error) => ({ blocked: /復元中/.test(error.message) }))
   await validating.promise
   const restoration = f.manager.restoreCheckpoint(f.thread.id, turn.id)
   await restoring.promise
   accounts.resolve({})
-  await rejected
-  assert.equal(f.calls.sessions, 0)
+  const sendOutcome = await outcome
   restoreResult.resolve({ restored: [], removed: [], undo: 'undo', error: null })
   await restoration
+  assert.deepEqual({ sendOutcome, sessions: f.calls.sessions }, { sendOutcome: { blocked: true }, sessions: 0 })
   assert.equal(f.manager.busy, false)
 })
 

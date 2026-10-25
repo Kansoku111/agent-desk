@@ -8,12 +8,13 @@ import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { fileListText, isImageFile } from './attachments.js'
 import { debouncedWriter, readJson } from './json-file.js'
+import { workspacesOverlap } from './execution.js'
 import { PERMISSION_MODES, runtimeKey } from './runtime.js'
 import { applyUpdate, newTurn, parseConfigOptions, settleTurn, titleFrom, nearestEffort } from './transcript.js'
 import { assertWorkflowEffort, assertWorkflowApplied } from '../shared/workflow-effort.js'
 import {
   assertDirectory, carryoverText, describeError, isUndoable, normalizeMessage, receiptStatus, restoreNoteText,
-  sameFolder, shortMessage, validateMessageId,
+  shortMessage, validateMessageId,
 } from './thread-utils.js'
 import { turnUsage } from './usage.js'
 import { OUTPUT_SPEED_META } from './output-speed.js'
@@ -635,7 +636,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   #assertNotRestoring(thread) {
-    if ([...this.restoring].some((other) => sameFolder(other.workspace, thread.workspace))) {
+    if ([...this.restoring].some((other) => workspacesOverlap(other.workspace, thread.workspace))) {
       throw new Error('同じフォルダのファイルを復元中です。完了を待ってください。')
     }
   }
@@ -643,7 +644,7 @@ export class ThreadManager extends EventEmitter {
   #assertWorkspaceIdle(thread) {
     this.#assertNotRestoring(thread)
     for (const other of this.threads.values()) {
-      if (this.active.has(other.id) && sameFolder(other.workspace, thread.workspace)) {
+      if (this.active.has(other.id) && workspacesOverlap(other.workspace, thread.workspace)) {
         throw new Error(other.id === thread.id
           ? '作業中は戻せません。停止するか、完了を待ってください。'
           : `同じフォルダで作業中のタスク（${other.title}）があります。完了を待ってから戻してください。`)
