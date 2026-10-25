@@ -190,7 +190,12 @@ export function AbView({ id }: { id: string }) {
         <div className="ab-followup"><textarea className="ab-input" aria-label="追加相談" placeholder="案への修正・追加の条件" value={text} onChange={(event) => setText(event.target.value)} rows={3} maxLength={100000} disabled={busy} /><button className="button" disabled={busy || !text.trim()} onClick={async () => { if (await action('ab.revise', { text })) setText('') }}>リーダーに送る</button></div>
       </section>}
       {['completed', 'needs-attention'].includes(run.phase) && run.config.delegate && !run.jobs.some((job) => job.role === 'reviewer' && job.status === 'completed') && <p className="muted">リーダーレビュー未実施</p>}
-      {canRetry && <button className="button" disabled={busy} onClick={() => { setRetryPermission(run.config.permissionMode ?? 'workspace-write'); setRetrying(run.retryJobId!) }}>この段階を再試行</button>}
+      {canRetry && <button className="button" disabled={busy} onClick={() => {
+        // A stage the sandbox itself blocked would only fail the same way again.
+        const blocked = run.jobs.find((job) => job.id === run.retryJobId)?.blockers?.length
+        setRetryPermission(blocked ? 'danger-full-access' : run.config.permissionMode ?? 'workspace-write')
+        setRetrying(run.retryJobId!)
+      }}>この段階を再試行</button>}
       {['error', 'stopped', 'interrupted'].includes(run.phase) && <button className="button" onClick={() => setState({ abStart: run.workspace })}>新しい相談</button>}
     </div>
     {retrying && <ConfirmDialog title="この段階を再試行" body={<>
