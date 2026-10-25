@@ -12,6 +12,7 @@ import { patchGoalSource } from '../server/goal-patch.js'
 import { patchMcpTimeoutSource } from '../server/mcp-timeout-patch.js'
 import { patchRetrySource } from '../server/retry-patch.js'
 import { patchOutputSpeedSource } from '../server/output-speed-patch.js'
+import { patchFsSearchSource } from '../server/fs-search-patch.js'
 
 const project = fileURLToPath(new URL('../', import.meta.url))
 
@@ -58,6 +59,7 @@ async function fixture(t) {
     'dsh-compatibility.js', 'steer-patch.js', 'goal-patch.js', 'retry-patch.js', 'mcp-timeout-patch.js', 'fast-mode-hook.js', 'fast-mode.js',
     'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js',
     'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js',
+    'fs-search-hook.js', 'fs-search-patch.js', 'fs-search.js',
   ].map((file) => `server/${file}`)]) {
     await fs.copyFile(path.join(project, file), path.join(root, file))
   }
@@ -85,12 +87,15 @@ async function fixture(t) {
   await pkg('@deepseek-ai/dsh-base')
   const acpDir = await pkg('@deepseek-ai/dsh-acp')
   const llmDir = await pkg('@deepseek-ai/dsh-llm-pi-ai')
+  const searchDir = await pkg('@deepseek-ai/dsh-tool-fs-search')
   // Use a read-only upstream source snapshot, copied to the isolated fixture.
   // Its imports are only parsed (--check), never evaluated.
   const acpSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-acp'), 'utf8')
   const llmSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-llm-pi-ai'), 'utf8')
   const acp = await put(`${acpDir}/lib/index.js`, acpSource)
   const llm = await put(`${llmDir}/lib/index.js`, llmSource)
+  const searchSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-tool-fs-search'), 'utf8')
+  const search = await put(`${searchDir}/lib/index.js`, searchSource)
   const pi = await pkg('@earendil-works/pi-ai', 'dist/index.js', {
     exports: { '.': './dist/index.js', './utils/*': './dist/utils/*.js', './api/*': './dist/api/*.js' },
   })
@@ -101,16 +106,16 @@ async function fixture(t) {
   await put(`${pi}/dist/providers/opencode-go.models.js`, 'import values from "./data/opencode-go.json" with { type: "json" }; export const OPENCODE_GO_MODELS = values')
   await put(`${pi}/dist/providers/data/opencode-go.json`, JSON.stringify({ 'openai-completions': { 'chat:fixture': { id: 'fixture', type: 'chat' } } }))
   const retry = await put(`${pi}/dist/utils/retry.js`, 'export const isRetryableAssistantError = () => true')
-  return { root, put, acp, llm, acpSource, llmSource, retry, pi }
+  return { root, put, acp, llm, search, acpSource, llmSource, searchSource, retry, pi }
 }
 
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
-  const { acpSource, llmSource } = await fixture(t)
+  const { acpSource, llmSource, searchSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
-    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js',
+    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js', 'fs-search-hook.js',
   ])
-  assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource }), {
-    acp: patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource)))), llm: patchRetrySource(llmSource),
+  assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, search: searchSource }), {
+    acp: patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource)))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource),
   })
 })
 
@@ -135,6 +140,7 @@ for (const [name, field, change] of [
   ['goal', 'acp', (source) => source.replace('settleAfterQuiescence(inflight) {', 'upstreamSettlement(inflight) {')],
   ['retry', 'llm', (source) => source.replace('function classifyPiAiError(message)', 'function upstreamClassifier(message)')],
   ['output-speed', 'acp', (source) => source.replace('requestSignal?.removeEventListener', 'requestSignal?.upstreamRemoveEventListener')],
+  ['fs-search', 'search', (source) => source.replace('async function runRipgrep(', 'async function upstreamSearch(')],
 ]) {
   test(`fresh verify rejects changed upstream ${name} fixture instead of accepting model-only success`, async (t) => {
     const f = await fixture(t)
