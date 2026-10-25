@@ -118,7 +118,7 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
           </button>
         )}
         {thread.team?.childId && <BackToLeader teamId={thread.team.id} childId={thread.team.childId} />}
-        {team && <span className="cl-mark tm-mark" title={team.execution ? '実行モード' : 'エージェントチームのリーダー'}>{team.execution ? 'EX' : 'TM'}</span>}
+        {team && <span className="cl-mark tm-mark" title={team.execution ? 'エコモード' : 'エージェントチームのリーダー'}>{team.execution ? 'eco' : 'TM'}</span>}
         {renaming
           ? (
             <input

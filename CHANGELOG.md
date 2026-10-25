@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed EX to **eco** (エコモード / economy mode) across the UI and reports. Existing settings and workflow behavior are unchanged.
+
 ### Fixed
 
 - OpenCode Go no longer silently loses new or renamed model IDs while waiting for pi-ai: missing exact IDs are supplemented from OpenCode's structured model catalog after validating the supported protocol, pinned endpoint, capabilities and limits. Cached valid definitions survive source failures; unresolved IDs and definition-fetch failures show a warning instead of a successful-sync check. Public metadata requests never carry the user's API key or conversation data.

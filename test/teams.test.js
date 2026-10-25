@@ -245,7 +245,7 @@ async function setupExecution(t, options = {}) {
 }
 const exTask = { title: 'implement', task: 'do the bounded work', criteria: 'the test passes without unrelated changes', checks: [], tier: 'low', provider: 'gpt' }
 
-test('EX holds one writer through verification and parent judgment, then checks freshness', async (t) => {
+test('eco holds one writer through verification and parent judgment, then checks freshness', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(123)"' }])
   await tool('spawn', { ...exTask, checks: ['test'] })
@@ -257,7 +257,7 @@ test('EX holds one writer through verification and parent judgment, then checks 
   await Promise.all([...manager.exPending])
   assert.equal(child.execution.verification.status, 'passed')
   assert.equal(child.execution.phase, 'review')
-  assert.match(child.reports.at(-1).text, /EX 検証: passed/)
+  assert.match(child.reports.at(-1).text, /eco 検証: passed/)
   await fs.writeFile(path.join(workspace, 'source.txt'), 'external edit')
   await assert.rejects(tool('close', { child: child.id }), /変更/)
   assert.equal(child.execution.verification.status, 'stale')
@@ -265,7 +265,7 @@ test('EX holds one writer through verification and parent judgment, then checks 
   assert.equal(child.execution.outcome, 'abandoned')
 })
 
-test('EX retries explicitly repairable failures once, then escalates repeated evidence', async (t) => {
+test('eco retries explicitly repairable failures once, then escalates repeated evidence', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(123);process.exit(2)"', autoRepair: true }])
   await tool('spawn', { ...exTask, checks: ['test'] })
@@ -283,7 +283,7 @@ test('EX retries explicitly repairable failures once, then escalates repeated ev
   await assert.rejects(tool('close', { child: child.id }), /成功していません/)
 })
 
-test('EX requires acceptance criteria and checks, isolates research and preserves TM defaults', async (t) => {
+test('eco requires acceptance criteria and checks, isolates research and preserves TM defaults', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await assert.rejects(tool('spawn', { ...exTask, criteria: '' }), /criteria/)
   await assert.rejects(tool('spawn', { ...exTask, checks: ['missing'] }), /登録/)
@@ -293,7 +293,7 @@ test('EX requires acceptance criteria and checks, isolates research and preserve
   assert.equal(threads.threads.get(research.taskId).permissionMode, 'read-only')
   await tool('spawn', exTask)
   const writer = team.children[1]
-  assert.throws(() => manager.guardExecution({ id: 'ordinary', workspace }), /EX/)
+  assert.throws(() => manager.guardExecution({ id: 'ordinary', workspace }), /eco/)
   manager.guardExecution({ id: team.leaderId, workspace })
   threads.finish(writer.taskId, 'done')
   await Promise.all([...manager.exPending])
@@ -303,7 +303,7 @@ test('EX requires acceptance criteria and checks, isolates research and preserve
   assert.equal(writer.execution.outcome, 'accepted')
 })
 
-test('EX research reports skip verification and close without a reason', async (t) => {
+test('eco research reports skip verification and close without a reason', async (t) => {
   const { tool, team, manager, threads } = await setupExecution(t)
   manager.execution.verify = async () => { throw new Error('research must not be verified') }
   await tool('spawn', { ...exTask, mode: 'research' })
@@ -316,7 +316,7 @@ test('EX research reports skip verification and close without a reason', async (
   assert.equal(research.execution.outcome, 'accepted')
 })
 
-test('EX verify tool re-verifies the current files without a child turn', async (t) => {
+test('eco verify tool re-verifies the current files without a child turn', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(1)"' }])
   await tool('spawn', { ...exTask, checks: ['test'] })
@@ -335,7 +335,7 @@ test('EX verify tool re-verifies the current files without a child turn', async 
   await assert.rejects(tool('verify', { child: child.id }), /判定待ち/)
 })
 
-test('EX re-verifies once when a check rewrites the sources itself', async (t) => {
+test('eco re-verifies once when a check rewrites the sources itself', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'fmt', allowSourceChanges: true, command: 'node -e "const fs=require(\'fs\');if(fs.readFileSync(\'source.txt\',\'utf8\')!==\'formatted\')fs.writeFileSync(\'source.txt\',\'formatted\')"' }])
   await tool('spawn', { ...exTask, checks: ['fmt'] })
@@ -351,7 +351,7 @@ test('EX re-verifies once when a check rewrites the sources itself', async (t) =
   assert.match(child.reports.at(-1).text, /初回: stale/)
 })
 
-test('EX does not automatically reverify an ordinary check after source changes', async (t) => {
+test('eco does not automatically reverify an ordinary check after source changes', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'test', command: `node -e "require('fs').writeFileSync('source.txt','unexpected')"` }])
   await tool('spawn', { ...exTask, checks: ['test'] })
@@ -363,7 +363,7 @@ test('EX does not automatically reverify an ordinary check after source changes'
   assert.equal(child.execution.verification.rerun, undefined)
 })
 
-test('EX reports do not wait indefinitely for children still working', async (t) => {
+test('eco reports do not wait indefinitely for children still working', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   let clock = 1_000_000
   const { tool, team, manager, threads } = await setupExecution(t, { gatherMs: REPORT_GATHER_MS, now: () => clock })
@@ -379,7 +379,7 @@ test('EX reports do not wait indefinitely for children still working', async (t)
   assert.equal(sent().length, before + 1)
 })
 
-test('EX stopAll before verification starts does not launch a command or auto-repair', async (t) => {
+test('eco stopAll before verification starts does not launch a command or auto-repair', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "process.exit(2)"', autoRepair: true }])
   await tool('spawn', { ...exTask, checks: ['test'] })
@@ -395,7 +395,7 @@ test('EX stopAll before verification starts does not launch a command or auto-re
   assert.equal(child.reports.at(-1).kind, 'cancelled')
 })
 
-test('EX failed send preserves the reviewed evidence and restart interrupts verification', async (t) => {
+test('eco failed send preserves the reviewed evidence and restart interrupts verification', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await tool('spawn', exTask)
   const child = team.children[0]
@@ -413,14 +413,14 @@ test('EX failed send preserves the reviewed evidence and restart interrupts veri
   assert.equal(child.execution.phase, 'review')
   assert.equal(child.execution.verification, undefined)
   assert.equal(child.reports.at(-1).kind, 'error')
-  assert.throws(() => manager.guardExecution({ id: 'other', workspace: path.join(workspace, 'nested') }), /EX/)
+  assert.throws(() => manager.guardExecution({ id: 'other', workspace: path.join(workspace, 'nested') }), /eco/)
 })
 
-test('EX accepts an explicitly chosen API parent and records mode in launch tools', async (t) => {
+test('eco accepts an explicitly chosen API parent and records mode in launch tools', async (t) => {
   const { manager, workspace } = await setupExecution(t)
   const result = await manager.create({ workspace, execution: { leaderModel: '["anthropic","claude-haiku-5-5"]' } })
   assert.equal(result.thread.model, '["anthropic","claude-haiku-5-5"]')
-  assert.equal(result.thread.title, '実行モード')
+  assert.equal(result.thread.title, 'エコモード')
   assert.equal(result.team.execution.metrics.childTurns, 0)
   const mcp = manager.mcpServerFor({ team: { id: result.team.id, role: 'leader' } })
   assert.ok(mcp.env.some((entry) => entry.name === 'AGENT_DESK_EXECUTION'))

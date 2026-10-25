@@ -58,7 +58,7 @@ export function ExecutionChecksDialog({ workspace, onClose }: { workspace: strin
     setSaving(false)
     if (result) onClose()
   }
-  return <Modal title="実行モードの検証" onClose={onClose} width={600}>
+  return <Modal title="エコモードの検証" onClose={onClose} width={600}>
     {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>読み込み中…</p>}
     <div className="modal-actions"><button type="button" className="button" onClick={onClose}>キャンセル</button><button type="button" className="button primary" disabled={!checks || saving} onClick={() => void save()}>保存</button></div>
   </Modal>
@@ -122,7 +122,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       }
     } finally { setStarting(false) }
   }
-  return <Modal title="実行モード" onClose={close} width={620} className="team-start-modal">
+  return <Modal title="エコモード" onClose={close} width={620} className="team-start-modal">
     <div className="team-start-body">
       <section className="account-card ex-models">
         <label>親<select disabled={!modelsReady || starting} value={modelsReady ? selection.leader : ''} onChange={(e) => changeModels({ leader: e.target.value })}>

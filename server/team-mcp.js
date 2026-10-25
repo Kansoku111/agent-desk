@@ -113,7 +113,7 @@ const TOOLS = [
 
 if (process.env.AGENT_DESK_EXECUTION === '1') {
   const spawn = TOOLS.find((tool) => tool.name === 'spawn')
-  spawn.description = 'Delegate one bounded EX work unit to the inexpensive child. The app verifies and performs limited repairs before reporting. Close the previous unit before starting another; end your turn instead of polling.'
+  spawn.description = 'Delegate one bounded eco work unit to the inexpensive child. The app verifies and performs limited repairs before reporting. Close the previous unit before starting another; end your turn instead of polling.'
   spawn.inputSchema.properties.tier.enum = ['low']
   Object.assign(spawn.inputSchema.properties, {
     mode: { type: 'string', enum: ['write', 'research'], description: 'write (default): one writer through judgment; research: read-only investigation that may run in parallel, with checks:[] and no command execution for Claude Code.' },

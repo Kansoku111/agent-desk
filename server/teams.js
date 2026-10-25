@@ -205,7 +205,7 @@ export class TeamManager extends EventEmitter {
         if (child.execution?.phase === 'verifying') {
           child.execution.phase = 'review'
           delete child.execution.verification
-          this.#report(team, child, 'error', 'EXの検証が再起動で中断されました。send で再検証を依頼してください。', { verified: true })
+          this.#report(team, child, 'error', 'ecoの検証が再起動で中断されました。send で再検証を依頼してください。', { verified: true })
         }
         // The app stopped before the child's task was made: there is no conversation to go on with, so the child is dropped.
         if (!child.taskId) {
@@ -470,7 +470,7 @@ export class TeamManager extends EventEmitter {
       // Hashing every file here made a large folder (My PC) take ~30s to start; each child's verification takes its own snapshot.
       if (!(await fs.promises.stat(team.workspace).catch(() => null))?.isDirectory()) throw new Error('作業フォルダが見つかりません')
       for (const provider of TEAM_PROVIDERS) config[provider].mid.enabled = false
-      if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled && config[provider].low.enabled && config[provider].low.model)) throw new Error('EXの子の低枠モデルを選んでください')
+      if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled && config[provider].low.enabled && config[provider].low.model)) throw new Error('ecoの子の低枠モデルを選んでください')
       config.batchReports = true
       team.execution = { metrics: { childTurns: 0, parentTurns: 0, parentReports: 0, verifications: 0, repairs: 0 }, stopped: false }
       if (execution.leaderModel) {
@@ -518,7 +518,7 @@ export class TeamManager extends EventEmitter {
     }
     team.workspace = thread.workspace
     team.leaderId = thread.id
-    const title = team.execution ? '実行モード' : 'エージェントチーム'
+    const title = team.execution ? 'エコモード' : 'エージェントチーム'
     await this.threads.update(thread.id, { title }).catch(() => {})
     await this.#save()
     this.#emit(team)
@@ -560,7 +560,7 @@ export class TeamManager extends EventEmitter {
     return { removed: true }
   }
 
-  // ---------------------------------------------------------------- EX execution mode
+  // ---------------------------------------------------------------- eco economy mode
 
   get busy() { return this.exPending.size > 0 || this.execution.active.size > 0 }
 
@@ -573,12 +573,12 @@ export class TeamManager extends EventEmitter {
   guardExecution(record) {
     if (!record?.workspace) return
     const own = this.#byTask(record.id)
-    if (own?.child?.execution && own.child.execution.phase !== 'working') throw new Error('EXの検証・判定中です。親から send で手直しを依頼してください')
+    if (own?.child?.execution && own.child.execution.phase !== 'working') throw new Error('ecoの検証・判定中です。親から send で手直しを依頼してください')
     for (const team of this.teams.values()) {
-      // Only work inside the EX folder is blocked; a parent folder (My PC, a drive) is caught by the staleness check instead.
+      // Only work inside the eco folder is blocked; a parent folder (My PC, a drive) is caught by the staleness check instead.
       if (!team.execution || !workspaceWithin(team.workspace, record.workspace)) continue
       if (own?.team === team) continue
-      if (team.children.some((child) => !child.closed && child.execution?.mode !== 'research')) throw new Error('このフォルダはEXが実行・検証・判定中です')
+      if (team.children.some((child) => !child.closed && child.execution?.mode !== 'research')) throw new Error('このフォルダはecoが実行・検証・判定中です')
     }
   }
 
@@ -601,7 +601,7 @@ export class TeamManager extends EventEmitter {
   }
 
   #exTask(team, args) {
-    if (args.tier && args.tier !== 'low') throw new Error('EXの子は低枠のみです')
+    if (args.tier && args.tier !== 'low') throw new Error('ecoの子は低枠のみです')
     const mode = args.mode ?? 'write'
     if (!['write', 'research'].includes(mode)) throw new Error('mode は write または research です')
     const criteria = String(args.criteria ?? '').trim()
@@ -623,7 +623,7 @@ export class TeamManager extends EventEmitter {
   /** The leader asks for a fresh verification of what it reviewed (it may have edited files itself); no child turn is spent. */
   async #reverify(team, args) {
     const child = this.#child(team, args.child)
-    if (!team.execution || !child.execution || child.execution.mode === 'research') throw new Error('再検証できるのはEXの実装の子だけです')
+    if (!team.execution || !child.execution || child.execution.mode === 'research') throw new Error('再検証できるのはecoの実装の子だけです')
     if (child.closed || child.execution.phase !== 'review') throw new Error('判定待ちの子だけ再検証できます')
     team.execution.stopped = false
     const pending = this.#exVerify(team, child, '（親の依頼による再検証）', { repair: false }).finally(() => this.exPending.delete(pending))
@@ -639,7 +639,7 @@ export class TeamManager extends EventEmitter {
       if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return
       if (team.execution.stopped) {
         child.execution.phase = 'review'
-        this.#report(team, child, 'cancelled', 'EXの検証はユーザーにより停止されました。', { verified: true, byUser: true })
+        this.#report(team, child, 'cancelled', 'ecoの検証はユーザーにより停止されました。', { verified: true, byUser: true })
         return
       }
       let run = await this.execution.verify({ id: child.id, folder: team.workspace, checks: child.execution.checks })
@@ -668,14 +668,14 @@ export class TeamManager extends EventEmitter {
         child.execution.repairs++
         team.execution.metrics.repairs++
         child.execution.phase = 'working'
-        await this.#send(team, { child: child.id, message: `[EX 自動差し戻し ${child.execution.repairs}/${child.execution.maxRepairs}]\n完了条件: ${child.execution.criteria}\n依頼の範囲内だけを修正してください。検証設定・完了条件を変えて通すことは禁止です。仕様判断や環境対応が必要なら、その問題を報告して終了してください。\n${verificationReport(run)}\n${failed.tail}`, executionRetry: true })
+        await this.#send(team, { child: child.id, message: `[eco 自動差し戻し ${child.execution.repairs}/${child.execution.maxRepairs}]\n完了条件: ${child.execution.criteria}\n依頼の範囲内だけを修正してください。検証設定・完了条件を変えて通すことは禁止です。仕様判断や環境対応が必要なら、その問題を報告して終了してください。\n${verificationReport(run)}\n${failed.tail}`, executionRetry: true })
         return
       }
       child.execution.phase = 'review'
       this.#report(team, child, 'report', `${verificationReport(run)}\n\n完了条件: ${child.execution.criteria}\n\n子の報告:\n${text}`, { verified: true })
     } catch (error) {
       child.execution.phase = 'review'
-      this.#report(team, child, 'error', `EXの検証に失敗しました: ${error.message}`, { verified: true })
+      this.#report(team, child, 'error', `ecoの検証に失敗しました: ${error.message}`, { verified: true })
     } finally { await this.#save(); this.#emit(team) }
   }
 
@@ -778,7 +778,7 @@ export class TeamManager extends EventEmitter {
     if (execution) { child.execution = execution; team.execution.stopped = false }
     team.children.push(child)
     try {
-      await this.#startTask(team, child, execution ? `${task}\n\n[EX 完了条件]\n${execution.criteria}\n実装後にアプリが検証します。範囲外の変更はせず、結果・変更箇所・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。` : task)
+      await this.#startTask(team, child, execution ? `${task}\n\n[eco 完了条件]\n${execution.criteria}\n実装後にアプリが検証します。範囲外の変更はせず、結果・変更箇所・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。` : task)
     } catch (error) {
       team.children = team.children.filter((entry) => entry !== child)
       this.#emit(team)
@@ -845,7 +845,7 @@ export class TeamManager extends EventEmitter {
     if (team.execution) {
       if (child.execution?.phase === 'verifying') throw new Error('検証中には指示を追加できません')
       this.#exRoom(team, child, child.execution?.mode === 'research')
-      if (this.#childBusy(child)) throw new Error('EXの子は作業中です。完了を待ってください')
+      if (this.#childBusy(child)) throw new Error('ecoの子は作業中です。完了を待ってください')
       if (!args.executionRetry) {
         team.execution.stopped = false
         child.execution.repairs = 0
@@ -983,7 +983,7 @@ export class TeamManager extends EventEmitter {
       '使える枠:',
       ...this.#tierLines(config),
     ]
-    if (team.execution) lines.push('EX: 子は低枠のみ。完了条件 criteria と検証ID checks を指定して spawn。書き込み・検証・判定は直列です。', `登録済み検証: ${JSON.stringify(this.execution.checks(team.workspace))}`)
+    if (team.execution) lines.push('eco: 子は低枠のみ。完了条件 criteria と検証ID checks を指定して spawn。書き込み・検証・判定は直列です。', `登録済み検証: ${JSON.stringify(this.execution.checks(team.workspace))}`)
     if (!team.children.length) lines.push('子はまだいません。')
     for (const child of team.children) {
       const state = STATE_LABEL[this.#childState(child)] ?? this.#childState(child)
@@ -1119,7 +1119,7 @@ export class TeamManager extends EventEmitter {
   messageChild(teamId, childId, text) {
     const { team, child } = this.#agentChild(teamId, childId)
     this.guardExecution({ id: child.taskId, workspace: team.workspace })
-    if (team.execution) throw new Error('EXの子への指示は親に伝えてください。検証と判定を迂回できません')
+    if (team.execution) throw new Error('ecoの子への指示は親に伝えてください。検証と判定を迂回できません')
     const body = String(text ?? '').trim()
     if (!body) throw new Error('送る内容を書いてください')
     if (this.agents.running(child.taskId)) {
@@ -1225,7 +1225,7 @@ export class TeamManager extends EventEmitter {
     if (team.execution) {
       for (const provider of TEAM_PROVIDERS) {
         next[provider].mid.enabled = false
-        if (next[provider].enabled && !next[provider].low.enabled) throw new Error('EXは低枠のみ使用できます')
+        if (next[provider].enabled && !next[provider].low.enabled) throw new Error('ecoは低枠のみ使用できます')
       }
     }
     assertChildrenOn(next)
@@ -1298,7 +1298,7 @@ export class TeamManager extends EventEmitter {
   #gatherWait(team) {
     const ex = Boolean(team.execution)
     if (!this.gatherMs || (!ex && !teamConfig(this.getSettings()).batchReports)) return 0
-    // A child held up on an approval, or word from Agent Desk itself, goes at once; in EX so does a failure or a stop.
+    // A child held up on an approval, or word from Agent Desk itself, goes at once; in eco so does a failure or a stop.
     if (team.queue.some((item) => item.kind === 'approval' || !item.childId || (ex && (item.kind === 'error' || item.kind === 'cancelled')))) return 0
     if (team.queue.reduce((size, item) => size + (item.text?.length ?? 0), 0) >= BATCH_CHARS) return 0
     const queued = (child) => team.queue.some((item) => item.childId === child.id)

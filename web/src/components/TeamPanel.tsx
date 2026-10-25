@@ -296,7 +296,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
       <aside className="subagent-panel team-panel" aria-label="チーム">
         <div className="subagent-panel-head">
           <Users size={15} />
-          <span className="subagent-panel-title">{team.execution ? "実行モード" : "チーム"}</span>
+          <span className="subagent-panel-title">{team.execution ? "エコモード" : "チーム"}</span>
           <span className="subagent-panel-count">{running > 0 ? `作業中 ${running} / ${children.length}` : `${children.length} 人`}</span>
           <button type="button" className="icon-button small" aria-label="パネルを閉じる" title="パネルを閉じる" onClick={() => setTeamPanel(false)}>
             <X size={15} />

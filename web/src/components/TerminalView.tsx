@@ -135,7 +135,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
         )}
         {terminal.team?.role === 'child' && <BackToLeader teamId={terminal.team.id} childId={terminal.team.childId} />}
         {leads
-          ? <span className="cl-mark tm-mark" title={team?.execution ? '実行モード' : 'エージェントチームのリーダー（Claude Code）'}>{team?.execution ? 'EX' : 'TM'}</span>
+          ? <span className="cl-mark tm-mark" title={team?.execution ? 'エコモード' : 'エージェントチームのリーダー（Claude Code）'}>{team?.execution ? 'eco' : 'TM'}</span>
           : <span className="cl-mark" aria-hidden="true">CL</span>}
         {renaming
           ? (
