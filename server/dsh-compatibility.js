@@ -12,6 +12,7 @@ import { patchMcpTimeoutSource } from './mcp-timeout-patch.js'
 import { patchRetrySource } from './retry-patch.js'
 import { patchOutputSpeedSource } from './output-speed-patch.js'
 import { patchFsSearchSource } from './fs-search-patch.js'
+import { patchGoalToolSource } from './goal-tool-patch.js'
 
 // Both AcpRuntime and the verifier use this registration order. load hooks call
 // nextLoad first, so their source transforms unwind in registration order (not
@@ -22,6 +23,7 @@ const HOOKS = [
   { name: 'steer', module: 'acp', patch: patchAcpSource },
   { name: 'retry', module: 'llm', patch: patchRetrySource },
   { name: 'goal', module: 'acp', patch: patchGoalSource },
+  { name: 'goal-tool', module: 'goalTool', patch: patchGoalToolSource },
   { name: 'mcp-timeout', module: 'acp', patch: patchMcpTimeoutSource },
   { name: 'output-speed', module: 'acp', patch: patchOutputSpeedSource },
   { name: 'fs-search', module: 'search', patch: patchFsSearchSource },
@@ -31,8 +33,8 @@ export function runtimeHookArgs() {
   return HOOKS.flatMap(({ name }) => ['--import', new URL(`./${name}-hook.js`, import.meta.url).href])
 }
 
-export function composeCompatibilityPatches({ acp, llm, search }) {
-  const sources = { acp, llm, search }
+export function composeCompatibilityPatches({ acp, llm, search, goalTool }) {
+  const sources = { acp, llm, search, goalTool }
   for (const hook of HOOKS) {
     if (!hook.patch) continue
     const patched = hook.patch(sources[hook.module])
@@ -81,8 +83,9 @@ export function resolveCompatibilityModules(root) {
   const acp = createRequire(acpApp).resolve('@deepseek-ai/dsh-acp')
   const llm = createRequire(base).resolve('@deepseek-ai/dsh-llm-pi-ai')
   const search = createRequire(base).resolve('@deepseek-ai/dsh-tool-fs-search')
+  const goalTool = createRequire(base).resolve('@deepseek-ai/dsh-tool-goal')
   // A changed entrypoint no longer matches the hooks' URL filters.
-  for (const [file, name] of [[acp, 'dsh-acp'], [llm, 'dsh-llm-pi-ai'], [search, 'dsh-tool-fs-search']]) {
+  for (const [file, name] of [[acp, 'dsh-acp'], [llm, 'dsh-llm-pi-ai'], [search, 'dsh-tool-fs-search'], [goalTool, 'dsh-tool-goal']]) {
     if (!file.replaceAll('\\', '/').endsWith(`/@deepseek-ai/${name}/lib/index.js`)) {
       throw new Error(`${name}: module entrypoint no longer matches the runtime hook: ${file}`)
     }
@@ -90,7 +93,7 @@ export function resolveCompatibilityModules(root) {
   const pi = packageFile('@earendil-works/pi-ai', llm)
   // retry-hook imports the app's pi-ai, which may differ from dsh's nested copy.
   const retryPi = packageFile('@earendil-works/pi-ai', path.join(root, 'server', 'retry-hook.js'))
-  return { acp, llm, search, pi, retryPi }
+  return { acp, llm, search, goalTool, pi, retryPi }
 }
 
 async function verifyActualHookChain(modules, expected) {
@@ -99,7 +102,7 @@ async function verifyActualHookChain(modules, expected) {
   // the result of their nextLoad chain. Do not evaluate any dsh module: replacing
   // its final source with an empty module prevents all upstream side effects.
   for (const { name } of HOOKS) await import(new URL(`./${name}-hook.js`, import.meta.url).href)
-  const targets = new Map(['acp', 'llm', 'search'].map((key) => [
+  const targets = new Map(['acp', 'llm', 'search', 'goalTool'].map((key) => [
     `${pathToFileURL(modules[key]).href}?agent-desk-compatibility`, key,
   ]))
   const seen = new Set()
@@ -129,6 +132,7 @@ export async function verifyDshCompatibility({ root = fileURLToPath(new URL('../
       acp: await fs.readFile(modules.acp, 'utf8'),
       llm: await fs.readFile(modules.llm, 'utf8'),
       search: await fs.readFile(modules.search, 'utf8'),
+      goalTool: await fs.readFile(modules.goalTool, 'utf8'),
     })
     const { isWrapped, wrapperSource } = await import('./fast-mode-hook.js')
     for (const api of ['anthropic-messages', 'openai-codex-responses', 'openai-responses']) {
