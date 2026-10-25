@@ -9,6 +9,7 @@ import { workflowEffort, workflowLevels, workflowOptions } from '../../../shared
 import { Modal, ConfirmDialog } from './Modal'
 import { byNewest, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
+import { useWheelSelect } from './useWheelSelect'
 import { Markdown, CopyButton } from './Markdown'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { AbImages, AbInput, useAbDraft } from './AbInput'
@@ -49,6 +50,10 @@ function ModelField({ label, value, groups, disabled, onChange, effort, efforts,
 }) {
   const effortName = !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : '中'
   const name = groups.flatMap((group) => group.models).find((model) => model.value === value)?.name ?? 'モデルを選択'
+  const modelWheel = useWheelSelect<HTMLButtonElement>(disabled ? [] : groups.flatMap((group) => group.models.map((model) => model.value)), value, onChange)
+  const effortWheel = useWheelSelect<HTMLButtonElement>(disabled || !value ? [] : efforts, efforts.includes(effort) ? effort : null, onEffort)
+  const wheelName = groups.flatMap((group) => group.models).find((model) => model.value === modelWheel.shown)?.name ?? name
+  const shownEffort = effortWheel.pending && effortWheel.shown ? effortLabel(effortWheel.shown) : effortName
   return <div className="ab-field">
     <span>{label}</span>
     <div className="ab-model-controls"><Dropdown
@@ -56,8 +61,8 @@ function ModelField({ label, value, groups, disabled, onChange, effort, efforts,
       portal
       width={300}
       trigger={({ toggle, open }) => (
-        <button type="button" className={`ab-picker ${open ? 'active' : ''}`} aria-label={`${label}: ${name}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={toggle}>
-          <span>{name}</span>
+        <button ref={modelWheel.ref} type="button" className={`ab-picker ${open ? 'active' : ''} ${modelWheel.pending ? 'wheeling' : ''}`} aria-label={`${label}: ${name}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={toggle}>
+          <span>{wheelName}</span>
           <ChevronDown size={13} />
         </button>
       )}
@@ -77,8 +82,8 @@ function ModelField({ label, value, groups, disabled, onChange, effort, efforts,
       )}
     </Dropdown>
     <Dropdown portal width={160} className="ab-effort-menu" trigger={({ toggle, open }) => (
-      <button type="button" className="ab-effort" aria-label={`${label}の推論レベル: ${effortName}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled || !value || !efforts.length} onClick={toggle}>
-        <span>{effortName}</span><ChevronDown size={12} />
+      <button ref={effortWheel.ref} type="button" className={`ab-effort ${effortWheel.pending ? 'wheeling' : ''}`} aria-label={`${label}の推論レベル: ${effortName}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled || !value || !efforts.length} onClick={toggle}>
+        <span>{shownEffort}</span><ChevronDown size={12} />
       </button>
     )}>
       {(close) => <>
