@@ -19,8 +19,8 @@ export function parseModelIds(body) {
 }
 
 export class OpenCodeGoModels {
-  constructor({ file, fetchImpl = fetch, installed = installedModels, refreshDefinitions = null }) {
-    Object.assign(this, { file, fetchImpl, installed, refreshDefinitions })
+  constructor({ file, fetchImpl = fetch, installed = installedModels, refreshDefinitions = null, unlisted = () => [] }) {
+    Object.assign(this, { file, fetchImpl, installed, refreshDefinitions, unlisted })
     this.saved = null
     this.served = null
     this.hidden = []
@@ -55,13 +55,14 @@ export class OpenCodeGoModels {
       try { await this.refreshDefinitions(ids, { force }) } catch {}
     }
     const installed = await this.installed()
+    const unlisted = new Set(this.unlisted())
     const live = new Set(ids)
     const served = [...installed.keys()].filter((id) => live.has(id)).sort()
     if (!served.length) throw new Error('No service models match the supported catalog')
     return {
       served,
       hidden: [...installed].filter(([id]) => !live.has(id)).map(([id, name]) => ({ id, name })),
-      missing: ids.filter((id) => !installed.has(id)).sort(),
+      missing: ids.filter((id) => !installed.has(id) && !unlisted.has(id)).sort(),
     }
   }
 

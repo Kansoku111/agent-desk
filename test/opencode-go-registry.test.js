@@ -192,6 +192,51 @@ test('streaming responses cannot bypass the registry size limit by omitting cont
   assert.equal(registry.checkedAt, null)
 })
 
+test('legacy live ids outside the curated Go catalog are not pending definitions', async (t) => {
+  const { dir, registry, file } = await fixture(t, () => Response.json(body(
+    metadata('new-model'), metadata('retired-model', { status: 'deprecated' }),
+    metadata('unsupported-model', { provider: { npm: 'unsupported-sdk' } }),
+  )))
+  const ids = ['known-model', 'new-model', 'legacy-model', 'retired-model', 'unsupported-model']
+  const models = await new OpenCodeGoModels({
+    file: path.join(dir, 'models.json'),
+    installed: async () => new Map(openCodeModels(mergeOpenCodeCatalog(base, registry.groups)).map((model) => [model.id, model.name])),
+    refreshDefinitions: (ids, options) => registry.refresh(ids, options),
+    unlisted: () => registry.unlisted,
+    fetchImpl: async () => Response.json({ data: ids.map((id) => ({ id })) }),
+  }).load()
+  await models.refresh('key')
+  assert.deepEqual(registry.unlisted, ['legacy-model', 'retired-model'])
+  assert.deepEqual(models.missing, ['unsupported-model'])
+  assert.deepEqual(models.served, ['known-model', 'new-model'])
+  const restored = await new OpenCodeGoRegistry({ file, base: async () => base }).load()
+  assert.deepEqual(restored.unlisted, registry.unlisted)
+  assert.equal(await restored.refresh(ids), false)
+  restored.fetchImpl = async () => { throw new Error('offline') }
+  await restored.refresh(ids, { force: true })
+  assert.equal(restored.failed, true)
+  assert.deepEqual(restored.unlisted, registry.unlisted)
+  registry.fetchImpl = async () => Response.json(body(metadata('new-model')))
+  await models.refresh('key', { maxAgeMs: 0 })
+  assert.deepEqual(models.missing, [], 'catalog exclusions alone do not imply pending definitions')
+  // A later publication moves an id back to a real definition gap if its
+  // metadata is present but its protocol is still unsupported.
+  registry.fetchImpl = async () => Response.json(body(metadata('legacy-model', { provider: { npm: 'unsupported-sdk' } })))
+  await models.refresh('key', { maxAgeMs: 0 })
+  assert.ok(models.missing.includes('legacy-model'))
+})
+
+test('old registry caches recheck previously requested ids for catalog classification', async (t) => {
+  const { file, calls } = await fixture(t, () => Response.json(body()))
+  await fs.writeFile(file, JSON.stringify({ groups: {}, checkedAt: Date.now(), requested: ['legacy-model'] }))
+  const registry = await new OpenCodeGoRegistry({ file, base: async () => base,
+    fetchImpl: async () => { calls.push('refresh'); return Response.json(body()) },
+  }).load()
+  await registry.refresh(['legacy-model'])
+  assert.equal(calls.length, 1)
+  assert.deepEqual(registry.unlisted, ['legacy-model'])
+})
+
 test('a registry failure does not disguise a new live id as a fully synchronized inventory', async (t) => {
   const { dir, registry } = await fixture(t, () => { throw new Error('offline') })
   const models = await new OpenCodeGoModels({

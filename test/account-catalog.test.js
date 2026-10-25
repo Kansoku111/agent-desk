@@ -247,11 +247,28 @@ test('a genuinely unsupported official id remains explicit in the update state r
     provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
     settings: { modelAutoUpdate: true },
     probeBody: JSON.stringify({ data: [{ id: 'glm-5.3' }, { id: 'no-supported-definition' }] }),
-    registryBody: { 'opencode-go': { id: 'opencode-go', models: {} } },
+    registryBody: { 'opencode-go': { id: 'opencode-go', models: {
+      'no-supported-definition': { id: 'no-supported-definition', provider: { npm: 'unsupported-sdk' } },
+    } } },
   })
   assert.deepEqual(added.modelUpdate.opencodeGo.missing, ['no-supported-definition'])
   assert.equal(added.modelUpdate.opencodeGo.error, false)
   assert.ok(!added.catalog.models.some((model) => model.id === 'no-supported-definition'))
+})
+
+test('legacy Go service ids are reported as catalog exclusions, not pending definitions', { timeout: 45_000 }, async (t) => {
+  const added = await keyRefreshesCatalog(t, {
+    provider: 'opencodeGo', account: 'opencodeGo', catalogProvider: 'opencode-go', probe: 'https://opencode.ai/inference/go/v1/models',
+    settings: { modelAutoUpdate: true },
+    probeBody: JSON.stringify({ data: [{ id: 'glm-5.3' }, { id: 'legacy-model' }, { id: 'retired-model' }] }),
+    registryBody: { 'opencode-go': { id: 'opencode-go', models: {
+      'retired-model': { id: 'retired-model', status: 'deprecated' },
+    } } },
+  })
+  assert.deepEqual(added.modelUpdate.opencodeGo.missing, [])
+  assert.deepEqual(added.modelUpdate.opencodeGo.unlisted, ['legacy-model', 'retired-model'])
+  assert.equal(added.modelUpdate.opencodeGo.definitionError, false)
+  assert.deepEqual(added.catalog.models.filter((model) => model.provider === 'opencode-go').map((model) => model.id), ['glm-5.3'])
 })
 
 test('OpenCode Go models the service no longer lists leave the picker', { timeout: 45_000 }, async (t) => {

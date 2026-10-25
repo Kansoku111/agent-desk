@@ -208,6 +208,7 @@ function UpdatesCard({ updates }: { updates: Updates }) {
                   : models.opencodeGo.checkedAt ? `照合済み（${dateTime(models.opencodeGo.checkedAt)}）` : '未確認'}
                 {models.opencodeGo.hidden.length > 0 && <>　非表示: {models.opencodeGo.hidden.map((model) => model.name).join('、')}</>}
                 {models.opencodeGo.missing?.length > 0 && <>　定義待ち: {models.opencodeGo.missing.join('、')}</>}
+                {!!models.opencodeGo.unlisted?.length && <>　公式カタログ対象外: {models.opencodeGo.unlisted.join('、')}</>}
                 {models.opencodeGo.definitionError && <>　公式モデル定義を更新できませんでした</>}
               </p>
             )}

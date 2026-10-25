@@ -83,6 +83,15 @@ test('OpenCode cannot show a success check while definitions are missing or cann
   assert.match(source, /registry: 'OpenCode 公式カタログ'/)
 })
 
+test('catalog exclusions remain visible only in the collapsed synchronization details', async () => {
+  const source = await updatesCardSource()
+  const details = /<details\b[^>]*>([\s\S]*?)<\/details>/.exec(source)[1]
+  assert.match(details, /公式カタログ対象外/)
+  assert.match(details, /models\.opencodeGo\.unlisted\.join/)
+  const row = /<span className="update-name">OpenCode Go<\/span>([\s\S]*?)<\/div>/.exec(source)[1]
+  assert.doesNotMatch(row, /unlisted|公式カタログ対象外/)
+})
+
 test('About exposes one shared manual check for application and model updates', async () => {
   const source = await updatesCardSource()
   assert.match(source, /await\s+Promise\.all\(\[\s*act\('updates\.check'\),\s*act\('modelUpdate\.check'\)\s*\]\)/)

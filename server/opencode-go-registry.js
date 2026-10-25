@@ -126,6 +126,7 @@ export class OpenCodeGoRegistry {
     this.failed = false
     this.lastAdded = null
     this.requested = []
+    this.unlisted = []
     this.lastAttempt = 0
     this.lastInventory = ''
     this.queue = Promise.resolve()
@@ -136,7 +137,9 @@ export class OpenCodeGoRegistry {
     if (saved?.groups && Number.isFinite(saved.checkedAt)) {
       this.groups = supportedGroups(await this.base(), saved.groups)
       this.checkedAt = saved.checkedAt
-      this.requested = Array.isArray(saved.requested) ? saved.requested.filter(isModelId) : []
+      // Old caches did not distinguish catalog exclusions from definition gaps.
+      this.requested = saved.format === 2 && Array.isArray(saved.requested) ? saved.requested.filter(isModelId) : []
+      this.unlisted = saved.format === 2 && Array.isArray(saved.unlisted) ? saved.unlisted.filter(isModelId) : []
       this.lastAdded = saved.lastAdded ?? null
     }
     return this
@@ -162,7 +165,12 @@ export class OpenCodeGoRegistry {
         const response = await this.fetchImpl(OPENCODE_GO_REGISTRY_URL, {
           redirect: 'error', signal: AbortSignal.timeout(12_000),
         })
-        const fresh = registryDefinitions(await registryBody(response), liveIds, base)
+        const body = await registryBody(response)
+        const fresh = registryDefinitions(body, liveIds, base)
+        // /models also retains legacy/preview ids absent from the curated Go
+        // catalog. They are not evidence that a pi-ai update is still pending.
+        const unlisted = needed.filter((id) => !Object.hasOwn(body['opencode-go'].models, id)
+          || body['opencode-go'].models[id]?.status === 'deprecated')
         const combined = {}
         for (const source of [this.groups, fresh]) for (const [api, group] of Object.entries(source)) {
           combined[api] = { ...combined[api], ...group }
@@ -173,9 +181,9 @@ export class OpenCodeGoRegistry {
           .map(({ id, name }) => ({ provider: 'opencode-go', id, name }))
         const checkedAt = Date.now()
         const lastAdded = models.length ? { at: checkedAt, source: 'OpenCode', models } : this.lastAdded
-        await writeJson(this.file, { groups, checkedAt, requested: needed, lastAdded })
+        await writeJson(this.file, { format: 2, groups, checkedAt, requested: needed, unlisted, lastAdded })
         const changed = JSON.stringify(groups) !== JSON.stringify(this.groups)
-        Object.assign(this, { groups, checkedAt, requested: needed, lastAdded, failed: false })
+        Object.assign(this, { groups, checkedAt, requested: needed, unlisted, lastAdded, failed: false })
         return changed
       } catch {
         this.failed = true

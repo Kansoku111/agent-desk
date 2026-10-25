@@ -238,6 +238,7 @@ const opencodeGoModels = await new OpenCodeGoModels({
   file: path.join(paths.home, 'opencode-go-models.json'),
   installed: () => installedModels(openCodeFetched()),
   refreshDefinitions: (ids, options) => opencodeRegistry.refresh(ids, options),
+  unlisted: () => opencodeRegistry.unlisted,
 }).load()
 let opencodeGoKeyed = false
 /** The saved OpenCode Go key, while models follow the service (the sync setting is on). */
@@ -272,6 +273,7 @@ const modelUpdateState = () => ({
     ? {
       checkedAt: opencodeGoModels.checkedAt, error: opencodeGoModels.failed,
       hidden: opencodeGoModels.hidden, missing: opencodeGoModels.missing,
+      unlisted: opencodeRegistry.unlisted.filter((id) => opencodeGoModels.saved?.ids.includes(id)),
       definitionCheckedAt: opencodeRegistry.checkedAt, definitionError: opencodeRegistry.failed,
     }
     : null,

@@ -515,8 +515,10 @@ export interface ModelUpdate {
     error: boolean
     /** Catalog models the service no longer lists (hidden from the picker). */
     hidden: { id: string; name: string }[]
-    /** Service ids still lacking a supported model definition. */
+    /** Service ids still lacking a supported definition, excluding verified catalog exclusions. */
     missing: string[]
+    /** Live ids absent from, or deprecated in, the official Go catalog. */
+    unlisted?: string[]
     /** Last successful check of the supplemental official catalog. */
     definitionCheckedAt?: number | null
     definitionError?: boolean
