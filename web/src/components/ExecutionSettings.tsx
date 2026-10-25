@@ -3,8 +3,8 @@ import { Plus, Trash2 } from 'lucide-react'
 import { act, setState, startTeam, useStore } from '../store'
 import type { ExecutionCheck, TeamProvider, TeamSettings } from '../types'
 import { executionModelSelection } from '../model-selection'
-import { effortLabel, pickableEfforts } from '../util'
-import { claudeEfforts } from './TerminalPickers'
+import { effortLabel } from '../util'
+import { workflowEffort, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { Modal } from './Modal'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import type { AuthConsentState } from '../team-auth-consent'
@@ -83,8 +83,13 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       // selection saved from another device. This never starts a model.
       const restored = result.models ? result : await act<{ models: typeof DEFAULT_CHOICE }>('execution.setModels', { models: readChoice(), onlyIfUnset: true })
       if (!alive || !restored?.models) return
-      latest.current = { ...DEFAULT_CHOICE, ...restored.models }
-      setChoice(latest.current)
+      const next = { ...DEFAULT_CHOICE, ...restored.models }
+      const levels = effortOptions(next)
+      next.leaderEffort = workflowEffort(next.leaderEffort, levels.leader)
+      next.childEffort = workflowEffort(next.childEffort, levels.child)
+      latest.current = next
+      setChoice(next)
+      if (JSON.stringify(next) !== JSON.stringify(restored.models)) saves.current = saves.current.then(() => act('execution.setModels', { models: next }))
       setModelsReady(true)
     })()
     return () => { alive = false }
@@ -92,8 +97,8 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const changeModels = (patch: Partial<typeof DEFAULT_CHOICE>) => {
     const next = { ...latest.current, ...patch }
     const levels = effortOptions(next)
-    if (!levels.leader.includes(next.leaderEffort)) next.leaderEffort = ''
-    if (!levels.child.includes(next.childEffort)) next.childEffort = ''
+    next.leaderEffort = workflowEffort(next.leaderEffort, levels.leader, next.leader !== latest.current.leader)
+    next.childEffort = workflowEffort(next.childEffort, levels.child, next.model !== latest.current.model || next.provider !== latest.current.provider)
     latest.current = next
     setChoice(next)
     try { localStorage.setItem(CHOICE_KEY, JSON.stringify(next)) } catch { /* server persistence remains available */ }
@@ -104,12 +109,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const [starting, setStarting] = useState(false)
   const close = () => setState({ executionStart: null })
   const effortOptions = (value: typeof DEFAULT_CHOICE) => {
-    const levels = (model: string) => {
-      if (!server || !model) return []
-      if (model.startsWith('claude:')) return claudeEfforts(server, model.slice(7))
-      // Unknown capability means default only, not a guessed generic effort.
-      return pickableEfforts(server.catalog.effortsByModel[model] ?? []).map((entry) => entry.value)
-    }
+    const levels = (model: string) => server && model ? workflowLevels(server.catalog, model) : []
     const selected = server ? executionModelSelection(server, value.provider, value.leader, value.model) : null
     const child = value.provider === 'claude' ? (selected?.model ? `claude:${selected.model}` : '') : selected?.childModels.find((entry) => entry.id === selected.model)?.value ?? ''
     return { leader: levels(selected?.leader ?? ''), child: levels(child) }
@@ -118,10 +118,10 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const selection = server ? executionModelSelection(server, provider, leader, model) : null
   useEffect(() => {
     if (!modelsReady || !selection) return
-    if ((leader && !selection.leader) || (model && !selection.model) || (leaderEffort && !levels.leader.includes(leaderEffort)) || (childEffort && !levels.child.includes(childEffort))) {
+    if ((leader && !selection.leader) || (model && !selection.model) || leaderEffort !== workflowEffort(leaderEffort, levels.leader) || childEffort !== workflowEffort(childEffort, levels.child)) {
       changeModels({ leader: selection.leader, model: selection.model })
     }
-  }, [modelsReady, selection?.leader, selection?.model, leader, model, leaderEffort, childEffort, levels.leader.join(), levels.child.join()])
+  }, [modelsReady, selection?.leader, selection?.model, leader, model, leaderEffort, childEffort, levels.leader?.join(), levels.child?.join()])
   if (!server?.settings.agentTeams || !selection) return null
   const { leaderModels, childModels } = selection
   const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude')
@@ -148,7 +148,15 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       }
     } finally { startingRef.current = false; setStarting(false) }
   }
-  const effortSelect = (key: 'leaderEffort' | 'childEffort', values: string[], label: string) => <select aria-label={label} className="ex-effort" disabled={!modelsReady || starting} value={choice[key]} onChange={(event) => changeModels({ [key]: event.target.value })}><option value="">既定</option>{values.map((value) => <option key={value} value={value}>{effortLabel(value)}</option>)}</select>
+  const effortSelect = (key: 'leaderEffort' | 'childEffort', values: string[] | undefined, label: string) => {
+    const options = workflowOptions(choice[key], values)
+    const unsupported = Boolean(choice[key] && !options.includes(choice[key]))
+    return <select aria-label={label} className="ex-effort" disabled={!modelsReady || starting || !options.length} value={options.length ? choice[key] : ''} onChange={(event) => changeModels({ [key]: event.target.value })}>
+      {!options.length ? <option value="">指定不可</option> : unsupported && <option value={choice[key]} disabled>{effortLabel(choice[key])}（非対応）</option>}
+      {options.map((value) => <option key={value} value={value}>{effortLabel(value)}</option>)}
+    </select>
+  }
+
   return <Modal title="エコモード" onClose={close} width={620} className="team-start-modal">
     <div className="team-start-body">
       <section className="account-card ex-models">

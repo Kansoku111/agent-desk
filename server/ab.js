@@ -7,8 +7,10 @@ import fs from 'node:fs/promises'
 import { readJson, writeJson } from './json-file.js'
 import { abContextImages } from './ab-images.js'
 import { EFFORTS as CLAUDE_EFFORTS } from './terminal-helpers.js'
+import { workflowEffort, workflowLevels } from '../shared/workflow-effort.js'
 
 const ROLES = ['a', 'b', 'leader', 'implementer']
+// Raw preferences retain legacy blanks; new-run resolution below materializes medium.
 export const AB_DEFAULTS = { a: '', b: '', leader: '', implementer: '', efforts: { a: '', b: '', leader: '', implementer: '' }, lean: true, delegate: true, review: true }
 // Implementation always runs unsandboxed; every other stage is read-only.
 export const abJobPermission = (writable) => writable ? 'danger-full-access' : 'read-only'
@@ -37,10 +39,11 @@ const RUNNING = new Set(['running', 'stopping'])
 const RETRY_PHASE = { instructions: 'preparing', implementer: 'implementing', direct: 'implementing', reviewer: 'reviewing' }
 
 export class AbManager extends EventEmitter {
-  constructor({ dir, runner, validateModel = () => {}, authorize = async () => {}, validateImages = async (images) => { if (images.length) throw new Error('Image attachments not configured'); return [] } }) {
+  constructor({ dir, runner, catalog = () => ({ effortsByModel: {} }), validateModel = () => {}, authorize = async () => {}, validateImages = async (images) => { if (images.length) throw new Error('Image attachments not configured'); return [] } }) {
     super()
     this.dir = dir
     this.runner = runner
+    this.catalog = catalog
     this.validateModel = validateModel
     this.authorize = authorize
     this.validateImages = validateImages
@@ -106,11 +109,12 @@ export class AbManager extends EventEmitter {
     if (!Array.isArray(images) || typeof text !== 'string' || (!text.trim() && !images.length) || text.length > 100000) throw new Error('相談文を入力してください（10万文字以内）')
     if (typeof workspace !== 'string' || !path.isAbsolute(workspace) || !(await fs.stat(workspace).catch(() => null))?.isDirectory()) throw new Error('作業フォルダが見つかりません')
     config = abConfig(config)
+    for (const key of ROLES) config.efforts[key] = workflowEffort(config.efforts[key], workflowLevels(this.catalog(), config[key]))
     for (const key of ['a', 'b', 'leader', ...(config.delegate ? ['implementer'] : [])]) this.validateModel(config[key])
     images = await this.validateImages(images, config)
     await this.authorize({ workspace, config, authConfirmation })
     const run = { id: randomUUID(), workspace: path.resolve(workspace), title: text.trim().split('\n')[0].slice(0, 80) || '画像の相談', text, images, config,
-      phase: 'consulting', revision: 0, plan: '', jobs: [], messages: [], createdAt: Date.now(), updatedAt: Date.now() }
+      strictEffort: true, phase: 'consulting', revision: 0, plan: '', jobs: [], messages: [], createdAt: Date.now(), updatedAt: Date.now() }
     this.runs.set(run.id, run)
     await this.save(run)
     await this.lock(run.id, async () => {
@@ -135,7 +139,7 @@ export class AbManager extends EventEmitter {
   }
   async launch(run, job) {
     try {
-      const handle = await this.runner.start({ runId: run.id, jobId: job.id, workspace: run.workspace, model: job.model, effort: job.effort ?? '',
+      const handle = await this.runner.start({ runId: run.id, jobId: job.id, workspace: run.workspace, model: job.model, effort: job.effort ?? '', strictEffort: run.strictEffort === true,
         text: job.text, images: await this.validateImages(job.images ?? abContextImages(run), run.config), instructions: job.instructions, writable: job.writable, lean: run.config.lean, permissionMode: job.permissionMode })
       job.handle = handle
       await this.save(run)

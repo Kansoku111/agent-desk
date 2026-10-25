@@ -64,10 +64,11 @@ test('AB images survive all stages, image-only follow-ups, retries and reload wi
 
 for (const preflight of [false, true]) test(`AB Claude backend writes actual base64 image blocks to stdin (preflight=${preflight})`, async (t) => {
   const { dir, images, bytes, cleanups } = await fixture(t)
-  let proc, stdin = ''
+  let proc, launch, stdin = ''
   const agents = await new ClaudeRunner({ dir: path.join(dir, 'agents'), findClaude: () => 'claude',
     ...(preflight ? { preflight: async () => null } : {}),
-    spawn: () => {
+    spawn: (command, args) => {
+      launch = [command, ...args].join(' ')
       proc = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), pid: 12 })
       proc.stdin.on('data', (chunk) => { stdin += chunk })
       proc.kill = () => { setImmediate(() => proc.emit('close', 0)) }
@@ -76,9 +77,10 @@ for (const preflight of [false, true]) test(`AB Claude backend writes actual bas
   }).load()
   cleanups.push(() => agents.shutdown())
   const runner = new AbRunner({ agents, threads: new EventEmitter(), attachmentsDir: dir })
-  const handle = await runner.start({ runId: 'R', jobId: 'J', workspace: dir, model: 'claude:sonnet', text: 'original', images, instructions: 'readonly', writable: false })
+  const handle = await runner.start({ runId: 'R', jobId: 'J', workspace: dir, model: 'claude:sonnet', effort: 'medium', text: 'original', images, instructions: 'readonly', writable: false })
   // Preflight and process attachment run asynchronously.
   await new Promise((resolve) => setImmediate(resolve))
+  assert.match(launch, /--effort[\s"]+medium/)
   const content = JSON.parse(stdin).message.content
   assert.deepEqual(content[0], { type: 'text', text: 'original' })
   assert.equal(content.length, 3)

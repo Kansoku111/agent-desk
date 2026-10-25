@@ -441,7 +441,7 @@ const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'
   preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
 const abRunner = new AbRunner({ threads, agents: abAgents, attachmentsDir: paths.attachmentsDir, instructions: () => settings.customInstructions,
   guard: (record) => teams.guardExecution(record) })
-const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner,
+const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalog.data,
   validateImages: async (images, config) => {
     const saved = await abImages(paths.attachmentsDir, images)
     if (saved.length) assertAbImageModels(config, catalog.data.models)

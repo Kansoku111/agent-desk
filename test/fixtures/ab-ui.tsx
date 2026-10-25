@@ -40,7 +40,7 @@ const store = await import('../../web/src/store')
 const { AbStartDialog, AbView } = await import('../../web/src/components/Ab')
 const { ExecutionStartDialog } = await import('../../web/src/components/ExecutionSettings')
 const run = { id: 'run', workspace: 'C:\\fixture', title: 'Fixture', text: 'original', images: [image], config, phase: 'completed', revision: 1, plan: 'plan', jobs: [], messages: [{ text: 'follow-up', images: [image] }], createdAt: 1, updatedAt: 1 }
-const server: any = { settings: { agentTeams: {}, modelVisibility: {} }, accounts: { chatgpt: { signedIn: true }, claude: { configured: false }, deepseek: { configured: false } }, catalog: { models: [{ value: model, id: 'fixture', provider: 'openai-codex', name: 'Fixture GPT' }], providers: { 'openai-codex': 'ChatGPT' }, fallbackEfforts: [], effortsByModel: { [model]: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] } }, ab: [run] }
+const server: any = { settings: { agentTeams: {}, modelVisibility: {} }, accounts: { chatgpt: { signedIn: true }, claude: { configured: false }, deepseek: { configured: false } }, catalog: { models: [{ value: model, id: 'fixture', provider: 'openai-codex', name: 'Fixture GPT' }], providers: { 'openai-codex': 'ChatGPT' }, fallbackEfforts: [], effortsByModel: { [model]: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] } }, ab: [run] }
 store.setState({ server })
 store.connect()
 const root = createRoot(document.getElementById('root')!)
@@ -100,9 +100,12 @@ const api = {
     check(count('ab.approve') === 0, 'Enter never approves')
     passed.push('history image rendering / no implicit approval')
     await render('start')
+    check([...document.querySelectorAll('.ab-effort')].every((button) => button.textContent?.includes('中')), 'all four unspecified efforts display medium')
+    check(Object.values(requests.filter((request) => request.type === 'ab.configure').at(-1).config.efforts).every((value) => value === 'medium'), 'all four defaults saved as medium')
     for (const button of [...document.querySelectorAll<HTMLButtonElement>('.ab-effort')]) {
       button.scrollIntoView({ block: 'center' }); button.click(); await tick()
       const menu = document.querySelector<HTMLElement>('[role="menu"]')!
+      check(!menu.textContent?.includes('既定'), 'default-only menu entry removed')
       const rect = menu.getBoundingClientRect()
       check(menu.parentElement === document.body && rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight, 'menu fits viewport outside clipping parent')
       const items = menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
@@ -116,7 +119,26 @@ const api = {
     await tick()
     check(Object.values(requests.filter((request) => request.type === 'ab.configure').at(-1).config.efforts).every((value) => value === 'high'), 'all four efforts saved')
     passed.push('all four portal menus: placement / selection / persistence')
-    await render('eco'); delay = 'execution.setModels'; await select('親の推論レベル', 'high'); await select('子の推論レベル', 'low')
+    const originalLevels = server.catalog.effortsByModel[model]
+    for (const [levels, expected] of [[[ { value: 'low' } ], '低'], [[], '指定不可'], [undefined, '中']] as const) {
+      if (levels === undefined) delete server.catalog.effortsByModel[model]
+      else server.catalog.effortsByModel[model] = levels
+      await render('start')
+      const buttons = [...document.querySelectorAll<HTMLButtonElement>('.ab-effort')]
+      check(buttons.every((button) => button.textContent?.includes(expected)), `AB capability state: ${expected}`)
+      check(buttons.every((button) => button.disabled === (expected === '指定不可')), `AB capability disabled: ${expected}`)
+      await render('eco')
+      for (const label of ['親の推論レベル', '子の推論レベル']) {
+        const element = document.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!
+        check(element.selectedOptions[0]?.textContent === expected && element.disabled === (expected === '指定不可'), `eco capability state: ${expected}`)
+      }
+      savedModels = { leader: model, provider: 'gpt', model: 'fixture', leaderEffort: '', childEffort: '' }
+    }
+    server.catalog.effortsByModel[model] = originalLevels
+    passed.push('AB/eco legacy defaults: nearest / no reasoning disabled / unknown medium')
+    await render('eco')
+    check(document.querySelector<HTMLSelectElement>('[aria-label="親の推論レベル"]')!.value === 'medium' && document.querySelector<HTMLSelectElement>('[aria-label="子の推論レベル"]')!.value === 'medium', 'eco unspecified efforts display medium')
+    delay = 'execution.setModels'; await select('親の推論レベル', 'high'); await select('子の推論レベル', 'low')
     const before = count('team.create')
     const start = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === '始める')!
     start.click(); start.click(); await tick()

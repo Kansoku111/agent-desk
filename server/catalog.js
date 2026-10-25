@@ -89,7 +89,7 @@ export class Catalog {
       this.data.signature = this.signature
       changed = true
     }
-    if (parsed.currentModel && parsed.efforts.length) {
+    if (parsed.currentModel && configOptions.some((option) => option.id === 'model')) {
       const before = JSON.stringify(this.data.effortsByModel[parsed.currentModel] ?? null)
       if (before !== JSON.stringify(parsed.efforts)) {
         this.data.effortsByModel[parsed.currentModel] = parsed.efforts

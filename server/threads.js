@@ -10,6 +10,7 @@ import { fileListText, isImageFile } from './attachments.js'
 import { debouncedWriter, readJson } from './json-file.js'
 import { PERMISSION_MODES, runtimeKey } from './runtime.js'
 import { applyUpdate, newTurn, parseConfigOptions, settleTurn, titleFrom, nearestEffort } from './transcript.js'
+import { assertWorkflowEffort, assertWorkflowApplied } from '../shared/workflow-effort.js'
 import {
   assertDirectory, carryoverText, describeError, isUndoable, normalizeMessage, receiptStatus, restoreNoteText,
   sameFolder, shortMessage, validateMessageId,
@@ -817,9 +818,10 @@ export class ThreadManager extends EventEmitter {
       parsed = parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? [])
     }
     const wanted = thread.effort ?? ''
-    // AB must not display/save one explicit level while silently sending another.
-    if (thread.ab && wanted && !parsed.efforts.some((effort) => effort.value === wanted)) throw new Error(`ABの推論レベル ${wanted} はこのモデルで利用できません`)
-    const target = thread.ab && wanted ? wanted : nearestEffort(wanted, parsed.efforts)
+    const strict = (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort
+    const label = thread.ab ? 'AB' : 'eco'
+    if (strict) assertWorkflowEffort(wanted, parsed, label)
+    const target = strict ? wanted : nearestEffort(wanted, parsed.efforts)
     if (target !== wanted) {
       thread.effort = target
       this.#saveIndex()
@@ -829,9 +831,7 @@ export class ThreadManager extends EventEmitter {
       const changed = await runtime.setOption(thread.sessionId, 'reasoning_effort', target)
       this.#checkRun(thread, active)
       this.#learnOptions(thread, changed)
-      if (thread.ab && wanted && parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? []).currentEffort !== wanted) {
-        throw new Error(`ABの推論レベル ${wanted} の適用を確認できません`)
-      }
+      if (strict) assertWorkflowApplied(wanted, parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? []), label)
     }
     return runtime
   }

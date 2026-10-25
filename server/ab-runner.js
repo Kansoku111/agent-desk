@@ -77,7 +77,7 @@ export class AbRunner extends EventEmitter {
       return { kind: 'claude', id: session.id }
     }
     const thread = await this.threads.create({ workspace, model, effort, permissionMode: abJobPermission(writable),
-      ab: { runId, jobId, writable, lean } })
+      ab: { runId, jobId, writable, lean, ...(input.strictEffort ? { strictEffort: true } : {}) } })
     this.owned.set(thread.id, owner)
     try {
       // Consultation user content is not rewritten or prefixed by a leader.

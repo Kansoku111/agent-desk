@@ -19,6 +19,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readJson, writeJson } from './json-file.js'
 import { sameToken } from './remote.js'
+import { workflowTeamEfforts } from '../shared/workflow-effort.js'
 import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
 import { CATALOG_PROVIDER, childTask, clip, describeTool, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
@@ -479,6 +480,12 @@ export class TeamManager extends EventEmitter {
         team.leaderKind = 'thread'
       }
     }
+    if (execution) {
+      const id = config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model
+      const leaderModel = team.execution.leaderModel ?? (gpt ? this.catalog.data.models.find((model) => model.provider === 'openai-codex' && model.id === id)?.value ?? JSON.stringify(['openai-codex', id]) : undefined)
+      workflowTeamEfforts(config, this.catalog.data, leaderModel, CATALOG_PROVIDER)
+      team.execution.strictEffort = true
+    }
     if (authConfirmation) await this.#confirmAuth(team, authConfirmation, false)
     if (gpt || team.execution?.leaderModel) return this.#createGptLed(team, config)
     this.teams.set(team.id, team)
@@ -510,7 +517,7 @@ export class TeamManager extends EventEmitter {
       // Marked as the leader from the start: its session mounts the team's tools (mcpServerFor).
       thread = await this.threads.create({
         workspace: team.workspace, model, effort: config.gptLeader.effort ?? '',
-        permissionMode: config.leaderBypass ? 'danger-full-access' : 'workspace-write', team: { id: team.id, role: 'leader' },
+        permissionMode: config.leaderBypass ? 'danger-full-access' : 'workspace-write', team: { id: team.id, role: 'leader', ...(team.execution?.strictEffort ? { strictEffort: true } : {}) },
       })
     } catch (error) {
       this.teams.delete(team.id)
@@ -805,7 +812,7 @@ export class TeamManager extends EventEmitter {
           ?? JSON.stringify([catalogProvider, child.model])
         const thread = await this.threads.create({
           workspace: team.workspace, model: value, effort: child.effort ?? '', permissionMode: child.execution?.mode === 'research' ? 'read-only' : 'danger-full-access',
-          team: { id: team.id, childId: child.id, ...(child.execution ? { executionMode: child.execution.mode } : {}) },
+          team: { id: team.id, childId: child.id, ...(child.execution ? { executionMode: child.execution.mode } : {}), ...(team.execution?.strictEffort ? { strictEffort: true } : {}) },
         })
         taskId = child.taskId = thread.id
         if (!this.teams.has(team.id)) throw new Error('team was removed')

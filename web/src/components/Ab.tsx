@@ -3,9 +3,9 @@ import { ChevronDown, Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-reac
 import { act, navigate, setState, useStore } from '../store'
 import type { AbConfig, AbJob, AbRun, AppState } from '../types'
 import { providerReady, visibleModels } from '../model-selection'
-import { effortLabel, pickableEfforts } from '../util'
+import { effortLabel } from '../util'
 import { abTimeline } from '../ab-transcript'
-import { claudeEfforts } from './TerminalPickers'
+import { workflowEffort, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { Modal, ConfirmDialog } from './Modal'
 import { byNewest, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
@@ -20,10 +20,8 @@ const ROLE: Record<string, string> = { a: '相談 A', b: '相談 B', leader: '�
 const FIELDS = [['a', '相談 A'], ['b', '相談 B'], ['leader', '判断・報告リーダー'], ['implementer', '実装用モデル']] as const
 const CLAUDE_CODE = [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:sonnet', name: 'Sonnet' }, { value: 'claude:haiku', name: 'Haiku' }]
 
-function modelEfforts(server: AppState, model: string): string[] {
-  if (!model) return []
-  if (model.startsWith('claude:')) return claudeEfforts(server, model.slice(7))
-  return pickableEfforts(server.catalog.effortsByModel[model] ?? server.catalog.fallbackEfforts).map((entry) => entry.value)
+function modelEfforts(server: AppState, model: string, wanted: string): string[] {
+  return workflowOptions(wanted, workflowLevels(server.catalog, model))
 }
 
 interface ModelGroup { id: string; heading: string; note: string; models: { value: string; name: string }[] }
@@ -49,6 +47,7 @@ function ModelField({ label, value, groups, disabled, onChange, effort, efforts,
   label: string; value: string; groups: ModelGroup[]; disabled: boolean; onChange: (value: string) => void
   effort: string; efforts: string[]; onEffort: (value: string) => void
 }) {
+  const effortName = !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : '中'
   const name = groups.flatMap((group) => group.models).find((model) => model.value === value)?.name ?? 'モデルを選択'
   return <div className="ab-field">
     <span>{label}</span>
@@ -78,12 +77,11 @@ function ModelField({ label, value, groups, disabled, onChange, effort, efforts,
       )}
     </Dropdown>
     <Dropdown portal width={160} className="ab-effort-menu" trigger={({ toggle, open }) => (
-      <button type="button" className="ab-effort" aria-label={`${label}の推論レベル: ${effort ? effortLabel(effort) : '既定'}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled || !value} onClick={toggle}>
-        <span>{effort ? effortLabel(effort) : '既定'}</span><ChevronDown size={12} />
+      <button type="button" className="ab-effort" aria-label={`${label}の推論レベル: ${effortName}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled || !value || !efforts.length} onClick={toggle}>
+        <span>{effortName}</span><ChevronDown size={12} />
       </button>
     )}>
       {(close) => <>
-        <MenuItem label="既定" selected={!effort} onSelect={() => { onEffort(''); close() }} />
         {efforts.map((value) => <MenuItem key={value} label={effortLabel(value)} selected={effort === value} onSelect={() => { onEffort(value); close() }} />)}
       </>}
     </Dropdown></div>
@@ -110,7 +108,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
       if (!alive || !result) return
       const next = { ...result.config, efforts: { ...result.config.efforts } }
       if (server) for (const [key] of FIELDS) {
-        if (!modelEfforts(server, next[key]).includes(next.efforts[key])) next.efforts[key] = ''
+        next.efforts[key] = workflowEffort(next.efforts[key], workflowLevels(server.catalog, next[key]))
       }
       setConfig(next)
       if (JSON.stringify(next) !== JSON.stringify(result.config)) saves.current = saves.current.then(() => act('ab.configure', { config: next }))
@@ -144,9 +142,9 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
       {config ? <>
         <div className="ab-model-grid">{FIELDS.map(([key, label]) => (
           <ModelField key={key} label={label} value={valid(config[key]) ? config[key] : ''} groups={groups} disabled={busy}
-            effort={config.efforts[key]} efforts={modelEfforts(server, config[key])}
+            effort={config.efforts[key]} efforts={modelEfforts(server, config[key], config.efforts[key])}
             onEffort={(value) => change({ efforts: { ...config.efforts, [key]: value } })}
-            onChange={(value) => change({ [key]: value, efforts: { ...config.efforts, [key]: modelEfforts(server, value).includes(config.efforts[key]) ? config.efforts[key] : '' } })} />
+            onChange={(value) => change({ [key]: value, efforts: { ...config.efforts, [key]: workflowEffort(config.efforts[key], workflowLevels(server.catalog, value), true) } })} />
         ))}</div>
         <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
         <ImplementationOptions config={config} change={change} disabled={busy} />
