@@ -7,11 +7,12 @@ export type Theme = 'system' | 'light' | 'dark'
 export interface AbConfig {
   a: string; b: string; leader: string; implementer: string
   lean: boolean; delegate: boolean; review: boolean
+  permissionMode: 'workspace-write' | 'danger-full-access'
 }
 export interface AbJob {
   id: string; role: string; model: string; status: string; report: string; error?: string
   handle?: { kind: string; id: string }
-  denials?: string[]; stopError?: string
+  denials?: string[]; blockers?: string[]; stopError?: string; writable?: boolean; permissionMode?: PermissionMode
 }
 export interface AbRun {
   id: string; workspace: string; title: string; text: string; config: AbConfig

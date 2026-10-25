@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { AB_CONSULT } from './ab.js'
+import { AB_CONSULT, abPermissionMode } from './ab.js'
 import { describeTool } from './teams-prompts.js'
 
 export function abClaudeArgs({ writable, lean, instructions }) {
@@ -26,7 +26,9 @@ export class AbRunner extends EventEmitter {
         const turn = turns.at(-1)
         this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: status === 'done' ? 'completed' : status,
           text: turn?.items?.filter((item) => item.type === 'agent').at(-1)?.text ?? '', error: turn?.error?.message,
-          denials: owner.denials })
+          denials: owner.denials, ...(owner.writable ? { blockers: (turn?.items ?? [])
+            .filter((item) => item.type === 'tool' && item.status === 'failed' && /SetNamedSecurityInfoW failed \(Win32 5\)/i.test(item.output ?? ''))
+            .map((item) => `${describeTool(item.name, item.input)}\n${item.output}`) } : {}) })
       }).catch((error) => this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: 'error', error: error.message, denials: owner.denials }))
     })
     agents.on('finished', ({ id, status, text, error, denials }) => {
@@ -59,7 +61,7 @@ export class AbRunner extends EventEmitter {
   async start(input) {
     const { runId, jobId, model, workspace, text, writable, lean, instructions } = input
     this.guard({ workspace })
-    const owner = { runId, jobId, denials: [], deniedIds: new Set() }
+    const owner = { runId, jobId, writable, denials: [], deniedIds: new Set() }
     if (model.startsWith('claude:')) {
       const session = await this.agents.create({ workspace, model: model.slice(7),
         args: abClaudeArgs({ writable, lean, instructions: `${instructions}\n\n${this.instructions()}` }) })
@@ -71,7 +73,7 @@ export class AbRunner extends EventEmitter {
       }
       return { kind: 'claude', id: session.id }
     }
-    const thread = await this.threads.create({ workspace, model, permissionMode: writable ? 'workspace-write' : 'read-only',
+    const thread = await this.threads.create({ workspace, model, permissionMode: writable ? abPermissionMode(input.permissionMode) : 'read-only',
       ab: { runId, jobId, writable, lean } })
     this.owned.set(thread.id, owner)
     try {

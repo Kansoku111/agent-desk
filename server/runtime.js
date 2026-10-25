@@ -20,7 +20,13 @@ export { dshEnv }
 export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access']
 
 /** The runtime a thread's session runs in: its mode's, or the team children's of that mode. */
-export const runtimeKey = (thread) => thread.ab ? (thread.ab.writable ? 'ab:write' : thread.ab.lean ? 'ab:lean' : 'ab:research') : (thread.team?.childId ? `team:${thread.permissionMode}` : thread.permissionMode)
+export function runtimeKey(thread) {
+  if (thread.ab) {
+    if (!thread.ab.writable) return thread.ab.lean ? 'ab:lean' : 'ab:research'
+    return thread.permissionMode === 'danger-full-access' ? 'ab:write:danger-full-access' : 'ab:write'
+  }
+  return thread.team?.childId ? `team:${thread.permissionMode}` : thread.permissionMode
+}
 
 const STDERR_TAIL = 16_000
 
@@ -197,7 +203,7 @@ export class RuntimePool extends EventEmitter {
         this.runtimes.set(key, runtime)
       }
     }
-    for (const [key, mode, patch] of [['ab:lean', 'read-only', paths.abLeanPatch], ['ab:research', 'read-only', paths.abResearchPatch], ['ab:write', 'workspace-write', paths.abWritePatch]]) {
+    for (const [key, mode, patch] of [['ab:lean', 'read-only', paths.abLeanPatch], ['ab:research', 'read-only', paths.abResearchPatch], ['ab:write', 'workspace-write', paths.abWritePatch], ['ab:write:danger-full-access', 'danger-full-access', paths.abWritePatch]]) {
       if (!patch) continue
       const runtime = new AcpRuntime({ mode, paths, patches: [patch], onUpdate, onPermission })
       runtime.on('exit', (info) => this.emit('exit', { mode, key, ...info }))

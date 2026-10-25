@@ -12,7 +12,7 @@ await writeHomePatch(paths.homePatch, {})
 await writeAbPatches(paths, {})
 const pool = new RuntimePool({ paths, onUpdate: () => {}, onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
 try {
-  for (const key of ['ab:lean', 'ab:research', 'ab:write']) {
+  for (const key of ['ab:lean', 'ab:research', 'ab:write', 'ab:write:danger-full-access']) {
     const runtime = await pool.get(key)
     console.log(key, runtime.state, runtime.agentInfo?.name)
     if (/error|failed|unknown.*plugin/i.test(runtime.stderr)) console.log(runtime.stderr)

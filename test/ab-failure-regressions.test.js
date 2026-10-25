@@ -215,9 +215,10 @@ test('AB reviewer receives denied operations and warning is retained', async (t)
   await f.finish('implementer', { denials: ['Bash: blocked'] })
   assert.match(f.calls.at(-1).text, /Bash: blocked/)
   await f.finish('reviewer')
-  assert.equal(f.run.phase, 'reviewed')
+  assert.equal(f.run.phase, 'needs-attention')
   assert.ok(f.run.warning)
-  assert.deepEqual(f.notifications.map((event) => event.kind), ['ab-approval', 'ab-reviewed'])
+  assert.equal(f.run.retryJobId, f.run.jobs.find((job) => job.role === 'implementer').id)
+  assert.deepEqual(f.notifications.map((event) => event.kind), ['ab-approval', 'ab-attention'])
 })
 
 test('AB notifications route to AB and describe approval, completion, review and errors', () => {
