@@ -18,6 +18,7 @@ import {
 import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
+import { createAppRestarter } from './app-restart.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
 import { createSettingsService, DEFAULT_SETTINGS, migrateSettings } from './settings.js'
 import { localLlmSettings, localRoute } from './local-llm.js'
@@ -716,6 +717,12 @@ const settingsService = createSettingsService({
   onBackgroundError: (error) => log('settings update check:', error.message),
 })
 
+// The next server takes over this port and token, as after an update.
+const restartApp = createAppRestarter({
+  root: projectRoot, home: paths.home, args, shutdown, log,
+  handoff: () => ({ port: server.address().port, token, windows: countClients(false) }),
+})
+
 const handlers = {
   ...createThreadHandlers({ paths, threads, teams, subagents, getSettings, saveSettings, broadcast }),
   ...createWorkspaceHandlers({ paths, getSettings, saveSettings, broadcast }),
@@ -735,6 +742,13 @@ const handlers = {
   'state.get': (_params, client) => fullState(client),
 
   'settings.update': ({ patch }) => settingsService.update(patch),
+
+  // Builds the UI, then restarts this server whatever it is doing (the tasks stop).
+  'app.restart': async () => {
+    if (DEV) throw new Error('開発サーバー（npm run dev）では使えません')
+    await restartApp()
+    return null
+  },
 
   'remote.set': async ({ enabled }) => {
     // Saved from a copy: when the write fails, the live settings and the listener stay as they were.

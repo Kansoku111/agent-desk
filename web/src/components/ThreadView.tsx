@@ -1,12 +1,12 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  ArrowDown, Bot, ChevronDown, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, SquareTerminal, Trash2,
+  ArrowDown, Bot, ChevronDown, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, RotateCw, SquareTerminal, Trash2,
 } from 'lucide-react'
 import { act, setState, setSubagentPanel, useRemote, useStore } from '../store'
 import type { ThreadSummary, Turn } from '../types'
 import { undoableRestore, workspaceLabel } from '../util'
 import { Composer } from './Composer'
-import { Dropdown, MenuItem } from './Popover'
+import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
 import { BackToLeader, TeamPanel, TeamToggle, useLedTeam } from './TeamPanel'
 import { TurnView } from './TurnView'
@@ -59,6 +59,15 @@ export function OpenInMenu({ workspace }: { workspace: string }) {
               }}
             />
           )}
+          <MenuDivider />
+          <MenuItem
+            icon={<RotateCw size={14} />}
+            label="ビルドして再起動"
+            onSelect={() => {
+              close()
+              setState({ restartConfirm: true })
+            }}
+          />
         </>
       )}
     </Dropdown>

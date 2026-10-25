@@ -11,7 +11,8 @@ import { AgentView } from './components/AgentView'
 import { FileMenuHost } from './components/FileRef'
 import { lazyChunk } from './lazy-chunk'
 import { useSidebarSwipe } from './sidebarSwipe'
-import { getState, navigate, remoteHost, setState, teamChildOf, useStore } from './store'
+import { ConfirmDialog } from './components/Modal'
+import { act, getState, navigate, remoteHost, setState, teamChildOf, toast, useStore } from './store'
 
 // Only used once opened: the terminal screen (xterm) and the settings dialog stay out of the first load.
 const TerminalView = lazyChunk(() => import('./components/TerminalView').then((module) => ({ default: module.TerminalView })))
@@ -78,6 +79,7 @@ export function App() {
   const teamStart = useStore((state) => state.teamStart)
   const executionStart = useStore((state) => state.executionStart)
   const abStart = useStore((state) => state.abStart)
+  const restartConfirm = useStore((state) => state.restartConfirm)
   // The server restarts into the new version; the window reconnects to it.
   const updating = useStore((state) => state.server?.updates?.app?.phase === 'installing')
   const title = useStore((state) => {
@@ -151,6 +153,19 @@ export function App() {
       {teamStart && <TeamStartDialog key={teamStart} workspace={teamStart} />}
       {executionStart && <ExecutionStartDialog key={executionStart} workspace={executionStart} />}
       {abStart && <AbStartDialog key={abStart} workspace={abStart} />}
+      {restartConfirm && (
+        <ConfirmDialog
+          title="ビルドして再起動"
+          body={<p>実行中のタスクは停止します。</p>}
+          confirmLabel="再起動"
+          danger
+          onClose={() => setState({ restartConfirm: false })}
+          onConfirm={() => {
+            toast('ビルドして再起動しています…')
+            void act('app.restart')
+          }}
+        />
+      )}
       <Toasts />
       <FileMenuHost />
     </div>

@@ -40,6 +40,8 @@ export interface State {
   teamStart: string | null
   executionStart: string | null
   abStart: string | null
+  /** The confirmation for "build and restart" (the open menu). */
+  restartConfirm: boolean
   sidebarOpen: boolean
   toasts: Toast[]
   queued: Record<string, QueuedMessage[]>
@@ -167,6 +169,7 @@ let state: State = {
   teamStart: null,
   executionStart: null,
   abStart: null,
+  restartConfirm: false,
   sidebarOpen: !isNarrow(),
   toasts: [],
   queued: readQueued(),
