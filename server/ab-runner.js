@@ -59,11 +59,11 @@ export class AbRunner extends EventEmitter {
     })
   }
   async start(input) {
-    const { runId, jobId, model, workspace, text, writable, lean, instructions } = input
+    const { runId, jobId, model, effort = '', workspace, text, writable, lean, instructions } = input
     this.guard({ workspace })
     const owner = { runId, jobId, writable, denials: [], deniedIds: new Set() }
     if (model.startsWith('claude:')) {
-      const session = await this.agents.create({ workspace, model: model.slice(7),
+      const session = await this.agents.create({ workspace, model: model.slice(7), effort: effort || null,
         args: abClaudeArgs({ writable, lean, instructions: `${instructions}\n\n${this.instructions()}` }) })
       this.owned.set(session.id, owner)
       try { this.agents.run(session.id, text) } catch (error) {
@@ -73,7 +73,7 @@ export class AbRunner extends EventEmitter {
       }
       return { kind: 'claude', id: session.id }
     }
-    const thread = await this.threads.create({ workspace, model, permissionMode: abJobPermission(writable),
+    const thread = await this.threads.create({ workspace, model, effort, permissionMode: abJobPermission(writable),
       ab: { runId, jobId, writable, lean } })
     this.owned.set(thread.id, owner)
     try {

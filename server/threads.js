@@ -817,7 +817,9 @@ export class ThreadManager extends EventEmitter {
       parsed = parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? [])
     }
     const wanted = thread.effort ?? ''
-    const target = nearestEffort(wanted, parsed.efforts)
+    // AB must not display/save one explicit level while silently sending another.
+    if (thread.ab && wanted && !parsed.efforts.some((effort) => effort.value === wanted)) throw new Error(`ABの推論レベル ${wanted} はこのモデルで利用できません`)
+    const target = thread.ab && wanted ? wanted : nearestEffort(wanted, parsed.efforts)
     if (target !== wanted) {
       thread.effort = target
       this.#saveIndex()
@@ -827,6 +829,9 @@ export class ThreadManager extends EventEmitter {
       const changed = await runtime.setOption(thread.sessionId, 'reasoning_effort', target)
       this.#checkRun(thread, active)
       this.#learnOptions(thread, changed)
+      if (thread.ab && wanted && parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? []).currentEffort !== wanted) {
+        throw new Error(`ABの推論レベル ${wanted} の適用を確認できません`)
+      }
     }
     return runtime
   }

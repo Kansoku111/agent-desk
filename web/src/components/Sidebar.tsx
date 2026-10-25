@@ -6,6 +6,7 @@ import {
 import { act, getState, isNarrow, navigate, request, setState, startTerminal, toast, useRemote, useStore } from '../store'
 import { selectThreadRange } from '../thread-selection'
 import { threadMarkdown } from '../thread-transcript'
+import { abMarkdown } from '../ab-transcript'
 import { ConfirmDialog } from './Modal'
 import type { AbRun, TerminalSummary, ThreadSummary, Turn } from '../types'
 import { copyText, parseModel, relativeTime, workspaceLabel } from '../util'
@@ -109,6 +110,51 @@ interface ThreadSelection {
   busy: boolean
   toggle: (id: string, range: boolean) => void
   group: (ids: string[]) => void
+}
+
+function AbRow({ run, active, selection }: { run: AbRun; active: boolean; selection: ThreadSelection }) {
+  const [renaming, setRenaming] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [title, setTitle] = useState(run.title)
+  const save = async () => {
+    setRenaming(false)
+    if (title.trim() && title.trim() !== run.title) await act('ab.update', { runId: run.id, title: title.trim() })
+  }
+  const copy = async () => {
+    try { await copyText(abMarkdown(run)); toast('履歴をコピーしました', 'success') }
+    catch { toast('コピーできませんでした', 'error') }
+  }
+  return <li className={`thread-row ${active ? 'active' : ''} ${selection.enabled && selection.selected.has(run.id) ? 'selected' : ''}`}>
+    {selection.enabled && <input type="checkbox" className="thread-checkbox" aria-label={`${run.title} を選択`}
+      checked={selection.selected.has(run.id)} disabled={selection.busy} onChange={() => {}}
+      onClick={(event) => selection.toggle(run.id, event.shiftKey)} />}
+    {renaming ? <input className="rename-input" autoFocus aria-label="タスク名" value={title} maxLength={200}
+      onChange={(event) => setTitle(event.target.value)} onBlur={() => void save()}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return
+        if (event.key === 'Enter') void save()
+        if (event.key === 'Escape') { setTitle(run.title); setRenaming(false) }
+      }} /> : <button type="button" className="thread-button" disabled={selection.busy} title={run.title}
+      onClick={(event) => selection.enabled || event.ctrlKey || event.metaKey || event.shiftKey
+        ? selection.toggle(run.id, event.shiftKey) : navigate({ view: 'ab', id: run.id })}>
+      <span className="cl-mark tm-mark small">AB</span><span className="thread-title">{run.title}</span>
+      <span className="thread-meta">{run.jobs.some((job) => ['running', 'stopping'].includes(job.status))
+        ? <Loader2 size={13} className="spin" /> : run.phase === 'awaiting-approval'
+          ? <span className="status-dot approval" title="案の確認待ち" /> : <span className="thread-time">{relativeTime(run.updatedAt)}</span>}</span>
+    </button>}
+    {!renaming && !selection.enabled && <Dropdown placement="bottom" align="right" width={180} className="thread-actions"
+      trigger={({ toggle }) => <button type="button" className="icon-button small" aria-label="ABの操作" onClick={toggle}><MoreHorizontal size={14} /></button>}>
+      {(close) => <>
+        <MenuItem icon={<Pencil size={14} />} label="名前を変更" onSelect={() => { close(); setTitle(run.title); setRenaming(true) }} />
+        <MenuItem icon={<Copy size={14} />} label="履歴をコピー" onSelect={() => { close(); void copy() }} />
+        <MenuItem icon={run.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />} label={run.archived ? 'アーカイブから戻す' : 'アーカイブ'}
+          onSelect={() => { close(); void act('ab.update', { runId: run.id, archived: !run.archived }) }} />
+        <MenuItem icon={<Trash2 size={14} />} label="削除" danger hint="⌫" keys={['Backspace', 'Delete']} onSelect={() => { close(); setRemoving(true) }} />
+      </>}
+    </Dropdown>}
+    {removing && <ConfirmDialog title="ABを削除" body={<p>実行中の作業を停止し、相談と各担当の記録を削除します。プロジェクトのファイルは削除しません。</p>}
+      confirmLabel="削除" danger onClose={() => setRemoving(false)} onConfirm={() => void act('ab.remove', { runId: run.id })} />}
+  </li>
 }
 
 function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; active: boolean; selection: ThreadSelection }) {
@@ -540,12 +586,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
           )}
           {shownRows.map((row) => (row.thread
             ? <ThreadRow key={row.id} thread={row.thread} active={activeId === row.id} selection={selection} />
-            : row.ab ? <li key={row.id} className={`thread-row ${activeId === row.id ? 'active' : ''}`}>
-              <button className="thread-button" onClick={(event) => selection.enabled ? selection.toggle(row.id, event.shiftKey) : navigate({ view: 'ab', id: row.id })}>
-                {selection.enabled && <input type="checkbox" readOnly checked={selection.selected.has(row.id)} tabIndex={-1} />}
-                <span className="cl-mark tm-mark small">AB</span><span className="thread-title">{row.ab.title}</span>
-                {['consulting', 'judging', 'preparing', 'implementing', 'reviewing'].includes(row.ab.phase) ? <Loader2 size={13} className="spin" /> : row.ab.phase === 'awaiting-approval' ? <span className="status-dot approval" title="案の確認待ち" /> : <span className="thread-time">{relativeTime(row.ab.updatedAt)}</span>}
-              </button></li>
+            : row.ab ? <AbRow key={row.id} run={row.ab} active={activeId === row.id} selection={selection} />
             : <TerminalRow key={row.id} terminal={row.terminal!} active={activeId === row.id} selection={selection} />))}
         </ul>
       )}
@@ -608,7 +649,7 @@ export function Sidebar() {
         color: projectColor(colors, path),
         threads: visible.filter((thread) => thread.workspace === path),
         terminals: visibleTerminals.filter((terminal) => terminal.workspace === path),
-        ab: ab.filter((run) => run.workspace === path && shown({ ...run, archived: false })),
+        ab: ab.filter((run) => run.workspace === path && shown({ ...run, archived: Boolean(run.archived) })),
       })
     }
     const any = (group: Group) => group.threads.length > 0 || group.terminals.length > 0 || group.ab.length > 0

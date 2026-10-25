@@ -14,7 +14,12 @@
 .ab-report[open] summary { margin-bottom: 16px; }
 .ab-model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .ab-field { display: grid; gap: 6px; min-width: 0; font-size: 12px; }
-.ab-field .dropdown { display: flex; }
+.ab-model-controls { display: flex; gap: 6px; min-width: 0; }
+.ab-field .dropdown { display: flex; flex: 1; min-width: 0; }
+.ab-field .ab-effort-menu { flex: 0 0 auto; }
+.ab-effort { display: flex; align-items: center; justify-content: space-between; gap: 4px; width: 72px; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 12px; }
+.ab-effort:hover:not(:disabled) { background: var(--bg-hover); }
+.ab-effort:disabled { opacity: 0.5; }
 .ab-picker { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 13px; text-align: left; }
 .ab-picker span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ab-picker:hover:not(:disabled), .ab-picker.active { background: var(--bg-hover); }

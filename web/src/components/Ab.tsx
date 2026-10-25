@@ -3,6 +3,9 @@ import { ChevronDown, Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-reac
 import { act, navigate, setState, useStore } from '../store'
 import type { AbConfig, AbJob, AbRun, AppState } from '../types'
 import { providerReady, visibleModels } from '../model-selection'
+import { effortLabel, pickableEfforts } from '../util'
+import { abTimeline } from '../ab-transcript'
+import { claudeEfforts } from './TerminalPickers'
 import { Modal, ConfirmDialog } from './Modal'
 import { byNewest, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
@@ -15,6 +18,12 @@ const ACTIVE = ['consulting', 'judging', 'preparing', 'implementing', 'reviewing
 const ROLE: Record<string, string> = { a: '相談 A', b: '相談 B', leader: '判断・報告', instructions: '実装指示', implementer: '実装', direct: 'リーダー実装', reviewer: 'レビュー' }
 const FIELDS = [['a', '相談 A'], ['b', '相談 B'], ['leader', '判断・報告リーダー'], ['implementer', '実装用モデル']] as const
 const CLAUDE_CODE = [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:sonnet', name: 'Sonnet' }, { value: 'claude:haiku', name: 'Haiku' }]
+
+function modelEfforts(server: AppState, model: string): string[] {
+  if (!model) return []
+  if (model.startsWith('claude:')) return claudeEfforts(server, model.slice(7))
+  return pickableEfforts(server.catalog.effortsByModel[model] ?? server.catalog.fallbackEfforts).map((entry) => entry.value)
+}
 
 interface ModelGroup { id: string; heading: string; note: string; models: { value: string; name: string }[] }
 
@@ -35,13 +44,14 @@ function modelGroups(server: AppState): ModelGroup[] {
   ]
 }
 
-function ModelField({ label, value, groups, disabled, onChange }: {
+function ModelField({ label, value, groups, disabled, onChange, effort, efforts, onEffort }: {
   label: string; value: string; groups: ModelGroup[]; disabled: boolean; onChange: (value: string) => void
+  effort: string; efforts: string[]; onEffort: (value: string) => void
 }) {
   const name = groups.flatMap((group) => group.models).find((model) => model.value === value)?.name ?? 'モデルを選択'
   return <div className="ab-field">
     <span>{label}</span>
-    <Dropdown
+    <div className="ab-model-controls"><Dropdown
       placement="bottom"
       width={300}
       trigger={({ toggle, open }) => (
@@ -65,6 +75,16 @@ function ModelField({ label, value, groups, disabled, onChange }: {
         </div>
       )}
     </Dropdown>
+    <Dropdown width={160} className="ab-effort-menu" trigger={({ toggle, open }) => (
+      <button type="button" className="ab-effort" aria-label={`${label}の推論レベル: ${effort ? effortLabel(effort) : '既定'}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled || !value} onClick={toggle}>
+        <span>{effort ? effortLabel(effort) : '既定'}</span><ChevronDown size={12} />
+      </button>
+    )}>
+      {(close) => <>
+        <MenuItem label="既定" selected={!effort} onSelect={() => { onEffort(''); close() }} />
+        {efforts.map((value) => <MenuItem key={value} label={effortLabel(value)} selected={effort === value} onSelect={() => { onEffort(value); close() }} />)}
+      </>}
+    </Dropdown></div>
   </div>
 }
 
@@ -84,7 +104,15 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   const saves = useRef(Promise.resolve<unknown>(null))
   useEffect(() => {
     let alive = true
-    void act<{ config: AbConfig }>('ab.config', {}).then((result) => { if (alive && result) setConfig(result.config) })
+    void act<{ config: AbConfig }>('ab.config', {}).then((result) => {
+      if (!alive || !result) return
+      const next = { ...result.config, efforts: { ...result.config.efforts } }
+      if (server) for (const [key] of FIELDS) {
+        if (!modelEfforts(server, next[key]).includes(next.efforts[key])) next.efforts[key] = ''
+      }
+      setConfig(next)
+      if (JSON.stringify(next) !== JSON.stringify(result.config)) saves.current = saves.current.then(() => act('ab.configure', { config: next }))
+    })
     return () => { alive = false }
   }, [])
   const change = (patch: Partial<AbConfig>) => {
@@ -113,7 +141,10 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
     <div className="team-start-body">
       {config ? <>
         <div className="ab-model-grid">{FIELDS.map(([key, label]) => (
-          <ModelField key={key} label={label} value={valid(config[key]) ? config[key] : ''} groups={groups} disabled={busy} onChange={(value) => change({ [key]: value })} />
+          <ModelField key={key} label={label} value={valid(config[key]) ? config[key] : ''} groups={groups} disabled={busy}
+            effort={config.efforts[key]} efforts={modelEfforts(server, config[key])}
+            onEffort={(value) => change({ efforts: { ...config.efforts, [key]: value } })}
+            onChange={(value) => change({ [key]: value, efforts: { ...config.efforts, [key]: modelEfforts(server, value).includes(config.efforts[key]) ? config.efforts[key] : '' } })} />
         ))}</div>
         <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
         <ImplementationOptions config={config} change={change} disabled={busy} />
@@ -127,7 +158,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
 
 function Report({ job, workspace, modelName, open = false }: { job: AbJob; workspace: string; modelName: string; open?: boolean }) {
   return <details className="ab-report" open={open || undefined}>
-    <summary><span>{ROLE[job.role] ?? job.role}</span><span className="muted">{modelName}</span>{job.status === 'running' && <Loader2 size={14} className="spin" />}</summary>
+    <summary><span>{ROLE[job.role] ?? job.role}</span><span className="muted">{modelName}{job.effort ? ` · ${effortLabel(job.effort)}` : ''}</span>{job.status === 'running' && <Loader2 size={14} className="spin" />}</summary>
     {job.error && <p className="error-text">{job.error}</p>}
     {job.stopError && <p role="alert" className="error-text">{job.stopError}</p>}
     {job.report ? <><CopyButton text={job.report} /><Markdown text={job.report} workspace={workspace} /></> : <p className="muted">{job.status === 'running' ? '検討中…' : '報告なし'}</p>}
@@ -163,13 +194,15 @@ export function AbView({ id }: { id: string }) {
       <div className="ab-consultations">{run.jobs.filter((job) => ['a', 'b'].includes(job.role)).map((job) => <Report key={job.id} job={job} workspace={run.workspace} modelName={modelName(job.model)} />)}</div>
       {run.error && <p role="alert" className="error-text">{run.error}</p>}
       {run.warning && <p role="alert" className="error-text">{run.warning}</p>}
-      {run.messages.map((message, index) => <section className="ab-question" key={index}><Markdown text={message} workspace={run.workspace} /></section>)}
-      {run.jobs.filter((job) => !['a', 'b'].includes(job.role)).map((job) => <Report key={job.id} job={job} workspace={run.workspace} modelName={modelName(job.model)} open={job.id === latest?.id} />)}
-      {run.phase === 'awaiting-approval' && <section className="ab-approval">
+      {abTimeline(run).filter((entry) => entry.kind !== 'job' || !['a', 'b'].includes(entry.job.role)).map((entry) => entry.kind === 'message'
+        ? <section className="ab-question" key={entry.key}><Markdown text={entry.text} workspace={run.workspace} /></section>
+        : <Report key={entry.key} job={entry.job} workspace={run.workspace} modelName={modelName(entry.job.model)} open={entry.job.id === latest?.id} />)}
+      {run.phase === 'awaiting-approval' && !running && <section className="ab-approval">
         <ImplementationOptions config={options} change={(patch) => setOptions((current) => ({ ...current, ...patch }))} disabled={busy} />
         <button className="button primary" disabled={busy || (options.delegate && !run.config.implementer)} onClick={() => void action('ab.approve', { revision: run.revision, ...options })}>この案に同意して実装</button>
-        <div className="ab-followup"><textarea className="ab-input" aria-label="追加相談" placeholder="案への修正・追加の条件" value={text} onChange={(event) => setText(event.target.value)} rows={3} maxLength={100000} disabled={busy} /><button className="button" disabled={busy || !text.trim()} onClick={async () => { if (await action('ab.revise', { text })) setText('') }}>リーダーに送る</button></div>
+
       </section>}
+      {['awaiting-approval', 'completed', 'reviewed', 'needs-attention'].includes(run.phase) && !running && <div className="ab-followup"><textarea className="ab-input" aria-label="追加相談" placeholder="案への修正・追加の条件" value={text} onChange={(event) => setText(event.target.value)} rows={3} maxLength={100000} disabled={busy} /><button className="button" disabled={busy || !text.trim()} onClick={async () => { if (await action('ab.revise', { text })) setText('') }}>リーダーに送る</button></div>}
       {['completed', 'needs-attention'].includes(run.phase) && run.config.delegate && !run.jobs.some((job) => job.role === 'reviewer' && job.status === 'completed') && <p className="muted">リーダーレビュー未実施</p>}
       {canRetry && <button className="button" disabled={busy} onClick={() => setRetrying(run.retryJobId!)}>この段階を再試行</button>}
       {['error', 'stopped', 'interrupted'].includes(run.phase) && <button className="button" onClick={() => setState({ abStart: run.workspace })}>新しい相談</button>}

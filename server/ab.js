@@ -5,15 +5,22 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { readJson, writeJson } from './json-file.js'
+import { EFFORTS as CLAUDE_EFFORTS } from './terminal-helpers.js'
 
-export const AB_DEFAULTS = { a: '', b: '', leader: '', implementer: '', lean: true, delegate: true, review: true }
+const ROLES = ['a', 'b', 'leader', 'implementer']
+export const AB_DEFAULTS = { a: '', b: '', leader: '', implementer: '', efforts: { a: '', b: '', leader: '', implementer: '' }, lean: true, delegate: true, review: true }
 // Implementation always runs unsandboxed; every other stage is read-only.
 export const abJobPermission = (writable) => writable ? 'danger-full-access' : 'read-only'
 export function abConfig(input = {}) {
-  const result = { ...AB_DEFAULTS }
-  for (const key of ['a', 'b', 'leader', 'implementer']) {
+  const result = { ...AB_DEFAULTS, efforts: { ...AB_DEFAULTS.efforts } }
+  if (input.efforts !== undefined && (!input.efforts || typeof input.efforts !== 'object' || Array.isArray(input.efforts))) throw new Error('ABの推論レベルが不正です')
+  for (const key of ROLES) {
+    const effort = input.efforts?.[key] ?? ''
+    if (typeof effort !== 'string' || effort.length > 100) throw new Error('ABの推論レベルが不正です')
+    result.efforts[key] = effort
     if (input[key] !== undefined && (typeof input[key] !== 'string' || input[key].length > 1000)) throw new Error('ABのモデル設定が不正です')
     result[key] = input[key] ?? result[key]
+    if (result[key].startsWith('claude:') && effort && !CLAUDE_EFFORTS.includes(effort)) throw new Error('Claude Codeの推論レベルが不正です')
   }
   for (const key of ['lean', 'delegate', 'review']) {
     if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error('ABの設定が不正です')
@@ -51,7 +58,7 @@ export class AbManager extends EventEmitter {
     for (const run of saved.runs ?? []) {
       run.config = abConfig(run.config)
       // Older versions left denied implementations at a dead end with no retry.
-      if (run.warning && ['needs-attention', 'reviewed'].includes(run.phase) && run.approvedPlan) {
+      if (run.warning && ['needs-attention', 'reviewed'].includes(run.phase) && run.approvedPlan && run.approvedRevision === run.revision) {
         const blocked = run.jobs.findLast((job) => job.writable && (job.denials?.length || job.blockers?.length))
         if (blocked) run.retryJobId = blocked.id
       }
@@ -116,8 +123,8 @@ export class AbManager extends EventEmitter {
     })
     return { run: this.summary(run) }
   }
-  job(run, role, model, text, instructions, writable = false) {
-    const job = { id: randomUUID(), role, model, text, instructions, writable,
+  job(run, role, model, text, instructions, writable = false, effort = run.config.efforts[ROLES.includes(role) ? role : 'leader']) {
+    const job = { id: randomUUID(), role, model, effort, text, instructions, writable,
       permissionMode: abJobPermission(writable),
       status: 'running', report: '', createdAt: Date.now() }
     run.jobs.push(job)
@@ -125,7 +132,7 @@ export class AbManager extends EventEmitter {
   }
   async launch(run, job) {
     try {
-      const handle = await this.runner.start({ runId: run.id, jobId: job.id, workspace: run.workspace, model: job.model,
+      const handle = await this.runner.start({ runId: run.id, jobId: job.id, workspace: run.workspace, model: job.model, effort: job.effort ?? '',
         text: job.text, instructions: job.instructions, writable: job.writable, lean: run.config.lean, permissionMode: job.permissionMode })
       job.handle = handle
       await this.save(run)
@@ -166,9 +173,9 @@ export class AbManager extends EventEmitter {
     this.emit('notify', { kind: `ab-${kind}`, ab: true, threadId: run.id, title: run.title,
       ...(kind === 'error' ? { status: 'error' } : {}) })
   }
-  async next(run, phase, role, model, text, instructions, writable = false) {
+  async next(run, phase, role, model, text, instructions, writable = false, effort) {
     run.phase = phase
-    const job = this.job(run, role, model, text, instructions, writable)
+    const job = this.job(run, role, model, text, instructions, writable, effort)
     await this.save(run)
     await this.launch(run, job)
     if (job.error) await this.fail(run, job)
@@ -239,11 +246,14 @@ export class AbManager extends EventEmitter {
   approve({ id, revision, delegate, review }) {
     return this.lock(id, async () => {
       const run = this.require(id)
-      if (run.phase !== 'awaiting-approval' || revision !== run.revision) throw new Error('最新の案を確認してから承認してください')
+      if (run.phase !== 'awaiting-approval' || revision !== run.revision || run.jobs.some((job) => RUNNING.has(job.status))) throw new Error('最新の案を確認してから承認してください')
       if (typeof delegate !== 'boolean' || typeof review !== 'boolean') throw new Error('実装方式を選択してください')
       this.validateModel(delegate ? run.config.implementer : run.config.leader)
       run.config.delegate = delegate
       run.config.review = review
+      delete run.error
+      delete run.warning
+      delete run.retryJobId
       run.approvedPlan = run.plan
       run.approvedAt = Date.now()
       run.approvedRevision = revision
@@ -261,11 +271,19 @@ export class AbManager extends EventEmitter {
   revise({ id, text }) {
     return this.lock(id, async () => {
       const run = this.require(id)
-      if (run.phase !== 'awaiting-approval') throw new Error('案の確認待ちのときだけ追加相談できます')
+      if (!['awaiting-approval', 'completed', 'reviewed', 'needs-attention'].includes(run.phase)
+        || run.jobs.some((job) => RUNNING.has(job.status))) throw new Error('実行中の作業がないときだけ追加相談できます')
       if (typeof text !== 'string' || !text.trim() || text.length > 100000) throw new Error('追加の指示を入力してください')
-      run.messages.push(text)
+      run.messages.push({ text, afterJobId: run.jobs.at(-1)?.id })
+      // Invalidate approval immediately, even if consultation fails or the app exits.
+      delete run.approvedRevision
+      delete run.retryJobId
+      delete run.error
       await this.next(run, 'judging', 'leader', run.config.leader,
-        JSON.stringify({ originalRequest: run.text, reports: run.jobs.filter((job) => ['a', 'b'].includes(job.role)).map(({ role, report }) => ({ role, report })), previousPlan: run.plan, additionalInstructions: run.messages }), JUDGE)
+        JSON.stringify({ originalRequest: run.text, approvedPlan: run.approvedPlan, previousPlan: run.plan,
+          reports: run.jobs.map(({ id, role, report, error, createdAt }) => ({ id, role, report, error, createdAt })),
+          conversation: run.messages }),
+        JUDGE + '\n追加相談への回答を行い、必要な修正は再承認できる自己完結した更新案として提示してください。過去の実装・レビューと追加会話を考慮し、完了済み操作の重複を避けてください。過去の承認は今回の変更を許可しません。')
       return { run: this.summary(run) }
     })
   }
@@ -287,7 +305,7 @@ export class AbManager extends EventEmitter {
       const instructions = `${original.instructions}\n\nユーザーがこの段階の再試行を明示的に選びました。前の試行で変更済みのファイルは残っています。まず現在のファイルと差分を確認し、済んだ作業を重複して実行しないでください。外部操作や副作用の完了が不明なら再実行せず、未確認として報告してください。`
       delete run.error
       delete run.retryJobId
-      await this.next(run, RETRY_PHASE[previous.role], previous.role, previous.model, context, instructions, previous.writable)
+      await this.next(run, RETRY_PHASE[previous.role], previous.role, previous.model, context, instructions, previous.writable, previous.effort ?? '')
       run.jobs.at(-1).retryOf = original.id
       await this.save(run)
       return { run: this.summary(run) }
@@ -300,6 +318,17 @@ export class AbManager extends EventEmitter {
       if (RUNNING.has(last?.status) && run.approvedPlan && RETRY_PHASE[last.role]) run.retryJobId = last.id
       run.phase = 'stopped'
       await this.stopJobs(run)
+      await this.save(run)
+      return { run: this.summary(run) }
+    })
+  }
+  update({ id, title, archived }) {
+    return this.lock(id, async () => {
+      const run = this.require(id)
+      if (title !== undefined && (typeof title !== 'string' || !title.trim() || title.trim().length > 200)) throw new Error('ABの名前が不正です（200文字以内）')
+      if (archived !== undefined && typeof archived !== 'boolean') throw new Error('アーカイブ設定が不正です')
+      if (title !== undefined) run.title = title.trim()
+      if (archived !== undefined) run.archived = archived
       await this.save(run)
       return { run: this.summary(run) }
     })

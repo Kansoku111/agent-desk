@@ -6,17 +6,19 @@ export type Theme = 'system' | 'light' | 'dark'
 
 export interface AbConfig {
   a: string; b: string; leader: string; implementer: string
+  efforts: Record<'a' | 'b' | 'leader' | 'implementer', string>
   lean: boolean; delegate: boolean; review: boolean
 }
 export interface AbJob {
-  id: string; role: string; model: string; status: string; report: string; error?: string
+  id: string; role: string; model: string; effort?: string; status: string; report: string; error?: string
   handle?: { kind: string; id: string }
   denials?: string[]; blockers?: string[]; stopError?: string; writable?: boolean; permissionMode?: PermissionMode
 }
 export interface AbRun {
   id: string; workspace: string; title: string; text: string; config: AbConfig
   phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string; warning?: string; retryJobId?: string
-  messages: string[]; createdAt: number; updatedAt: number
+  archived?: boolean
+  messages: (string | { text: string; afterJobId?: string })[]; createdAt: number; updatedAt: number
 }
 
 export interface ThreadSummary {
