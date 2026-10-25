@@ -33,6 +33,27 @@ function GuideList({ title, setting, saved, fields }: { title: string; setting: 
   const edit = (id: string, patch: Record<string, string>) => setDraft(draft.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)))
   const add = () => setDraft([...draft, { id: newId(), name: '', ...Object.fromEntries(fields.map((field) => [field.key, ''])) }])
 
+  const remove = async (id: string) => {
+    const remaining = draft.filter((entry) => entry.id !== id)
+    if (!base.some((entry) => entry.id === id)) {
+      setDraft(remaining)
+      return
+    }
+    // Persist only the deletion, not unrelated edits or incomplete new entries.
+    const nextBase = base.filter((entry) => entry.id !== id)
+    setSaving(true)
+    setError(null)
+    try {
+      await request('settings.update', { patch: { [setting]: nextBase, teamGuidesBase: { [setting]: base } } })
+      setBase(nextBase)
+      setDraft(remaining)
+      toast(`${title}を削除しました`, 'success')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    setSaving(false)
+  }
+
   const save = async () => {
     setSaving(true)
     setError(null)
@@ -58,7 +79,7 @@ function GuideList({ title, setting, saved, fields }: { title: string; setting: 
           <div className="team-guide-head">
             <input value={entry.name} maxLength={NAME_MAX} readOnly={saving} onChange={(event) => edit(entry.id, { name: event.target.value })}
               placeholder="名前" aria-label={`${title}の名前`} />
-            <button type="button" className="icon-button" disabled={saving} onClick={() => setDraft(draft.filter((other) => other.id !== entry.id))}
+            <button type="button" className="icon-button" disabled={saving} onClick={() => void remove(entry.id)}
               title="削除" aria-label={`${entry.name || title}を削除`}>
               <Trash2 size={15} />
             </button>

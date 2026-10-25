@@ -1,9 +1,139 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import { test } from 'node:test'
+import ts from 'typescript'
+import { createSettingsService, migrateSettings } from '../server/settings.js'
 
-// Keep the editor's conflict-handling contract covered without a TSX/browser loader.
+// Keep the editor's conflict-handling contract covered independently of a browser.
 const source = () => fs.readFile(new URL('../web/src/components/TeamGuides.tsx', import.meta.url), 'utf8')
+
+// Execute the real TSX handlers with minimal state/JSX adapters, not a duplicate
+// of the deletion logic. Settings still go through the actual commit service.
+async function editor(setting, initial, hooks = {}) {
+  const slots = []
+  const calls = []
+  const notices = []
+  let cursor = 0
+  let saved = initial
+  let persisted = JSON.stringify({ [setting]: initial })
+  let live = migrateSettings(JSON.parse(persisted))
+  const service = createSettingsService({
+    getSettings: () => live,
+    saveSettings: async (candidate) => {
+      await hooks.save?.()
+      persisted = JSON.stringify(candidate)
+      return candidate
+    },
+    publishSettings: (candidate) => { live = candidate; saved = live[setting] },
+  })
+  const jsx = (type, props) => ({ type, props })
+  const modules = {
+    react: { useState: (initialValue) => {
+      const index = cursor++
+      if (!(index in slots)) slots[index] = initialValue
+      return [slots[index], (value) => { slots[index] = value }]
+    } },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'lucide-react': {},
+    '../store': {
+      request: async (method, { patch }) => {
+        calls.push({ method, patch: structuredClone(patch) })
+        return service.update(patch)
+      },
+      toast: (...args) => notices.push(args),
+    },
+  }
+  const { outputText } = ts.transpileModule(`${await source()}\nexport { GuideList }`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+  })
+  const exports = {}
+  new Function('require', 'exports', outputText)((name) => {
+    assert.ok(name in modules, `unexpected dependency: ${name}`)
+    return modules[name]
+  }, exports)
+  const title = setting === 'teamPolicies' ? '方針' : 'プレイブック'
+  const fields = (setting === 'teamPolicies' ? ['text'] : ['description', 'body'])
+    .map((key) => ({ key, placeholder: key, label: key, max: 20_000 }))
+  const render = () => {
+    cursor = 0
+    return exports.GuideList({ title, setting, saved, fields })
+  }
+  const find = (predicate, node = render()) => {
+    if (!node || typeof node !== 'object') return undefined
+    if (predicate(node)) return node
+    for (const child of [node.props?.children].flat(Infinity)) {
+      if (!child || typeof child !== 'object') continue
+      const found = find(predicate, child)
+      if (found) return found
+    }
+  }
+  return {
+    calls, notices, find,
+    get draft() { return slots[0] },
+    get base() { return slots[1] },
+    get error() { return slots[3] },
+    restart: () => migrateSettings(JSON.parse(persisted)),
+    delete: async (name) => {
+      find((node) => node.props?.['aria-label'] === `${name}を削除`).props.onClick()
+      await new Promise((resolve) => setImmediate(resolve))
+    },
+    edit: (name, value) => find((node) => node.type === 'input' && node.props.value === name).props.onChange({ target: { value } }),
+    add: () => find((node) => node.type === 'button' && node.props.children?.includes(' 追加')).props.onClick(),
+    externalSave: async (entries) => service.update({ [setting]: entries, teamGuidesBase: { [setting]: saved } }),
+  }
+}
+
+for (const [setting, body] of [['teamPolicies', { text: 'original' }], ['teamPlaybooks', { description: 'when', body: 'original' }]]) {
+  const entries = () => [{ id: 'a', name: 'A', ...body }, { id: 'b', name: 'B', ...body }]
+
+  test(`${setting}: delete persists immediately, including deletion of the last entry`, async () => {
+    const h = await editor(setting, entries())
+    await h.delete('A')
+    assert.deepEqual(h.restart()[setting], [entries()[1]])
+    assert.deepEqual(h.draft, [entries()[1]])
+    assert.deepEqual(h.calls[0].patch.teamGuidesBase[setting], entries())
+    await h.delete('B')
+    assert.deepEqual(h.restart()[setting], [])
+    assert.deepEqual(h.draft, [])
+    assert.equal(h.notices.length, 2)
+  })
+
+  test(`${setting}: delete preserves unrelated edits and incomplete additions without saving them`, async () => {
+    const h = await editor(setting, entries())
+    h.edit('B', 'Edited B')
+    h.add()
+    await h.delete('A')
+    assert.deepEqual(h.restart()[setting], [entries()[1]])
+    assert.equal(h.draft[0].name, 'Edited B')
+    assert.equal(h.draft[1].name, '')
+    assert.deepEqual(h.base, [entries()[1]])
+    await h.delete(setting === 'teamPolicies' ? '方針' : 'プレイブック')
+    assert.equal(h.calls.length, 1, 'unsaved additions are removed locally')
+    assert.equal(h.draft.length, 1)
+  })
+
+  test(`${setting}: a failed deletion retains the entry and reports the error`, async () => {
+    const h = await editor(setting, entries(), { save: () => { throw new Error('disk full') } })
+    await h.delete('A')
+    assert.deepEqual(h.draft, entries())
+    assert.deepEqual(h.restart()[setting], entries())
+    assert.match(h.error, /disk full/)
+    assert.equal(h.notices.length, 0)
+  })
+
+  test(`${setting}: a stale deletion cannot overwrite another window's save`, async () => {
+    const h = await editor(setting, entries())
+    h.edit('B', 'Unsaved B')
+    const external = entries().map((entry) => ({ ...entry, name: `External ${entry.name}` }))
+    await h.externalSave(external)
+    await h.delete('A')
+    assert.deepEqual(h.restart()[setting], external)
+    assert.equal(h.draft[0].name, 'A')
+    assert.equal(h.draft[1].name, 'Unsaved B')
+    assert.match(h.error, /別の画面で更新/)
+    assert.equal(h.notices.length, 0)
+  })
+}
 
 test('guide editor keeps the original base while dirty and sends it with saves', async () => {
   const code = await source()
