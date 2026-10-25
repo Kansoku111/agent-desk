@@ -463,14 +463,14 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
               <CheckSquare size={14} />
             </button>
           )}
-          <button type="button" className="icon-button small cl-button" title="AB：2社に相談" aria-label={`${group.label} でABを始める`} onClick={() => setState({ abStart: group.path })}>AB</button>
-          <button type="button" className="icon-button small cl-button ex-button" title="エコモード"
+          <button type="button" className="icon-button small task-start-button ab-button" title="AB：2社に相談" aria-label={`${group.label} でABを始める`} onClick={() => setState({ abStart: group.path })}>AB</button>
+          <button type="button" className="icon-button small task-start-button ex-button" title="エコモード"
             aria-label={`${group.label} でエコモードを始める`} onClick={() => setState({ executionStart: group.path })}>eco</button>
-          <button type="button" className="icon-button small cl-button tm-button" title="エージェントチームを始める（リーダーや子のモデルを選んでから始めます）"
+          <button type="button" className="icon-button small task-start-button tm-button" title="エージェントチームを始める（リーダーや子のモデルを選んでから始めます）"
             aria-label={`${group.label} でエージェントチームを始める`} onClick={() => setState({ teamStart: group.path })}>
             TM
           </button>
-          <button type="button" className="icon-button small cl-button" title="Claude Code で新しいタスク" aria-label={`${group.label} で Claude Code を開く`}
+          <button type="button" className="icon-button small task-start-button cl-button" title="Claude Code で新しいタスク" aria-label={`${group.label} で Claude Code を開く`}
             onClick={() => void startTerminal(group.path)}>
             CL
           </button>

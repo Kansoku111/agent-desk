@@ -37,7 +37,6 @@
 .ex-check input:not([type="checkbox"]), .ex-models select { width: 100%; min-width: 0; }
 .ex-check-heading { display: flex; align-items: center; gap: 10px; }
 .ex-check-heading label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
-.ex-button { color: var(--green); }
 
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI",
@@ -60,6 +59,7 @@
   --accent: #0d0d0d;
   --accent-text: #ffffff;
   --focus: #2f6feb;
+  --purple: #8250df;
   --green: #1a7f37;
   --green-bg: rgba(26, 127, 55, 0.1);
   --red: #cf222e;
@@ -97,6 +97,7 @@
     --accent: #ececec;
     --accent-text: #171717;
     --focus: #6aa0ff;
+    --purple: #c4a7ff;
     --green: #4ac26b;
     --green-bg: rgba(74, 194, 107, 0.12);
     --red: #ff7b72;
@@ -128,6 +129,7 @@
   --accent: #ececec;
   --accent-text: #171717;
   --focus: #6aa0ff;
+  --purple: #c4a7ff;
   --green: #4ac26b;
   --green-bg: rgba(74, 194, 107, 0.12);
   --red: #ff7b72;
@@ -4031,13 +4033,22 @@ select:focus {
 
 /* ---------------------------------------------------------------- Claude Code tasks (CL) */
 
-/* Each project button keeps its own color, also under the pointer:
-   CL amber, + green (TM is blue, below). */
-.icon-button.cl-button {
-  color: var(--amber);
+/* Project launch actions: AB purple, eco green, TM blue, CL amber.
+   Typography is shared, but each mode owns its color (including on hover). */
+.icon-button.task-start-button {
+  color: var(--task-action-color);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.task-start-button.ab-button { --task-action-color: var(--purple); }
+.task-start-button.ex-button { --task-action-color: var(--green); }
+.task-start-button.tm-button { --task-action-color: var(--focus); }
+.task-start-button.cl-button { --task-action-color: var(--amber); }
+
+.task-group-actions .task-start-button:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--task-action-color) 14%, transparent);
 }
 
 .icon-button.new-task-button {
@@ -4486,10 +4497,6 @@ button.terminal-status.active {
   padding: 0 4px;
   font-size: 9px;
   vertical-align: 1px;
-}
-
-.icon-button.tm-button {
-  color: var(--focus);
 }
 
 /* A team child's way back to its leader: first in the header, kept on a narrow screen. */
