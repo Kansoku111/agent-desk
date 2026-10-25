@@ -1,4 +1,6 @@
 // Shapes shared with the Agent Desk server (see server/*.js).
+import type { UsageScore } from '../../shared/usage-score.js'
+export type { UsageScore } from '../../shared/usage-score.js'
 
 export type PermissionMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 export type ThreadStatus = 'idle' | 'running' | 'error'
@@ -13,9 +15,11 @@ export interface AbJob {
   id: string; role: string; model: string; effort?: string; status: string; report: string; error?: string
   handle?: { kind: string; id: string }
   denials?: string[]; blockers?: string[]; stopError?: string; writable?: boolean; permissionMode?: PermissionMode
+  score?: UsageScore
 }
 export interface AbRun {
   id: string; workspace: string; title: string; text: string; images?: ImageRef[]; config: AbConfig
+  score?: UsageScore
   phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string; warning?: string; retryJobId?: string
   archived?: boolean
   messages: (string | { text: string; images?: ImageRef[]; afterJobId?: string })[]; createdAt: number; updatedAt: number
@@ -34,6 +38,7 @@ export interface ThreadSummary {
   updatedAt: number
   archived: boolean
   usage: { used: number; size: number } | null
+  score?: UsageScore
   status: ThreadStatus
   pendingApproval: boolean
   /** Set when the task is a child of an agent team (server/teams.js). */
@@ -47,6 +52,7 @@ export interface TerminalSummary {
   title: string
   workspace: string
   sessionId: string
+  score?: UsageScore | null
   createdAt: number
   updatedAt: number
   archived: boolean
@@ -144,6 +150,7 @@ export interface TeamSummary {
   id: string
   workspace: string
   leaderId: string
+  score?: UsageScore
   /** `terminal`: Claude Code leads; `thread`: GPT leads, as a dsh task. */
   leaderKind: 'terminal' | 'thread'
   /** The team's own settings: chosen when it started, changed in its panel since. */
@@ -287,6 +294,7 @@ export interface Turn {
   user: { text: string; images: ImageRef[] }
   items: TurnItem[]
   usage?: TurnUsage
+  totalScore?: UsageScore
   /** Approximate received text throughput; never a provider decoding benchmark. */
   outputSpeed?: OutputSpeed
   /** Workspace snapshots around the turn; `changed` counts the files the turn changed. */
@@ -336,6 +344,7 @@ export interface TurnUsage {
   cacheWrite: number
   reasoning: number
   cost: number | null
+  score?: UsageScore
   models: string[]
 }
 

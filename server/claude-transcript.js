@@ -7,6 +7,9 @@
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { clip } from './transcript.js'
+import { loadPricing, mergeUsage } from './usage.js'
+import { claudeUsage, untrackedClaudeCalls } from './claude-usage.js'
+import { addScores, emptyScore } from '../shared/usage-score.js'
 
 /** Turns kept in memory and sent; the conversation before them is only counted. */
 export const MAX_TURNS = 80
@@ -71,7 +74,9 @@ function resultText(content) {
 
 /** The conversation of one transcript file, kept up to date as the file grows. */
 export class ClaudeConversation {
-  constructor() {
+  constructor({ pricing = new Map(), scores = {} } = {}) {
+    this.pricing = pricing
+    this.scores = scores
     this.epoch = randomBytes(6).toString('hex')
     this.reset()
   }
@@ -82,6 +87,10 @@ export class ClaudeConversation {
     this.skipping = false
     this.turns = []
     this.tools = new Map()
+    this.responses = new Map()
+    this.missingTurns = new Set()
+    this.untrackedCalls = new Set()
+    this.totalScore = emptyScore()
     this.omitted = 0
     this.rev = 0
     this.epoch = randomBytes(6).toString('hex')
@@ -100,6 +109,13 @@ export class ClaudeConversation {
     if (turn.status !== 'running') return
     turn.status = status
     turn.endedAt = at
+    if (!turn.usage) {
+      const missing = { points: 0, priced: 0, unpriced: 1 }
+      this.scores[`turn:${turn.id}`] = { score: missing }
+      this.missingTurns.add(turn.id)
+      this.totalScore = addScores(this.totalScore, missing)
+      turn.totalScore = this.totalScore
+    }
     this.#touch(turn)
   }
 
@@ -123,6 +139,38 @@ export class ClaudeConversation {
       this.omitted += 1
       for (const item of dropped.items) if (item.type === 'tool') this.tools.delete(item.id)
     }
+  }
+
+  #usage(entry, current) {
+    const id = entry.message?.id ?? entry.uuid
+    if (!id) return
+    const parsed = claudeUsage(entry.message, this.pricing, time(entry), this.scores[id])
+    if (!parsed) return
+    const previous = this.responses.get(id)
+    if (previous && this.scores[id]?.signature === parsed.saved.signature
+      && JSON.stringify(previous.usage.score) === JSON.stringify(parsed.usage.score)) return
+    const turn = previous?.turn ?? current
+    const oldScore = previous?.usage.score ?? emptyScore()
+    const delta = {
+      points: parsed.usage.score.points - oldScore.points,
+      priced: parsed.usage.score.priced - oldScore.priced,
+      unpriced: parsed.usage.score.unpriced - oldScore.unpriced,
+    }
+    if (!previous && this.missingTurns.delete(turn.id)) delta.unpriced--
+    delete this.scores[`turn:${turn.id}`]
+    turn.usage = mergeUsage(turn.usage, parsed.usage)
+    if (previous) {
+      for (const key of ['requests', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']) turn.usage[key] -= previous.usage[key]
+      turn.usage.score = addScores(turn.usage.score, { points: -oldScore.points, priced: -oldScore.priced, unpriced: -oldScore.unpriced })
+    }
+    this.totalScore = addScores(this.totalScore, delta)
+    const index = this.turns.indexOf(turn)
+    for (const later of this.turns.slice(Math.max(0, index))) {
+      later.totalScore = later === current ? this.totalScore : addScores(later.totalScore ?? emptyScore(), delta)
+      this.#touch(later)
+    }
+    this.responses.set(id, { turn, usage: parsed.usage })
+    this.scores[id] = parsed.saved
   }
 
   /** Folds one parsed line in. */
@@ -172,6 +220,14 @@ export class ClaudeConversation {
       this.#startTurn(entry, text)
     } else if (entry.type === 'assistant' && Array.isArray(content)) {
       const turn = this.#current ?? (this.#startTurn(entry, ''), this.#current)
+      this.#usage(entry, turn)
+      for (const id of untrackedClaudeCalls(entry.message)) {
+        if (this.untrackedCalls.has(id)) continue
+        this.untrackedCalls.add(id)
+        const missing = { points: 0, priced: 0, unpriced: 1 }
+        this.scores[`external:${id}`] = { score: missing }
+        turn.totalScore = this.totalScore = addScores(this.totalScore, missing)
+      }
       content.forEach((block, index) => {
         if (block?.type === 'text' && block.text?.trim()) {
           turn.items.push({ type: 'agent', id: `${entry.uuid}:${index}`, text: block.text })
@@ -233,13 +289,15 @@ export class ClaudeConversation {
       reset: since === 0,
       turns: this.turns.filter((turn) => turn.rev > since),
       ids: this.turns.map((turn) => turn.id),
+      score: this.totalScore,
     }
   }
 }
 
 /** Keeps the conversations of the transcript files in use, each read once and then followed. */
 export class ClaudeTranscripts {
-  constructor() {
+  constructor({ pricing = loadPricing } = {}) {
+    this.pricing = pricing
     this.files = new Map()
   }
 
@@ -267,10 +325,10 @@ export class ClaudeTranscripts {
    * The conversation in `file`, as the turns changed since the viewer's last
    * read (`epoch` and `since` are what its last read returned).
    */
-  async read(file, { epoch = null, since = 0 } = {}) {
+  async read(file, { epoch = null, since = 0, scores = {} } = {}) {
     let entry = this.files.get(file)
     if (!entry) {
-      entry = { conversation: new ClaudeConversation(), busy: null, used: 0 }
+      entry = { conversation: new ClaudeConversation({ scores }), busy: null, used: 0 }
       this.files.set(file, entry)
     }
     entry.used = Date.now()
@@ -278,6 +336,7 @@ export class ClaudeTranscripts {
     const previous = entry.busy
     const work = (async () => {
       await previous?.catch(() => {})
+      entry.conversation.pricing = await this.pricing()
       await this.#catchUp(entry, file)
     })()
     entry.busy = work

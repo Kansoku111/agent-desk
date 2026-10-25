@@ -18,6 +18,7 @@ import {
 } from './thread-utils.js'
 import { turnUsage } from './usage.js'
 import { OUTPUT_SPEED_META } from './output-speed.js'
+import { emptyScore, scoresUpTo } from '../shared/usage-score.js'
 export { carryoverText, describeError, isUndoable, restoreNoteText } from './thread-utils.js'
 
 const TURN_EMIT_MS = 60
@@ -140,6 +141,8 @@ export class ThreadManager extends EventEmitter {
     const receipts = new Map((doc.receipts ?? []).map((entry) => [entry.messageId, entry]))
     this.receipts.set(threadId, receipts)
     this.turns.set(threadId, turns)
+    thread.score = scoresUpTo(turns).at(-1) ?? emptyScore()
+    this.#saveIndex()
     if (repriced) this.#saveTurns(threadId)
     return turns
   }
@@ -282,6 +285,7 @@ export class ThreadManager extends EventEmitter {
       updatedAt: now,
       archived: false,
       usage: null,
+      score: emptyScore(),
       status: 'idle',
       pendingApproval: false,
       ...(team ? { team } : {}),
@@ -557,6 +561,7 @@ export class ThreadManager extends EventEmitter {
     this.#resolvePermissions(thread.id, null)
     await Promise.allSettled([this.#attachUsage(thread.id, turn, thread.sessionId), this.#finishCheckpoint(thread, turn)])
     settleTurn(turn, outcome)
+    thread.score = scoresUpTo(this.turns.get(thread.id) ?? []).at(-1) ?? emptyScore()
     thread.status = outcome.status === 'error' ? 'error' : 'idle'
     thread.pendingApproval = false
     thread.updatedAt = Date.now()

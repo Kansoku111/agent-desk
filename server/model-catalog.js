@@ -218,6 +218,7 @@ export async function catalogModelLimits() {
 export async function configuredModelCatalog(customModels = [], fetched = null) {
   const [dir] = catalogDataDirs()
   const definitions = {}
+  const pricing = {}
   const added = []
   const models = []
   const skipped = []
@@ -227,6 +228,11 @@ export async function configuredModelCatalog(customModels = [], fetched = null) 
     const original = JSON.parse(await fs.readFile(path.join(dir, `${provider}.json`), 'utf8'))
     if (!knownLayout(original)) throw new Error(`Unsupported model catalog layout: ${provider}`)
     const result = applyCatalogAdditions(original, provider, customModels, fetched)
+    for (const group of Object.values(result.data)) for (const model of Object.values(group)) {
+      if ((model.type ?? 'chat') === 'chat' && model.cost && !['custom', 'account'].includes(model[MARKER])) {
+        pricing[`${provider}/${model.id}`] = model.cost
+      }
+    }
     definitions[provider] = Object.values(result.data)
       .flatMap(group => Object.values(group))
       .filter(model => (model.type ?? 'chat') === 'chat')
@@ -246,5 +252,5 @@ export async function configuredModelCatalog(customModels = [], fetched = null) 
     models.push(...result.models.map(model => ({ provider, ...model })))
     skipped.push(...result.skipped.map(entry => ({ provider, ...entry })))
   }
-  return { changed: false, definitions, added, models, skipped, warnings }
+  return { changed: false, definitions, pricing, added, models, skipped, warnings }
 }

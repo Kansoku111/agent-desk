@@ -22,6 +22,8 @@ OpenCode Go は提供中のIDを `/inference/go/v1/models` から取得し、pi-
 
 設定更新の確定順序・更新経路と保証しないリソース境界は [設定更新の整合性](settings-consistency.md) を参照してください。
 
+累計ptは `shared/usage-score.js` の固定基準・集約処理を共有し、単価計算は `server/usage.js` を再利用します。追加カタログの単価もアプリ内で渡し、料金表の別同期は追加しません。dshは各ターンの `usage.score`、非対話Claudeは担当記録の累計と `totalScore`、対話型Claudeはアプリ側の端末記録に応答ID別の確定ptを保存します。Claude Code自身の会話ログは変更しません。チームは担当IDごとの累計を保存し、同じ通知で加算せず置き換えるため、再試行・fresh・子削除でも二重計上や消費の消失を防ぎます。ABは各段階の記録を合算します。[集計範囲](usage.md)。
+
 ## データの保存場所
 
 | OS | 場所 |

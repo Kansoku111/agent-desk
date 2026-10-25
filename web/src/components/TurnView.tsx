@@ -4,7 +4,8 @@ import {
   Info, ListChecks, Loader2, MonitorCog, Search, ShieldQuestion, SquareTerminal, Wrench, X,
 } from 'lucide-react'
 import { act, attachmentUrl, isImageAttachment, setSubagentPanel, useStore, type State } from '../store'
-import type { ImageRef, NoticeItem, PlanItem, SteerItem, SubagentInfo, TextItem, ToolItem, Turn, TurnItem, TurnUsage } from '../types'
+import type { ImageRef, NoticeItem, PlanItem, SteerItem, SubagentInfo, TextItem, ToolItem, Turn, TurnItem, TurnUsage, UsageScore } from '../types'
+import { UsagePoints } from './UsagePoints'
 import { duration, fileChanges, formatTokens, formatTokensExact, formatUsd, summarizeTool, type DiffLine, type ToolIcon } from '../util'
 import { CopyButton, Markdown } from './Markdown'
 import { FileRef } from './FileRef'
@@ -312,7 +313,7 @@ function OutputSpeed({ speed }: { speed: Turn['outputSpeed'] }) {
 }
 
 /** Tokens the turn used, and the estimated cost of API models. */
-function UsageLine({ usage, taskCost, speed }: { usage: TurnUsage; taskCost: number | null; speed: Turn['outputSpeed'] }) {
+function UsageLine({ usage, taskCost, speed, score }: { usage: TurnUsage; taskCost: number | null; speed: Turn['outputSpeed']; score?: UsageScore | null }) {
   const inputTotal = usage.input + usage.cacheRead + usage.cacheWrite
   const detail = [
     `リクエスト ${usage.requests} 回`,
@@ -328,7 +329,8 @@ function UsageLine({ usage, taskCost, speed }: { usage: TurnUsage; taskCost: num
   ].filter(Boolean).join('\n')
   return (
     <div className="usage-line" title={detail}>
-      <span>入力 {formatTokens(inputTotal)}</span>
+      <UsagePoints score={score} />
+      <span>· 入力 {formatTokens(inputTotal)}</span>
       {usage.cacheRead > 0 && <span className="usage-sub">（キャッシュ {formatTokens(usage.cacheRead)}）</span>}
       <span>· 出力 {formatTokens(usage.output)}</span>
       <OutputSpeed speed={speed} />
@@ -340,12 +342,13 @@ function UsageLine({ usage, taskCost, speed }: { usage: TurnUsage; taskCost: num
   )
 }
 
-export const TurnView = memo(function TurnView({ turn, workspace, taskCost = null, threadId, threadBusy, undoable, hideUser = false }: {
+export const TurnView = memo(function TurnView({ turn, workspace, taskCost = null, taskScore, threadId, threadBusy, undoable, hideUser = false }: {
   turn: Turn
   /** Leave out the request bubble, when the request is shown elsewhere. */
   hideUser?: boolean
   workspace: string
   taskCost?: number | null
+  taskScore?: UsageScore | null
   threadId: string
   /** The task is working, so its files cannot be restored now. */
   threadBusy: boolean
@@ -422,8 +425,8 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
         <div className="turn-status"><X size={13} /> 停止しました</div>
       )}
       {turn.status === 'error' && turn.error && <TurnError error={turn.error} />}
-      {!running && turn.usage && <UsageLine usage={turn.usage} taskCost={taskCost} speed={turn.outputSpeed} />}
-      {!running && !turn.usage && turn.outputSpeed && <div className="usage-line"><OutputSpeed speed={turn.outputSpeed} /></div>}
+      {!running && turn.usage && <UsageLine usage={turn.usage} taskCost={taskCost} speed={turn.outputSpeed} score={taskScore ?? turn.totalScore ?? turn.usage.score} />}
+      {!running && !turn.usage && <div className="usage-line"><UsagePoints score={taskScore ?? turn.totalScore} /><OutputSpeed speed={turn.outputSpeed} /></div>}
       {!running && <RestoreControls threadId={threadId} turn={turn} busy={threadBusy} undoable={undoable} />}
     </section>
   )

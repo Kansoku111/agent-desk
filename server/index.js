@@ -31,7 +31,7 @@ import { OpenCodeGoRegistry } from './opencode-go-registry.js'
 import { SiwcModelCatalog } from './siwc-models.js'
 import { ModelCatalogUpdater } from './model-updates.js'
 import { installedModels, OpenCodeGoModels } from './opencode-go-models.js'
-import { resetPricing, setFastPricing } from './usage.js'
+import { resetPricing, setCatalogPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
 import { ChatGptUsage } from './chatgpt-usage.js'
@@ -292,10 +292,12 @@ async function syncModelCatalog() {
     const shippedGo = await installedModels()
     const piGo = await installedModels(modelUpdater.fetched)
     for (const model of openCodeModels(await readOpenCodeCatalog(openCodeFetched()))) {
+      if (model.cost) result.pricing[`opencode-go/${model.id}`] = model.cost
       if (shippedGo.has(model.id)) continue
       result.added.push(`opencode-go/${model.id}`)
       result.models.push({ provider: 'opencode-go', id: model.id, name: model.name, source: piGo.has(model.id) ? 'fetched' : 'registry' })
     }
+    setCatalogPricing(result.pricing)
   } catch (error) {
     result = { changed: false, added: [], models: [], skipped: [], warnings: [error.message] }
   }

@@ -23,6 +23,40 @@ async function setup(t, config = {}) {
   return { dir, runner, manager, id: run.id, finish }
 }
 
+test('AB totals every stage and failed attempt once, including after restart', async (t) => {
+  const { dir, runner, manager, id } = await setup(t)
+  const finishScore = async (role, points, status = 'completed') => {
+    const job = manager.require(id).jobs.findLast((entry) => entry.role === role)
+    await manager.lock(id, () => manager.finished({ runId: id, jobId: job.id, status, text: `${role} report`,
+      score: { points, priced: 1, unpriced: 0 } }))
+    return job
+  }
+  await finishScore('a', 1); await finishScore('b', 2); await finishScore('leader', 3)
+  await manager.approve({ id, revision: 1, delegate: true, review: true })
+  await finishScore('instructions', 4)
+  const failed = await finishScore('implementer', 5, 'error')
+  await manager.retry({ id, jobId: failed.id })
+  await finishScore('implementer', 6)
+  const review = await finishScore('reviewer', 7)
+  assert.equal(manager.summary(manager.require(id)).score.points, 28)
+  await manager.finished({ runId: id, jobId: review.id, status: 'completed', text: 'duplicate', score: review.score })
+  assert.equal(manager.summary(manager.require(id)).score.points, 28)
+  const restored = await new AbManager({ dir, runner }).load()
+  assert.equal(restored.summary(restored.require(id)).score.points, 28)
+  assert.equal(restored.require(id).phase, 'reviewed')
+})
+
+test('AB keeps late consumption after stop without restarting a stage', async (t) => {
+  const { manager, id, runner } = await setup(t)
+  await manager.stop({ id })
+  const job = manager.require(id).jobs[0]
+  await manager.finished({ runId: id, jobId: job.id, status: 'completed', text: 'late', score: { points: 2, priced: 1, unpriced: 0 } })
+  const view = manager.summary(manager.require(id))
+  assert.deepEqual(view.score, { points: 2, priced: 1, unpriced: 1 })
+  assert.equal(view.phase, 'stopped')
+  assert.equal(runner.calls.length, 2)
+})
+
 test('AB sends exact original independently and waits for BOTH reports', async (t) => {
   const { runner, manager, id, finish } = await setup(t)
   assert.equal(runner.calls.length, 2)

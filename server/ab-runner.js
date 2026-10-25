@@ -24,21 +24,22 @@ export class AbRunner extends EventEmitter {
       const owner = this.owned.get(threadId)
       if (!owner) return
       this.owned.delete(threadId)
-      void threads.get(threadId).then(({ turns }) => {
+      void threads.get(threadId).then(({ thread, turns }) => {
         const turn = turns.at(-1)
         this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: status === 'done' ? 'completed' : status,
           text: turn?.items?.filter((item) => item.type === 'agent').at(-1)?.text ?? '', error: turn?.error?.message,
+          ...(thread?.score ? { score: thread.score } : {}),
           denials: owner.denials, ...(owner.writable ? { blockers: (turn?.items ?? [])
             .filter((item) => item.type === 'tool' && item.status === 'failed' && /SetNamedSecurityInfoW failed \(Win32 5\)/i.test(item.output ?? ''))
             .map((item) => `${describeTool(item.name, item.input)}\n${item.output}`) } : {}) })
       }).catch((error) => this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: 'error', error: error.message, denials: owner.denials }))
     })
-    agents.on('finished', ({ id, status, text, error, denials }) => {
+    agents.on('finished', ({ id, status, text, error, denials, score }) => {
       const owner = this.owned.get(id)
       if (!owner) return
       this.owned.delete(id)
       this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: status === 'done' ? 'completed' : status, text, error,
-        denials: (denials ?? []).map((entry) => describeTool(entry?.tool_name, entry?.tool_input)) })
+        denials: (denials ?? []).map((entry) => describeTool(entry?.tool_name, entry?.tool_input)), ...(score ? { score } : {}) })
     })
     // The event carries NO requestId. Read the registered pending requests;
     // respondPermission is synchronous and must not be treated as a Promise.

@@ -15,6 +15,8 @@ npm run build      # 画面のビルド（npm start 時は必要なら自動で�
 
 `scripts/probe-acp.mjs` は、dsh の ACP 応答を直接確かめるための診断用スクリプトです。`scripts/check-dsh.mjs` は、dsh を更新したあとの動作確認スクリプトです（`node scripts/check-dsh.mjs`、[更新](updating.md) を参照）。
 
+累計ptの画面検証は `node test/fixtures/serve-ab-ui.mjs` を起動し、表示URLの `ab-ui.html` を `usage-score-ui.html` に替えて開きます。DevToolsで `await usageScoreTest.run()` を実行すると、通常・TM・Eco・Claude親・AB・一部未算定・全未算定を実コンポーネントで検証します。375px幅でも実行でき、実モデルや本番データは使いません。
+
 ## リリース
 
 アプリの「更新」ボタンは、GitHub のリリースを配信元にします（[更新](updating.md)）。

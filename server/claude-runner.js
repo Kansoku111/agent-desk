@@ -21,6 +21,9 @@ import path from 'node:path'
 import readline from 'node:readline'
 import { normalizeClaudeLimits } from './claude-limits.js'
 import { OutputSpeedMeter } from './output-speed.js'
+import { claudeUsage, untrackedClaudeCalls } from './claude-usage.js'
+import { loadPricing, mergeUsage } from './usage.js'
+import { addScores, emptyScore, scoresUpTo, scoreFromUsd } from '../shared/usage-score.js'
 import { readJson, writeJson } from './json-file.js'
 import { INHERITED_MARKERS, findClaude, launchCommand } from './terminals.js'
 
@@ -145,6 +148,7 @@ export class ClaudeRunner extends EventEmitter {
   }
 
   async load() {
+    this.pricing = await loadPricing()
     await fs.mkdir(this.dir, { recursive: true })
     for (const name of await fs.readdir(this.dir)) {
       if (!name.endsWith('.json')) continue
@@ -157,6 +161,7 @@ export class ClaudeRunner extends EventEmitter {
         last.status = 'error'
         last.endedAt = record.updatedAt
         last.error = { message: CUT_OFF }
+        last.totalScore = record.score = addScores(record.score ?? scoresUpTo(record.turns.slice(0, -1)).at(-1) ?? emptyScore(), last.usage?.score)
       }
       this.records.set(record.id, record)
     }
@@ -188,6 +193,7 @@ export class ClaudeRunner extends EventEmitter {
       lastStatus: record.turns.at(-1)?.status ?? null,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      score: record.score ?? scoresUpTo(record.turns).at(-1) ?? emptyScore(),
     }
   }
 
@@ -213,6 +219,7 @@ export class ClaudeRunner extends EventEmitter {
    * `args` are more flags for every turn (the system prompt, tools left out).
    */
   async create({ workspace, model = null, effort = null, args = [] }) {
+    this.pricing = await loadPricing()
     const now = this.now()
     const record = {
       id: randomUUID(), sessionId: randomUUID(), workspace: String(workspace), model, effort, args: [...args],
@@ -236,6 +243,7 @@ export class ClaudeRunner extends EventEmitter {
       id: randomUUID(), startedAt: now, endedAt: null, status: 'running', stopReason: null, error: null,
       user: { text: String(text), images }, items: [],
     }
+    record.score ??= scoresUpTo(record.turns).at(-1) ?? emptyScore()
     record.turns = [...record.turns, turn].slice(-TURNS_KEPT)
     record.updatedAt = now
 
@@ -254,7 +262,7 @@ export class ClaudeRunner extends EventEmitter {
     const command = launchCommand(claude, args)
     const spawnOptions = { cwd: record.workspace, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }
     const live = {
-      proc: null, turn, stopping: false, apiKey: null, refusal: null, stderr: '', result: null,
+      proc: null, turn, stopping: false, apiKey: null, refusal: null, stderr: '', result: null, responses: new Map(), untrackedCalls: new Set(),
       steers: new Map(), early: [], denials: [], ended: false, grace: null,
       // Its commands running in the background (task id → description), and the waits on them.
       background: new Map(), answered: false, wake: null, backgroundCap: null, cutBackground: null,
@@ -299,6 +307,7 @@ export class ClaudeRunner extends EventEmitter {
     let refusal = null
     try {
       refusal = await this.preflight({ record, claude, cwd: spawnOptions.cwd, env: spawnOptions.env })
+      this.pricing = await loadPricing()
     } catch (error) {
       // Never start a billable run when inspection failed.
       refusal = 'Claude Code の認証確認に失敗しました。チームの設定で再確認してください。'
@@ -450,9 +459,23 @@ export class ClaudeRunner extends EventEmitter {
       return
     }
     if (event.type === 'system' && event.subtype === 'background_tasks_changed') return this.#onBackground(live, event.tasks)
+    if (event.type === 'assistant') {
+      for (const id of untrackedClaudeCalls(event.message)) live.untrackedCalls.add(id)
+      const id = event.message?.id ?? event.uuid
+      const parsed = claudeUsage(event.message, this.pricing ?? new Map(), this.now())
+      if (id && parsed) {
+        live.responses.set(id, parsed.usage)
+        live.turn.usage = [...live.responses.values()].reduce((sum, usage) => mergeUsage(sum, usage), null)
+      }
+    }
     if (event.type === 'result') {
       live.speed.pause()
       live.result = event
+      if (!live.responses.size) {
+        const usage = resultUsage(event)
+        if (usage) live.turn.usage = { ...usage, requests: event.num_turns ?? 1, reasoning: 0, cost: null,
+          models: Object.keys(event.modelUsage ?? {}).map((model) => `anthropic/${model}`), score: scoreFromUsd(usage.costUsd) }
+      }
       live.denials.push(...(Array.isArray(event.permission_denials) ? event.permission_denials : []))
       this.#answered(live)
       return
@@ -493,6 +516,9 @@ export class ClaudeRunner extends EventEmitter {
       steer.taken = true
       live.turn.items.push({ type: 'notice', id: uuid, level: 'warning', text: `作業中に送ったメッセージは Claude Code に届きませんでした: ${clip(steer.text, 200)}` })
     }
+    if (live.responses.size && live.untrackedCalls.size) {
+      live.turn.usage.score = addScores(live.turn.usage.score, { points: 0, priced: 0, unpriced: live.untrackedCalls.size })
+    }
     // An answer from before a later turn that then crashed is not what the run ended with.
     const result = live.answered || code === 0 ? live.result : null
     if (live.refusal) return this.#finish(record, live.turn, { status: 'error', message: live.refusal })
@@ -523,12 +549,13 @@ export class ClaudeRunner extends EventEmitter {
     turn.stopReason = stopReason
     if (status === 'error') turn.error = { message: message ?? 'エラーで止まりました' }
     record.updatedAt = turn.endedAt
+    turn.totalScore = record.score = addScores(record.score ?? emptyScore(), turn.usage?.score)
     void this.#save(record)
     this.emit('turn', { id: record.id, turn })
     this.emit('session', this.summary(record))
     if (quiet) return
     const reply = text || turn.items.filter((item) => item.type === 'agent').at(-1)?.text || ''
-    this.emit('finished', { id: record.id, status, text: reply, error: turn.error?.message ?? null, denials, ...(usage ? { usage } : {}) })
+    this.emit('finished', { id: record.id, status, text: reply, error: turn.error?.message ?? null, denials, score: record.score, ...(usage ? { usage } : {}) })
   }
 
   #kill(live) {

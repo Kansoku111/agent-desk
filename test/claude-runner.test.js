@@ -89,7 +89,8 @@ test('a turn is one claude -p run: the prompt on stdin, its events folded into t
   proc.end(0)
   await ended
   assert.equal(runner.busy, false)
-  assert.deepEqual(finished, [{ id: session.id, status: 'done', text: '作りました', error: null, denials: [{ tool_name: 'Write', tool_input: { file_path: 'x' } }] }])
+  assert.deepEqual(finished, [{ id: session.id, status: 'done', text: '作りました', error: null, denials: [{ tool_name: 'Write', tool_input: { file_path: 'x' } }],
+    score: { points: 0, priced: 0, unpriced: 1 } }])
   const [turn] = runner.turns(session.id)
   assert.equal(turn.status, 'done')
   assert.deepEqual(turn.items.map((item) => item.type), ['thought', 'tool', 'agent'])
@@ -116,6 +117,32 @@ test('the token counts Claude Code reports with its result go out with the finis
   spawned[0].end(0)
   await ended
   assert.deepEqual(finished[0].usage, { input: 10, output: 5, cacheRead: 100, cacheWrite: 7, costUsd: 0.02 })
+})
+
+test('Claude scores deduplicated responses, retains stopped consumption and restores cumulative points', async (t) => {
+  const { runner, spawned, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work', model: 'test-model' })
+  runner.pricing = new Map([['anthropic/test-model', { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }]])
+  runner.run(session.id, 'first')
+  const message = { type: 'assistant', message: { id: 'm1', model: 'test-model', content: [{ type: 'text', text: 'ok' }],
+    usage: { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 1000 } } }
+  spawned[0].write(message); spawned[0].write(message)
+  const ended = done()
+  runner.stop(session.id)
+  await ended
+  assert.equal(runner.turns(session.id)[0].usage.requests, 1)
+  assert.ok(Math.abs(runner.get(session.id).score.points - 1.55) < 1e-9)
+  runner.run(session.id, 'retry')
+  const again = done()
+  spawned[1].write({ ...message, message: { ...message.message, id: 'm2' } })
+  spawned[1].write({ type: 'result', subtype: 'success', result: 'done' })
+  spawned[1].end()
+  await again
+  await runner.writes.get(session.id)
+  const restored = await new ClaudeRunner({ dir: runner.dir }).load()
+  assert.ok(Math.abs(restored.get(session.id).score.points - 3.1) < 1e-9)
+  assert.equal(restored.turns(session.id)[0].status, 'cancelled')
+  assert.ok(Math.abs(restored.turns(session.id)[1].totalScore.points - 3.1) < 1e-9)
 })
 
 test('partial Claude text/thought events share the meter without duplicating the final transcript', async (t) => {
@@ -324,7 +351,8 @@ test('stop cancels the turn; an error result and a crash report what went wrong'
   ended = done()
   spawned[1].write({ type: 'result', subtype: 'error_max_turns', is_error: true, result: '' })
   spawned[1].end(1)
-  assert.deepEqual(await ended, { id: session.id, status: 'error', text: '', error: 'error_max_turns', denials: [] })
+  assert.deepEqual(await ended, { id: session.id, status: 'error', text: '', error: 'error_max_turns', denials: [],
+    score: { points: 0, priced: 0, unpriced: 2 } })
 
   runner.run(session.id, 'z')
   ended = done()

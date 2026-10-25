@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-react'
 import { act, loadAgentTurns, loadThread, navigate, setState, useRemote, useStore } from '../store'
-import type { AbConfig, AbJob, AbRun, AppState, Turn } from '../types'
+import type { AbConfig, AbJob, AbRun, AppState, Turn, UsageScore } from '../types'
+import { UsagePoints } from './UsagePoints'
+import { scoresUpTo } from '../../../shared/usage-score.js'
 import { OpenInMenu } from './ThreadView'
 import { TurnView } from './TurnView'
 import { providerReady, visibleModels } from '../model-selection'
@@ -176,11 +178,12 @@ function useJobTurns(job: AbJob, wanted: boolean): Turn[] | undefined {
   return turns
 }
 
-function Report({ job, workspace, modelName, open = false }: { job: AbJob; workspace: string; modelName: string; open?: boolean }) {
+function Report({ job, workspace, modelName, open = false, taskScore }: { job: AbJob; workspace: string; modelName: string; open?: boolean; taskScore?: UsageScore }) {
   const [shown, setShown] = useState(open)
   const running = job.status === 'running'
   const turns = useJobTurns(job, shown || running)
   const live = Boolean(turns?.length)
+  const scores = scoresUpTo(turns ?? [])
   const notes = [job.denials?.length ? `承認が必要なため実行されなかった操作\n${job.denials.map((entry) => `- ${entry}`).join('\n')}` : '',
     job.blockers?.length ? `実行環境の権限エラー\n${job.blockers.map((entry) => `- ${entry}`).join('\n')}` : ''].filter(Boolean).join('\n\n')
   return <details className="ab-report" open={open || undefined} onToggle={(event) => setShown(event.currentTarget.open)}>
@@ -188,9 +191,11 @@ function Report({ job, workspace, modelName, open = false }: { job: AbJob; works
     {job.error && !turns?.some((turn) => turn.error?.message === job.error) && <p className="error-text">{job.error}</p>}
     {job.stopError && <p role="alert" className="error-text">{job.stopError}</p>}
     {live
-      ? <>{turns!.map((turn) => <TurnView key={turn.id} turn={turn} workspace={workspace} threadId={job.handle!.id} threadBusy undoable={false} hideUser />)}
+      ? <>{turns!.map((turn, index) => <TurnView key={turn.id} turn={turn} workspace={workspace} threadId={job.handle!.id} threadBusy undoable={false} hideUser
+          taskScore={index === turns!.length - 1 ? taskScore ?? job.score ?? scores[index] : scores[index]} />)}
         {notes && <Markdown text={notes} workspace={workspace} />}</>
-      : job.report ? <><CopyButton text={job.report} /><Markdown text={job.report} workspace={workspace} /></> : <p className="muted">{running ? '検討中…' : '報告なし'}</p>}
+      : <>{job.report ? <><CopyButton text={job.report} /><Markdown text={job.report} workspace={workspace} /></> : <p className="muted">{running ? '検討中…' : '報告なし'}</p>}
+          {!running && <div className="usage-line"><UsagePoints score={taskScore ?? job.score} /></div>}</>}
   </details>
 }
 
@@ -228,7 +233,7 @@ export function AbView({ id }: { id: string }) {
       {run.warning && <p role="alert" className="error-text">{run.warning}</p>}
       {abTimeline(run).filter((entry) => entry.kind !== 'job' || !['a', 'b'].includes(entry.job.role)).map((entry) => entry.kind === 'message'
         ? <section className="ab-question" key={entry.key}><Markdown text={entry.text} workspace={run.workspace} /><AbImages images={entry.images} /></section>
-        : <Report key={entry.key} job={entry.job} workspace={run.workspace} modelName={modelName(entry.job.model)} open={entry.job.id === latest?.id} />)}
+        : <Report key={entry.key} job={entry.job} workspace={run.workspace} modelName={modelName(entry.job.model)} open={entry.job.id === latest?.id} taskScore={entry.job.id === latest?.id ? run.score : undefined} />)}
       {run.phase === 'awaiting-approval' && !running && <section className="ab-approval">
         <ImplementationOptions config={options} change={(patch) => setOptions((current) => ({ ...current, ...patch }))} disabled={busy} />
         <button className="button primary" disabled={busy || (options.delegate && !run.config.implementer)} onClick={() => void action('ab.approve', { revision: run.revision, ...options })}>この案に同意して実装</button>

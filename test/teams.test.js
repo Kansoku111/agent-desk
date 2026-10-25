@@ -247,6 +247,37 @@ async function setupExecution(t, options = {}) {
 }
 const exTask = { title: 'implement', task: 'do the bounded work', criteria: 'the test passes without unrelated changes', checks: [], tier: 'low', provider: 'gpt' }
 
+for (const mode of ['TM', 'eco']) {
+  test(`${mode} sums parent and children once and preserves scores across restart`, async (t) => {
+    const f = mode === 'eco' ? await setupExecution(t) : await setup(t, { leaderProvider: 'gpt' })
+    const parent = f.threads.threads.get(f.leader)
+    parent.score = { points: 10, priced: 1, unpriced: 0 }
+    f.threads.emit('thread', { ...parent })
+    await f.tool('spawn', mode === 'eco' ? exTask : { title: 'implement', task: 'do it', tier: 'low', provider: 'gpt' })
+    const child = f.team.children[0]
+    const childRecord = f.threads.threads.get(child.taskId)
+    childRecord.score = { points: 1, priced: 1, unpriced: 0 }
+    f.threads.finish(child.taskId, 'done')
+    f.threads.emit('thread', { ...childRecord })
+    assert.equal(f.manager.summary(f.team).score.points, 11)
+    if (mode === 'TM') {
+      await f.tool('send', { child: child.name, message: 'start fresh', fresh: true })
+      const next = f.threads.threads.get(child.taskId)
+      next.score = { points: 2, priced: 1, unpriced: 0 }
+      f.threads.finish(child.taskId, 'again')
+      assert.equal(f.manager.summary(f.team).score.points, 13)
+      await f.threads.remove(child.taskId)
+      assert.equal(f.manager.summary(f.team).score.points, 13, 'removing a child cannot refund its consumption')
+    }
+    await f.manager.writes
+    const restored = await new TeamManager({ file: path.join(f.dir, 'teams.json'), dir: path.join(f.dir, 'teams'),
+      threads: f.threads, terminals: f.terminals, agents: f.agents, catalog: CATALOG,
+      getSettings: () => TEAM_DEFAULTS, apiUrl: () => '', node: '', script: '' }).load()
+    t.after(() => restored.stop())
+    assert.equal(restored.summary(restored.teams.get(f.team.id)).score.points, mode === 'TM' ? 13 : 11)
+  })
+}
+
 const GUIDES = {
   policies: [{ id: 'p1', name: 'TMの方針', text: 'TM専用の方針本文' }],
   playbooks: [{ id: 'b1', name: 'TM専用の手順', description: 'TM専用の場面', body: 'TM専用の手順本文' }],

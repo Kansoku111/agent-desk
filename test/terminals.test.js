@@ -59,6 +59,39 @@ async function setup({ launch, preflight = () => null, instructions, gptSubagent
   return { dir, workspace, claudeHome, pty, sent, manager }
 }
 
+test('interactive Claude parent scores on Stop without a viewer and freezes rates across restart', async (t) => {
+  const { manager, workspace, dir, claudeHome } = await setup()
+  t.after(() => manager.shutdown())
+  const terminal = await manager.create({ workspace })
+  const transcript = path.join(dir, 'parent.jsonl')
+  const record = manager.records.get(terminal.id)
+  record.transcriptPath = transcript
+  const rates = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }
+  manager.transcripts.pricing = async () => new Map([['anthropic/test-model', rates]])
+  const entries = (id) => [
+    { parentUuid: null, type: 'user', uuid: `u${id}`, message: { content: 'question' } },
+    { parentUuid: `u${id}`, type: 'assistant', uuid: `a${id}`, message: { id: `m${id}`, model: 'test-model', content: [{ type: 'text', text: 'answer' }],
+      usage: { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 1000 } } },
+    { type: 'system', subtype: 'turn_duration' },
+  ].map((entry) => JSON.stringify(entry)).join('\n') + '\n'
+  await fs.writeFile(transcript, entries(1))
+  assert.equal(manager.hook(terminal.id, manager.live.get(terminal.id).secret, { hook_event_name: 'Stop' }), true)
+  await settle()
+  assert.ok(Math.abs(manager.summary(record).score.points - 1.55) < 1e-9)
+  await manager.writes
+  const restored = await new TerminalManager({ file: path.join(dir, 'terminals.json'), settingsFile: path.join(dir, 'claude-terminal-settings.json'),
+    hookUrl: () => '', send: () => {}, claudeHome }).load()
+  t.after(() => restored.shutdown())
+  restored.transcripts.pricing = async () => new Map([['anthropic/test-model', { ...rates, output: 100 }]])
+  const before = await restored.conversation(terminal.id)
+  assert.ok(Math.abs(before.turns[0].totalScore.points - 1.55) < 1e-9)
+  await fs.appendFile(transcript, entries(2))
+  await restored.conversation(terminal.id)
+  assert.ok(Math.abs(restored.summary(restored.records.get(terminal.id)).score.points - 7.6) < 1e-9)
+  await restored.conversation(terminal.id)
+  assert.ok(Math.abs(restored.summary(restored.records.get(terminal.id)).score.points - 7.6) < 1e-9)
+})
+
 test('findClaude searches PATH, then the installers\' folders', () => {
   const found = new Set(['C:\\bin\\claude.cmd', 'C:\\Users\\me\\.local\\bin\\claude.exe'])
   const exists = (file) => found.has(file)

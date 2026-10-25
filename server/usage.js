@@ -17,6 +17,7 @@ import zlib from 'node:zlib'
 import { fastMultiplier } from './fast-mode.js'
 import { catalogDataDirs } from './model-catalog.js'
 import { deepSeekPricing, deepSeekRatesAt } from './deepseek-pricing.js'
+import { addScores, emptyScore, scoreFromUsd } from '../shared/usage-score.js'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 /** Providers whose API use is billed per token with catalog rates. */
@@ -214,11 +215,19 @@ export function mergeUsage(a, b) {
   for (const key of ['requests', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']) total[key] = a[key] + b[key]
   total.cost = a.cost === null && b.cost === null ? null : (a.cost ?? 0) + (b.cost ?? 0)
   total.models = [...new Set([...a.models, ...b.models])]
+  total.score = addScores(a.score, b.score)
   return total
 }
 
 let pricingCache = null
 let fastPricingState = null
+let catalogPricing = new Map()
+
+/** App-owned bundled/fetched definitions; never borrow rates from a custom template. */
+export function setCatalogPricing(rates) {
+  catalogPricing = new Map(Object.entries(rates))
+  resetPricing()
+}
 
 /**
  * Catalog rates ($ per million tokens) by `provider/model`. The map's `fast`
@@ -229,16 +238,18 @@ export async function loadPricing() {
   const pricing = new Map(deepSeekPricing())
   pricing.fast = fastPricingState
   const [dir] = catalogDataDirs()
-  for (const provider of ['anthropic']) {
+  for (const provider of ['openai-codex', 'anthropic', 'opencode-go']) {
     try {
       const data = JSON.parse(await fs.readFile(path.join(dir, `${provider}.json`), 'utf8'))
       for (const group of Object.values(data)) {
         for (const model of Object.values(group)) {
-          if (model?.cost && (model.type ?? 'chat') === 'chat') pricing.set(`${provider}/${model.id}`, model.cost)
+          if (model?.cost && (model.type ?? 'chat') === 'chat'
+            && !['custom', 'account'].includes(model.agentDeskAdded)) pricing.set(`${provider}/${model.id}`, model.cost)
         }
       }
     } catch {}
   }
+  for (const [key, rates] of catalogPricing) pricing.set(key, rates)
   pricingCache = pricing
   return pricing
 }
@@ -255,13 +266,19 @@ export function setFastPricing(fast) {
 }
 
 /** One logged response's cost, or null when the model has no rates. */
-export function priceResponse(pricing, key, usage, time) {
+export function priceResponse(pricing, key, usage, time, multiplier = fastMultiplier(pricing.fast, key, time)) {
   const rates = pricing.get(key)
   const active = rates?.schedule === 'deepseek' ? deepSeekRatesAt(rates, time) : rates
-  return active ? responseCost(active, usage) * fastMultiplier(pricing.fast, key, time) : null
+  const cost = active ? responseCost(active, usage) : null
+  return cost === null ? null : cost * multiplier
 }
 
-/** pi-ai's calculateCost for one response; the log has no 1h-cache split, so writes use the 5m rate. */
+/** A response is scored once, using its actual model, context tier and cache split. */
+export function scoreResponse(pricing, key, usage, time, multiplier) {
+  return scoreFromUsd(priceResponse(pricing, key, usage, time, multiplier))
+}
+
+/** pi-ai rates; dsh logs without a cache TTL split retain the catalog's 5m write rate. */
 export function responseCost(rates, usage) {
   const input = usage.inputTokens ?? 0
   const output = usage.outputTokens ?? 0
@@ -275,7 +292,15 @@ export function responseCost(rates, usage) {
       matched = tier.inputTokensAbove
     }
   }
-  return (active.input * input + active.output * output + active.cacheRead * cacheRead + active.cacheWrite * cacheWrite) / 1_000_000
+  const hourWrites = usage.cacheWrite1hTokens ?? 0
+  if (!Number.isFinite(hourWrites) || hourWrites < 0 || hourWrites > cacheWrite) return null
+  // Anthropic's 1h cache writes cost 2x base input; use an explicit catalog rate if available.
+  // https://platform.claude.com/docs/en/build-with-claude/prompt-caching#pricing
+  if (hourWrites) active = { ...active, cacheWrite1h: active.cacheWrite1h ?? active.input * 2 }
+  const parts = [['input', input], ['output', output], ['cacheRead', cacheRead], ['cacheWrite', cacheWrite - hourWrites], ['cacheWrite1h', hourWrites]]
+  if (parts.some(([key, count]) => !Number.isFinite(count) || count < 0
+    || (count > 0 && (!Number.isFinite(active[key]) || active[key] < 0)))) return null
+  return parts.reduce((sum, [key, count]) => sum + (count ? active[key] * count : 0), 0) / 1_000_000
 }
 
 /**
@@ -286,7 +311,8 @@ export function responseCost(rates, usage) {
  * @returns the turn's usage, or null when the log holds no response for it.
  */
 export function summarizeUsage(events, since, pricing, until = Infinity) {
-  const total = { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: null, models: [] }
+  const total = { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: null, models: [], score: emptyScore() }
+  const seen = new Set()
   const models = new Set()
   let cost = 0
   let priced = false
@@ -295,6 +321,10 @@ export function summarizeUsage(events, since, pricing, until = Infinity) {
     const usage = event.data?.usage
     if (!usage) continue
     const source = event.data?.message?.source ?? {}
+    const id = event.data?.message?.id ?? event.seq
+    if (id !== undefined && seen.has(id)) continue
+    if (id !== undefined) seen.add(id)
+    total.score = addScores(total.score, scoreResponse(pricing, `${source.provider}/${source.model}`, usage, event.time))
     total.requests += 1
     total.input += usage.inputTokens ?? 0
     total.output += usage.outputTokens ?? 0

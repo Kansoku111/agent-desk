@@ -8,6 +8,7 @@ import { readJson, writeJson } from './json-file.js'
 import { abContextImages } from './ab-images.js'
 import { EFFORTS as CLAUDE_EFFORTS } from './terminal-helpers.js'
 import { workflowEffort, workflowLevels } from '../shared/workflow-effort.js'
+import { addScores, emptyScore } from '../shared/usage-score.js'
 
 const ROLES = ['a', 'b', 'leader', 'implementer']
 // Raw preferences retain legacy blanks; new-run resolution below materializes medium.
@@ -79,7 +80,9 @@ export class AbManager extends EventEmitter {
     return this
   }
   list() { return [...this.runs.values()].map((run) => this.summary(run)) }
-  summary(run) { return structuredClone(run) }
+  summary(run) {
+    return structuredClone({ ...run, score: addScores(...run.jobs.map((job) => job.score ?? (RUNNING.has(job.status) ? emptyScore() : null))) })
+  }
   get busy() { return [...this.runs.values()].some((run) => ACTIVE.has(run.phase) || run.jobs.some((job) => RUNNING.has(job.status))) }
   lock(id, work) {
     const task = (this.locks.get(id) ?? Promise.resolve()).catch(() => {}).then(work)
@@ -187,9 +190,14 @@ export class AbManager extends EventEmitter {
     await this.launch(run, job)
     if (job.error) await this.fail(run, job)
   }
-  async finished({ runId, jobId, status, text, error, denials = [], blockers = [] }) {
+  async finished({ runId, jobId, status, text, error, denials = [], blockers = [], score }) {
     const run = this.runs.get(runId)
     const job = run?.jobs.find((entry) => entry.id === jobId)
+    if (job && score) job.score = score
+    if (job && job.status !== 'running' && job.status !== 'stopping') {
+      if (score) await this.save(run)
+      return
+    }
     if (job?.status === 'stopping') {
       job.status = 'stopped'
       delete job.stopError

@@ -3,6 +3,7 @@ import { ArrowDown, Loader2, ShieldQuestion, SquareTerminal } from 'lucide-react
 import { act, request } from '../store'
 import type { TerminalSummary, Turn } from '../types'
 import { TurnView } from './TurnView'
+import { useLedTeam } from './TeamPanel'
 
 type Snapshot = { epoch: string | null; rev: number; omitted: number; reset: boolean; turns: Turn[]; ids: string[] }
 
@@ -182,6 +183,7 @@ export function TerminalChat({ terminal, turns, omitted, loaded, error, onShowSc
   const stick = useRef(true)
   const [showJump, setShowJump] = useState(false)
   const working = terminal.state === 'running' && terminal.activity !== 'idle'
+  const team = useLedTeam(terminal.id)
   // A turn the file still calls running is over once Claude Code is idle (or ended).
   const shown = useMemo(() => turns.map((turn, index) => (
     turn.status === 'running' && (index < turns.length - 1 || !working) ? { ...turn, status: 'done' as const } : turn
@@ -214,8 +216,9 @@ export function TerminalChat({ terminal, turns, omitted, loaded, error, onShowSc
           {error && !loaded && <div className="loading-turns">{error}</div>}
           {loaded && omitted > 0 && <div className="loading-turns">これより前の {omitted} 件のやり取りは表示していません</div>}
           {loaded && shown.length === 0 && <div className="loading-turns">まだ会話がありません。下の欄からメッセージを送ってください。</div>}
-          {shown.map((turn) => (
-            <TurnView key={turn.id} turn={turn} workspace={terminal.workspace} threadId={terminal.id} threadBusy={false} undoable={false} />
+          {shown.map((turn, index) => (
+            <TurnView key={turn.id} turn={turn} workspace={terminal.workspace} threadId={terminal.id} threadBusy={false} undoable={false}
+              taskScore={index === shown.length - 1 ? team?.score ?? terminal.score ?? turn.totalScore : turn.totalScore} />
           ))}
         </div>
       </div>

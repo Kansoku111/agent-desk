@@ -10,6 +10,7 @@ import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
 import { BackToLeader, TeamPanel, TeamToggle, useLedTeam } from './TeamPanel'
 import { TurnView } from './TurnView'
+import { scoresUpTo } from '../../../shared/usage-score.js'
 
 function useGit(workspace: string, refreshKey: unknown) {
   const [git, setGit] = useState<{ branch: string; changes: number } | null>(null)
@@ -211,6 +212,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   if (!thread) return <div className="main-empty">タスクが見つかりません</div>
   const undoableId = turns ? undoableRestore(turns) : null
   const costs = turns ? costsUpTo(turns) : []
+  const scores = turns ? scoresUpTo(turns) : []
   return (
     <div className="thread-view">
       <Header thread={thread} />
@@ -234,6 +236,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                   turn={turn}
                   workspace={thread.workspace}
                   taskCost={costs[index]}
+                  taskScore={index === turns.length - 1 && team ? team.score : scores[index]}
                   threadId={thread.id}
                   threadBusy={thread.status === 'running'}
                   undoable={turn.id === undoableId}

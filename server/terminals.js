@@ -15,6 +15,7 @@ import { ClaudeTranscripts } from './claude-transcript.js'
 import { instructionsSection } from './instructions-plugin.js'
 import { readJson, writeJson } from './json-file.js'
 import { sameToken } from './remote.js'
+import { addScores } from '../shared/usage-score.js'
 import {
   API_KEY_ENV, DEFAULT_TITLE, DIALOG_RULE, EFFORTS, INHERITED_MARKERS, READY_DELAY_MS, READY_FALLBACK_MS, isFile,
   REDRAW_DELAY_MS, clampSize, cleanTitle, findClaude, hookEffect, hookSettings, launchCommand, parseDialog,
@@ -104,6 +105,7 @@ export class TerminalManager extends EventEmitter {
     /** The model and level a new task starts with: the last ones chosen (null: Claude Code's own default). */
     this.defaults = { model: null, effort: null }
     this.writes = Promise.resolve()
+    this.usageReads = new Set()
   }
 
   async load() {
@@ -121,7 +123,7 @@ export class TerminalManager extends EventEmitter {
   }
 
   #save() {
-    const snapshot = { defaults: { ...this.defaults }, terminals: [...this.records.values()].map((record) => ({ ...record })) }
+    const snapshot = { defaults: { ...this.defaults }, terminals: [...this.records.values()].map((record) => structuredClone(record)) }
     this.writes = this.writes.then(() => writeJson(this.file, snapshot)).catch((error) => this.log('terminals:', error.message))
     return this.writes
   }
@@ -157,6 +159,7 @@ export class TerminalManager extends EventEmitter {
       effortInUse: live?.effort ?? null,
       // A team's leader or child (teams.js); null for a task of its own.
       team: record.team ?? null,
+      score: record.score ?? null,
     }
   }
 
@@ -268,8 +271,23 @@ export class TerminalManager extends EventEmitter {
     const record = this.#record(id)
     const file = this.#transcriptFile(record)
     if (!file) return { epoch: null, rev: 0, omitted: 0, reset: true, turns: [], ids: [], file: null }
-    const snapshot = await this.transcripts.read(file, { epoch: typeof epoch === 'string' ? epoch : null, since: Number(since) > 0 ? Number(since) : 0 })
+    const snapshot = await this.transcripts.read(file, { epoch: typeof epoch === 'string' ? epoch : null, since: Number(since) > 0 ? Number(since) : 0,
+      scores: record.responseScores ??= {} })
+    if (this.records.get(id) !== record) return { ...snapshot, file }
+    const score = addScores(...Object.values(record.responseScores).map((entry) => entry.score))
+    if (JSON.stringify(record.score) !== JSON.stringify(score)) {
+      record.score = score
+      void this.#save()
+      this.#changed(record)
+    }
     return { ...snapshot, file }
+  }
+
+  #refreshUsage(id) {
+    const task = this.conversation(id).catch((error) => this.log('Claude usage:', error.message))
+      .finally(() => this.usageReads.delete(task))
+    this.usageReads.add(task)
+    return task
   }
 
   /**
@@ -286,7 +304,7 @@ export class TerminalManager extends EventEmitter {
     if (live.activity !== 'running') return live.activity === 'idle'
     const file = this.#transcriptFile(record)
     if (file && (quietMs <= 0 || Date.now() - fs.statSync(file).mtimeMs >= quietMs)) {
-      const last = (await this.transcripts.read(file)).turns.at(-1)
+      const last = (await this.conversation(id)).turns.at(-1)
       if (last && last.status !== 'running' && live.activity === 'running' && live.alive) return this.#settled(id, record, live, 'the conversation file')
     }
     const idleAt = await this.#claudeIdleAt(record, live)
@@ -494,6 +512,7 @@ export class TerminalManager extends EventEmitter {
       live.exitCode = exitCode
       this.#note(record.id, `Claude Code exited (code ${exitCode}${live.replacing ? ', being replaced' : ''})`)
       live.exited?.()
+      if (!this.closing && this.records.get(record.id) === record) void this.#refreshUsage(record.id)
       // Restarted for a new model: the task is not shown as ended in between.
       if (!live.replacing) term.write('', () => this.#changed(record))
     })
@@ -879,6 +898,7 @@ export class TerminalManager extends EventEmitter {
     if (save) void this.#save()
     if (save || reported || backgroundChanged || before !== live.activity) this.#changed(record)
     if (live.activity === 'approval' && before !== 'approval') this.emit('approval-needed', { terminalId: id, title: record.title })
+    if (effect.finished) void this.#refreshUsage(id)
     if (effect.finished && before !== 'idle') this.emit('turn-finished', { terminalId: id, title: record.title, failed: Boolean(effect.failed) })
     // A team reads the reply a turn ended with (Stop's last_assistant_message) and its errors.
     this.emit('hook', { terminalId: id, input })
@@ -887,6 +907,7 @@ export class TerminalManager extends EventEmitter {
 
   /** Ends every Claude Code process (the app is quitting); their tasks resume on the next start. */
   async shutdown() {
+    this.closing = true
     for (const pending of this.starting.values()) pending.cancelled = true
     for (const [id, live] of this.live) {
       if (!live.alive) continue
@@ -895,6 +916,7 @@ export class TerminalManager extends EventEmitter {
         live.proc.kill()
       } catch {}
     }
+    await Promise.allSettled([...this.usageReads, ...[...this.live.keys()].filter((id) => this.records.has(id)).map((id) => this.#refreshUsage(id))])
     await this.writes
   }
 }

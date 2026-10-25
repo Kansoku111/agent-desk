@@ -29,6 +29,7 @@ import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
 import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspaceKey, workspaceWithin, workspacesOverlap } from './execution.js'
 import { ExecutionReview } from './execution-review.js'
+import { addScores, emptyScore, scoresUpTo } from '../shared/usage-score.js'
 
 const mcpScript = fileURLToPath(new URL('./team-mcp.js', import.meta.url))
 
@@ -208,7 +209,22 @@ export class TeamManager extends EventEmitter {
     await this.#saveAuth()
   }
 
+  #captureScores(team) {
+    const before = JSON.stringify(team.scoreMembers)
+    team.scoreMembers ??= {}
+    const members = [[team.leaderKind, team.leaderId], ...team.children.filter((child) => child.taskId).map((child) => [child.kind, child.taskId])]
+    for (const [kind, id] of members) {
+      const record = kind === 'thread' ? this.threads.threads.get(id)
+        : kind === 'terminal' ? this.terminals.records?.get(id) : this.agents.get(id)
+      if (!record) continue
+      const turns = kind === 'thread' ? this.threads.turns?.get(id) : null
+      team.scoreMembers[id] = record.score ?? (turns ? scoresUpTo(turns).at(-1) ?? emptyScore() : team.scoreMembers[id] ?? null)
+    }
+    return before !== JSON.stringify(team.scoreMembers)
+  }
+
   #save() {
+    for (const team of this.teams.values()) this.#captureScores(team)
     const snapshot = saveSnapshot(this.teams.values(), this.delivering)
     this.writes = this.writes.then(() => writeJson(this.file, snapshot)).catch((error) => this.log('teams:', error.message))
     return this.writes
@@ -261,6 +277,7 @@ export class TeamManager extends EventEmitter {
   }
 
   summary(team) {
+    this.#captureScores(team)
     const leader = team.leaderKind === 'thread' ? null : this.terminals.status(team.leaderId)
     let delivery = 'idle'
     if (this.delivering.has(team.id)) delivery = 'delivering'
@@ -277,6 +294,7 @@ export class TeamManager extends EventEmitter {
       createdAt: team.createdAt,
       updatedAt: team.updatedAt,
       children: team.children.map((child) => this.#childSummary(child)),
+      score: addScores(...Object.values(team.scoreMembers ?? {})),
       queue: team.queue.map(({ id, childId, kind, at }) => ({ id, childId, kind, at })),
       delivery,
       approvals: [...this.approvals.values()].filter((entry) => entry.teamId === team.id)
@@ -864,6 +882,7 @@ export class TeamManager extends EventEmitter {
     const { title } = child
     // The task's name in the lists; a leader that named the child after its job gets it once.
     const taskTitle = child.name === title ? title : `${child.name}: ${title}`
+    this.#captureScores(team)
     const previous = child.taskId
     child.taskId = null
     let taskId = null
@@ -1606,6 +1625,7 @@ export class TeamManager extends EventEmitter {
   #onThread(thread) {
     const found = this.#byTask(thread.id)
     if (!found) return
+    if (this.#captureScores(found.team)) void this.#save()
     if (!found.child) {
       // A GPT leader: its state shows in the panel, and an idle one takes the next report.
       if (thread.status !== 'running') this.#pump(found.team)
@@ -1731,6 +1751,7 @@ export class TeamManager extends EventEmitter {
     const found = this.#byTask(summary.id)
     if (!found) return
     const { team, child } = found
+    if (this.#captureScores(team)) void this.#save()
     if (child) {
       if (summary.activity === 'idle') void this.#flushChild(team, child)
       return this.#emit(team)
@@ -1745,7 +1766,10 @@ export class TeamManager extends EventEmitter {
 
   #onAgent(session) {
     const found = this.#byTask(session.id)
-    if (found?.child) this.#emit(found.team)
+    if (found?.child) {
+      if (this.#captureScores(found.team)) void this.#save()
+      this.#emit(found.team)
+    }
   }
 
   #onAgentFinished({ id, status, text, error, denials, usage }) {
