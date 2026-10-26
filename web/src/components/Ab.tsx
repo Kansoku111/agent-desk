@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-react'
 import { act, loadAgentTurns, loadThread, navigate, setState, useRemote, useStore } from '../store'
 import type { AbConfig, AbJob, AbRun, AppState, Turn, UsageScore } from '../types'
@@ -133,6 +133,11 @@ export function AbView({ id }: { id: string }) {
   const server = useStore((state) => state.server)
   const run = server?.ab?.find((entry) => entry.id === id)
   const remote = useRemote()
+  const content = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const element = content.current
+    if (element) element.scrollTop = element.scrollHeight
+  }, [id, run?.id])
   const draft = useAbDraft()
   const [busy, setBusy] = useState(false)
   const [removing, setRemoving] = useState(false)
@@ -157,7 +162,7 @@ export function AbView({ id }: { id: string }) {
       {(ACTIVE.includes(run.phase) || running) && <button className="icon-button" aria-label="ABを停止" disabled={busy} onClick={() => void action('ab.stop')}><Square size={16} /></button>}
       <button className="icon-button" aria-label="ABを削除" disabled={busy} onClick={() => setRemoving(true)}><Trash2 size={16} /></button>
     </header>
-    <div className="ab-content">
+    <div ref={content} className="ab-content">
       <section className="ab-question"><CopyButton text={run.text} /><Markdown text={run.text} workspace={run.workspace} /><AbImages images={run.images} /></section>
       <div className="ab-consultations">{run.jobs.filter((job) => ['a', 'b'].includes(job.role)).map((job) => <Report key={job.id} job={job} workspace={run.workspace} modelName={modelName(job.model)} />)}</div>
       {run.error && <p role="alert" className="error-text">{run.error}</p>}

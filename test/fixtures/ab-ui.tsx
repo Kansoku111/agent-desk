@@ -75,8 +75,33 @@ const choose = async (label: string) => {
 }
 const api = {
   requests, render,
+  async scroll() {
+    const longRun = { ...run, text: Array.from({ length: 80 }, (_, index) => 'Paragraph ' + index).join('\n\n') }
+    store.setState({ server: { ...server, ab: [longRun] } })
+    await render('view')
+    const content = () => document.querySelector<HTMLDivElement>('.ab-content')!
+    const atBottom = () => content().scrollHeight - content().clientHeight - content().scrollTop < 2
+    check(content().clientHeight > 0 && content().scrollHeight > content().clientHeight, 'AB scroll fixture overflows')
+    check(atBottom(), 'AB opens at bottom')
+    content().scrollTop = 0
+    store.setState({ server: { ...server, ab: [{ ...longRun, updatedAt: 2 }] } })
+    await tick()
+    check(content().scrollTop === 0, 'AB updates preserve reading position')
+    await render('start'); await render('view')
+    check(atBottom(), 'AB reopens at bottom')
+    root.render(<AbView id="other" />); await tick()
+    check(!document.querySelector('.ab-content'), 'AB waits for run data')
+    store.setState({ server: { ...server, ab: [longRun, { ...longRun, id: 'other' }] } })
+    await tick()
+    check(atBottom(), 'AB delayed run opens at bottom')
+    content().scrollTop = 0
+    root.render(<AbView id="run" />); await tick()
+    check(atBottom(), 'AB run switch opens at bottom')
+    store.setState({ server })
+    return 'AB scroll: open / reopen / delayed data / run switch / preserve reading position'
+  },
   async run() {
-    const passed: string[] = []
+    const passed: string[] = [await api.scroll()]
     for (const kind of ['start', 'view']) {
       const method = kind === 'start' ? 'ab.create' : 'ab.revise'
       await render(kind)
