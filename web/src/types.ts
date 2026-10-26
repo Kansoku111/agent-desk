@@ -23,6 +23,7 @@ export interface AbRun {
   score?: UsageScore
   phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string; warning?: string; retryJobId?: string
   archived?: boolean
+  pinned?: boolean
   messages: (string | { text: string; images?: ImageRef[]; afterJobId?: string })[]; createdAt: number; updatedAt: number
 }
 
@@ -39,6 +40,7 @@ export interface ThreadSummary {
   createdAt: number
   updatedAt: number
   archived: boolean
+  pinned?: boolean
   usage: { used: number; size: number } | null
   score?: UsageScore
   status: ThreadStatus
@@ -58,6 +60,7 @@ export interface TerminalSummary {
   createdAt: number
   updatedAt: number
   archived: boolean
+  pinned?: boolean
   /** `running`: the process is up; `exited`: it ended (its last screen stays); `stopped`: not started since the app started. */
   state: 'running' | 'exited' | 'stopped'
   /** From Claude Code's hooks: working on a prompt, waiting for an approval, or idle. */

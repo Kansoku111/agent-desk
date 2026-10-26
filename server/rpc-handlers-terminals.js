@@ -48,7 +48,7 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
     // `model` / `effort`: a value, null for Claude Code's own default, or left out to keep the current one.
     'terminal.configure': async ({ terminalId, model, effort }, client) => ({ terminal: await terminals.configure(terminalId, client, { model, effort }) }),
     'terminal.stop': ({ terminalId }) => ({ terminal: terminals.stop(terminalId) }),
-    'terminal.update': async ({ terminalId, title, archived }) => ({ terminal: await terminals.update(terminalId, { title, archived }) }),
+    'terminal.update': async ({ terminalId, title, archived, pinned }) => ({ terminal: await terminals.update(terminalId, { title, archived, pinned }) }),
     // Deleting a team's leader deletes the team with its children.
     'terminal.remove': ({ terminalId }) => {
       const teamId = teams.teamLedBy(terminalId)

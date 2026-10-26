@@ -2,10 +2,11 @@ import { createPortal } from 'react-dom'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   Archive, ArchiveRestore, ArrowLeft, Folder, FolderOpen, FolderPlus, Loader2, Monitor, MoreHorizontal, PanelLeftClose, Palette, Pencil, Plus,
-  CheckSquare, ChevronDown, ChevronUp, Copy, Search, Settings, SquarePen, Trash2, X,
+  CheckSquare, ChevronDown, ChevronUp, Copy, Pin, PinOff, Search, Settings, SquarePen, Trash2, X,
 } from 'lucide-react'
 import { act, getState, isNarrow, navigate, request, setState, startTerminal, toast, useStore } from '../store'
 import { selectThreadRange } from '../thread-selection'
+import { groupRows, visibleRows, MAX_ROWS, VISIBLE_ROWS } from '../task-rows'
 import { threadMarkdown } from '../thread-transcript'
 import { abMarkdown } from '../ab-transcript'
 import { ConfirmDialog, Modal } from './Modal'
@@ -37,10 +38,7 @@ function writeCollapsed(paths: string[]) {
 // The sidebar unmounts when closed, so its scroll position lives here to survive reopening.
 let taskTreeScroll = 0
 
-/** Rows each project shows before "さらに表示", and the projects the user has opened up. */
-const VISIBLE_ROWS = 3
-/** The most a project lists, however far it is opened; older tasks are still found by searching. */
-const MAX_ROWS = 10
+/** Projects the user has opened up beyond the recent-task quota. */
 const expandedGroups = new Set<string>()
 
 /** Opens the composer for a new task in one project (or My PC). */
@@ -138,7 +136,9 @@ function AbRow({ run, active, selection }: { run: AbRun; active: boolean; select
       }} /> : <button type="button" className="thread-button" disabled={selection.busy} title={run.title}
       onClick={(event) => selection.enabled || event.ctrlKey || event.metaKey || event.shiftKey
         ? selection.toggle(run.id, event.shiftKey) : navigate({ view: 'ab', id: run.id })}>
-      <span className="cl-mark tm-mark small">AB</span><span className="thread-title">{run.title}</span>
+      <span className="cl-mark tm-mark small">AB</span>
+      {run.pinned && <Pin size={12} className="thread-pin" aria-label="ピン留め済み" />}
+      <span className="thread-title">{run.title}</span>
       <span className="thread-meta">{run.jobs.some((job) => ['running', 'stopping'].includes(job.status))
         ? <Loader2 size={13} className="spin" /> : run.phase === 'awaiting-approval'
           ? <span className="status-dot approval" title="案の確認待ち" /> : <span className="thread-time">{relativeTime(run.updatedAt)}</span>}</span>
@@ -148,6 +148,8 @@ function AbRow({ run, active, selection }: { run: AbRun; active: boolean; select
       {(close) => <>
         <MenuItem icon={<Pencil size={14} />} label="名前を変更" onSelect={() => { close(); setTitle(run.title); setRenaming(true) }} />
         <MenuItem icon={<Copy size={14} />} label="履歴をコピー" onSelect={() => { close(); void copy() }} />
+        <MenuItem icon={run.pinned ? <PinOff size={14} /> : <Pin size={14} />} label={run.pinned ? 'ピン留めを解除' : 'ピン留め'}
+          onSelect={() => { close(); void act('ab.update', { runId: run.id, pinned: !run.pinned }) }} />
         <MenuItem icon={run.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />} label={run.archived ? 'アーカイブから戻す' : 'アーカイブ'}
           onSelect={() => { close(); void act('ab.update', { runId: run.id, archived: !run.archived }) }} />
         <MenuItem icon={<Trash2 size={14} />} label="削除" danger hint="⌫" keys={['Backspace', 'Delete']} onSelect={() => { close(); setRemoving(true) }} />
@@ -200,6 +202,7 @@ function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; activ
               ? selection.toggle(thread.id, event.shiftKey)
               : navigate({ view: 'thread', id: thread.id })} title={leads ? `エージェントチーム（GPT）: ${thread.title}` : thread.title}>
             {leads && <span className="cl-mark tm-mark small" aria-label={execution ? "エコモード" : "エージェントチーム"}>{execution ? "eco" : "TM"}</span>}
+            {thread.pinned && <Pin size={12} className="thread-pin" aria-label="ピン留め済み" />}
             <span className="thread-title">{thread.title}</span>
             <span className="thread-meta"><ThreadStatus thread={thread} /></span>
           </button>
@@ -233,6 +236,14 @@ function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; activ
                 onSelect={() => {
                   close()
                   void copyHistory(thread)
+                }}
+              />
+              <MenuItem
+                icon={thread.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                label={thread.pinned ? 'ピン留めを解除' : 'ピン留め'}
+                onSelect={() => {
+                  close()
+                  void act('thread.update', { threadId: thread.id, pinned: !thread.pinned })
                 }}
               />
               <MenuItem
@@ -308,6 +319,7 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
             {leads
               ? <span className="cl-mark tm-mark small" aria-label={team?.execution ? 'エコモード' : 'エージェントチーム'}>{team?.execution ? 'eco' : 'TM'}</span>
               : <span className="cl-mark small" aria-label="Claude Code">CL</span>}
+            {terminal.pinned && <Pin size={12} className="thread-pin" aria-label="ピン留め済み" />}
             <span className="thread-title">{terminal.title}</span>
             <span className="thread-meta"><TerminalStatus terminal={terminal} /></span>
           </button>
@@ -341,6 +353,14 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
                 onSelect={() => {
                   close()
                   void copyTerminalHistory(terminal)
+                }}
+              />
+              <MenuItem
+                icon={terminal.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                label={terminal.pinned ? 'ピン留めを解除' : 'ピン留め'}
+                onSelect={() => {
+                  close()
+                  void act('terminal.update', { terminalId: terminal.id, pinned: !terminal.pinned })
                 }}
               />
               <MenuItem
@@ -388,22 +408,6 @@ interface Group {
   ab: AbRun[]
 }
 
-/** Agent tasks and Claude Code tasks of one group, most recent first. */
-function groupRows(group: Group) {
-  return [
-    ...group.threads.map((thread) => ({ id: thread.id, updatedAt: thread.updatedAt, thread, terminal: null, ab: null })),
-    ...group.terminals.map((terminal) => ({ id: terminal.id, updatedAt: terminal.updatedAt, thread: null, terminal, ab: null })),
-    ...group.ab.map((ab) => ({ id: ab.id, updatedAt: ab.updatedAt, thread: null, terminal: null, ab })),
-  ].sort((a, b) => b.updatedAt - a.updatedAt)
-}
-
-/** The rows a group lists: the latest few, up to MAX_ROWS once opened up, all while searching, and the open task always. */
-function visibleRows(rows: ReturnType<typeof groupRows>, expanded: boolean, searching: boolean, activeId: string | null) {
-  if (searching) return rows
-  const limit = expanded ? MAX_ROWS : VISIBLE_ROWS
-  return rows.filter((row, index) => index < limit || row.id === activeId)
-}
-
 function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, activeId, searching, selection }: {
   group: Group
   collapsed: boolean
@@ -419,7 +423,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
   const rows = groupRows(group)
   const shownRows = visibleRows(rows, expanded, searching, activeId)
   // The button opens the rows past the first few, up to the cap.
-  const more = Math.min(rows.length, MAX_ROWS) - VISIBLE_ROWS
+  const more = Math.min(rows.filter((row) => !row.pinned).length, MAX_ROWS) - VISIBLE_ROWS
   const hasRows = rows.length > 0 || draftHere
   const [renaming, setRenaming] = useState(false)
   const [colorOpen, setColorOpen] = useState(false)

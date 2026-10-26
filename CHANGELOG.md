@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sidebar task menus support persistent pin/unpin for regular conversations, Claude Code tasks, teams/Eco and AB. Pins appear first within their project with a small marker, remain outside the recent-row quota, and keep their state across restarts and archiving.
 - Eco leaders can continue related implementation with the same child after reviewing and accepting its research. The explicit `implement` tool retains the model and conversation, applies writer permissions through the app, captures a new baseline, and preserves serialized writes, verification and parent judgment. Ordinary research follow-ups remain read-only; failed session migration never silently starts a replacement conversation.
 
 ### Changed

@@ -212,7 +212,7 @@ export class ThreadManager extends EventEmitter {
   // ---------------------------------------------------------------- views
 
   summary(thread) {
-    return { ...thread, toolMode: this.teamToolMode?.(thread) ?? thread.toolMode ?? 'native' }
+    return { ...thread, pinned: Boolean(thread.pinned), toolMode: this.teamToolMode?.(thread) ?? thread.toolMode ?? 'native' }
   }
 
   list() {
@@ -320,6 +320,7 @@ export class ThreadManager extends EventEmitter {
     if (patch.toolMode !== undefined) thread.toolMode = patch.toolMode
     if (typeof patch.title === 'string' && patch.title.trim()) thread.title = patch.title.trim().slice(0, 120)
     if (typeof patch.archived === 'boolean') thread.archived = patch.archived
+    if (typeof patch.pinned === 'boolean') thread.pinned = patch.pinned
     if (patch.permissionMode !== undefined && patch.permissionMode !== thread.permissionMode) {
       if (thread.team?.executionMode === 'research') throw new Error('EXの調査専用タスクは読み取り専用です')
       if (!PERMISSION_MODES.includes(patch.permissionMode)) throw new Error('不明な権限モードです')

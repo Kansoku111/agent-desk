@@ -1115,6 +1115,11 @@ select:focus {
   white-space: nowrap;
 }
 
+.thread-pin {
+  flex: none;
+  color: var(--text-subtle);
+}
+
 .thread-meta {
   display: flex;
   flex: none;

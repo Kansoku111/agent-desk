@@ -84,7 +84,7 @@ export class AbManager extends EventEmitter {
   }
   list() { return [...this.runs.values()].map((run) => this.summary(run)) }
   summary(run) {
-    return structuredClone({ ...run, score: addScores(...run.jobs.map((job) => job.score ?? (RUNNING.has(job.status) ? emptyScore() : null))) })
+    return structuredClone({ ...run, pinned: Boolean(run.pinned), score: addScores(...run.jobs.map((job) => job.score ?? (RUNNING.has(job.status) ? emptyScore() : null))) })
   }
   get busy() { return [...this.runs.values()].some((run) => ACTIVE.has(run.phase) || run.jobs.some((job) => RUNNING.has(job.status))) }
   lock(id, work) {
@@ -343,11 +343,12 @@ export class AbManager extends EventEmitter {
       return { run: this.summary(run) }
     })
   }
-  update({ id, title, archived, toolMode }) {
+  update({ id, title, archived, pinned, toolMode }) {
     return this.lock(id, async () => {
       const run = this.require(id)
       if (title !== undefined && (typeof title !== 'string' || !title.trim() || title.trim().length > 200)) throw new Error('ABの名前が不正です（200文字以内）')
       if (archived !== undefined && typeof archived !== 'boolean') throw new Error('アーカイブ設定が不正です')
+      if (pinned !== undefined && typeof pinned !== 'boolean') throw new Error('ピン留め設定が不正です')
       if (toolMode !== undefined) {
         assertToolMode(toolMode)
         if (toolMode !== run.config.toolMode && (ACTIVE.has(run.phase) || run.jobs.some((job) => RUNNING.has(job.status)))) throw new Error('実行中はPTCを変更できません')
@@ -355,6 +356,7 @@ export class AbManager extends EventEmitter {
       }
       if (title !== undefined) run.title = title.trim()
       if (archived !== undefined) run.archived = archived
+      if (pinned !== undefined) run.pinned = pinned
       await this.save(run)
       return { run: this.summary(run) }
     })

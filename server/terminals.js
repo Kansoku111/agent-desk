@@ -144,6 +144,7 @@ export class TerminalManager extends EventEmitter {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       archived: Boolean(record.archived),
+      pinned: Boolean(record.pinned),
       // 'running': the process is up; 'exited': it ended (its last screen stays); 'stopped': none since the app started.
       state: live ? (live.alive ? 'running' : 'exited') : 'stopped',
       activity: live?.alive ? live.activity : 'idle',
@@ -835,13 +836,14 @@ export class TerminalManager extends EventEmitter {
     return this.summary(this.#record(id))
   }
 
-  async update(id, { title, archived }) {
+  async update(id, { title, archived, pinned }) {
     const record = this.#record(id)
     if (typeof title === 'string' && title.trim()) {
       record.title = title.trim().slice(0, 120)
       record.renamed = true
     }
     if (typeof archived === 'boolean') record.archived = archived
+    if (typeof pinned === 'boolean') record.pinned = pinned
     await this.#save()
     this.#changed(record)
     return this.summary(record)
