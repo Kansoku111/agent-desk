@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-26
+
 ### Changed
 
 - Usage footers show cumulative **API-equivalent amounts** (`API換算 $…` / `API換算 ¥…`) instead of points across regular/CL/Eco/TM/AB. General settings selects USD (default) or JPY with a required positive manual USD/JPY rate; no rate is guessed or fetched. Settings validate/save before publication and need no model restart. Existing saved scores and USD equivalents remain unchanged; changing the manual rate changes only JPY presentation, including history. API-equivalent amounts truncate to at most one decimal (`$19.282996` → `$19.2`) without reducing stored-value or exchange-rate precision. Positive amounts below 0.1 remain distinct from zero (`< $0.1` / `< ¥0.1`); unknown totals show `—` and partial totals keep a rounded-down lower bound. Metered estimates and actual billing totals remain in USD, separate from the reference display.
@@ -14,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Eco acceptance now requires recorded verification evidence; overlapping-workspace conflicts identify the blocking workflow, and restores are fenced across overlapping workspaces. Eco children always retain the extra tools needed for implementation.
+- Settings updates are isolated and committed before publishing state, including queued-history changes and account-update failures. TM policy/playbook deletions persist immediately, and those instructions remain scoped to TM.
+- AB supports per-role reasoning levels, screenshots, Enter-to-send, safe follow-ups and history actions. Consultations show their live conversations, and the header includes the Open menu. New AB/Eco reasoning defaults to medium; Eco reasoning choices persist, and model/reasoning dropdowns support mouse-wheel selection.
+- Terminal actions launch visible terminals; the redundant project Explorer action is removed, and sidebar workflow-launch colors are distinct.
 - The API-equivalent amount is now a keyboard/touch-accessible button opening usage details instead of leaving metered cost estimates only in a native hover title. Legacy turns without a recorded equivalent still expose their saved metered costs. JPY details include the USD reference and applied manual rate; Escape/close returns focus to the amount.
 - API-price-equivalent points no longer leak subscription/local-model reference prices into metered-cost totals, history, or subagent cost readouts. Existing usage caches remove only non-metered costs while preserving tokens, metered costs and deleted-log history; live logs are repriced under the corrected billing policy.
 - Responses without usage now count as unpriced rather than silently disappearing from points. Duplicate responses prefer their latest available usage, including when it arrives after a usage-less record, without counting twice.
