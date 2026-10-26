@@ -53,6 +53,7 @@ export class AcpRuntime extends EventEmitter {
     this.goalWaitWrites = new Map()
     this.startPromise = null
     this.stopPromise = null
+    this.stopTimedOut = false
   }
 
   start() {
@@ -71,6 +72,8 @@ export class AcpRuntime extends EventEmitter {
   async #start() {
     this.state = 'starting'
     await fs.mkdir(this.paths.runtimeCwd, { recursive: true })
+    // The stop deadline can expire before the asynchronous directory creation.
+    if (this.stopTimedOut) throw new Error('dsh stopped during startup')
     const env = dshEnv(this.paths, this.mode)
     const layers = this.patches.flatMap((file) => ['--patch', file])
     const child = spawn(process.execPath, [...runtimeHookArgs(), dshBin, '--profile', 'acp', ...layers], {
@@ -227,18 +230,23 @@ export class AcpRuntime extends EventEmitter {
   }
 
   async #stop(graceMs) {
-    // A stop requested during startup must also drain the process it starts.
-    await this.startPromise?.catch(() => {})
-    const child = this.child
-    if (!child || child.exitCode !== null || child.signalCode !== null) return
-    this.state = 'stopped'
-    const exited = new Promise((resolve) => child.once('exit', resolve))
+    // The grace period also covers startup: a stalled initialization must not
+    // postpone shutdown until the much longer startup timeout.
+    const timer = setTimeout(() => { this.stopTimedOut = true; this.#kill() }, graceMs)
     try {
-      child.stdin.end()
-    } catch {}
-    const timer = setTimeout(() => this.#kill(child), graceMs)
-    await exited
-    clearTimeout(timer)
+      await this.startPromise?.catch(() => {})
+      const child = this.child
+      this.state = 'stopped'
+      if (!child || child.exitCode !== null || child.signalCode !== null) return
+      const exited = new Promise((resolve) => child.once('exit', resolve))
+      try {
+        child.stdin.end()
+      } catch {}
+      await exited
+    } finally {
+      clearTimeout(timer)
+      this.stopTimedOut = false
+    }
   }
 }
 
@@ -270,20 +278,23 @@ export class RuntimePool extends EventEmitter {
   async get(key) {
     const runtime = this.runtimes.get(key)
     if (!runtime) throw new Error(`unknown permission mode: ${key}`)
-    if (this.paused) throw new Error('dsh を更新しています。完了してからもう一度送信してください。')
-    await runtime.start()
-    return runtime
+    while (true) {
+      if (this.paused) throw new Error('dsh を更新しています。完了してからもう一度送信してください。')
+      // Do not start a replacement if the pool was paused while this get waited.
+      if (runtime.stopPromise) {
+        await runtime.stopPromise
+        continue
+      }
+      await runtime.start()
+      if (this.paused) throw new Error('dsh を更新しています。完了してからもう一度送信してください。')
+      // A recycle can begin while awaiting an already-ready start.
+      if (!runtime.stopPromise) return runtime
+    }
   }
 
   /** Stops every runtime and keeps them stopped (while dsh itself is replaced). */
   async pause() {
     this.paused = true
-    // A get already waiting for a recycle may start its replacement as that
-    // stop settles. Include the replacement before draining the paused pool.
-    await Promise.all([...this.runtimes.values()].map(async (runtime) => {
-      await runtime.stopPromise
-      await runtime.startPromise?.catch(() => {})
-    }))
     await this.stopAll()
   }
 

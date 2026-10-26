@@ -7,7 +7,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import YAML from 'yaml'
-import { AcpRuntime } from '../server/runtime.js'
+import { AcpRuntime, RuntimePool } from '../server/runtime.js'
+import { TeamManager } from '../server/teams.js'
 import { ThreadManager } from '../server/threads.js'
 import { appPaths } from '../server/paths.js'
 import { abPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
@@ -119,6 +120,68 @@ for (const toolMode of ['native', 'ptc']) {
     assert.match(JSON.stringify(f.requests.at(-1).messages), /child-report-after-delegation/)
     assert.notEqual(f.runtime.child, child)
     assert.equal(f.runtime.state, 'ready')
+  })
+}
+
+for (const toolMode of ['native', 'ptc']) {
+  test(`team delivery and a deferred pool recycle preserve the leader's history (${toolMode})`, { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'danger-full-access')
+    const pool = new RuntimePool({ paths: f.paths, onUpdate() {}, onPermission: async () => ({}) })
+    pool.runtimes.set('danger-full-access', f.runtime)
+    f.runtime.on('exit', (info) => pool.emit('exit', { key: 'danger-full-access', ...info }))
+    // Route the GPT leader through the deterministic local model, not a provider API.
+    const model = '["local-llm","ptc-fixture"]'
+    const catalog = { learn: () => false, data: { models: [{ provider: 'openai-codex', id: 'ptc-fixture', value: model, name: 'Fixture' }] } }
+    const threads = new ThreadManager({ paths: f.paths, pool, catalog,
+      getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null })
+    const terminals = Object.assign(new EventEmitter(), { status: () => null })
+    const agents = Object.assign(new EventEmitter(), { get: () => null, running: () => false })
+    const teams = new TeamManager({ file: path.join(f.home, 'teams.json'), dir: path.join(f.home, 'teams'),
+      threads, terminals, agents, catalog, getSettings: () => ({ leaderProvider: 'gpt', toolMode,
+        gptLeader: { model: 'ptc-fixture', effort: null }, gpt: { enabled: true } }),
+      apiUrl: () => '', gatherMs: 0 })
+    f.cleanups.push(() => threads.shutdown(), () => teams.stop(), () => pool.pause())
+    const collect = f.runtime.onUpdate
+    f.runtime.onUpdate = (id, update) => { collect(id, update); threads.onUpdate(id, update) }
+    const { team: view, thread: leader } = await teams.create({ workspace: f.workspace })
+    const team = teams.teams.get(view.id)
+    await threads.send(leader.id, { text: 'leader-context-before-delegation' })
+    await threads.active.get(leader.id).done
+    const sessionId = threads.threads.get(leader.id).sessionId
+    const childThread = await threads.create({ workspace: f.workspace, model, permissionMode: 'danger-full-access',
+      team: { id: team.id, childId: 'fixture-child' } })
+    const child = { id: 'fixture-child', taskId: childThread.id, kind: 'thread', name: 'Worker', title: 'Fixture',
+      provider: 'gpt', tier: 'low', model: 'ptc-fixture', closed: false, awaiting: true, pending: [], followups: [], reports: [],
+      createdAt: Date.now(), updatedAt: Date.now() }
+    team.children.push(child)
+    // Simulate the child's completed turn; report delivery itself uses the real managers.
+    threads.turns.set(childThread.id, [{ items: [{ type: 'agent', text: 'actual-child-report-after-delegation' }] }])
+    const oldProcess = f.runtime.child
+    const before = f.requests.length
+    const leaderFinished = Promise.withResolvers()
+    let stopped
+    // TeamManager runs first and queues delivery. The next listener has the
+    // same idle check and deferred-restart ordering as the application.
+    threads.on('turn-finished', ({ threadId, status }) => {
+      if (threadId === childThread.id) {
+        assert.equal(threads.busy, false)
+        stopped = pool.stopAll()
+      } else if (threadId === leader.id) leaderFinished.resolve(status)
+    })
+    threads.emit('turn-finished', { threadId: childThread.id, status: 'done' })
+    assert.ok(stopped)
+    assert.equal(await leaderFinished.promise, 'done')
+    await stopped
+    const result = await threads.get(leader.id)
+    assert.deepEqual(result.turns.map((turn) => turn.status), ['done', 'done'])
+    assert.equal(result.thread.sessionId, sessionId)
+    assert.equal(child.reports.length, 1)
+    assert.equal(team.queue.length, 0)
+    assert.equal(teams.summary(team).delivery, 'idle')
+    assert.equal(f.requests.length, before + 1)
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /leader-context-before-delegation/)
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /actual-child-report-after-delegation/)
+    assert.notEqual(f.runtime.child, oldProcess)
   })
 }
 
