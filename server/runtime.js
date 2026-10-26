@@ -52,9 +52,13 @@ export class AcpRuntime extends EventEmitter {
     this.waitingSessions = new Set()
     this.goalWaitWrites = new Map()
     this.startPromise = null
+    this.stopPromise = null
   }
 
   start() {
+    // A queued team report can arrive just as a deferred settings restart
+    // closes stdin. Never hand it the still-resolved start of the old process.
+    if (this.stopPromise) return this.stopPromise.then(() => this.start())
     this.startPromise ??= this.#start().catch((error) => {
       this.startPromise = null
       this.state = 'failed'
@@ -210,21 +214,29 @@ export class AcpRuntime extends EventEmitter {
     if (this.conn) await this.conn.closeSession({ sessionId })
   }
 
-  #kill() {
+  #kill(child = this.child) {
     try {
-      this.child?.kill()
+      child?.kill()
     } catch {}
   }
 
   /** Graceful stop: stdin EOF lets dsh drain sessions and flush persistence. */
-  async stop(graceMs = 5000) {
+  stop(graceMs = 5000) {
+    this.stopPromise ??= this.#stop(graceMs).finally(() => { this.stopPromise = null })
+    return this.stopPromise
+  }
+
+  async #stop(graceMs) {
+    // A stop requested during startup must also drain the process it starts.
+    await this.startPromise?.catch(() => {})
     const child = this.child
-    if (!child) return
+    if (!child || child.exitCode !== null || child.signalCode !== null) return
+    this.state = 'stopped'
     const exited = new Promise((resolve) => child.once('exit', resolve))
     try {
       child.stdin.end()
     } catch {}
-    const timer = setTimeout(() => this.#kill(), graceMs)
+    const timer = setTimeout(() => this.#kill(child), graceMs)
     await exited
     clearTimeout(timer)
   }
@@ -266,8 +278,12 @@ export class RuntimePool extends EventEmitter {
   /** Stops every runtime and keeps them stopped (while dsh itself is replaced). */
   async pause() {
     this.paused = true
-    // A runtime still booting has no process to stop yet.
-    await Promise.all([...this.runtimes.values()].map((runtime) => runtime.startPromise?.catch(() => {})))
+    // A get already waiting for a recycle may start its replacement as that
+    // stop settles. Include the replacement before draining the paused pool.
+    await Promise.all([...this.runtimes.values()].map(async (runtime) => {
+      await runtime.stopPromise
+      await runtime.startPromise?.catch(() => {})
+    }))
     await this.stopAll()
   }
 

@@ -1,6 +1,6 @@
 // Real ACP + bundled PTC runtime; deterministic local responses, no provider API.
 import assert from 'node:assert/strict'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import fs from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
@@ -8,6 +8,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import YAML from 'yaml'
 import { AcpRuntime } from '../server/runtime.js'
+import { ThreadManager } from '../server/threads.js'
 import { appPaths } from '../server/paths.js'
 import { abPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
 import { localRoute } from '../server/local-llm.js'
@@ -58,8 +59,9 @@ async function setup(t, mode, profile) {
     permissions.push(request)
     return { outcome: { outcome: 'cancelled' } }
   } })
-  const runtimes = [runtime]
+  const runtimes = [runtime], cleanups = []
   t.after(async () => {
+    for (const cleanup of cleanups) await cleanup()
     for (const entry of runtimes) await entry.stop()
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
@@ -76,7 +78,48 @@ async function setup(t, mode, profile) {
     assert.equal(result.stopReason, 'end_turn')
     return updates.slice(from)
   }
-  return { runtime, session, prompt, run, requests, updates, permissions, workspace, home, queue, paths, patches, runtimes }
+  return { runtime, session, prompt, run, requests, updates, permissions, workspace, home, queue, paths, patches, runtimes, cleanups }
+}
+
+for (const toolMode of ['native', 'ptc']) {
+  test(`a child report admitted during runtime recycling resumes the leader once (${toolMode})`, { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'danger-full-access')
+    const pool = Object.assign(new EventEmitter(), {
+      get: () => f.runtime.start(),
+      holderOf: (id) => f.runtime.liveSessions.has(id) ? f.runtime : null,
+      status: () => ({}),
+    })
+    f.runtime.on('exit', (info) => pool.emit('exit', { key: 'danger-full-access', ...info }))
+    const threads = new ThreadManager({ paths: f.paths, pool, catalog: { learn: () => false },
+      getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null })
+    f.cleanups.push(() => threads.shutdown())
+    const collect = f.runtime.onUpdate
+    f.runtime.onUpdate = (id, update) => { collect(id, update); threads.onUpdate(id, update) }
+    // Same scheduling gate and admission path as a parked GPT team leader.
+    threads.teamGoalWaiting = () => true
+    const leader = await threads.create({ workspace: f.workspace, model: '["local-llm","ptc-fixture"]', permissionMode: 'danger-full-access', toolMode,
+      team: { id: 'recycle-fixture', role: 'leader' } })
+    await threads.send(leader.id, { text: 'leader-context-before-delegation' })
+    await threads.active.get(leader.id).done
+    const sessionId = threads.threads.get(leader.id).sessionId
+    const child = f.runtime.child
+    const before = f.requests.length
+    // #pumpThread queues send before the last child's turn-finished listener
+    // applies a deferred model/settings restart. Admission itself is async.
+    const delivery = threads.send(leader.id, { text: '[Agent Desk チーム] child-report-after-delegation' })
+    const recycled = f.runtime.stop()
+    await delivery
+    await threads.active.get(leader.id).done
+    await recycled
+    const view = await threads.get(leader.id)
+    assert.deepEqual(view.turns.map((turn) => turn.status), ['done', 'done'], JSON.stringify(view.turns.at(-1).error))
+    assert.equal(view.thread.sessionId, sessionId, 'resume full history, not a new carryover conversation')
+    assert.equal(f.requests.length, before + 1, 'no report replay or duplicate model request')
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /leader-context-before-delegation/)
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /child-report-after-delegation/)
+    assert.notEqual(f.runtime.child, child)
+    assert.equal(f.runtime.state, 'ready')
+  })
 }
 
 for (const toolMode of ['native', 'ptc']) {
