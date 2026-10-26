@@ -6,6 +6,13 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { ExecutionVerifier, normalizeChecks, sourceSnapshot, EXECUTION_PROMPT, workspaceKey, workspaceWithin, workspacesOverlap } from '../server/execution.js'
 
+test('eco leader knows research permissions are independent and immutable across follow-ups', () => {
+  assert.match(EXECUTION_PROMPT, /research child is read-only even when you have full access/)
+  assert.match(EXECUTION_PROMPT, /Omit sandbox_permissions and justification/)
+  assert.match(EXECUTION_PROMPT, /spawn a separate mode: write child/)
+  assert.match(EXECUTION_PROMPT, /send and fresh preserve the child's original mode/)
+})
+
 test('workspace aliases preserve overlap for descendants that do not exist yet', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-overlap-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))

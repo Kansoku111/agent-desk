@@ -801,6 +801,32 @@ test('eco requires acceptance criteria and checks, isolates research and preserv
   assert.equal(writer.execution.outcome, 'accepted')
 })
 
+test('eco reports research permissions and preserves them through send and fresh', async (t) => {
+  const { tool, team, manager, threads } = await setupExecution(t)
+  const spawned = await tool('spawn', { ...exTask, mode: 'research', name: 'R' })
+  const child = team.children[0]
+  assert.match(spawned, /mode: research（読み取り専用・昇格不可）/)
+  assert.match(spawned, /別の mode: write/)
+  assert.match(await tool('status'), /R .*mode: research・読み取り専用・昇格不可/)
+  const firstTask = child.taskId
+  threads.finish(firstTask, 'investigated')
+  await tool('send', { child: child.id, message: 'investigate more' })
+  assert.equal(child.taskId, firstTask)
+  assert.equal(threads.threads.get(child.taskId).permissionMode, 'read-only')
+  threads.finish(child.taskId, 'more evidence')
+  await tool('send', { child: child.id, message: 'investigate afresh', fresh: true })
+  assert.notEqual(child.taskId, firstTask)
+  assert.equal(threads.threads.get(child.taskId).permissionMode, 'read-only')
+  threads.permissions.push({
+    threadId: child.taskId, requestId: 'research-escalation', name: 'run_code',
+    input: { sandbox_permissions: 'workspace-write' },
+    options: [{ optionId: 'yes', kind: 'allow_once' }, { optionId: 'no', kind: 'reject_once' }],
+  })
+  threads.emit('approval-needed', { threadId: child.taskId })
+  assert.deepEqual(threads.calls.at(-1), ['respond', 'research-escalation', 'no'])
+  assert.equal(manager.summary(team).approvals.length, 0)
+})
+
 test('eco research reports skip verification but still require the parent review reason', async (t) => {
   const { tool, team, manager, threads } = await setupExecution(t)
   manager.execution.verify = async () => { throw new Error('research must not be verified') }

@@ -90,7 +90,7 @@ export function childPrompt(name, { background = false } = {}) {
     '- Never stop to ask a question or wait for a confirmation: nobody would answer. Pick reasonable defaults yourself and mention them in your report.',
     '- Change only what your task covers. Other agents work in the same folder at the same time.',
     '- You have no subagent tools: do the whole task yourself. If part of it should run in parallel, say so in your report, and the leader can start another child.',
-    '- In long work, keep a short progress note in a file as you go, so you can pick up where you were after the conversation is compacted or restarted.',
+    '- In long work, if this session permits file writes, keep a short progress note in a file as you go, so you can pick up where you were after the conversation is compacted or restarted.',
     background
       ? '- A long command may run in the background (Bash with run_in_background, or Monitor): you may end your turn while it runs, and you are woken when it ends. Only the reply you give once nothing of yours runs in the background reaches the leader, so stop servers and watchers you no longer need before your final reply.'
       : '- Wait for every command to finish before you end your turn: your session may stop between turns, and a command left running in the background can be cut off.',

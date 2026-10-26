@@ -888,7 +888,7 @@ export class TeamManager extends EventEmitter {
     team.updatedAt = now
     await this.#save()
     this.#emit(team)
-    return `子「${child.name}」を起動しました（${this.#label(child)}）。終わると報告がこの会話に届きます。ほかに任せる作業がなければ、ターンを終えて待ってください。`
+    return `子「${child.name}」を起動しました（${this.#label(child)}）。${child.execution?.mode === 'research' ? 'mode: research（読み取り専用・昇格不可）。実装は別の mode: write の子へ依頼してください。' : ''}終わると報告がこの会話に届きます。ほかに任せる作業がなければ、ターンを終えて待ってください。`
   }
 
   /** Starts a new conversation for the child on its task; on failure the child keeps the task it had. */
@@ -1108,7 +1108,7 @@ export class TeamManager extends EventEmitter {
     if (!team.children.length) lines.push('子はまだいません。')
     for (const child of team.children) {
       const state = STATE_LABEL[this.#childState(child)] ?? this.#childState(child)
-      lines.push(`- ${child.name} [${state}] ${this.#label(child)} — ${child.title}（報告 ${child.reports.length} 件${child.pending.length ? `・未送信の指示 ${child.pending.length} 件` : ''}）`)
+      lines.push(`- ${child.name} [${state}] ${this.#label(child)} — ${child.title}${child.execution ? ` [mode: ${child.execution.mode}${child.execution.mode === 'research' ? '・読み取り専用・昇格不可' : ''}]` : ''}（報告 ${child.reports.length} 件${child.pending.length ? `・未送信の指示 ${child.pending.length} 件` : ''}）`)
     }
     return lines.join('\n')
   }

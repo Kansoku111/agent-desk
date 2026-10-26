@@ -143,9 +143,39 @@ for (const profile of ['ab-read', 'ab-write', 'team', 'team-read']) {
   test(`real ${profile} profile executes PTC without reopening delegation or role writes`, { timeout: 120_000 }, async (t) => {
     const writable = profile !== 'ab-read' && profile !== 'team-read'
     const f = await setup(t, writable ? 'danger-full-access' : 'read-only', profile)
+    if (profile === 'team-read') {
+      f.queue.push({ name: 'read', args: { file_path: 'input.txt' } })
+      await f.prompt()
+      const system = f.requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
+      assert.match(system, /This child session runs in read-only mode, independently of the leader's permissions/)
+      assert.match(system, /Omit sandbox_permissions and justification on run_code/)
+      assert.equal(f.permissions.length, 0)
+    }
     await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
-    const reads = await f.run('return await tools.read({ file_path: "input.txt" });')
+    // Reproduce the screenshot's initial investigation, without escalation controls.
+    const reads = await f.run(profile === 'team-read'
+      ? `await tools.todo_write({ todos: [{ content: 'Inspect source', status: 'in_progress' }] });
+         await tools.working_directory({ cd: ${JSON.stringify(f.workspace)} });
+         await tools.glob({ pattern: '*.txt', path: ${JSON.stringify(f.workspace)} });
+         return await tools.read({ file_path: "input.txt" });`
+      : 'return await tools.read({ file_path: "input.txt" });')
     assert.ok(reads.some((update) => update.title === 'read' && update.status === 'completed'))
+    assert.equal(f.permissions.length, 0, 'read-only investigation does not require approval')
+    if (profile === 'team-read') {
+      assert.ok(!reads.some((update) => update.status === 'failed'), JSON.stringify(reads))
+      const system = f.requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
+      assert.match(system, /Omit sandbox_permissions and justification on run_code/)
+      await f.runtime.stop()
+      await f.runtime.start()
+      await f.runtime.resumeSession(f.session.sessionId, f.workspace)
+      // ThreadManager reapplies the saved presentation before every prompt.
+      await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+      const resumed = await f.run('return await tools.read({ file_path: "input.txt" });')
+      assert.ok(resumed.some((update) => update.title === 'read' && update.status === 'completed'))
+      assert.equal(f.permissions.length, 0)
+      const resumedSystem = f.requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
+      assert.match(resumedSystem, /This child session runs in read-only mode/)
+    }
     const absent = await f.run('return { subagent: typeof tools.subagent, workflow: typeof tools.workflow, goal: typeof tools.create_goal, write: typeof tools.write };')
     const text = JSON.stringify(absent)
     assert.match(text, /subagent[^}]*undefined/)

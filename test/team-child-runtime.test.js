@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import YAML from 'yaml'
 import { homePatch, TEAM_CHILD_PLUGIN, teamChildPatch } from '../server/dsh-config.js'
-import { apply, SECTION_NAME } from '../server/team-child-plugin.js'
+import { apply, SECTION_NAME, READ_ONLY_SECTION_NAME, READ_ONLY_PROMPT } from '../server/team-child-plugin.js'
 import { childPrompt } from '../server/teams-prompts.js'
 import { RuntimePool, runtimeKey } from '../server/runtime.js'
 
@@ -21,6 +21,29 @@ test('the child plugin adds its text as one literal section after the persona', 
   assert.equal(sections.length, 0)
   apply({ systemPrompt }, { text: childPrompt() })
   assert.deepEqual(sections, [{ name: SECTION_NAME, order: 10250, text: childPrompt(), interpolate: false }])
+})
+
+test('read-only child guidance comes from its own runtime, not leader messages', () => {
+  const previous = process.env.DSH_PERMISSION_MODE
+  try {
+    for (const mode of ['read-only', 'danger-full-access']) {
+      process.env.DSH_PERMISSION_MODE = mode
+      const sections = []
+      apply({ systemPrompt: { getSectionOrder: () => 10200, section: (section) => sections.push(section) } }, { text: childPrompt() })
+      const readOnly = sections.find((section) => section.name === READ_ONLY_SECTION_NAME)
+      if (mode === 'read-only') {
+        assert.deepEqual(readOnly, { name: READ_ONLY_SECTION_NAME, order: 10251, text: READ_ONLY_PROMPT, interpolate: false })
+        assert.match(readOnly.text, /independently of the leader's permissions/)
+        assert.match(readOnly.text, /Omit sandbox_permissions and justification on run_code/)
+        assert.match(readOnly.text, /do not retry escalation or work around the denial/)
+        assert.match(readOnly.text, /separate mode: write child/)
+      } else assert.equal(readOnly, undefined)
+    }
+  } finally {
+    if (previous === undefined) delete process.env.DSH_PERMISSION_MODE
+    else process.env.DSH_PERMISSION_MODE = previous
+  }
+  assert.match(childPrompt(), /if this session permits file writes/)
 })
 
 test('the layer also removes the fixed-model tools the home patch adds, with their prompt section', () => {

@@ -74,6 +74,38 @@ test('SIWC strips every preview unsupported field, priority, uses namespace and 
   assert.equal(changed.reasoning.effort, 'low')
   assert.deepEqual(siwcPayload(changed, model), changed)
 })
+test('SIWC keeps escalation controls optional instead of relying on the Responses strict default', () => {
+  const parameters = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      code: { type: 'string' }, description: { type: 'string' },
+      sandbox_permissions: { type: 'string', enum: ['workspace-write', 'danger-full-access'] },
+      justification: { type: 'string' },
+    },
+    required: ['code', 'description'],
+  }
+  const program = { type: 'function', name: 'run_code', parameters }
+  const explicit = { type: 'function', name: 'strict_tool', strict: true, parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } }
+  const custom = { type: 'custom', name: 'custom_tool', format: { type: 'text' } }
+  const builtin = { type: 'web_search' }
+  const namespace = { type: 'namespace', name: 'existing', tools: [{ type: 'function', name: 'pwsh', parameters }, explicit, custom] }
+  const payload = { input: [], tools: [program, explicit, custom, builtin, namespace] }
+  const before = structuredClone(payload)
+  const changed = siwcPayload(payload, model)
+  const local = changed.tools.find(tool => tool.name === 'agent_desk')
+  assert.equal(local.tools.find(tool => tool.name === 'run_code').strict, false)
+  assert.deepEqual(local.tools.find(tool => tool.name === 'run_code').parameters, parameters)
+  assert.deepEqual(local.tools.find(tool => tool.name === 'strict_tool'), explicit)
+  assert.deepEqual(local.tools.find(tool => tool.name === 'custom_tool'), custom)
+  const existing = changed.tools.find(tool => tool.name === 'existing')
+  assert.equal(existing.tools[0].strict, false)
+  assert.deepEqual(existing.tools[0].parameters.required, ['code', 'description'])
+  assert.deepEqual(existing.tools.slice(1), [explicit, custom])
+  assert.deepEqual(changed.tools.find(tool => tool.type === 'web_search'), builtin)
+  assert.deepEqual(payload, before, 'normalization must not mutate registry schemas')
+  assert.deepEqual(siwcPayload(changed, model), changed, 'payload and fetch hooks may both normalize the same request')
+})
+
 test('effort mapping never sends unsupported none/off/minimal/max and catalog only consumes capability metadata', () => {
   for (const effort of ['none', 'off', 'minimal', undefined, 'invalid']) assert.equal(siwcEffort(effort, model), 'low')
   for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) assert.equal(siwcEffort(effort, model), effort)
@@ -121,6 +153,7 @@ test('SIWC per-request fetch injects latest token only at fixed public endpoint'
       method: 'POST',
       body: JSON.stringify({
         input: [],
+        tools: [{ type: 'function', name: 'run_code', parameters: { type: 'object', properties: { code: { type: 'string' }, sandbox_permissions: { type: 'string' } }, required: ['code'] } }],
         temperature: 0
       }),
       headers: {
@@ -130,6 +163,10 @@ test('SIWC per-request fetch injects latest token only at fixed public endpoint'
   }
   assert.deepEqual(sent.map(item => item.auth), ['Bearer access-first', 'Bearer access-second'])
   assert.ok(sent.every(item => item.url === `${SIWC_RESOURCE}/responses` && item.originator === null && item.body.temperature === undefined))
+  for (const { body } of sent) {
+    assert.equal(body.tools[0].tools[0].strict, false)
+    assert.deepEqual(body.tools[0].tools[0].parameters.required, ['code'])
+  }
   await assert.rejects(opts.fetch('https://example.com/responses', {
     method: 'POST',
     body: '{}'

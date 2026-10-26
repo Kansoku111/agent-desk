@@ -19,6 +19,15 @@ export function siwcEffort(effort, model) {
   if (index < 0) return supported[0]
   return [...supported].reverse().find(value => LEVELS.indexOf(value) <= index) ?? supported[0]
 }
+// Responses may normalize an omitted strict flag by making optional arguments
+// required. In particular, sandbox_permissions must remain omittable: supplying
+// it asks for escalation even on a read-only investigation. Preserve explicit
+// strict schemas; never rewrite the registry's parameters or validation.
+function withToolStrictDefault(tool) {
+  if (tool.type === 'function') return { ...tool, strict: tool.strict ?? false }
+  if (tool.type === 'namespace') return { ...tool, tools: tool.tools.map(withToolStrictDefault) }
+  return tool
+}
 export function siwcPayload(payload, model) {
   const next = {
     ...payload,
@@ -39,6 +48,7 @@ export function siwcPayload(payload, model) {
     ...next.reasoning,
     effort: siwcEffort(next.reasoning?.effort, model)
   }
+  if (next.tools) next.tools = next.tools.map(withToolStrictDefault)
   const local = (next.tools ?? []).filter(tool => ['function', 'custom'].includes(tool.type))
   if (local.length) next.tools = [...next.tools.filter(tool => !local.includes(tool)), {
     type: 'namespace',
