@@ -166,6 +166,10 @@ export class TeamManager extends EventEmitter {
       const team = thread.team && this.teams.get(thread.team.id)
       return team ? this.config(team).toolMode : undefined
     }
+    threads.teamGoalWaiting = (thread) => {
+      const team = thread.team && this.teams.get(thread.team.id)
+      return team?.execution && team.leaderId === thread.id ? this.#goalWaiting(team) : undefined
+    }
     threads.executionGuard = (record) => this.guardExecution(record)
     terminals.executionGuard = (record) => this.guardExecution(record)
 
@@ -786,6 +790,20 @@ export class TeamManager extends EventEmitter {
       throw error
     }
     const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+    const result = await this.#callTool(team, tool, input)
+    if (team.execution && team.leaderKind === 'thread' && this.teams.has(team.id)) {
+      await this.threads.setGoalWaiting(team.leaderId, this.#goalWaiting(team))
+    }
+    return result
+  }
+
+  /** Keep the gate until queued reports are actually admitted as a new prompt. */
+  #goalWaiting(team) {
+    return team.execution.stopped || team.queue.length > 0 || team.children.some((child) => !child.closed
+      && (child.awaiting || ['working', 'verifying'].includes(child.execution?.phase) || this.#childBusy(child)))
+  }
+
+  #callTool(team, tool, input) {
     switch (tool) {
       case 'spawn': return this.#spawn(team, input)
       case 'send': return this.#send(team, input)
@@ -1403,6 +1421,7 @@ export class TeamManager extends EventEmitter {
       }
       stopped += 1
     }
+    if (team.execution && team.leaderKind === 'thread') await this.threads.setGoalWaiting(team.leaderId, this.#goalWaiting(team))
     return { team: this.summary(team), stopped }
   }
 

@@ -11,9 +11,11 @@
 // The patch keeps the prompt in flight while the goal continues: after the
 // agent goes idle it waits for the driver to start the next round, and only
 // settles once the goal stops (complete, paused, blocked, disarmed, out of
-// rounds) or no round starts in time. The prompt's stop reason then comes from
+// rounds), an eco leader is parked for external work, or no round starts in time. The prompt's stop reason then comes from
 // the last turn. Cancelling the prompt also disarms the goal, so a round the
 // driver was about to queue does not run with no prompt waiting for it.
+
+const WAIT_IMPORT = `import { GOAL_WAIT_CONFIG as agentDeskGoalWaitConfig, setGoalWaiting as agentDeskSetGoalWaiting, isGoalWaiting as agentDeskGoalWaiting } from ${JSON.stringify(new URL('./goal-wait.js', import.meta.url).href)};\n`
 
 /** Longest wait for the driver to start the next round once the agent is idle. */
 export const ROUND_START_TIMEOUT_MS = 30_000
@@ -44,7 +46,7 @@ const WAIT_FOR_ROUND = `async agentDeskNextGoalRound(inflight) {
 			// Already-started work must finish even when it consumed the last
 			// round, completed the goal, or disarmed it while still running.
 			if (this.agent.status === "running") return true;
-			if (!drivable() || Date.now() >= deadline) return false;
+			if (agentDeskGoalWaiting(this.agent) || !drivable() || Date.now() >= deadline) return false;
 			await new Promise((resolve) => setTimeout(resolve, ${POLL_MS}));
 		}
 		if (cancelled()) {
@@ -59,6 +61,15 @@ const WAIT_FOR_ROUND = `async agentDeskNextGoalRound(inflight) {
 
 /** dsh-acp's source with goal rounds kept inside the prompt, or null when it does not look as expected. */
 export function patchGoalSource(source) {
+  const config = '\tsetConfig(configId, value, signal) {\n\t\tthis.assertActive();'
+  if (source.includes('agentDeskGoalWaitConfig') || source.split(config).length !== 2) return null
+  const patched = patchGoalSettlement(source)
+  if (!patched) return null
+  return WAIT_IMPORT + patched.replace(config, config + '\n\t\tif (configId === agentDeskGoalWaitConfig) return Promise.resolve(agentDeskSetGoalWaiting(this, value));')
+    .replace('\tcancel() {\n\t\tconst inflight = this.inflight;', '\tcancel() {\n\t\tif (agentDeskGoalWaiting(this.agent)) this.ctx.get("goals")?.disarm(this.agent);\n\t\tconst inflight = this.inflight;')
+}
+
+function patchGoalSettlement(source) {
   // 0.2.1 drains child agents and uses AbortController for cancellation. Keep
   // that settlement loop intact and re-enter it for every automatic goal round.
   if (source.includes('const cancelled = inflight.cancellationDone.promise;')) return patchGoalSource021(source)
@@ -83,6 +94,18 @@ export function patchGoalSource(source) {
     'inflight.turn === event.data.turn',
     `(inflight.turn === event.data.turn || inflight.${FOLLOWING} === true)`,
   ))
+}
+
+
+/** Gate reservations and their pre-step rechecks; normal agents never enter this wait set. */
+export function patchGoalDriverSource(source) {
+  const anchors = ['function apply(ctx) {', 'function readyToDrive(state) {', 'function validReservation(state, content, source) {']
+  if (source.includes('agentDeskGoalWaiting') || anchors.some((anchor) => source.split(anchor).length !== 2)) return null
+  const imports = 'import { isGoalWaiting as agentDeskGoalWaiting, goalWaitDriverReady as agentDeskGoalWaitDriverReady } from ' + JSON.stringify(new URL('./goal-wait.js', import.meta.url).href) + ';\n'
+  return imports + source
+    .replace(anchors[0], anchors[0] + '\n\tagentDeskGoalWaitDriverReady();')
+    .replace(anchors[1], anchors[1] + '\n\t\tif (agentDeskGoalWaiting(state.agent)) return false;')
+    .replace(anchors[2], anchors[2] + '\n\t\t\tif (agentDeskGoalWaiting(state.agent)) return false;')
 }
 
 function patchGoalSource021(source) {

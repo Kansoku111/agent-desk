@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Eco guidance prioritizes inexpensive children for investigation and implementation while leaving research depth, planning detail and review needs to the leader. Eco launches no longer include TM parallel-writer or mid-tier advice. Children receive their work unit's captured verification commands and working directories at new-unit/conversation boundaries, with focused checks preferred but necessary full testing still allowed. Research reports can include evidence-backed implementation ideas; no presets, review caps, automatic acceptance or verification bypasses are added.
 
+### Fixed
+
+- Eco dsh leaders stop automatic goal rounds while delegated children, verification or undelivered reports are pending, rather than repeatedly generating waiting messages. A session-local scheduling gate preserves the active goal and round budget, admits explicit user/report/approval messages, and leaves normal/TM/child goal continuation unchanged. Driver reservations, ACP settlement and runtime compatibility checks share the gate; unsupported application fails before a new parent prompt.
+
 ## [0.1.3] - 2026-10-26
 
 ### Changed

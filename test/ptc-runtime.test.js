@@ -26,7 +26,8 @@ async function setup(t, mode, profile) {
     let raw = ''
     for await (const chunk of req) raw += chunk
     requests.push(JSON.parse(raw))
-    const next = queue.shift()
+    const planned = queue.shift()
+    const next = typeof planned === 'function' ? await planned(requests.at(-1)) : planned
     const base = { id: `reply-${requests.length}`, object: 'chat.completion.chunk', created: 0, model: 'ptc-fixture' }
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const send = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason }] })}\n\n`)
@@ -123,6 +124,62 @@ for (const toolMode of ['native', 'ptc']) {
     assert.equal(f.permissions.length, 0, 'no escalation prompt is used')
   })
 }
+
+
+for (const toolMode of ['native', 'ptc']) {
+  test('real eco goal wait makes no automatic calls and accepts reports and user prompts (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'danger-full-access')
+    await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
+    const tool = (name, args) => ({ name: toolMode === 'ptc' ? 'run_code' : name, args: toolMode === 'ptc'
+      ? { code: 'return await tools.' + name + '(' + JSON.stringify(args) + ');', description: 'Exercise team goal scheduling' } : args })
+    f.queue.push(tool('create_goal', { objective: 'Finish local fixture work after its child reports', max_goal_rounds: 3 }))
+    // Simulate the server setting the wait before a delegated tool returns, while the parent is active.
+    f.queue.push(async () => { await f.runtime.setGoalWaiting(f.session.sessionId, true) })
+    assert.equal((await f.prompt()).stopReason, 'end_turn')
+    assert.equal(f.requests.length, 2, 'no goal round after the parent says it is waiting')
+    for (const message of ['User asks how it is going', 'Child report arrived while another child still works']) {
+      f.queue.push(tool('get_goal', {}))
+      const before = f.requests.length
+      await f.runtime.prompt(f.session.sessionId, [{ type: 'text', text: message }])
+      assert.equal(f.requests.length, before + 2, 'one explicit prompt only, not polling rounds')
+      const outputs = f.requests.at(-1).messages.filter((entry) => entry.role === 'tool').map((entry) => typeof entry.content === 'string' ? entry.content : JSON.stringify(entry.content))
+      const latest = outputs.at(-1)
+      assert.match(latest, /phase[\s\S]{0,20}active/)
+      assert.match(latest, /activation[\s\S]{0,20}armed/)
+      assert.match(latest, /roundsStarted[\s\S]{0,10}0/)
+    }
+    const output = f.requests.at(-1).messages.filter((entry) => entry.role === 'tool').at(-1).content
+    const goalId = JSON.stringify(output).match(/goal-[a-z0-9-]+/)[0]
+    f.queue.push(tool('update_goal', { goal_id: goalId, revision: 1, action: 'complete' }))
+    await f.runtime.setGoalWaiting(f.session.sessionId, false)
+    const before = f.requests.length
+    await f.runtime.prompt(f.session.sessionId, [{ type: 'text', text: 'All children reported; review their results and complete the goal' }])
+    assert.equal(f.requests.length, before + 2)
+    // Another session in the very same process must retain ordinary autonomous goal rounds.
+    const sibling = await f.runtime.newSession(f.workspace)
+    f.queue.push({ name: 'create_goal', args: { objective: 'Continue ordinary work without an eco wait', max_goal_rounds: 1 } })
+    const from = f.requests.length
+    await f.runtime.prompt(sibling.sessionId, [{ type: 'text', text: 'Create the goal and keep working until its round limit' }])
+    assert.equal(f.requests.length, from + 3)
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /goal_round/)
+  })
+}
+
+test('cancelling a parked parent disarms its goal without restarting it', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'danger-full-access')
+  await f.runtime.setGoalWaiting(f.session.sessionId, true)
+  f.queue.push({ name: 'create_goal', args: { objective: 'Wait for a child then finish', max_goal_rounds: 3 } })
+  await f.prompt()
+  assert.equal(f.requests.length, 2)
+  await f.runtime.cancel(f.session.sessionId)
+  await f.runtime.setGoalWaiting(f.session.sessionId, false)
+  f.queue.push({ name: 'get_goal', args: {} })
+  await f.prompt()
+  assert.equal(f.requests.length, 4)
+  const text = f.requests.at(-1).messages.filter((entry) => entry.role === 'tool').at(-1).content
+  assert.match(text, /disarmed/)
+  assert.match(text, /active/)
+})
 
 test('real ACP switches native → PTC → native, forwards internal tools, resumes and isolates sessions', { timeout: 120_000 }, async (t) => {
   const f = await setup(t, 'danger-full-access')

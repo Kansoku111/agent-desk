@@ -40,6 +40,10 @@ function fakeThreads() {
       threads.calls.push(['update', id, patch])
       Object.assign(threads.threads.get(id), patch)
     },
+    async setGoalWaiting(id, waiting) {
+      threads.calls.push(['goal-wait', id, waiting])
+      threads.threads.get(id).goalWaiting = waiting
+    },
     async implementResearch(id) {
       const thread = threads.threads.get(id)
       if (thread.status === 'running') throw new Error('調査中です')
@@ -257,6 +261,102 @@ async function setupExecution(t, options = {}, settings = {}) {
   const team = base.manager.teams.get(view.id)
   return { ...base, team, leader: team.leaderId, tool: (name, args = {}) => base.manager.call(team.id, team.secret, name, args) }
 }
+
+test('eco parks after delegation and keeps reports arriving before parent idle queued for delivery', async (t) => {
+  const f = await setupExecution(t)
+  const parent = f.threads.threads.get(f.leader)
+  parent.status = 'running'
+  assert.equal(f.threads.teamGoalWaiting(parent), false)
+  await f.tool('spawn', { ...exTask, mode: 'research' })
+  const child = f.team.children[0]
+  assert.equal(parent.goalWaiting, true)
+  assert.equal(f.threads.teamGoalWaiting(f.threads.threads.get(child.taskId)), undefined)
+  f.threads.finish(child.taskId, 'evidence ready before parent ends')
+  assert.equal(f.team.queue.length, 1)
+  assert.equal(f.threads.teamGoalWaiting(parent), true, 'queued report must not open an autonomous goal round')
+  parent.status = 'idle'
+  f.threads.emit('turn-finished', { threadId: f.leader, status: 'done' })
+  await tick()
+  assert.equal(f.team.queue.length, 0)
+  assert.equal(f.threads.teamGoalWaiting(parent), false)
+  const reports = f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader)
+  assert.equal(reports.length, 1)
+  assert.match(reports[0][2], /evidence ready/)
+  await f.tool('close', { child: child.id, reason: '報告の根拠を確認した' })
+  assert.equal(parent.goalWaiting, false)
+})
+
+test('eco stays parked for a remaining child and wakes on an error report', async (t) => {
+  const f = await setupExecution(t)
+  const parent = f.threads.threads.get(f.leader)
+  parent.status = 'running'
+  await f.tool('spawn', { ...exTask, mode: 'research', name: 'first' })
+  await f.tool('spawn', { ...exTask, mode: 'research', name: 'second' })
+  const [first, second] = f.team.children
+  parent.status = 'idle'
+  f.threads.finish(first.taskId, 'first done')
+  await tick()
+  assert.equal(f.threads.teamGoalWaiting(parent), true)
+  await f.tool('close', { child: first.id, reason: '根拠を確認した' })
+  assert.equal(parent.goalWaiting, true)
+  parent.status = 'idle'
+  f.threads.finish(second.taskId, 'child failed', 'error')
+  await tick()
+  assert.equal(f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).length, 2)
+  assert.equal(f.threads.teamGoalWaiting(parent), false)
+})
+
+
+test('eco approval wakes the parked leader and answering it parks again for the child', async (t) => {
+  const f = await setupExecution(t)
+  const parent = f.threads.threads.get(f.leader)
+  parent.status = 'running'
+  await f.tool('spawn', exTask)
+  const child = f.team.children[0]
+  parent.status = 'idle'
+  f.threads.permissions.push({ threadId: child.taskId, requestId: 'approval-wake', name: 'shell', input: { command: 'read only' }, options: [{ optionId: 'yes', kind: 'allow_once' }] })
+  f.threads.emit('approval-needed', { threadId: child.taskId })
+  await tick()
+  assert.equal(parent.status, 'running')
+  assert.equal(f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).length, 1)
+  await f.tool('approve', { child: child.id, allow: true })
+  assert.ok(f.threads.calls.some((call) => call[0] === 'respond' && call[1] === 'approval-wake'))
+  assert.equal(parent.goalWaiting, true)
+})
+
+
+test('stopAll keeps the leader parked even after a cancellation report and only new delegated work releases the stop latch', async (t) => {
+  const f = await setupExecution(t)
+  const parent = f.threads.threads.get(f.leader)
+  parent.status = 'running'
+  await f.tool('spawn', { ...exTask, mode: 'research' })
+  const child = f.team.children[0]
+  await f.manager.stopAll(f.team.id)
+  assert.equal(parent.goalWaiting, true)
+  f.threads.finish(child.taskId, 'stopped by user', 'cancelled')
+  parent.status = 'idle'
+  f.threads.emit('turn-finished', { threadId: f.leader, status: 'done' })
+  await tick()
+  assert.equal(f.team.queue.length, 0)
+  assert.equal(f.threads.teamGoalWaiting(parent), true, 'the stop must not become an automatic retry loop')
+  await f.tool('close', { child: child.id, accept: false, reason: 'ユーザーが停止した' })
+  assert.equal(parent.goalWaiting, true)
+  await f.tool('send', { child: child.id, message: 'ユーザーの依頼で調査を再開' })
+  assert.equal(f.team.execution.stopped, false)
+  f.threads.finish(child.taskId, 'new evidence')
+  parent.status = 'idle'
+  f.threads.emit('turn-finished', { threadId: f.leader, status: 'done' })
+  await tick()
+  assert.equal(f.threads.teamGoalWaiting(parent), false)
+})
+
+test('TM dispatch never enables an eco goal wait', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  await f.tool('spawn', { title: 'work', task: 'bounded work', tier: 'low', provider: 'gpt' })
+  assert.equal(f.threads.teamGoalWaiting(f.threads.threads.get(f.leader)), undefined)
+  assert.equal(f.threads.calls.some((call) => call[0] === 'goal-wait'), false)
+})
+
 test('team PTC validates selections and stays off for legacy teams even when new-team defaults are on', async (t) => {
   assert.equal(teamConfig({}).toolMode, 'native')
   assert.equal(mergeTeamConfig({}, { toolMode: 'ptc' }).toolMode, 'ptc')
@@ -788,14 +888,14 @@ test('eco does not launch a child if stopped while capturing its initial review 
   const { tool, team, manager, threads } = await setupExecution(t)
   let release
   manager.executionReview.start = () => new Promise((resolve) => { release = resolve })
-  const before = threads.calls.length
+  const before = threads.calls.filter((call) => call[0] !== 'goal-wait').length
   const pending = tool('spawn', exTask)
   assert.equal(typeof release, 'function')
   await manager.stopAll(team.id)
   release({ error: 'test baseline' })
   await assert.rejects(pending, /開始前に停止/)
   assert.equal(team.children.length, 0)
-  assert.equal(threads.calls.length, before)
+  assert.equal(threads.calls.filter((call) => call[0] !== 'goal-wait').length, before)
 })
 
 test('eco reserves a resumed writer during baseline capture and restores evidence if stopped', async (t) => {

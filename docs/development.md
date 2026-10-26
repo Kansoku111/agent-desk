@@ -21,6 +21,8 @@ PTCの回帰検証は `node --test test/ptc.test.js test/ptc-runtime.test.js tes
 
 AB・TM・ecoのPTC画面検証は同じViteフィクスチャサーバーの `ptc-ui.html` を開き、DevToolsで `await ptcTest.run()` を実行します。各開始画面の選択・設定保存・送信値、既存AB／チームの保存失敗・二重操作防止・実行中の無効化・通知後の表示更新を確認します。本番データや実モデルは使いません。
 
+eco親の自動継続待機は `test/goal-driver-wait.test.js`・`test/goal-patch.test.js`・`test/thread-goal-wait.test.js`・`test/teams.test.js` で、予約前／実行直前の再確認、ターン終了、設定の適用確認、報告の配送順序を検査します。`test/ptc-runtime.test.js` は通常方式・PTCの実dshで、待機中にgoal roundのモデル要求が増えないこと、目標のactive／armed状態と残り回数、明示入力の受領、キャンセル、同一プロセスの通常セッションの自動継続を確認します。新しい `goal-wait` hookも更新時の実フック互換性ゲートに含みます。
+
 ## リリース
 
 アプリの「更新」ボタンは、GitHub のリリースを配信元にします（[更新](updating.md)）。

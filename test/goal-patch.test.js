@@ -7,6 +7,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { patchGoalSource } from '../server/goal-patch.js'
+import { isGoalWaiting, setGoalWaiting, goalWaitDriverReady } from '../server/goal-wait.js'
 import { patchAcpSource } from '../server/steer-patch.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -29,11 +30,11 @@ function settlementClass() {
   const cancelStart = source.indexOf('\tcancelPrompt(detail) {')
   const cancel = source.includes('const cancelled = inflight.cancellationDone.promise;')
     ? source.slice(cancelStart, start) : ''
-  return new Function(`
+  return new Function('agentDeskGoalWaiting', `
     const internalError$1 = (message) => new Error(message);
     const errorChain = (error) => String(error?.message ?? error);
     const turnEndToStopReason = (end) => end.kind === "completed" ? "end_turn" : end.kind;
-    return class { ${cancel} ${source.slice(start, end)} }`)()
+    return class { ${cancel} ${source.slice(start, end)} }`)(isGoalWaiting)
 }
 
 /** A dsh agent that runs turns on demand, and its goal service. */
@@ -120,6 +121,33 @@ test('leaves an unexpected dsh-acp alone', () => {
   const source = installedSource()
   assert.equal(patchGoalSource(source.replace('\n\tsettleAfterQuiescence(inflight) {', '\n\tsettle(inflight) {')), null)
   assert.equal(patchGoalSource(source.replace('inflight.endReason = event.data.reason', 'inflight.end = event.data.reason')), null)
+})
+
+
+test('team wait settles without disarming the active goal or waiting for another round', async () => {
+  goalWaitDriverReady()
+  const goal = activeGoal()
+  const session = fakeSession({ goal })
+  setGoalWaiting({ agent: session.agent, assertActive() {} }, 'waiting')
+  const prompt = settle(settlementClass(), session)
+  await tick(20)
+  assert.deepEqual(prompt.outcome(), { stopReason: 'end_turn' })
+  assert.equal(goal.activation, 'armed')
+  assert.equal(goal.phase, 'active')
+  assert.equal(session.goals.disarmed, 0)
+})
+
+test('a team wait does not truncate a currently running goal round', async () => {
+  goalWaitDriverReady()
+  const session = fakeSession({ goal: activeGoal() })
+  session.agent.run()
+  setGoalWaiting({ agent: session.agent, assertActive() {} }, 'waiting')
+  const prompt = settle(settlementClass(), session)
+  await tick(120)
+  assert.equal(prompt.outcome(), undefined)
+  session.agent.finish()
+  await tick(20)
+  assert.deepEqual(prompt.outcome(), { stopReason: 'end_turn' })
 })
 
 test('without a goal the prompt settles at the first idle, as before', async () => {

@@ -12,6 +12,7 @@ import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } from '@agentclie
 import { dshEnv } from './dsh-env.js'
 import { dshBin } from './paths.js'
 import { STEERED_META, STEER_META } from './steer-patch.js'
+import { GOAL_WAIT_CONFIG } from './goal-wait.js'
 
 // Runtime and update validation must compose the same hooks in the same order.
 import { runtimeHookArgs } from './dsh-compatibility.js'
@@ -48,6 +49,7 @@ export class AcpRuntime extends EventEmitter {
     this.conn = null
     this.stderr = ''
     this.liveSessions = new Set()
+    this.waitingSessions = new Set()
     this.startPromise = null
   }
 
@@ -87,6 +89,7 @@ export class AcpRuntime extends EventEmitter {
       this.child = null
       this.startPromise = null
       this.liveSessions.clear()
+      this.waitingSessions.clear()
       this.emit('exit', { code, signal, wasReady, stderr: this.stderr })
     })
     child.on('error', (error) => {
@@ -140,6 +143,18 @@ export class AcpRuntime extends EventEmitter {
     return result.configOptions
   }
 
+  /** Set a session-local automatic-round gate; explicit prompts remain admissible. */
+  async setGoalWaiting(sessionId, waiting) {
+    await this.#goalWaitOption(sessionId, waiting ? 'waiting' : 'ready')
+    if (waiting) this.waitingSessions.add(sessionId)
+    else this.waitingSessions.delete(sessionId)
+  }
+
+  async #goalWaitOption(sessionId, value) {
+    const options = await this.setOption(sessionId, GOAL_WAIT_CONFIG, value)
+    if (options?.find((option) => option.id === GOAL_WAIT_CONFIG)?.currentValue !== value) throw new Error('eco goal-wait was not applied; restart Agent Desk')
+  }
+
   prompt(sessionId, prompt) {
     return this.#requireConn().prompt({ sessionId, prompt })
   }
@@ -154,12 +169,15 @@ export class AcpRuntime extends EventEmitter {
   }
 
   async cancel(sessionId) {
-    if (this.conn) await this.conn.cancel({ sessionId })
+    if (!this.conn) return
+    if (this.waitingSessions.has(sessionId)) await this.#goalWaitOption(sessionId, 'cancelled')
+    else await this.conn.cancel({ sessionId })
   }
 
   async closeSession(sessionId) {
     if (!this.liveSessions.has(sessionId)) return
     this.liveSessions.delete(sessionId)
+    this.waitingSessions.delete(sessionId)
     if (this.conn) await this.conn.closeSession({ sessionId })
   }
 

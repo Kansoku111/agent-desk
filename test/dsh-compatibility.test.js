@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { composeCompatibilityPatches, runtimeHookArgs } from '../server/dsh-compatibility.js'
 import { patchAcpSource } from '../server/steer-patch.js'
-import { patchGoalSource } from '../server/goal-patch.js'
+import { patchGoalSource, patchGoalDriverSource } from '../server/goal-patch.js'
 import { patchMcpTimeoutSource } from '../server/mcp-timeout-patch.js'
 import { patchRetrySource } from '../server/retry-patch.js'
 import { patchOutputSpeedSource } from '../server/output-speed-patch.js'
@@ -62,7 +62,7 @@ async function fixture(t) {
     'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js',
     'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js',
     'fs-search-hook.js', 'fs-search-patch.js', 'fs-search.js',
-    'goal-tool-hook.js', 'goal-tool-patch.js',
+    'goal-tool-hook.js', 'goal-tool-patch.js', 'goal-wait-hook.js', 'goal-wait.js',
     'ptc-hook.js', 'ptc-patch.js',
   ].map((file) => `server/${file}`)]) {
     await fs.copyFile(path.join(project, file), path.join(root, file))
@@ -93,6 +93,7 @@ async function fixture(t) {
   const llmDir = await pkg('@deepseek-ai/dsh-llm-pi-ai')
   const searchDir = await pkg('@deepseek-ai/dsh-tool-fs-search')
   const goalToolDir = await pkg('@deepseek-ai/dsh-tool-goal')
+  const goalDriverDir = await pkg('@deepseek-ai/dsh-goal-round-driver')
   // Use a read-only upstream source snapshot, copied to the isolated fixture.
   // Its imports are only parsed (--check), never evaluated.
   const acpSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-acp'), 'utf8')
@@ -103,6 +104,8 @@ async function fixture(t) {
   const search = await put(`${searchDir}/lib/index.js`, searchSource)
   const goalToolSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-tool-goal'), 'utf8')
   const goalTool = await put(`${goalToolDir}/lib/index.js`, goalToolSource)
+  const goalDriverSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-goal-round-driver'), 'utf8')
+  const goalDriver = await put(`${goalDriverDir}/lib/index.js`, goalDriverSource)
   const pi = await pkg('@earendil-works/pi-ai', 'dist/index.js', {
     exports: { '.': './dist/index.js', './utils/*': './dist/utils/*.js', './api/*': './dist/api/*.js' },
   })
@@ -113,16 +116,16 @@ async function fixture(t) {
   await put(`${pi}/dist/providers/opencode-go.models.js`, 'import values from "./data/opencode-go.json" with { type: "json" }; export const OPENCODE_GO_MODELS = values')
   await put(`${pi}/dist/providers/data/opencode-go.json`, JSON.stringify({ 'openai-completions': { 'chat:fixture': { id: 'fixture', type: 'chat' } } }))
   const retry = await put(`${pi}/dist/utils/retry.js`, 'export const isRetryableAssistantError = () => true')
-  return { root, put, acp, llm, search, goalTool, acpSource, llmSource, searchSource, goalToolSource, retry, pi }
+  return { root, put, acp, llm, search, goalTool, goalDriver, acpSource, llmSource, searchSource, goalToolSource, goalDriverSource, retry, pi }
 }
 
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
-  const { acpSource, llmSource, searchSource, goalToolSource } = await fixture(t)
+  const { acpSource, llmSource, searchSource, goalToolSource, goalDriverSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
-    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'fs-search-hook.js',
+    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'goal-wait-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'fs-search-hook.js',
   ])
-  assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, search: searchSource, goalTool: goalToolSource }), {
-    acp: patchPtcSource(patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource))))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource),
+  assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, search: searchSource, goalTool: goalToolSource, goalDriver: goalDriverSource }), {
+    acp: patchPtcSource(patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource))))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource),
   })
 })
 
@@ -145,6 +148,7 @@ test('a catalog format warning blocks the update before the runtime starts', asy
 for (const [name, field, change] of [
   ['steer', 'acp', (source) => source.replace('a prompt is already in flight for this session', 'upstream changed admission')],
   ['goal', 'acp', (source) => source.replace('settleAfterQuiescence(inflight) {', 'upstreamSettlement(inflight) {')],
+  ['goal-wait', 'goalDriver', (source) => source.replace('function readyToDrive(state)', 'function changedReady(state)')],
   ['goal-tool', 'goalTool', (source) => source.replace('Replacement cap; valid only with action edit.', 'changed upstream cap')],
   ['retry', 'llm', (source) => source.replace('function classifyPiAiError(message)', 'function upstreamClassifier(message)')],
   ['output-speed', 'acp', (source) => source.replace('requestSignal?.removeEventListener', 'requestSignal?.upstreamRemoveEventListener')],
@@ -217,7 +221,7 @@ test('retry check export is mandatory, not merely an optional startup warning', 
   await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /isRetryableAssistantError is unavailable/)
 })
 
-for (const name of ['goal', 'goal-tool', 'ptc']) {
+for (const name of ['goal', 'goal-wait', 'goal-tool', 'ptc']) {
   test(`the gate observes actual ${name} hook transformations, not just standalone patch functions`, async (t) => {
     const { root } = await fixture(t)
     const hook = path.join(root, 'server', `${name}-hook.js`)

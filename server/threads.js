@@ -353,6 +353,15 @@ export class ThreadManager extends EventEmitter {
     return this.summary(thread)
   }
 
+  /** Scheduling control, not a model-visible goal phase mutation. */
+  async setGoalWaiting(threadId, waiting) {
+    const thread = this.#available(threadId)
+    if (!thread.sessionId) return // Recomputed before its first/recreated prompt.
+    const runtime = this.pool.holderOf(thread.sessionId)
+    if (!runtime) return
+    await runtime.setGoalWaiting(thread.sessionId, waiting)
+  }
+
   /** Team-manager only: move accepted research to its writer runtime without summarizing history. */
   implementResearch(threadId) {
     return this.#request(threadId, async () => {
@@ -865,6 +874,11 @@ export class ThreadManager extends EventEmitter {
     this.sessionIndex.set(thread.sessionId, thread.id)
     if (options) this.#learnOptions(thread, options)
 
+    const waiting = this.teamGoalWaiting?.(thread)
+    if (waiting !== undefined) {
+      await runtime.setGoalWaiting(thread.sessionId, waiting)
+      this.#checkRun(thread, active)
+    }
     const toolMode = this.summary(thread).toolMode
     assertToolMode(toolMode)
     const modeOption = toolModeOption(this.liveOptions.get(thread.sessionId))
