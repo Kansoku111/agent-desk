@@ -149,19 +149,22 @@ export class ClaudeConversation {
     const previous = this.responses.get(id)
     if (previous && this.scores[id]?.signature === parsed.saved.signature
       && JSON.stringify(previous.usage.score) === JSON.stringify(parsed.usage.score)) return
-    const turn = previous?.turn ?? current
+    const turnId = previous?.turnId ?? current.id
+    const turn = previous ? this.turns.find((entry) => entry.id === turnId) : current
     const oldScore = previous?.usage.score ?? emptyScore()
     const delta = {
       points: parsed.usage.score.points - oldScore.points,
       priced: parsed.usage.score.priced - oldScore.priced,
       unpriced: parsed.usage.score.unpriced - oldScore.unpriced,
     }
-    if (!previous && this.missingTurns.delete(turn.id)) delta.unpriced--
-    delete this.scores[`turn:${turn.id}`]
-    turn.usage = mergeUsage(turn.usage, parsed.usage)
-    if (previous) {
-      for (const key of ['requests', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']) turn.usage[key] -= previous.usage[key]
-      turn.usage.score = addScores(turn.usage.score, { points: -oldScore.points, priced: -oldScore.priced, unpriced: -oldScore.unpriced })
+    if (!previous && this.missingTurns.delete(turnId)) delta.unpriced--
+    delete this.scores[`turn:${turnId}`]
+    if (turn) {
+      turn.usage = mergeUsage(turn.usage, parsed.usage)
+      if (previous) {
+        for (const key of ['requests', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']) turn.usage[key] -= previous.usage[key]
+        turn.usage.score = addScores(turn.usage.score, { points: -oldScore.points, priced: -oldScore.priced, unpriced: -oldScore.unpriced })
+      }
     }
     this.totalScore = addScores(this.totalScore, delta)
     const index = this.turns.indexOf(turn)
@@ -169,7 +172,7 @@ export class ClaudeConversation {
       later.totalScore = later === current ? this.totalScore : addScores(later.totalScore ?? emptyScore(), delta)
       this.#touch(later)
     }
-    this.responses.set(id, { turn, usage: parsed.usage })
+    this.responses.set(id, { turnId, usage: parsed.usage })
     this.scores[id] = parsed.saved
   }
 

@@ -23,6 +23,8 @@ const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 /** Providers whose API use is billed per token with catalog rates. */
 const BILLED_PROVIDERS = new Set(['anthropic', 'deepseek-official'])
 
+export const isBilledModel = (key) => BILLED_PROVIDERS.has(key?.split('/')[0])
+
 const decompress = promisify(zlib.zstdDecompress)
 /** Frames decompressed at once (on the thread pool), and so the most work done between two turns of the event loop. */
 export const FRAME_BATCH = 16
@@ -265,17 +267,22 @@ export function setFastPricing(fast) {
   pricingCache = null
 }
 
-/** One logged response's cost, or null when the model has no rates. */
-export function priceResponse(pricing, key, usage, time, multiplier = fastMultiplier(pricing.fast, key, time)) {
+/** API-price equivalent; subscriptions may have rates without being metered bills. */
+function equivalentCost(pricing, key, usage, time, multiplier = fastMultiplier(pricing.fast, key, time)) {
   const rates = pricing.get(key)
   const active = rates?.schedule === 'deepseek' ? deepSeekRatesAt(rates, time) : rates
   const cost = active ? responseCost(active, usage) : null
   return cost === null ? null : cost * multiplier
 }
 
+/** Estimated bill for a metered route, never a subscription's API-price equivalent. */
+export function priceResponse(pricing, key, usage, time, multiplier) {
+  return isBilledModel(key) ? equivalentCost(pricing, key, usage, time, multiplier) : null
+}
+
 /** A response is scored once, using its actual model, context tier and cache split. */
 export function scoreResponse(pricing, key, usage, time, multiplier) {
-  return scoreFromUsd(priceResponse(pricing, key, usage, time, multiplier))
+  return scoreFromUsd(equivalentCost(pricing, key, usage, time, multiplier))
 }
 
 /** pi-ai rates; dsh logs without a cache TTL split retain the catalog's 5m write rate. */
@@ -312,32 +319,35 @@ export function responseCost(rates, usage) {
  */
 export function summarizeUsage(events, since, pricing, until = Infinity) {
   const total = { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: null, models: [], score: emptyScore() }
-  const seen = new Set()
+  const responses = new Map()
+  for (const event of events) {
+    if (event?.type !== 'assistant/message' || !(event.time >= since && event.time <= until)) continue
+    const id = event.data?.message?.id ?? event.seq ?? event
+    // Prefer the latest recorded usage; a usage-less duplicate cannot erase it.
+    if (!responses.has(id) || event.data?.usage) responses.set(id, event)
+  }
   const models = new Set()
   let cost = 0
   let priced = false
-  for (const event of events) {
-    if (event?.type !== 'assistant/message' || !(event.time >= since && event.time <= until)) continue
-    const usage = event.data?.usage
-    if (!usage) continue
+  for (const event of responses.values()) {
     const source = event.data?.message?.source ?? {}
-    const id = event.data?.message?.id ?? event.seq
-    if (id !== undefined && seen.has(id)) continue
-    if (id !== undefined) seen.add(id)
-    total.score = addScores(total.score, scoreResponse(pricing, `${source.provider}/${source.model}`, usage, event.time))
+    if (source.provider && source.model) models.add(`${source.provider}/${source.model}`)
     total.requests += 1
+    const usage = event.data?.usage
+    if (!usage) {
+      total.score = addScores(total.score, null)
+      continue
+    }
+    total.score = addScores(total.score, scoreResponse(pricing, `${source.provider}/${source.model}`, usage, event.time))
     total.input += usage.inputTokens ?? 0
     total.output += usage.outputTokens ?? 0
     total.cacheRead += usage.cacheReadTokens ?? 0
     total.cacheWrite += usage.cacheWriteTokens ?? 0
     total.reasoning += usage.reasoningTokens ?? 0
-    if (source.provider && source.model) models.add(`${source.provider}/${source.model}`)
-    if (BILLED_PROVIDERS.has(source.provider)) {
-      const price = priceResponse(pricing, `${source.provider}/${source.model}`, usage, event.time)
-      if (price !== null) {
-        cost += price
-        priced = true
-      }
+    const price = priceResponse(pricing, `${source.provider}/${source.model}`, usage, event.time)
+    if (price !== null) {
+      cost += price
+      priced = true
     }
   }
   if (total.requests === 0) return null

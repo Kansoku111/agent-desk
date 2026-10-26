@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { readJson, writeJson } from './json-file.js'
-import { FRAME_BATCH, frameStarts, frameTexts, loadPricing, priceResponse } from './usage.js'
+import { FRAME_BATCH, frameStarts, frameTexts, isBilledModel, loadPricing, priceResponse } from './usage.js'
 
 const CACHE_VERSION = 1
 const LOG_NAME = 'session.v4.jsonl.zstd'
@@ -25,12 +25,13 @@ export function localDay(time) {
 }
 
 /**
- * A changed rate table invalidates the cached costs. Fast-mode periods only
+ * Billing policy and metered rates invalidate cached costs; point-only rates
+ * do not. Fast-mode periods only
  * grow, and a log is repriced whenever it changes, so they need not count.
  */
 export function pricingSignature(pricing) {
-  const entries = [...pricing.entries()].sort(([a], [b]) => a.localeCompare(b))
-  return createHash('sha256').update(JSON.stringify(entries)).digest('hex').slice(0, 16)
+  const entries = [...pricing.entries()].filter(([key]) => isBilledModel(key)).sort(([a], [b]) => a.localeCompare(b))
+  return createHash('sha256').update(JSON.stringify({ billing: 'metered-only', rates: entries })).digest('hex').slice(0, 16)
 }
 
 const emptyTotals = () => ({ requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: null })
@@ -163,6 +164,15 @@ export class UsageHistory extends EventEmitter {
   async #load() {
     const data = await readJson(this.file, null)
     this.cache = data?.version === CACHE_VERSION ? data : { version: CACHE_VERSION, pricing: null, files: {} }
+    // Deleted logs cannot be repriced. Keep their tokens and metered costs, but
+    // remove subscription equivalents from both totals and incremental bases.
+    for (const entry of Object.values(this.cache.files)) {
+      for (const days of [entry.days, entry.base]) {
+        for (const models of Object.values(days ?? {})) {
+          for (const [model, totals] of Object.entries(models)) if (!isBilledModel(model)) totals.cost = null
+        }
+      }
+    }
   }
 
   async #logs() {
