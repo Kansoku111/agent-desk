@@ -4,7 +4,21 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { ExecutionVerifier, normalizeChecks, sourceSnapshot, EXECUTION_PROMPT } from '../server/execution.js'
+import { ExecutionVerifier, normalizeChecks, sourceSnapshot, EXECUTION_PROMPT, workspaceKey, workspaceWithin, workspacesOverlap } from '../server/execution.js'
+
+test('workspace aliases preserve overlap for descendants that do not exist yet', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-overlap-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const target = path.join(root, 'target')
+  const alias = path.join(root, 'alias')
+  await fs.mkdir(target)
+  await fs.symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  const missing = path.join(alias, 'missing', 'nested')
+  assert.equal(workspaceKey(missing), workspaceKey(path.join(target, 'missing', 'nested')))
+  assert.equal(workspaceWithin(target, missing), true)
+  assert.equal(workspacesOverlap(missing, target), true)
+  assert.equal(workspacesOverlap(missing, path.join(root, 'other')), false)
+})
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ex-'))

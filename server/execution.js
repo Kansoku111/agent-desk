@@ -11,7 +11,17 @@ const exec = promisify(execFile)
 const hash = (value) => createHash('sha256').update(value).digest('hex')
 export const workspaceKey = (folder) => {
   let resolved = path.resolve(folder)
-  try { resolved = fs.realpathSync.native(resolved) } catch {}
+  let ancestor = resolved
+  while (true) {
+    try {
+      resolved = path.join(fs.realpathSync.native(ancestor), path.relative(ancestor, resolved))
+      break
+    } catch {
+      const parent = path.dirname(ancestor)
+      if (parent === ancestor) break
+      ancestor = parent
+    }
+  }
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved
 }
 /** Whether `child` is `parent` or inside it. */

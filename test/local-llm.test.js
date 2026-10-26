@@ -211,7 +211,7 @@ test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) =
   assert.equal(model.id, 'mock-model:1b')
 
   const { thread } = await request('thread.create', { workspace, model: model.value, effort: '', permissionMode: 'read-only', text: 'こんにちは' })
-  const done = await waitFor(() => request('thread.get', { threadId: thread.id }), (next) => JSON.stringify(next).includes('ローカルからの返事') && !next.thread?.busy, 'the local reply')
+  const done = await waitFor(() => request('thread.get', { threadId: thread.id }), (next) => JSON.stringify(next).includes('ローカルからの返事') && next.thread?.status === 'idle', 'the local reply')
   assert.ok(done)
   assert.ok(speeds.some((speed) => speed.state === 'streaming' && speed.tokensPerSecond > 0), `live speed must cross SSE → dsh → ACP → WebSocket: ${JSON.stringify({ speeds, turns: done.turns })}`)
   assert.ok(speeds.every((entry) => !entry.whole), 'a moving speed must not resend the whole turn')

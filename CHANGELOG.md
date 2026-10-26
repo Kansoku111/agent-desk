@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Workspace overlap checks resolve existing ancestor aliases even for descendants that do not exist yet, including Windows temporary-folder junctions. The local-model integration test waits for the actual idle state before checking finalized output speed.
 - Eco acceptance now requires recorded verification evidence; overlapping-workspace conflicts identify the blocking workflow, and restores are fenced across overlapping workspaces. Eco children always retain the extra tools needed for implementation.
 - Settings updates are isolated and committed before publishing state, including queued-history changes and account-update failures. TM policy/playbook deletions persist immediately, and those instructions remain scoped to TM.
 - AB supports per-role reasoning levels, screenshots, Enter-to-send, safe follow-ups and history actions. Consultations show their live conversations, and the header includes the Open menu. New AB/Eco reasoning defaults to medium; Eco reasoning choices persist, and model/reasoning dropdowns support mouse-wheel selection.
