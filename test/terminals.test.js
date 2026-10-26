@@ -76,7 +76,7 @@ test('interactive Claude parent scores on Stop without a viewer and freezes rate
   ].map((entry) => JSON.stringify(entry)).join('\n') + '\n'
   await fs.writeFile(transcript, entries(1))
   assert.equal(manager.hook(terminal.id, manager.live.get(terminal.id).secret, { hook_event_name: 'Stop' }), true)
-  await settle()
+  await Promise.all([...manager.usageReads])
   assert.ok(Math.abs(manager.summary(record).score.points - 1.55) < 1e-9)
   await manager.writes
   const restored = await new TerminalManager({ file: path.join(dir, 'terminals.json'), settingsFile: path.join(dir, 'claude-terminal-settings.json'),
