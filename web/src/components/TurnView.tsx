@@ -331,7 +331,7 @@ function UsageLine({ usage, taskCost, speed, score }: { usage: TurnUsage; taskCo
   ].filter(Boolean).join('\n')
   return (
     <div className="usage-line" title={detail}>
-      <UsageCost score={score} />
+      <UsageCost score={score} detail={detail} />
       <span>· 入力 {formatTokens(inputTotal)}</span>
       {usage.cacheRead > 0 && <span className="usage-sub">（キャッシュ {formatTokens(usage.cacheRead)}）</span>}
       <span>· 出力 {formatTokens(usage.output)}</span>

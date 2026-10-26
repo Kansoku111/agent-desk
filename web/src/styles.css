@@ -1587,8 +1587,36 @@ select:focus {
 }
 
 .usage-cost {
+  border: 0;
+  padding: 0;
+  background: transparent;
   color: var(--text-muted);
   white-space: nowrap;
+  font: inherit;
+  cursor: pointer;
+}
+
+.usage-cost:hover {
+  text-decoration: underline;
+}
+
+.usage-detail {
+  padding: 0 20px 20px;
+  overflow: auto;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.usage-detail-total {
+  margin: 4px 0 12px;
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-detail-text {
+  white-space: pre-wrap;
+  line-height: 1.65;
 }
 
 .usage-sub {
@@ -2995,6 +3023,30 @@ select:focus {
   gap: 16px;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
+}
+
+.usage-display-setting {
+  flex-wrap: wrap;
+}
+
+.usage-display-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-rate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.usage-rate input {
+  width: 88px;
+  min-width: 0;
+  text-align: right;
 }
 
 .segmented {

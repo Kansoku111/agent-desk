@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Usage footers now show cumulative **API-equivalent USD** (`API換算 $…`) instead of points across regular/CL/Eco/TM/AB. Existing saved scores stay unchanged and convert at the fixed $0.002 per point, without repricing or migration. Small amounts keep up to six decimal places (positive sub-micro-dollar values show `< $0.000001`); unknown totals show `—` and partial totals show a rounded-down `≥ $…`. Per-turn/session metered cost estimates remain in the token detail, not as a second competing dollar readout; Settings billing totals stay separate.
+- Usage footers show cumulative **API-equivalent amounts** (`API換算 $…` / `API換算 ¥…`) instead of points across regular/CL/Eco/TM/AB. General settings selects USD (default) or JPY with a required positive manual USD/JPY rate; no rate is guessed or fetched. Settings validate/save before publication and need no model restart. Existing saved scores and USD equivalents remain unchanged; changing the manual rate changes only JPY presentation, including history. Small amounts keep up to six decimal places; unknown totals show `—` and partial totals show a rounded-down lower bound. Metered estimates and actual billing totals remain in USD, separate from the reference display.
 - Renamed EX to **eco** (エコモード / economy mode) across the UI and reports. Existing settings and workflow behavior are unchanged.
 
 ### Fixed
 
+- The API-equivalent amount is now a keyboard/touch-accessible button opening usage details instead of leaving metered cost estimates only in a native hover title. Legacy turns without a recorded equivalent still expose their saved metered costs. JPY details include the USD reference and applied manual rate; Escape/close returns focus to the amount.
 - API-price-equivalent points no longer leak subscription/local-model reference prices into metered-cost totals, history, or subagent cost readouts. Existing usage caches remove only non-metered costs while preserving tokens, metered costs and deleted-log history; live logs are repriced under the corrected billing policy.
 - Responses without usage now count as unpriced rather than silently disappearing from points. Duplicate responses prefer their latest available usage, including when it arrives after a usage-less record, without counting twice.
 - Interactive Claude's response index keeps turn IDs and compact usage metadata instead of references to full turn bodies, allowing text/thought/tool output beyond the 80-turn display limit to be released while preserving cumulative points, deduplication and late usage corrections.
@@ -30,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Cumulative API-price-equivalent usage at the start of the answer usage footer, shared by regular/CL tasks and Eco/TM/AB workflows (displayed as USD, not a bill or subscription-quota estimate). Existing model catalogs supply input/output/cache rates, applied per response before summing context tiers. Interactive Claude Code parents read/deduplicate their own usage logs; headless workers retain usage and totals beyond the displayed turn limit. Retries, fresh conversations and removed team children retain recorded consumption. Unpriced/missing usage shows `—` or a partial `≥ $…`; recorded values survive restarts and catalog price changes. See [docs/usage.md](docs/usage.md).
+- Cumulative API-price-equivalent usage at the start of the answer usage footer, shared by regular/CL tasks and Eco/TM/AB workflows (displayed as USD or manual-rate JPY, not a bill or subscription-quota estimate). Existing model catalogs supply input/output/cache rates, applied per response before summing context tiers. Interactive Claude Code parents read/deduplicate their own usage logs; headless workers retain usage and totals beyond the displayed turn limit. Retries, fresh conversations and removed team children retain recorded consumption. Unpriced/missing usage shows `—` or a partial `≥ $…`; recorded values survive restarts and catalog price changes. See [docs/usage.md](docs/usage.md).
 
 - "ビルドして再起動" in the task header's 開く menu (PC only): rebuilds the UI, then restarts Agent Desk on the same port and token so open windows reconnect, stopping any running tasks. The build runs first, so a failed build leaves the app running with the error shown. A normal relaunch still waits for running tasks to finish before replacing an older instance. See [docs/updating.md](docs/updating.md).
 

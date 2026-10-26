@@ -2,6 +2,7 @@ import { Monitor, Moon, Sun } from 'lucide-react'
 import { act, setState, useStore } from '../../store'
 import type { PermissionMode, Theme } from '../../types'
 import { PERMISSION_INFO } from '../../util'
+import { UsageDisplaySettings } from './UsageDisplaySettings'
 
 export function GeneralSettings() {
   const settings = useStore((state) => state.server?.settings)
@@ -27,6 +28,7 @@ export function GeneralSettings() {
           ))}
         </div>
       </div>
+      <UsageDisplaySettings />
       <div className="setting">
         <div>
           <h3>デスクトップ通知</h3>

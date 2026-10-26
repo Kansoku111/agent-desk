@@ -1,5 +1,5 @@
 // Shapes shared with the Agent Desk server (see server/*.js).
-import type { UsageScore } from '../../shared/usage-score.js'
+import type { UsageDisplay, UsageScore } from '../../shared/usage-score.js'
 export type { UsageScore } from '../../shared/usage-score.js'
 
 export type PermissionMode = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -385,7 +385,7 @@ export interface Accounts {
 
 export type FastProvider = 'openai-codex' | 'anthropic'
 
-export interface Settings {
+export interface Settings extends UsageDisplay {
   theme: Theme
   defaultModel: string | null
   defaultEffort: string

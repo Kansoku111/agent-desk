@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { addScores, emptyScore, formatEquivalentUsd, scoreFromUsd, scoresUpTo } from '../shared/usage-score.js'
+import { addScores, emptyScore, formatEquivalentCost, isUsdJpyRate, scoreFromUsd, scoresUpTo } from '../shared/usage-score.js'
 import { loadPricing, resetPricing, responseCost, scoreResponse, setCatalogPricing, summarizeUsage } from '../server/usage.js'
 
 const sol = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }
@@ -35,8 +35,8 @@ test('subscription responses get points without pretending to be API bills; dupl
 test('unknown models or incomplete rates are unpriced, never zero-cost known usage', () => {
   const total = summarizeUsage([response(1, 'sol', { inputTokens: 1000 }), response(2, 'missing', { inputTokens: 1000 })], 0, pricing)
   assert.deepEqual(total.score, { points: 1, priced: 1, unpriced: 1 })
-  assert.equal(formatEquivalentUsd(total.score), '≥ $0.002')
-  assert.equal(formatEquivalentUsd(scoreResponse(pricing, 'missing', { inputTokens: 1 }, 0)), '—')
+  assert.equal(formatEquivalentCost(total.score), '≥ $0.002')
+  assert.equal(formatEquivalentCost(scoreResponse(pricing, 'missing', { inputTokens: 1 }, 0)), '—')
   assert.equal(responseCost({ input: 1, output: 1 }, { cacheReadTokens: 1 }), null)
   assert.equal(responseCost(sol, { inputTokens: -1 }), null)
   assert.equal(responseCost(sol, { outputTokens: NaN }), null)
@@ -57,31 +57,55 @@ test('cumulative scores preserve retries, missing usage and totals beyond retain
   assert.deepEqual(scoresUpTo(turns).at(-1), { points: 2, priced: 2, unpriced: 1 })
   assert.deepEqual(scoresUpTo([{ status: 'done', totalScore: { points: 100, priced: 50, unpriced: 0 } }, { status: 'done', usage: { score: one } }]).at(-1),
     { points: 101, priced: 51, unpriced: 0 })
-  assert.equal(formatEquivalentUsd(emptyScore()), '$0.00')
-  assert.equal(formatEquivalentUsd(scoreFromUsd(0.000001)), '$0.000001')
-  assert.equal(formatEquivalentUsd(undefined), '—')
+  assert.equal(formatEquivalentCost(emptyScore()), '$0.00')
+  assert.equal(formatEquivalentCost(scoreFromUsd(0.000001)), '$0.000001')
+  assert.equal(formatEquivalentCost(undefined), '—')
   assert.deepEqual(addScores(one, null), { points: 1, priced: 1, unpriced: 1 })
 })
 
 test('saved points convert to cumulative USD without changing their value or representation', () => {
   const saved = JSON.parse('{"points":21.67,"priced":5,"unpriced":0}')
   const before = JSON.stringify(saved)
-  assert.equal(formatEquivalentUsd(saved), '$0.04334')
+  assert.equal(formatEquivalentCost(saved), '$0.04334')
   assert.equal(JSON.stringify(saved), before)
   const cumulative = scoresUpTo([{ status: 'done', usage: { score: saved } },
     { status: 'done', usage: { score: scoreFromUsd(0.01) } }]).at(-1)
-  assert.equal(formatEquivalentUsd(cumulative), '$0.05334')
+  assert.equal(formatEquivalentCost(cumulative), '$0.05334')
 })
 
 test('USD formatting preserves micro-costs and never rounds an unpriced lower bound upwards', () => {
-  assert.equal(formatEquivalentUsd(scoreFromUsd(0)), '$0.00')
-  assert.equal(formatEquivalentUsd(scoreFromUsd(0.0000001)), '< $0.000001')
-  assert.equal(formatEquivalentUsd(scoreFromUsd(0.0433409)), '$0.043341')
-  assert.equal(formatEquivalentUsd({ ...scoreFromUsd(0.0433409), unpriced: 1 }), '≥ $0.04334')
-  assert.equal(formatEquivalentUsd({ ...scoreFromUsd(0.0000001), unpriced: 1 }), '≥ $0.00')
-  assert.equal(formatEquivalentUsd(scoreFromUsd(1234.56789)), '$1,234.56789')
-  assert.equal(formatEquivalentUsd({ points: 0, priced: 0, unpriced: 3 }), '—')
-  assert.equal(formatEquivalentUsd(null), '—')
+  assert.equal(formatEquivalentCost(scoreFromUsd(0)), '$0.00')
+  assert.equal(formatEquivalentCost(scoreFromUsd(0.0000001)), '< $0.000001')
+  assert.equal(formatEquivalentCost(scoreFromUsd(0.0433409)), '$0.043341')
+  assert.equal(formatEquivalentCost({ ...scoreFromUsd(0.0433409), unpriced: 1 }), '≥ $0.04334')
+  assert.equal(formatEquivalentCost({ ...scoreFromUsd(0.0000001), unpriced: 1 }), '≥ $0.00')
+  assert.equal(formatEquivalentCost(scoreFromUsd(1234.56789)), '$1,234.56789')
+  assert.equal(formatEquivalentCost({ points: 0, priced: 0, unpriced: 3 }), '—')
+  assert.equal(formatEquivalentCost(null), '—')
+})
+
+test('manual JPY conversion changes only presentation, including micro-costs and lower bounds', () => {
+  const saved = Object.freeze({ points: 21.67, priced: 5, unpriced: 0 })
+  const before = JSON.stringify(saved)
+  const yen = { usageCurrency: 'JPY', usdJpyRate: 150 }
+  assert.equal(formatEquivalentCost(saved, yen), '¥6.501')
+  assert.equal(formatEquivalentCost(saved, { ...yen, usdJpyRate: 160 }), '¥6.9344')
+  assert.equal(formatEquivalentCost(saved), '$0.04334')
+  assert.equal(JSON.stringify(saved), before)
+  assert.equal(formatEquivalentCost(scoreFromUsd(0), yen), '¥0')
+  assert.equal(formatEquivalentCost(scoreFromUsd(0.0000005), yen), '¥0.000075')
+  assert.equal(formatEquivalentCost(scoreFromUsd(0.000000001), yen), '< ¥0.000001')
+  assert.equal(formatEquivalentCost({ ...scoreFromUsd(0.00012345679), unpriced: 1 }, yen), '≥ ¥0.018518')
+  assert.equal(formatEquivalentCost(scoreFromUsd(null), yen), '—')
+})
+
+test('JPY never invents an exchange rate or formats invalid converted amounts as free', () => {
+  for (const rate of [null, undefined, 0, -1, '150', NaN, Infinity]) {
+    assert.equal(isUsdJpyRate(rate), false)
+    assert.equal(formatEquivalentCost(scoreFromUsd(0.01), { usageCurrency: 'JPY', usdJpyRate: rate }), '—')
+  }
+  assert.equal(isUsdJpyRate(150.25), true)
+  assert.equal(formatEquivalentCost(scoreFromUsd(2), { usageCurrency: 'JPY', usdJpyRate: Number.MAX_VALUE }), '—')
 })
 
 test('catalog overlays carry new-model rates without changing a previously recorded score', async () => {

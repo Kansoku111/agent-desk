@@ -29,15 +29,20 @@ export function scoreFromUsd(usd) {
     : { points: 0, priced: 0, unpriced: 1 }
 }
 
-// Keep saved scores in their original unit; converting the display never reprices history.
-export function formatEquivalentUsd(score) {
+export const isUsdJpyRate = (rate) => Number.isFinite(rate) && rate > 0
+
+// Keep saved scores in their original unit; currency/rate changes only affect presentation.
+export function formatEquivalentCost(score, { usageCurrency = 'USD', usdJpyRate = null } = {}) {
   if (!score || (!score.priced && score.unpriced)) return '—'
-  const usd = score.points * USD_PER_POINT
-  if (!score.unpriced && usd > 0 && usd < 0.000001) return '< $0.000001'
-  const value = usd.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2,
-    maximumFractionDigits: 6, ...(score.unpriced ? { roundingMode: 'floor' } : {}) })
+  const jpy = usageCurrency === 'JPY'
+  if (jpy && !isUsdJpyRate(usdJpyRate)) return '—'
+  const amount = score.points * USD_PER_POINT * (jpy ? usdJpyRate : 1)
+  if (!Number.isFinite(amount)) return '—'
+  const options = { style: 'currency', currency: jpy ? 'JPY' : 'USD', minimumFractionDigits: jpy ? 0 : 2, maximumFractionDigits: 6 }
+  if (!score.unpriced && amount > 0 && amount < 0.000001) return `< ${(0.000001).toLocaleString('en-US', options)}`
+  const value = amount.toLocaleString('en-US', { ...options, ...(score.unpriced ? { roundingMode: 'floor' } : {}) })
   return `${score.unpriced ? '≥ ' : ''}${value}`
 }
 
-export const SCORE_NOTE = 'API料金換算の累計額（米ドル）。実際の請求額やサブスク利用枠の消費ではありません。'
+export const SCORE_NOTE = 'API料金換算の累計額。実際の請求額やサブスク利用枠の消費ではありません。'
 export const SCORE_PARTIAL_NOTE = '料金または使用量が不明な分は未算定です。'

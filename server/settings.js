@@ -9,6 +9,7 @@ import { isModelId } from './model-catalog.js'
 import { PERMISSION_MODES } from './runtime.js'
 import { mergeTeamConfig, TEAM_DEFAULTS } from './team-config.js'
 import { parsePlaybooks, parsePolicies } from './team-playbooks.js'
+import { isUsdJpyRate } from '../shared/usage-score.js'
 
 // Idempotent startup migration: GPT fast is not offered by the official SIWC route.
 export function migrateSettings(saved = {}) {
@@ -25,6 +26,8 @@ export function migrateSettings(saved = {}) {
 
 export const DEFAULT_SETTINGS = {
   theme: 'dark',
+  usageCurrency: 'USD',
+  usdJpyRate: null,
   defaultModel: null,
   defaultEffort: 'medium',
   defaultPermissionMode: 'workspace-write',
@@ -68,6 +71,7 @@ const BOOLEAN_SETTINGS = [
 const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool']
 const ENUM_SETTINGS = {
   theme: ['system', 'light', 'dark'],
+  usageCurrency: ['USD', 'JPY'],
   defaultPermissionMode: PERMISSION_MODES,
   dshUpdateChannel: UPDATE_CHANNELS,
 }
@@ -191,6 +195,14 @@ export function planSettingsUpdate(current, patch, now) {
     if (!owns(patch, key)) continue
     if (!values.includes(patch[key])) throw new Error(`${key} の値が不正です`)
     next[key] = patch[key]
+  }
+  if (owns(patch, 'usdJpyRate')) {
+    if (patch.usdJpyRate !== null && !isUsdJpyRate(patch.usdJpyRate)) throw new Error('1 USDあたりの円は正の数で指定してください')
+    next.usdJpyRate = patch.usdJpyRate
+  }
+  if ((owns(patch, 'usageCurrency') || owns(patch, 'usdJpyRate'))
+    && next.usageCurrency === 'JPY' && !isUsdJpyRate(next.usdJpyRate)) {
+    throw new Error('JPY表示には1 USDあたりの円を設定してください')
   }
   // Model selections are ACP's opaque strings, not bare model IDs. Effort
   // values also come from the catalog, so do not hard-code a model's levels.

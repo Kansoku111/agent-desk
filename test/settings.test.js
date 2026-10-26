@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createSettingsService, DEFAULT_SETTINGS, planSettingsUpdate } from '../server/settings.js'
+import { createSettingsService, DEFAULT_SETTINGS, migrateSettings, planSettingsUpdate } from '../server/settings.js'
 
 const defaults = (patch = {}) => ({ ...structuredClone(DEFAULT_SETTINGS), ...patch })
 const deferred = () => {
@@ -52,9 +52,50 @@ function harness(initial = {}, hooks = {}) {
   return { service, events, writes, published, get live() { return live } }
 }
 
+test('manual currency defaults and validation do not infer a USDJPY rate', () => {
+  const legacy = migrateSettings({ theme: 'light' })
+  assert.equal(legacy.usageCurrency, 'USD')
+  assert.equal(legacy.usdJpyRate, null)
+  for (const patch of [{ usageCurrency: 'EUR' }, { usageCurrency: 'JPY' },
+    ...[0, -1, '150', NaN, Infinity].map((usdJpyRate) => ({ usdJpyRate }))]) {
+    assert.throws(() => planSettingsUpdate(defaults(), patch, 1))
+  }
+  const { settings, effects } = planSettingsUpdate(defaults(), { usageCurrency: 'JPY', usdJpyRate: 150.5 }, 1)
+  assert.equal(settings.usageCurrency, 'JPY')
+  assert.equal(settings.usdJpyRate, 150.5)
+  assert.equal(Object.values(effects).some(Boolean), false)
+  assert.throws(() => planSettingsUpdate(settings, { usdJpyRate: null }, 1), /JPY/)
+})
+
+test('currency preferences publish only after saving and survive reload without runtime effects', async () => {
+  let fail = true
+  const h = harness({}, { save: () => { if (fail) throw new Error('disk full') } })
+  await assert.rejects(h.service.update({ usageCurrency: 'JPY', usdJpyRate: 150 }), /disk full/)
+  assert.equal(h.live.usageCurrency, 'USD')
+  assert.equal(h.live.usdJpyRate, null)
+  assert.deepEqual(h.events, ['save'])
+  fail = false
+  await h.service.update({ usageCurrency: 'JPY', usdJpyRate: 150 })
+  assert.deepEqual(h.events, ['save', 'save', 'publish'])
+  const restored = migrateSettings(JSON.parse(JSON.stringify(h.writes[0])))
+  assert.equal(restored.usageCurrency, 'JPY')
+  assert.equal(restored.usdJpyRate, 150)
+})
+
+test('queued currency changes validate the last committed rate and retain it when returning to USD', async () => {
+  const h = harness()
+  await Promise.all([h.service.update({ usdJpyRate: 150 }), h.service.update({ usageCurrency: 'JPY' })])
+  assert.equal(h.live.usageCurrency, 'JPY')
+  await h.service.update({ usageCurrency: 'USD' })
+  assert.equal(h.live.usdJpyRate, 150)
+  assert.deepEqual(h.events, ['save', 'publish', 'save', 'publish', 'save', 'publish'])
+})
+
 test('mixed valid/invalid patches have no persistence, publication or effects', async () => {
   const patches = [
     { customInstructions: 'valid', dshUpdateChannel: 'invalid' },
+    { theme: 'light', usageCurrency: 'JPY' },
+    { theme: 'light', usdJpyRate: 0 },
     { contextLimits: { anthropic: 128_000 }, subagentModels: { anthropic: 123 } },
     { subagentModels: { anthropic: 'claude-opus-5' }, customInstructions: 5 },
     { fastMode: { anthropic: true }, modelAutoUpdate: 'false' },
