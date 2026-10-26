@@ -9,7 +9,7 @@ import { priceResponse, scoreResponse, summarizeUsage, turnUsage } from '../serv
 import { dailyUsage, localDay, pricingSignature, UsageHistory } from '../server/usage-history.js'
 import { foldChild, newChild } from '../server/subagents.js'
 import { ClaudeConversation, MAX_TURNS } from '../server/claude-transcript.js'
-import { formatScore } from '../shared/usage-score.js'
+import { formatEquivalentUsd } from '../shared/usage-score.js'
 
 const rates = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }
 const providers = ['anthropic', 'deepseek-official', 'openai-codex', 'opencode-go', 'local-llm']
@@ -99,10 +99,10 @@ test('missing usage contributes one unpriced response even alongside known or du
   assert.deepEqual(total.score, { points: 1, priced: 1, unpriced: 1 })
   assert.equal(total.requests, 2)
   assert.equal(total.input, 1000)
-  assert.equal(formatScore(total.score), '≥ 1 pt')
+  assert.equal(formatEquivalentUsd(total.score), '≥ $0.002')
   const unavailable = summarizeUsage([missing], 0, pricing)
   assert.deepEqual(unavailable.score, { points: 0, priced: 0, unpriced: 1 })
-  assert.equal(formatScore(unavailable.score), '— pt')
+  assert.equal(formatEquivalentUsd(unavailable.score), '—')
   assert.equal(summarizeUsage([missing], missing.time + 1, pricing), null)
 })
 

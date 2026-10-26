@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Usage footers now show cumulative **API-equivalent USD** (`API換算 $…`) instead of points across regular/CL/Eco/TM/AB. Existing saved scores stay unchanged and convert at the fixed $0.002 per point, without repricing or migration. Small amounts keep up to six decimal places (positive sub-micro-dollar values show `< $0.000001`); unknown totals show `—` and partial totals show a rounded-down `≥ $…`. Per-turn/session metered cost estimates remain in the token detail, not as a second competing dollar readout; Settings billing totals stay separate.
 - Renamed EX to **eco** (エコモード / economy mode) across the UI and reports. Existing settings and workflow behavior are unchanged.
 
 ### Fixed
@@ -29,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Cumulative API-price-equivalent points at the start of the answer usage footer, shared by regular/CL tasks and Eco/TM/AB workflows (1 pt = $0.002, not a bill or subscription-quota estimate). Existing model catalogs supply input/output/cache rates, applied per response before summing context tiers. Interactive Claude Code parents read/deduplicate their own usage logs; headless workers retain usage and totals beyond the displayed turn limit. Retries, fresh conversations and removed team children retain recorded consumption. Unpriced/missing usage shows `— pt` or a partial `≥ … pt`; recorded points survive restarts and catalog price changes. See [docs/usage.md](docs/usage.md).
+- Cumulative API-price-equivalent usage at the start of the answer usage footer, shared by regular/CL tasks and Eco/TM/AB workflows (displayed as USD, not a bill or subscription-quota estimate). Existing model catalogs supply input/output/cache rates, applied per response before summing context tiers. Interactive Claude Code parents read/deduplicate their own usage logs; headless workers retain usage and totals beyond the displayed turn limit. Retries, fresh conversations and removed team children retain recorded consumption. Unpriced/missing usage shows `—` or a partial `≥ $…`; recorded values survive restarts and catalog price changes. See [docs/usage.md](docs/usage.md).
 
 - "ビルドして再起動" in the task header's 開く menu (PC only): rebuilds the UI, then restarts Agent Desk on the same port and token so open windows reconnect, stopping any running tasks. The build runs first, so a failed build leaves the app running with the error shown. A normal relaunch still waits for running tasks to finish before replacing an older instance. See [docs/updating.md](docs/updating.md).
 
@@ -39,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Execution mode (EX), next to TM: a separately configured parent/low-tier-child workflow with project verification commands, application-recorded logs and source fingerprints, bounded automatic repairs, explicit acceptance/abandonment, read-only parallel investigation, and serialized writes through review. Checks support cancellation and timeout; stale or failed results cannot be accepted. Available dsh usage and workflow counts are recorded without equating API prices with subscription usage. Existing TM choices and behavior remain unchanged outside overlapping EX workspace protection. See [docs/execution.md](docs/execution.md).
 
-- OpenCode Go: Settings → Accounts → "OpenCode Go" takes an OpenCode Go API key (checked against `https://opencode.ai/inference/go/v1/models`). While it is saved, dsh gets pi-ai's `opencode-go` route, so its models (GLM, Kimi, DeepSeek, Qwen and others, from pi-ai's catalog) show in the model picker; requests carry dsh's own User-Agent and an `x-opencode-session` header per conversation. No cost is shown (flat-rate subscription). Agent teams can use them as children ("OpenCode Go", child only, off by default).
+- OpenCode Go: Settings → Accounts → "OpenCode Go" takes an OpenCode Go API key (checked against `https://opencode.ai/inference/go/v1/models`). While it is saved, dsh gets pi-ai's `opencode-go` route, so its models (GLM, Kimi, DeepSeek, Qwen and others, from pi-ai's catalog) show in the model picker; requests carry dsh's own User-Agent and an `x-opencode-session` header per conversation. No metered bill estimate is shown (flat-rate subscription); API-equivalent usage is displayed separately. Agent teams can use them as children ("OpenCode Go", child only, off by default).
 
 ## [0.1.2] - 2026-10-24
 

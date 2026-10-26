@@ -29,12 +29,15 @@ export function scoreFromUsd(usd) {
     : { points: 0, priced: 0, unpriced: 1 }
 }
 
-export function formatScore(score) {
-  if (!score || (!score.priced && score.unpriced)) return '— pt'
-  const value = !score.unpriced && score.points > 0 && score.points < 0.01 ? '<0.01'
-    : score.points.toLocaleString('en-US', { maximumFractionDigits: 2, ...(score.unpriced ? { roundingMode: 'floor' } : {}) })
-  return `${score.unpriced ? '≥ ' : ''}${value} pt`
+// Keep saved scores in their original unit; converting the display never reprices history.
+export function formatEquivalentUsd(score) {
+  if (!score || (!score.priced && score.unpriced)) return '—'
+  const usd = score.points * USD_PER_POINT
+  if (!score.unpriced && usd > 0 && usd < 0.000001) return '< $0.000001'
+  const value = usd.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2,
+    maximumFractionDigits: 6, ...(score.unpriced ? { roundingMode: 'floor' } : {}) })
+  return `${score.unpriced ? '≥ ' : ''}${value}`
 }
 
-export const SCORE_NOTE = 'セッション全体のAPI料金換算。1 pt = $0.002。実際の請求額やサブスク利用枠の消費ではありません。'
+export const SCORE_NOTE = 'API料金換算の累計額（米ドル）。実際の請求額やサブスク利用枠の消費ではありません。'
 export const SCORE_PARTIAL_NOTE = '料金または使用量が不明な分は未算定です。'

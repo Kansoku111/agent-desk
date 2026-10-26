@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-react'
 import { act, loadAgentTurns, loadThread, navigate, setState, useRemote, useStore } from '../store'
 import type { AbConfig, AbJob, AbRun, AppState, Turn, UsageScore } from '../types'
-import { UsagePoints } from './UsagePoints'
+import { UsageCost } from './UsageCost'
 import { scoresUpTo } from '../../../shared/usage-score.js'
 import { OpenInMenu } from './ThreadView'
 import { TurnView } from './TurnView'
@@ -195,7 +195,7 @@ function Report({ job, workspace, modelName, open = false, taskScore }: { job: A
           taskScore={index === turns!.length - 1 ? taskScore ?? job.score ?? scores[index] : scores[index]} />)}
         {notes && <Markdown text={notes} workspace={workspace} />}</>
       : <>{job.report ? <><CopyButton text={job.report} /><Markdown text={job.report} workspace={workspace} /></> : <p className="muted">{running ? '検討中…' : '報告なし'}</p>}
-          {!running && <div className="usage-line"><UsagePoints score={taskScore ?? job.score} /></div>}</>}
+          {!running && <div className="usage-line"><UsageCost score={taskScore ?? job.score} /></div>}</>}
   </details>
 }
 

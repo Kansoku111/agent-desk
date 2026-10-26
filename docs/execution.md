@@ -49,6 +49,6 @@ Claude Codeの認証・課金確認はTMと同じ仕組みを使用します。A
 
 ## 記録と初版の範囲
 
-アプリのデータフォルダ内の `teams/execution/projects.json` に検証設定、`teams/execution/runs/<ID>/` に検証のJSONとログ、レビュー全文 `review.md`、差分全文 `changes.patch` を保存します。差分用のチェックポイントは `teams/execution/reviews/snapshots/` に保存します。`teams.json` に依頼文・追加指示・開始時点の記録、完了条件、判定とレビュー根拠、差し戻し回数、親子のターン数、報告・検証回数を記録します。dshが返した使用量は取得できた範囲で保存し、取得できないものは不明のままです。Claude Codeの子はターン終了時のトークン数と推定費用も記録します。Claude Code CLIの親も会話ログからトークン数とAPI料金換算ptを取得します。親の最新回答末尾のptは親と全担当の累計で、再試行や`fresh`前の取得済み消費も含みます。ターン数は引き続き受信したプロンプトフックに基づきます。[ptの集計範囲と未算定](usage.md)。
+アプリのデータフォルダ内の `teams/execution/projects.json` に検証設定、`teams/execution/runs/<ID>/` に検証のJSONとログ、レビュー全文 `review.md`、差分全文 `changes.patch` を保存します。差分用のチェックポイントは `teams/execution/reviews/snapshots/` に保存します。`teams.json` に依頼文・追加指示・開始時点の記録、完了条件、判定とレビュー根拠、差し戻し回数、親子のターン数、報告・検証回数を記録します。dshが返した使用量は取得できた範囲で保存し、取得できないものは不明のままです。Claude Codeの子はターン終了時のトークン数と推定費用も記録します。Claude Code CLIの親も会話ログからトークン数とAPI料金換算額を取得します。親の最新回答末尾のAPI換算額（米ドル）は親と全担当の累計で、再試行や`fresh`前の取得済み消費も含みます。ターン数は引き続き受信したプロンプトフックに基づきます。[API換算額の集計範囲と未算定](usage.md)。
 
 確認役の子の自動追加、検証候補の自動調査、worktreeによる書き込み並列化、TMとの消費比較画面は初版には含みません。

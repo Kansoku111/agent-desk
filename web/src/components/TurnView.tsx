@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { act, attachmentUrl, isImageAttachment, setSubagentPanel, useStore, type State } from '../store'
 import type { ImageRef, NoticeItem, PlanItem, SteerItem, SubagentInfo, TextItem, ToolItem, Turn, TurnItem, TurnUsage, UsageScore } from '../types'
-import { UsagePoints } from './UsagePoints'
+import { UsageCost } from './UsageCost'
 import { duration, fileChanges, formatTokens, formatTokensExact, formatUsd, summarizeTool, type DiffLine, type ToolIcon } from '../util'
 import { CopyButton, Markdown } from './Markdown'
 import { FileRef } from './FileRef'
@@ -312,7 +312,7 @@ function OutputSpeed({ speed }: { speed: Turn['outputSpeed'] }) {
   )
 }
 
-/** Tokens the turn used, and the estimated cost of API models. */
+/** Per-turn tokens with cumulative API-equivalent USD; metered estimates stay in the detail. */
 function UsageLine({ usage, taskCost, speed, score }: { usage: TurnUsage; taskCost: number | null; speed: Turn['outputSpeed']; score?: UsageScore | null }) {
   const inputTotal = usage.input + usage.cacheRead + usage.cacheWrite
   const detail = [
@@ -323,21 +323,19 @@ function UsageLine({ usage, taskCost, speed, score }: { usage: TurnUsage; taskCo
     `出力 ${formatTokensExact(usage.output)}`,
     usage.reasoning ? `うち推論 ${formatTokensExact(usage.reasoning)}` : null,
     usage.models.length ? `モデル: ${usage.models.map((model) => model.split('/')[1]).join(', ')}` : null,
+    usage.cost !== null ? `このターンの従量課金概算 ${formatUsd(usage.cost)}` : null,
+    usage.cost !== null && taskCost !== null && taskCost > usage.cost ? `このセッションの従量課金概算累計 ${formatUsd(taskCost)}` : null,
     usage.cost !== null ? 'モデルの単価に基づく概算です。正確な請求額は各社の管理画面で確認してください。' : null,
     usage.cost !== null && usage.models.some((model) => model.startsWith('deepseek-official/'))
       ? 'DeepSeek は公式料金表と応答記録の時刻でピーク／オフピーク料金を適用します。' : null,
   ].filter(Boolean).join('\n')
   return (
     <div className="usage-line" title={detail}>
-      <UsagePoints score={score} />
+      <UsageCost score={score} />
       <span>· 入力 {formatTokens(inputTotal)}</span>
       {usage.cacheRead > 0 && <span className="usage-sub">（キャッシュ {formatTokens(usage.cacheRead)}）</span>}
       <span>· 出力 {formatTokens(usage.output)}</span>
       <OutputSpeed speed={speed} />
-      {usage.cost !== null && <span className="usage-cost">· 約 {formatUsd(usage.cost)}</span>}
-      {usage.cost !== null && taskCost !== null && taskCost > usage.cost && (
-        <span className="usage-sub">（このタスク累計 {formatUsd(taskCost)}）</span>
-      )}
     </div>
   )
 }
@@ -426,7 +424,7 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
       )}
       {turn.status === 'error' && turn.error && <TurnError error={turn.error} />}
       {!running && turn.usage && <UsageLine usage={turn.usage} taskCost={taskCost} speed={turn.outputSpeed} score={taskScore ?? turn.totalScore ?? turn.usage.score} />}
-      {!running && !turn.usage && <div className="usage-line"><UsagePoints score={taskScore ?? turn.totalScore} /><OutputSpeed speed={turn.outputSpeed} /></div>}
+      {!running && !turn.usage && <div className="usage-line"><UsageCost score={taskScore ?? turn.totalScore} /><OutputSpeed speed={turn.outputSpeed} /></div>}
       {!running && <RestoreControls threadId={threadId} turn={turn} busy={threadBusy} undoable={undoable} />}
     </section>
   )

@@ -1586,13 +1586,9 @@ select:focus {
   cursor: default;
 }
 
-.usage-points {
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
 .usage-cost {
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .usage-sub {
