@@ -13,9 +13,3 @@ export function projectColor(colors: Record<string, number> | undefined, path: s
   const value = colors?.[path]
   return typeof value === 'number' && value >= -1 && value < PROJECT_HUES.length ? value : preferredColor(path)
 }
-
-/** The color one wheel step away; the cycle passes through "no tint" after the last hue. */
-export function stepColor(color: number, step: number) {
-  const stops = PROJECT_HUES.length + 1
-  return ((color + 1 + step) % stops + stops) % stops - 1
-}

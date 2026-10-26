@@ -1,16 +1,17 @@
+import { createPortal } from 'react-dom'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
-  Archive, ArchiveRestore, ArrowLeft, Folder, FolderOpen, FolderPlus, Loader2, Monitor, MoreHorizontal, PanelLeftClose, Pencil, Plus,
+  Archive, ArchiveRestore, ArrowLeft, Folder, FolderOpen, FolderPlus, Loader2, Monitor, MoreHorizontal, PanelLeftClose, Palette, Pencil, Plus,
   CheckSquare, ChevronDown, ChevronUp, Copy, Search, Settings, SquarePen, Trash2, X,
 } from 'lucide-react'
 import { act, getState, isNarrow, navigate, request, setState, startTerminal, toast, useStore } from '../store'
 import { selectThreadRange } from '../thread-selection'
 import { threadMarkdown } from '../thread-transcript'
 import { abMarkdown } from '../ab-transcript'
-import { ConfirmDialog } from './Modal'
+import { ConfirmDialog, Modal } from './Modal'
 import type { AbRun, TerminalSummary, ThreadSummary, Turn } from '../types'
 import { copyText, parseModel, relativeTime, workspaceLabel } from '../util'
-import { PROJECT_HUES, projectColor, stepColor } from '../projectColors'
+import { PROJECT_HUES, projectColor } from '../projectColors'
 import { Dropdown, MenuItem } from './Popover'
 import { openProjectDialog } from './ProjectDialog'
 import { teamNeedsUser, useLedTeam } from './TeamPanel'
@@ -403,46 +404,6 @@ function visibleRows(rows: ReturnType<typeof groupRows>, expanded: boolean, sear
   return rows.filter((row, index) => index < limit || row.id === activeId)
 }
 
-/**
- * Turning the mouse wheel over a group's header steps through the tints. The
- * new color shows at once and is saved when the wheel stops.
- */
-function useWheelColor(path: string, color: number) {
-  const head = useRef<HTMLDivElement>(null)
-  const [preview, setPreview] = useState<number | null>(null)
-  const shown = preview ?? color
-  const current = useRef(shown)
-  current.current = shown
-
-  useEffect(() => {
-    const element = head.current
-    if (!element) return
-    let delta = 0
-    let timer: number | undefined
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault()
-      // Line-based wheels (Firefox) report a few lines, not pixels.
-      delta += event.deltaMode === 1 ? event.deltaY * 40 : event.deltaY
-      if (Math.abs(delta) < 40) return
-      const next = stepColor(current.current, delta > 0 ? 1 : -1)
-      delta = 0
-      current.current = next
-      setPreview(next)
-      window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
-        void act('project.color', { path, color: next }).then(() => setPreview((value) => (value === next ? null : value)))
-      }, 350)
-    }
-    element.addEventListener('wheel', onWheel, { passive: false })
-    return () => {
-      element.removeEventListener('wheel', onWheel)
-      window.clearTimeout(timer)
-    }
-  }, [path])
-
-  return { head, color: shown }
-}
-
 function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, activeId, searching, selection }: {
   group: Group
   collapsed: boolean
@@ -461,17 +422,25 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
   const more = Math.min(rows.length, MAX_ROWS) - VISIBLE_ROWS
   const hasRows = rows.length > 0 || draftHere
   const [renaming, setRenaming] = useState(false)
+  const [colorOpen, setColorOpen] = useState(false)
+  const [savingColor, setSavingColor] = useState(false)
   const [name, setName] = useState(group.label)
+  const saveColor = async (color: number) => {
+    setSavingColor(true)
+    const result = await act('project.color', { path: group.path, color })
+    setSavingColor(false)
+    if (result !== null) setColorOpen(false)
+  }
   const saveName = async () => {
     setRenaming(false)
     if (name.trim() && name.trim() !== group.label) await act('project.rename', { path: group.path, name: name.trim() })
   }
   const Icon = group.pc ? Monitor : open && hasRows ? FolderOpen : Folder
-  const { head, color } = useWheelColor(group.path, group.color)
+  const color = group.color
   const tint = color >= 0 ? { '--group-hue': PROJECT_HUES[color] } as CSSProperties : undefined
   return (
     <section className={`task-group ${tint ? 'tinted' : ''}`} style={tint}>
-      <div className="task-group-head" ref={head}>
+      <div className="task-group-head">
         {renaming
           ? (
             <input
@@ -494,7 +463,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
               className="task-group-toggle"
               onClick={onToggle}
               aria-expanded={open}
-              title={`${group.pc ? `プロジェクトに属さないタスク（${group.path}）` : group.path}\nホイールで色を変更`}
+              title={group.pc ? `プロジェクトに属さないタスク（${group.path}）` : group.path}
             >
               <Icon size={15} />
               <span>{group.label}</span>
@@ -522,44 +491,62 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
           <button type="button" className="icon-button small new-task-button" title="新しいタスク" aria-label={`${group.label} で新しいタスク`} onClick={() => newTaskIn(group.path)}>
             <Plus size={14} />
           </button>
-          {!group.pc && (
-            <Dropdown
-              placement="bottom"
-              align="right"
-              width={200}
-              trigger={({ toggle }) => (
-                <button type="button" className="icon-button small" aria-label={`${group.label} の操作`} onClick={toggle}>
-                  <MoreHorizontal size={14} />
-                </button>
-              )}
-            >
-              {(close) => (
-                <>
+          <Dropdown
+            placement="bottom"
+            align="right"
+            width={200}
+            trigger={({ toggle }) => (
+              <button type="button" className="icon-button small" aria-label={`${group.label} の操作`} onClick={toggle}>
+                <MoreHorizontal size={14} />
+              </button>
+            )}
+          >
+            {(close) => (
+              <>
+                <MenuItem
+                  icon={<Palette size={14} />}
+                  label="色変更"
+                  onSelect={() => { close(); setColorOpen(true) }}
+                />
+                {!group.pc && <MenuItem
+                  icon={<Pencil size={14} />}
+                  label="名前を変更"
+                  onSelect={() => {
+                    close()
+                    setName(group.label)
+                    setRenaming(true)
+                  }}
+                />}
+                {!group.pc && rows.length === 0 && (
                   <MenuItem
-                    icon={<Pencil size={14} />}
-                    label="名前を変更"
+                    icon={<X size={14} />}
+                    label="一覧から外す"
                     onSelect={() => {
                       close()
-                      setName(group.label)
-                      setRenaming(true)
+                      void act('workspace.remove', { path: group.path })
                     }}
                   />
-                  {rows.length === 0 && (
-                    <MenuItem
-                      icon={<X size={14} />}
-                      label="一覧から外す"
-                      onSelect={() => {
-                        close()
-                        void act('workspace.remove', { path: group.path })
-                      }}
-                    />
-                  )}
-                </>
-              )}
-            </Dropdown>
-          )}
+                )}
+              </>
+            )}
+          </Dropdown>
         </div>
       </div>
+      {colorOpen && createPortal(
+        <Modal title={`${group.label} — 色変更`} onClose={() => setColorOpen(false)} width={320}>
+          <div className="modal-body project-color-palette" aria-label="プロジェクトの色">
+            {PROJECT_HUES.map((hue, index) => (
+              <button key={hue} type="button" className="project-color-swatch"
+                style={{ '--swatch-hue': hue } as CSSProperties}
+                aria-label={['青', '緑', 'オレンジ', '紫', 'ピンク', '青緑', '黄', '赤', '藍', '黄緑', '赤紫', '水色'][index]}
+                aria-pressed={color === index} disabled={savingColor}
+                onClick={() => void saveColor(index)} />
+            ))}
+            <button type="button" className="button project-color-none" aria-pressed={color === -1}
+              disabled={savingColor} onClick={() => void saveColor(-1)}>色なし</button>
+          </div>
+        </Modal>, document.body,
+      )}
       {open && hasRows && (
         <ul>
           {draftHere && (
@@ -844,4 +831,3 @@ export function Sidebar() {
     </aside>
   )
 }
- 

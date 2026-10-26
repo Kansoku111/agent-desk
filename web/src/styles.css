@@ -907,7 +907,28 @@ select:focus {
   margin-top: 4px;
 }
 
-/* A project's own faint color (picked with the mouse wheel over its header). */
+.project-color-palette {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+}
+
+.project-color-swatch {
+  aspect-ratio: 1;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: hsl(var(--swatch-hue) 65% 55%);
+}
+
+.project-color-swatch:is(:hover, :focus-visible, [aria-pressed="true"]) {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.project-color-none { grid-column: 1 / -1; }
+.project-color-none[aria-pressed="true"] { border-color: var(--text); }
+
+/* A project's own faint color, chosen from its actions menu. */
 .task-group.tinted {
   border-radius: 10px;
   background: hsl(var(--group-hue) 75% 55% / var(--group-tint));
