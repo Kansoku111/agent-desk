@@ -579,7 +579,7 @@ export async function startTeam(workspace: string, choices: TeamSettings, authCo
   return true
 }
 
-/** Shows or hides the team panel beside a leader, and remembers the choice. */
+/** Shows or hides the team panel beside a leader or child, and remembers the choice. */
 export function setTeamPanel(open: boolean) {
   setState({ teamPanel: open })
   try {

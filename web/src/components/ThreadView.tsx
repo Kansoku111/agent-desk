@@ -8,7 +8,7 @@ import { undoableRestore, workspaceLabel } from '../util'
 import { Composer } from './Composer'
 import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
-import { BackToLeader, TeamPanel, TeamToggle, useLedTeam } from './TeamPanel'
+import { BackToLeader, TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
 import { TurnView } from './TurnView'
 import { scoresUpTo } from '../../../shared/usage-score.js'
 
@@ -111,6 +111,7 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
     if (title.trim() && title.trim() !== thread.title) await act('thread.update', { threadId: thread.id, title: title.trim() })
   }
   const team = useLedTeam(thread.id)
+  const panelTeam = useTeam(thread.team?.id) ?? team
   return (
     <header className="main-header">
       <div className="header-left">
@@ -149,7 +150,7 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
         )}
       </div>
       <div className="header-right">
-        {team && <TeamToggle team={team} />}
+        {panelTeam && <TeamToggle team={panelTeam} />}
         <SubagentToggle threadId={thread.id} />
         {!remote && <OpenInMenu workspace={thread.workspace} />}
         <Dropdown
@@ -188,9 +189,10 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const thread = useStore((state) => state.server?.threads.find((entry) => entry.id === threadId))
   const turns = useStore((state) => state.turns[threadId])
   const panelOpen = useStore((state) => state.subagentPanel)
-  // A GPT team leader shows its children beside it, as a Claude leader does.
   const team = useLedTeam(threadId)
-  const teamPanel = useStore((state) => state.teamPanel) && Boolean(team?.children.length)
+  // Keep the same team beside its leader and its children.
+  const panelTeam = useTeam(thread?.team?.id) ?? team
+  const teamPanel = useStore((state) => state.teamPanel) && Boolean(panelTeam?.children.length)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const [showJump, setShowJump] = useState(false)
@@ -263,7 +265,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
             </div>
           </div>
         </div>
-        {team && teamPanel ? <TeamPanel team={team} /> : panelOpen && <SubagentPanel thread={thread} />}
+        {panelTeam && teamPanel ? <TeamPanel team={panelTeam} /> : panelOpen && <SubagentPanel thread={thread} />}
       </div>
     </div>
   )

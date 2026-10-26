@@ -112,7 +112,7 @@ export function BackToLeader({ teamId, childId }: { teamId: string; childId?: st
   )
 }
 
-/** In a leader's header: shows or hides the team panel once the leader started children. */
+/** Shows or hides the team panel from either the leader or a child. */
 export function TeamToggle({ team }: { team: TeamSummary | undefined }) {
   const open = useStore((state) => state.teamPanel)
   if (!team || (!team.children.length && !team.execution)) return null
@@ -282,7 +282,7 @@ function UsageDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-/** The right-hand panel beside a team's leader: its children, live, and what needs the user. */
+/** The right-hand panel beside a leader or child: all children, live, and what needs the user. */
 export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }) {
   const [diagram, setDiagram] = useState(false)
   const [editing, setEditing] = useState(false)

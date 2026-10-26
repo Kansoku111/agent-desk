@@ -3,7 +3,7 @@ import { ArrowDown, Clock3, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen,
 import { act, isTouch, setState, teamChildOf, useRemote, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import { workspaceLabel } from '../util'
-import { BackToLeader, StateIcon, stateLabel } from './TeamPanel'
+import { BackToLeader, StateIcon, stateLabel, TeamPanel, TeamToggle } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
 import { TurnView } from './TurnView'
 
@@ -19,6 +19,7 @@ export function AgentView({ taskId }: { taskId: string }) {
   const child = team?.children.find((entry) => entry.kind === 'agent' && entry.taskId === taskId)
   const turns = useStore((state) => state.agentTurns[taskId])
   const sidebarOpen = useStore((state) => state.sidebarOpen)
+  const teamPanel = useStore((state) => state.teamPanel)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
   const remote = useRemote()
@@ -74,6 +75,7 @@ export function AgentView({ taskId }: { taskId: string }) {
           </span>
         </div>
         <div className="header-right">
+          <TeamToggle team={team} />
           {working && (
             <button type="button" className="button ghost" title="この子の作業を止める（リーダーに伝わります）"
               onClick={() => void act('team.stopChild', { teamId: team.id, childId: child.id })}>
@@ -173,6 +175,7 @@ export function AgentView({ taskId }: { taskId: string }) {
             </div>
           </div>
         </div>
+        {teamPanel && team.children.length > 0 && <TeamPanel team={team} />}
       </div>
     </div>
   )
