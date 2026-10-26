@@ -1,10 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  ArrowDown, Bot, ChevronDown, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, RotateCw, SquareTerminal, Trash2,
+  ArrowDown, Bot, ChevronDown, Copy, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, RotateCw, SquareTerminal, Trash2,
 } from 'lucide-react'
-import { act, setState, setSubagentPanel, useRemote, useStore } from '../store'
+import { act, setState, setSubagentPanel, toast, useRemote, useStore } from '../store'
 import type { ThreadSummary, Turn } from '../types'
-import { undoableRestore, workspaceLabel } from '../util'
+import { copyText, undoableRestore, workspaceLabel } from '../util'
 import { Composer } from './Composer'
 import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
@@ -52,6 +52,14 @@ export function OpenInMenu({ workspace }: { workspace: string }) {
               }}
             />
           )}
+          <MenuItem
+            icon={<Copy size={14} />}
+            label="作業フォルダーのパスをコピー"
+            onSelect={() => {
+              close()
+              copyText(workspace).then(() => toast('パスをコピーしました', 'success'), () => toast('コピーできませんでした', 'error'))
+            }}
+          />
           <MenuDivider />
           <MenuItem
             icon={<RotateCw size={14} />}
