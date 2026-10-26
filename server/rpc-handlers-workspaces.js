@@ -9,7 +9,7 @@ import { isProjectColor } from './project-colors.js'
 import { gitInfo, openExternal, openFile, openIn, pickFolder } from './system.js'
 
 /** Handlers for workspaces and projects; index.js merges them into the request table. */
-export function createWorkspaceHandlers({ paths, getSettings, mutateSettings }) {
+export function createWorkspaceHandlers({ paths, getSettings, mutateSettings, openFile: launchFile = openFile }) {
 
   /** Where the folder picker starts: next to the most recent project, else the home folder. */
   function suggestedParent() {
@@ -100,7 +100,7 @@ export function createWorkspaceHandlers({ paths, getSettings, mutateSettings }) 
       if (!found.exists) throw new Error(`ファイルが見つかりません: ${ref}`)
       // Programs and scripts are shown, never started, from a click in an answer.
       const reveal = how === 'open' && !found.directory && isRunnable(found.file)
-      openFile(found.file, reveal ? 'reveal' : how)
+      await launchFile(found.file, reveal ? 'reveal' : how)
       return { file: found.file, revealed: reveal }
     },
 

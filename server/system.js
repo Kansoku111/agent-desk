@@ -97,31 +97,28 @@ export async function openIn(target, dir, { platform = process.platform, runComm
  * @param {string} file - an existing absolute path.
  * @param {'open' | 'reveal'} how - the default app, or the file's place in Explorer/Finder.
  */
-export function openFile(file, how) {
-  const detached = { detached: true, stdio: 'ignore' }
-  if (isWin) {
-    openFront(file, how === 'reveal')
+export async function openFile(file, how, { platform = process.platform, runCommand = run } = {}) {
+  if (platform !== 'win32') {
+    // Preserve the existing detached launch: xdg-open may live as long as the
+    // associated app, so it must not inherit the Windows helper's timeout.
+    const mac = platform === 'darwin'
+    spawn(mac ? 'open' : 'xdg-open', how === 'reveal'
+      ? (mac ? ['-R', file] : [path.dirname(file)]) : [file], { detached: true, stdio: 'ignore' }).unref()
     return
   }
-  if (how === 'reveal') {
-    if (isMac) {
-      spawn('open', ['-R', file], detached).unref()
-    } else {
-      spawn('xdg-open', [path.dirname(file)], detached).unref()
-    }
-    return
+  try {
+    const script = fileURLToPath(new URL('./open-front.ps1', import.meta.url))
+    await runCommand('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File', script,
+      ...(how === 'reveal' ? ['-Reveal'] : []),
+    ], {
+      windowsHide: true, timeout: 15_000,
+      env: { ...process.env, AGENT_DESK_FILE_PATH: file },
+    })
+  } catch (error) {
+    const action = how === 'reveal' ? 'ファイルの場所を表示できませんでした' : 'ファイルを開けませんでした'
+    throw new Error(`${action}: ${error.stderr?.trim() || error.message}`)
   }
-  spawn(isMac ? 'open' : 'xdg-open', [file], detached).unref()
-}
-
-/** Windows: opens the path and raises the new window above the app (see open-front.ps1). */
-function openFront(file, reveal) {
-  const script = fileURLToPath(new URL('./open-front.ps1', import.meta.url))
-  spawn('powershell.exe', [
-    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
-    '-Path', file,
-    ...(reveal ? ['-Reveal'] : []),
-  ], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
 }
 
 /** Current branch and number of changed files, or null outside a git repo. */
