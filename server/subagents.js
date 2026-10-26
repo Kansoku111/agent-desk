@@ -135,7 +135,7 @@ export async function decodeFrames(buffer, { keep = null } = {}) {
  * The lines of a task's own log that {@link SubagentTracker} uses: the calls
  * that may start a subagent, the catalog entries naming one, and the header.
  */
-const ROOT_LINE = (line) => line.includes('tool/call') || line.includes('subagent/catalog') || line.includes('"session"')
+const ROOT_LINE = (line) => line.includes('tool/call') || line.includes('tool/ptc-dispatch-start') || line.includes('subagent/catalog') || line.includes('"session"')
 
 /** Reads one session log as it grows, returning each event once. */
 export class LogTail {
@@ -509,9 +509,9 @@ export class SubagentTracker extends EventEmitter {
   /** Finds the children a session's events start, and the tool calls that started them. */
   #scan(tree, parentId, depth, events) {
     for (const event of events) {
-      if (event.type === 'tool/call' && DELEGATING_TOOL.test(event.data?.name ?? '')) {
+      if (['tool/call', 'tool/ptc-dispatch-start'].includes(event.type) && DELEGATING_TOOL.test(event.data?.name ?? '')) {
         const calls = tree.calls.get(parentId) ?? []
-        calls.push({ callId: event.data.callId, description: parseArguments(event.data.arguments)?.description ?? null })
+        calls.push({ callId: event.data.subCallId ?? event.data.callId, description: parseArguments(event.data.arguments)?.description ?? null })
         tree.calls.set(parentId, calls)
       } else if (event.type === 'subagent/catalog' && event.data?.childId && !tree.nodes.has(event.data.childId)) {
         const label = event.data.label ?? null

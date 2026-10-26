@@ -13,6 +13,7 @@ import { patchRetrySource } from './retry-patch.js'
 import { patchOutputSpeedSource } from './output-speed-patch.js'
 import { patchFsSearchSource } from './fs-search-patch.js'
 import { patchGoalToolSource } from './goal-tool-patch.js'
+import { patchPtcSource } from './ptc-patch.js'
 
 // Both AcpRuntime and the verifier use this registration order. load hooks call
 // nextLoad first, so their source transforms unwind in registration order (not
@@ -26,6 +27,7 @@ const HOOKS = [
   { name: 'goal-tool', module: 'goalTool', patch: patchGoalToolSource },
   { name: 'mcp-timeout', module: 'acp', patch: patchMcpTimeoutSource },
   { name: 'output-speed', module: 'acp', patch: patchOutputSpeedSource },
+  { name: 'ptc', module: 'acp', patch: patchPtcSource },
   { name: 'fs-search', module: 'search', patch: patchFsSearchSource },
 ]
 

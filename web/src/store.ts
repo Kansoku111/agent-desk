@@ -46,7 +46,7 @@ export interface State {
   toasts: Toast[]
   queued: Record<string, QueuedMessage[]>
   /** New-thread composer choices before a thread exists. */
-  draft: { workspace: string | null; model: string | null; effort: string; permissionMode: PermissionMode }
+  draft: { workspace: string | null; model: string | null; effort: string; permissionMode: PermissionMode; toolMode: 'native' | 'ptc' }
 }
 
 const TOKEN_KEY = 'agent-desk-token'
@@ -173,7 +173,7 @@ let state: State = {
   sidebarOpen: !isNarrow(),
   toasts: [],
   queued: readQueued(),
-  draft: { workspace: null, model: null, effort: 'medium', permissionMode: 'workspace-write' },
+  draft: { workspace: null, model: null, effort: 'medium', permissionMode: 'workspace-write', toolMode: 'native' },
 }
 
 const listeners = new Set<() => void>()
@@ -660,12 +660,13 @@ export async function startThread(text: string, images: Attachment[]) {
     model: draft.model,
     effort: draft.effort,
     permissionMode: draft.permissionMode,
+    toolMode: draft.toolMode,
     text,
     images: wire(images),
   })
   if (!result) return false
   upsertThread(result.thread)
-  setState((current) => ({ turns: { ...current.turns, [result.thread.id]: current.turns[result.thread.id] ?? [] } }))
+  setState((current) => ({ turns: { ...current.turns, [result.thread.id]: current.turns[result.thread.id] ?? [] }, draft: { ...current.draft, toolMode: 'native' } }))
   navigate({ view: 'thread', id: result.thread.id })
   void loadThread(result.thread.id)
   return true

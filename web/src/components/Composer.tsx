@@ -39,6 +39,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(0)
   const [sending, setSending] = useState(false)
+  const [changingToolMode, setChangingToolMode] = useState(false)
   const [dragging, setDragging] = useState(false)
   const input = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -61,7 +62,9 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
   const model = thread ? thread.model : draft.model
   const effort = thread ? thread.effort : draft.effort
   const permissionMode = thread ? thread.permissionMode : draft.permissionMode
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && uploading === 0 && !sending && Boolean(model)
+  const toolMode = (thread ? thread.toolMode : draft.toolMode) ?? 'native'
+  const ptcAvailable = !thread?.ab && !thread?.team
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && uploading === 0 && !sending && !changingToolMode && Boolean(model)
 
   const updateText = (value: string) => {
     setText(value)
@@ -229,6 +232,28 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
           <EffortPicker model={model} value={effort} onChange={setEffort} />
           <FastModeChip model={model} />
           <PermissionPicker value={permissionMode} onChange={setMode} existing={Boolean(thread?.sessionId)} disabled={running} />
+          {ptcAvailable && (
+            <button
+              type="button"
+              className={`chip ptc-chip ${toolMode === 'ptc' ? 'on' : ''}`}
+              aria-label="PTC"
+              aria-pressed={toolMode === 'ptc'}
+              disabled={running || sending || changingToolMode}
+              title={`PTC: ${toolMode === 'ptc' ? 'オン' : 'オフ'}（次の送信から適用）`}
+              onClick={async () => {
+                const value = toolMode === 'ptc' ? 'native' : 'ptc'
+                if (!thread) {
+                  setState((state) => ({ draft: { ...state.draft, toolMode: value } }))
+                  return
+                }
+                setChangingToolMode(true)
+                await act('thread.update', { threadId: thread.id, toolMode: value })
+                setChangingToolMode(false)
+              }}
+            >
+              PTC {toolMode === 'ptc' ? 'ON' : 'OFF'}
+            </button>
+          )}
         </div>
         <div className="composer-right">
           {model?.includes('"openai-codex"') && <ChatGptLimitChip />}

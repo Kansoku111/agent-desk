@@ -2,6 +2,8 @@
 // renders. A thread is a list of turns; a turn is one user prompt plus every
 // message, thought and tool call the agent produced for it.
 
+import { PTC_META } from './ptc.js'
+
 export const MAX_TOOL_OUTPUT = 24_000
 
 /** Keeps the head and tail of very long text so transcripts stay small. */
@@ -55,6 +57,10 @@ export function applyUpdate(turn, update) {
       item.name = update.title ?? item.name ?? 'tool'
       item.kind = update.kind ?? item.kind ?? 'other'
       item.status = update.status ?? item.status ?? 'pending'
+      if (update._meta?.[PTC_META]) {
+        item.parentCallId = update._meta[PTC_META].parentCallId
+        item.rootCallId = update._meta[PTC_META].rootCallId
+      }
       if (update.rawInput !== undefined) item.input = update.rawInput
       if (update.content) item.output = clip(contentText(update.content))
       if (update.locations) item.locations = update.locations
@@ -70,6 +76,10 @@ export function applyUpdate(turn, update) {
       }
       if (update.title) item.name = update.title
       if (update.status) item.status = update.status
+      if (update._meta?.[PTC_META]) {
+        item.parentCallId = update._meta[PTC_META].parentCallId
+        item.rootCallId = update._meta[PTC_META].rootCallId
+      }
       if (update.rawInput !== undefined) item.input = update.rawInput
       if (update.content) item.output = clip(contentText(update.content))
       if (update.locations) item.locations = update.locations

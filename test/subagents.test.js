@@ -147,15 +147,15 @@ test('SubagentTracker evicts expired idle trees when polling stops', async (t) =
   assert.equal(tracker.timer, null)
 })
 
-test('SubagentTracker finds a session\'s children, links their calls and reports changes', async () => {
+for (const ptc of [false, true]) test(`SubagentTracker finds children and links ${ptc ? 'PTC internal' : 'native'} calls`, async () => {
   const home = await tempHome()
   const folder = path.join(home, 'sessions', '--C-work--')
   const log = (id) => path.join(folder, id, 'session.v4.jsonl.zstd')
   for (const id of ['parent', 'child-a', 'child-b', 'grandchild']) await fs.mkdir(path.join(folder, id), { recursive: true })
   await fs.writeFile(log('parent'), frame(
     header('parent'),
-    { type: 'tool/call', seq: 0, time: 1, data: { callId: 'call-a', name: 'subagent_claude', arguments: '{"description":"First"}' } },
-    { type: 'tool/call', seq: 1, time: 1, data: { callId: 'call-b', name: 'subagent', arguments: '{"description":"Second"}' } },
+    { type: ptc ? 'tool/ptc-dispatch-start' : 'tool/call', seq: 0, time: 1, data: { ...(ptc ? { subCallId: 'call-a', parentCallId: 'root', rootCallId: 'root' } : { callId: 'call-a' }), name: 'subagent_claude', arguments: '{"description":"First"}' } },
+    { type: ptc ? 'tool/ptc-dispatch-start' : 'tool/call', seq: 1, time: 1, data: { ...(ptc ? { subCallId: 'call-b', parentCallId: 'root', rootCallId: 'root' } : { callId: 'call-b' }), name: 'subagent', arguments: '{"description":"Second"}' } },
     // Catalog order need not follow call order; labels decide.
     { type: 'subagent/catalog', seq: 2, time: 2, data: { childId: 'child-b', childCreatedAt: 2, mode: 'one-shot', label: 'Second' } },
     { type: 'subagent/catalog', seq: 3, time: 2, data: { childId: 'child-a', childCreatedAt: 2, mode: 'one-shot', label: 'First' } },

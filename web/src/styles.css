@@ -335,6 +335,17 @@ kbd {
   color: var(--text);
 }
 
+.chip.ptc-chip.on {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.tool-row.ptc-child {
+  margin-left: 20px;
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+}
+
 .chip.wheeling {
   background: var(--bg-active);
   color: var(--text);

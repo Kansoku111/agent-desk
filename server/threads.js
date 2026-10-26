@@ -18,6 +18,7 @@ import {
 } from './thread-utils.js'
 import { turnUsage } from './usage.js'
 import { OUTPUT_SPEED_META } from './output-speed.js'
+import { TOOL_MODE_CONFIG, assertToolMode, assertToolModeApplied, toolModeOption } from './ptc.js'
 import { emptyScore, scoresUpTo } from '../shared/usage-score.js'
 export { carryoverText, describeError, isUndoable, restoreNoteText } from './thread-utils.js'
 
@@ -74,6 +75,7 @@ export class ThreadManager extends EventEmitter {
     for (const thread of index.threads ?? []) {
       thread.status = 'idle'
       thread.pendingApproval = false
+      thread.toolMode ??= 'native'
       this.threads.set(thread.id, thread)
       if (thread.sessionId) this.sessionIndex.set(thread.sessionId, thread.id)
     }
@@ -267,11 +269,12 @@ export class ThreadManager extends EventEmitter {
   // ---------------------------------------------------------------- commands
 
   /** `team`: the agent team (teams.js) this task works for as a child, as { id, childId }. */
-  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', team = null, ab = null }) {
+  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'native', team = null, ab = null }) {
     if (this.stopping) throw new Error('アプリを終了しています')
     await assertDirectory(workspace)
     if (this.stopping) throw new Error('アプリを終了しています')
     if (!PERMISSION_MODES.includes(permissionMode)) throw new Error('不明な権限モードです')
+    assertToolMode(toolMode, { ab, team })
     const now = Date.now()
     const thread = {
       id: randomUUID(),
@@ -280,6 +283,7 @@ export class ThreadManager extends EventEmitter {
       model: model ?? null,
       effort: effort ?? '',
       permissionMode,
+      toolMode,
       sessionId: null,
       createdAt: now,
       updatedAt: now,
@@ -306,7 +310,13 @@ export class ThreadManager extends EventEmitter {
   async #update(threadId, patch) {
     const thread = this.#available(threadId)
     const running = this.active.has(threadId)
+    if (patch.toolMode !== undefined) {
+      assertToolMode(patch.toolMode, thread)
+      if (running && patch.toolMode !== thread.toolMode) throw new Error('実行中はPTCを変更できません')
+      // Persist the choice now; apply and verify it immediately before the next prompt.
+    }
     if (thread.ab && (patch.permissionMode !== undefined || patch.model !== undefined)) throw new Error('ABの担当モデルと権限は変更できません')
+    if (patch.toolMode !== undefined) thread.toolMode = patch.toolMode
     if (typeof patch.title === 'string' && patch.title.trim()) thread.title = patch.title.trim().slice(0, 120)
     if (typeof patch.archived === 'boolean') thread.archived = patch.archived
     if (patch.permissionMode !== undefined && patch.permissionMode !== thread.permissionMode) {
@@ -814,6 +824,20 @@ export class ThreadManager extends EventEmitter {
     }
     this.sessionIndex.set(thread.sessionId, thread.id)
     if (options) this.#learnOptions(thread, options)
+
+    const toolMode = thread.toolMode ?? 'native'
+    assertToolMode(toolMode, thread)
+    const modeOption = toolModeOption(this.liveOptions.get(thread.sessionId))
+    // Older/unpatched runtimes remain usable in native mode only. Never send
+    // a PTC request without an explicit acknowledgement of the selection.
+    if (toolMode === 'ptc' || modeOption) {
+      if (modeOption?.currentValue !== toolMode) {
+        const changed = await runtime.setOption(thread.sessionId, TOOL_MODE_CONFIG, toolMode)
+        this.#checkRun(thread, active)
+        this.#learnOptions(thread, changed)
+      }
+      assertToolModeApplied(this.liveOptions.get(thread.sessionId), toolMode)
+    }
 
     // Model first: the effort choices depend on the model.
     let parsed = parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? [])

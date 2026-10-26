@@ -14,6 +14,7 @@ import { patchRetrySource } from '../server/retry-patch.js'
 import { patchOutputSpeedSource } from '../server/output-speed-patch.js'
 import { patchFsSearchSource } from '../server/fs-search-patch.js'
 import { patchGoalToolSource } from '../server/goal-tool-patch.js'
+import { patchPtcSource } from '../server/ptc-patch.js'
 
 const project = fileURLToPath(new URL('../', import.meta.url))
 
@@ -62,6 +63,7 @@ async function fixture(t) {
     'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js',
     'fs-search-hook.js', 'fs-search-patch.js', 'fs-search.js',
     'goal-tool-hook.js', 'goal-tool-patch.js',
+    'ptc-hook.js', 'ptc-patch.js',
   ].map((file) => `server/${file}`)]) {
     await fs.copyFile(path.join(project, file), path.join(root, file))
   }
@@ -117,10 +119,10 @@ async function fixture(t) {
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
   const { acpSource, llmSource, searchSource, goalToolSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
-    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js', 'fs-search-hook.js',
+    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'fs-search-hook.js',
   ])
   assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, search: searchSource, goalTool: goalToolSource }), {
-    acp: patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource)))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource),
+    acp: patchPtcSource(patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource))))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource),
   })
 })
 
@@ -146,6 +148,7 @@ for (const [name, field, change] of [
   ['goal-tool', 'goalTool', (source) => source.replace('Replacement cap; valid only with action edit.', 'changed upstream cap')],
   ['retry', 'llm', (source) => source.replace('function classifyPiAiError(message)', 'function upstreamClassifier(message)')],
   ['output-speed', 'acp', (source) => source.replace('requestSignal?.removeEventListener', 'requestSignal?.upstreamRemoveEventListener')],
+  ['ptc', 'acp', (source) => source.replace('return this.modelControl.set(configId, value, signal);', 'return upstreamSetConfig();')],
   ['fs-search', 'search', (source) => source.replace('async function runRipgrep(', 'async function upstreamSearch(')],
 ]) {
   test(`fresh verify rejects changed upstream ${name} fixture instead of accepting model-only success`, async (t) => {
@@ -214,7 +217,7 @@ test('retry check export is mandatory, not merely an optional startup warning', 
   await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /isRetryableAssistantError is unavailable/)
 })
 
-for (const name of ['goal', 'goal-tool']) {
+for (const name of ['goal', 'goal-tool', 'ptc']) {
   test(`the gate observes actual ${name} hook transformations, not just standalone patch functions`, async (t) => {
     const { root } = await fixture(t)
     const hook = path.join(root, 'server', `${name}-hook.js`)

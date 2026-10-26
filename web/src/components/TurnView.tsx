@@ -102,7 +102,7 @@ const ToolRow = memo(function ToolRow({ item, workspace }: { item: ToolItem; wor
   const failed = item.status === 'failed'
   const expandable = Boolean(summary.detail)
   return (
-    <div className={`tool-row ${failed ? 'failed' : ''}`}>
+    <div className={`tool-row ${item.parentCallId ? 'ptc-child' : ''} ${failed ? 'failed' : ''}`} data-parent-call-id={item.parentCallId}>
       <div className="tool-head">
         <button
           type="button"

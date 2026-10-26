@@ -26,8 +26,8 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
       return { subagents: await subagents.list(thread.id, thread.sessionId) }
     },
 
-    'thread.create': async ({ workspace, model, effort, permissionMode, text, images }) => {
-      const thread = await threads.create({ workspace, model, effort, permissionMode })
+    'thread.create': async ({ workspace, model, effort, permissionMode, toolMode, text, images }) => {
+      const thread = await threads.create({ workspace, model, effort, permissionMode, toolMode })
       try {
         await threads.send(thread.id, { text: text ?? '', images: await saveImages(images) })
       } catch (error) {

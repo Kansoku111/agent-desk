@@ -3,6 +3,7 @@ import type { UsageDisplay, UsageScore } from '../../shared/usage-score.js'
 export type { UsageScore } from '../../shared/usage-score.js'
 
 export type PermissionMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+export type ToolMode = 'native' | 'ptc'
 export type ThreadStatus = 'idle' | 'running' | 'error'
 export type Theme = 'system' | 'light' | 'dark'
 
@@ -33,6 +34,7 @@ export interface ThreadSummary {
   model: string | null
   effort: string
   permissionMode: PermissionMode
+  toolMode?: ToolMode
   sessionId: string | null
   createdAt: number
   updatedAt: number
@@ -235,6 +237,8 @@ export interface PermissionOption {
 export interface ToolItem {
   type: 'tool'
   id: string
+  parentCallId?: string
+  rootCallId?: string
   name: string
   kind: string
   status: 'pending' | 'in_progress' | 'completed' | 'failed'
