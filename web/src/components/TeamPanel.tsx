@@ -26,9 +26,11 @@ const PROVIDER_LABEL = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude API', 
 
 const VERIFICATION_LABEL: Record<string, string> = { passed: '成功', failed: '失敗', stale: '再検証が必要', unverified: '未実行', cancelled: '停止', error: 'エラー' }
 
-const isActive = (state: TeamChildState) => state === 'running' || state === 'approval'
+/** Verification keeps working after the agent's turn ends; use running visuals, not idle ones. */
+const childDisplayState = (child: TeamChild): TeamChildState => child.execution?.phase === 'verifying' ? 'running' : child.state
+const isActive = (child: TeamChild) => ['running', 'approval'].includes(childDisplayState(child))
 /** What 全停止 stops: work under way, and work about to go on by itself. */
-const isStoppable = (state: TeamChildState) => isActive(state) || state === 'resuming'
+const isStoppable = (child: TeamChild) => isActive(child) || child.state === 'resuming'
 
 /** An idle child whose last turn ended in a report is waiting for the leader's audit. */
 export function stateLabel(child: TeamChild) {
@@ -116,7 +118,7 @@ export function BackToLeader({ teamId, childId }: { teamId: string; childId?: st
 export function TeamToggle({ team }: { team: TeamSummary | undefined }) {
   const open = useStore((state) => state.teamPanel)
   if (!team || (!team.children.length && !team.execution)) return null
-  const running = team.children.filter((child) => isActive(child.state) || child.execution?.phase === 'verifying').length
+  const running = team.children.filter(isActive).length
   return (
     <button
       type="button"
@@ -203,18 +205,18 @@ function Notices({ team }: { team: TeamSummary }) {
 }
 
 function ChildCard({ child }: { child: TeamChild }) {
-  const quiet = !isActive(child.state)
+  const quiet = !isActive(child)
   const opens = Boolean(child.taskId) && child.state !== 'removed'
   return (
     <button
       type="button"
-      className={`subagent-card team-card state-${child.state} ${quiet ? 'quiet' : ''}`}
+      className={`subagent-card team-card state-${childDisplayState(child)} ${quiet ? 'quiet' : ''}`}
       onClick={() => openTeamChild(child)}
       disabled={!opens}
       title={opens ? `${child.name} の作業を開く` : undefined}
     >
       <div className="subagent-card-head">
-        <span className="team-card-status" title={stateLabel(child)}><StateIcon state={child.state} /></span>
+        <span className="team-card-status" title={stateLabel(child)}><StateIcon state={childDisplayState(child)} /></span>
         <span className="team-card-name">{child.name}</span>
         <span className={`team-provider ${child.provider}`}>{PROVIDER_LABEL[child.provider]}</span>
         <span className="subagent-time">{stateLabel(child)}</span>
@@ -288,8 +290,8 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
   const [editing, setEditing] = useState(false)
   const [usage, setUsage] = useState(false)
   const [stopping, setStopping] = useState(false)
-  const running = team.children.filter((child) => isActive(child.state) || child.execution?.phase === 'verifying').length
-  const stoppable = team.children.filter((child) => isStoppable(child.state) || child.execution?.phase === 'verifying').length
+  const running = team.children.filter(isActive).length
+  const stoppable = team.children.filter(isStoppable).length
   const children = [...team.children].sort((a, b) => a.createdAt - b.createdAt)
   return (
     <>
@@ -380,18 +382,18 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
   const trunkEnd = children.length ? busY(rows - 1) : PAD + LEADER_H
   // Lines to working children are drawn last, over the quiet ones they share a bus with.
   const order = children.map((child, index) => ({ child, box: boxes[index] }))
-    .sort((a, b) => Number(isActive(a.child.state)) - Number(isActive(b.child.state)))
+    .sort((a, b) => Number(isActive(a.child)) - Number(isActive(b.child)))
   return (
     <Modal title="チームの構成" onClose={onClose} width={Math.max(440, Math.min(width + 60, 980))} className="team-diagram-modal">
       <div className="team-diagram-scroll">
         <div className="team-diagram" style={{ width, height }}>
           <svg className="team-lines" width={width} height={height} aria-hidden="true">
             {children.length > 0 && (
-              <path className={`team-line ${lead === 'running' || children.some((child) => isActive(child.state)) ? 'live' : ''}`}
+              <path className={`team-line ${lead === 'running' || children.some((child) => isActive(child)) ? 'live' : ''}`}
                 d={`M ${cx} ${PAD + LEADER_H} V ${trunkEnd}`} />
             )}
             {order.map(({ child, box }) => (
-              <path key={child.id} className={`team-line state-${child.state} ${isActive(child.state) ? 'live' : ''}`}
+              <path key={child.id} className={`team-line state-${childDisplayState(child)} ${isActive(child) ? 'live' : ''}`}
                 d={`M ${cx} ${busY(box.row)} H ${box.center} V ${box.y}`} />
             ))}
           </svg>
@@ -411,7 +413,7 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
               <button
                 key={child.id}
                 type="button"
-                className={`team-node provider-${child.provider} state-${child.state} ${isActive(child.state) ? 'live' : 'quiet'}`}
+                className={`team-node provider-${child.provider} state-${childDisplayState(child)} ${isActive(child) ? 'live' : 'quiet'}`}
                 style={{ left: box.x, top: box.y, width: BOX_W, height: BOX_H }}
                 disabled={!opens}
                 title={`${child.name}: ${child.title}`}
@@ -421,7 +423,7 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
                 }}
               >
                 <div className="team-node-head">
-                  <StateIcon state={child.state} size={13} />
+                  <StateIcon state={childDisplayState(child)} size={13} />
                   <span className="team-node-model">{child.modelName}</span>
                 </div>
                 <div className="team-node-title">{child.title}</div>
