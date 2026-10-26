@@ -6,11 +6,12 @@ import { sameToken } from './remote.js'
 const DEV_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
 
 // Actions that happen on the PC itself (dialogs, windows, the PC's browser) or
-// change remote access; a phone gets an explanation instead.
+// change remote access; a phone gets an explanation instead. Build-and-restart
+// is allowed on both listeners; it uses the same authenticated RPC and restarter.
 const PC_ONLY = new Set([
   'workspace.pick', 'folder.pick', 'workspace.open', 'file.open', 'system.openUrl', 'chatgpt.login',
   'codex.login', 'codex.cancel', 'codex.logout', 'chatgpt.logout',
-  'remote.set', 'remote.rotate', 'remote.recheck', 'remote.allowFirewall', 'updates.installApp', 'app.restart',
+  'remote.set', 'remote.rotate', 'remote.recheck', 'remote.allowFirewall', 'updates.installApp',
 ])
 
 /** The socket server; `clients` and `handlers` are index.js's, `dev` is the dev-mode flag. */

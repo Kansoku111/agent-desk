@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Authenticated phones can use Open → Build and restart with the same confirmation as the PC. Remote menus keep workspace-path copying and restart while terminal launching and other PC-only RPC restrictions remain unchanged.
 - Eco guidance prioritizes inexpensive children for investigation and implementation while leaving research depth, planning detail and review needs to the leader. Eco launches no longer include TM parallel-writer or mid-tier advice. Children receive their work unit's captured verification commands and working directories at new-unit/conversation boundaries, with focused checks preferred but necessary full testing still allowed. Research reports can include evidence-backed implementation ideas; no presets, review caps, automatic acceptance or verification bypasses are added.
 
 ### Fixed

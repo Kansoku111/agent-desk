@@ -8,7 +8,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, openExternal, request, setState, toast, uploadAttachment, useRemote, useStore } from '../store'
+import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, openExternal, request, setState, toast, uploadAttachment, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import type { Attachment, TerminalSummary } from '../types'
 import { copyText, workspaceLabel } from '../util'
@@ -113,7 +113,6 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
   const sidebarOpen = useStore((state) => state.sidebarOpen)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
-  const remote = useRemote()
   const [renaming, setRenaming] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [title, setTitle] = useState(terminal.title)
@@ -171,7 +170,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
         >
           {mode === 'chat' ? <SquareTerminal size={16} /> : <MessageSquare size={16} />}
         </button>
-        {!remote && <OpenInMenu workspace={terminal.workspace} />}
+        <OpenInMenu workspace={terminal.workspace} />
         <Dropdown
           placement="bottom"
           align="right"

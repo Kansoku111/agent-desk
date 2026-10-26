@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowDown, Clock3, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, Send, Square, X } from 'lucide-react'
-import { act, isTouch, setState, teamChildOf, useRemote, useStore } from '../store'
+import { act, isTouch, setState, teamChildOf, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import { workspaceLabel } from '../util'
 import { StateIcon, stateLabel, TeamPanel, TeamToggle } from './TeamPanel'
@@ -22,7 +22,6 @@ export function AgentView({ taskId }: { taskId: string }) {
   const teamPanel = useStore((state) => state.teamPanel)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
-  const remote = useRemote()
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const [showJump, setShowJump] = useState(false)
@@ -81,7 +80,7 @@ export function AgentView({ taskId }: { taskId: string }) {
               <Square size={13} /> 止める
             </button>
           )}
-          {!remote && <OpenInMenu workspace={team.workspace} />}
+          <OpenInMenu workspace={team.workspace} />
         </div>
       </header>
       <div className="thread-body">

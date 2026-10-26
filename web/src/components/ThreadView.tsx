@@ -27,6 +27,7 @@ function useGit(workspace: string, refreshKey: unknown) {
 }
 
 export function OpenInMenu({ workspace }: { workspace: string }) {
+  const remote = useRemote()
   const targets = useStore((state) => state.server?.openTargets)
   return (
     <Dropdown
@@ -42,7 +43,7 @@ export function OpenInMenu({ workspace }: { workspace: string }) {
     >
       {(close) => (
         <>
-          {targets?.terminal && (
+          {!remote && targets?.terminal && (
             <MenuItem
               icon={<SquareTerminal size={14} />}
               label="ターミナル"
@@ -110,7 +111,6 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
   const git = useGit(thread.workspace, thread.status === 'running' ? 'running' : thread.updatedAt)
-  const remote = useRemote()
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
   useEffect(() => setTitle(thread.title), [thread.title])
@@ -159,7 +159,7 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
       <div className="header-right">
         {panelTeam && <TeamToggle team={panelTeam} />}
         <SubagentToggle threadId={thread.id} />
-        {!remote && <OpenInMenu workspace={thread.workspace} />}
+        <OpenInMenu workspace={thread.workspace} />
         <Dropdown
           placement="bottom"
           align="right"

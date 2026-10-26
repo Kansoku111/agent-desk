@@ -1,5 +1,5 @@
 // Open via Vite: /@fs/<repository>/test/fixtures/ab-ui.html?t=fixture
-// No real models, files or server state are touched. In DevTools: await abTest.run(), or await abTest.openMenus() for menu-only checks.
+// No real models, files or server state are touched. In DevTools: await abTest.run(), await abTest.openMenus(), or await abTest.remoteRestart() for the confirmed remote RPC.
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import '../../web/src/styles.css'
@@ -80,6 +80,7 @@ const choose = async (label: string) => {
 const api = {
   requests, render,
   async openMenus() {
+    const restartsBefore = count('app.restart')
     const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
     const writes: string[] = []
     let rejectCopy = false
@@ -108,15 +109,20 @@ const api = {
       const opensAfterTerminal = count('workspace.open')
       await choose('ビルドして再起動')
       check(store.getState().restartConfirm === true, 'AB restart asks for confirmation')
-      check(count('workspace.open') === opensAfterTerminal && count('app.restart') === 0 && count('restart') === 0, 'AB restart does not run anything yet')
+      check(count('workspace.open') === opensAfterTerminal && count('app.restart') === restartsBefore && count('restart') === 0, 'AB restart does not run anything yet')
       store.setState({ restartConfirm: false })
       store.setState({ server: { ...server, app: { ...server.app, remote: true } } })
       await render('view')
-      check(![...document.querySelectorAll('.ab-header button')].some((button) => button.textContent?.trim() === '開く'), 'AB open menu hidden on remote')
+      const remoteMenu = await openMenu()
+      check([...remoteMenu.menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent).join('/') === label + '/ビルドして再起動', 'AB remote menu hides PC terminal only')
+      remoteMenu.trigger.click(); await tick()
+      await choose('ビルドして再起動')
+      check(store.getState().restartConfirm === true && count('app.restart') === restartsBefore, 'AB remote restart asks for confirmation without RPC')
+      store.setState({ restartConfirm: false })
       store.setState({ server })
       await render('view')
       check([...document.querySelectorAll('.ab-header button')].some((button) => button.textContent?.trim() === '開く'), 'AB open menu shown on local')
-      passed.push('AB open menu: terminal target / restart confirmation only / hidden on remote')
+      passed.push('AB open menu: terminal target / restart confirmation only / remote restart without PC terminal')
       for (const kind of ['view', 'thread']) {
         for (const terminal of [true, false, undefined]) {
           store.setState({ server: { ...server, openTargets: terminal === undefined ? undefined : { terminal } }, toasts: [] })
@@ -145,8 +151,12 @@ const api = {
         rejectCopy = false
         store.setState({ server: { ...server, app: { ...server.app, remote: true } } })
         await render(kind)
-        check(![...document.querySelectorAll('header button')].some((button) => button.textContent?.trim() === '開く'), kind + ' open menu hidden on remote')
-        passed.push(kind + ': exact path / success and failure notifications / closes / terminal independent / label fits / remote hidden')
+        const { menu } = await openMenu()
+        check([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent).join('/') === label + '/ビルドして再起動', kind + ' remote menu keeps copy and restart only')
+        ;[...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent === 'ビルドして再起動')!.click(); await tick()
+        check(store.getState().restartConfirm === true && count('app.restart') === restartsBefore, kind + ' remote restart only opens confirmation')
+        store.setState({ restartConfirm: false })
+        passed.push(kind + ': exact path / success and failure notifications / closes / terminal independent / label fits / remote restart')
       }
     } finally {
       if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor)
@@ -155,6 +165,39 @@ const api = {
       await render('view')
     }
     return passed
+  },
+  async remoteRestart() {
+    const { App } = await import('../../web/src/App')
+    const before = count('app.restart')
+    const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((entry) => entry.textContent === text)!
+    store.setState({ server: { ...server, app: { ...server.app, remote: true } }, connection: 'open', route: { view: 'thread', id: thread.id }, sidebarOpen: false, toasts: [] })
+    try {
+      root.render(<App />); await tick()
+      const { trigger, menu } = await openMenu()
+      for (const element of [trigger, menu]) {
+        const rect = element.getBoundingClientRect()
+        check(rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight, 'remote thread trigger and menu fit viewport')
+      }
+      trigger.click(); await tick()
+      await choose('ビルドして再起動')
+      const dialog = document.querySelector('[role="dialog"]')
+      check(dialog?.textContent?.includes('実行中のタスクは停止します。'), 'remote restart warns that running tasks stop')
+      check(count('app.restart') === before, 'opening confirmation sends no restart RPC')
+      button('キャンセル').click(); await tick()
+      check(!document.querySelector('[role="dialog"]') && count('app.restart') === before, 'cancel does not restart')
+      await choose('ビルドして再起動')
+      button('再起動').click(); await tick()
+      check(count('app.restart') === before + 1 && !store.getState().restartConfirm, 'confirm sends exactly one restart RPC and closes')
+      fail = 'app.restart'
+      await choose('ビルドして再起動')
+      button('再起動').click(); await tick()
+      check(count('app.restart') === before + 2 && store.getState().toasts.some((entry) => entry.tone === 'error' && entry.text.includes('fixture failure')), 'remote restart failure is shown')
+      return ['remote restart: warning / cancel without RPC / confirm once / failure notification']
+    } finally {
+      fail = ''
+      store.setState({ server, restartConfirm: false, toasts: [] })
+      await render('view')
+    }
   },
   async scroll() {
     const longRun = { ...run, text: Array.from({ length: 80 }, (_, index) => 'Paragraph ' + index).join('\n\n') }
@@ -271,6 +314,7 @@ const api = {
     check(document.querySelector<HTMLSelectElement>('[aria-label="親の推論レベル"]')!.value === 'high' && document.querySelector<HTMLSelectElement>('[aria-label="子の推論レベル"]')!.value === 'low', 'eco restored efforts')
     passed.push('eco independent effort persistence / execution payload / ordered pending saves / duplicate start')
     passed.push(...await api.openMenus())
+    passed.push(...await api.remoteRestart())
     return passed
   },
 }
