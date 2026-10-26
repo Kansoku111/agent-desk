@@ -4573,21 +4573,6 @@ button.terminal-status.active {
   vertical-align: 1px;
 }
 
-/* A team child's way back to its leader: first in the header, kept on a narrow screen. */
-.button.back-to-leader {
-  position: relative;
-  flex: none;
-  gap: 6px;
-  border: 1px solid color-mix(in srgb, var(--focus) 45%, var(--border));
-  color: var(--focus);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.button.back-to-leader:hover {
-  background: color-mix(in srgb, var(--focus) 12%, transparent);
-}
-
 .team-attention {
   width: 7px;
   height: 7px;
@@ -4706,6 +4691,12 @@ button.terminal-status.active {
 
 .team-card.state-error {
   border-color: color-mix(in srgb, var(--red) 50%, var(--border));
+}
+
+.team-card[aria-current="page"] {
+  opacity: 1;
+  background: color-mix(in srgb, var(--focus) 10%, var(--bg-elevated));
+  box-shadow: inset 3px 0 var(--focus);
 }
 
 .team-card-status {

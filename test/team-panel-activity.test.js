@@ -13,7 +13,7 @@ const modules = {
   react: { memo: (fn) => fn, useState: (value) => [value, () => {}] },
   'react/jsx-runtime': { jsx, jsxs: jsx },
   'lucide-react': { Loader2: 'spinner', CircleDot: 'idle', CheckCircle2: 'closed', ShieldAlert: 'approval', RefreshCw: 'resuming' },
-  '../store': { useStore: (select) => select({ teamPanel: true, server: { threads: [] } }) },
+  '../store': { useStore: (select) => select({ teamPanel: true, route: { view: 'thread', id: 'task' }, server: { threads: [] } }) },
 }
 const panel = {}
 new Function('require', 'exports', outputText)((name) => modules[name] ?? {}, panel)

@@ -7,24 +7,27 @@ import ts from 'typescript'
 async function harness(execution) {
   const team = { id: 'team', leaderId: 'leader', leaderKind: 'thread', execution, approvals: [], asks: [],
     children: [{ id: 'gpt', kind: 'thread', taskId: 'gpt-task' }, { id: 'claude', kind: 'agent', taskId: 'claude-task' }] }
-  const state = { teamPanel: true, subagentPanel: true, turns: {}, agentTurns: {},
+  const state = { route: { view: 'thread', id: 'leader' }, teamPanel: true, subagentPanel: true, turns: {}, agentTurns: {},
     server: { teams: [team], threads: [
       { id: 'leader', title: 'Leader' },
       { id: 'gpt-task', title: 'Child', team: { id: team.id, childId: 'gpt' } },
       { id: 'standalone', title: 'Standalone' },
-    ], app: {}, settings: {} } }
+    ], terminals: [], catalog: { models: [] }, app: {}, settings: {} } }
   const jsx = (type, props) => ({ type, props })
   const react = { memo: (fn) => fn, useState: (value) => [value, () => {}],
     useRef: () => ({ current: null }), useEffect() {}, useLayoutEffect() {} }
   const store = { useStore: (select) => select(state), useRemote: () => false,
     setTeamPanel: (open) => { state.teamPanel = open },
+    navigate: (route) => { state.route = route },
+    openTeamChild: (child) => { state.route = { view: child.kind, id: child.taskId } },
     teamChildOf: (server, taskId) => {
       const child = team.children.find((entry) => entry.kind === 'agent' && entry.taskId === taskId)
       return child ? { team, child } : null
     } }
   const modules = { react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '../store': store,
     '../drafts': { useDraft: () => ['', () => {}], useImeField: () => ({}) },
-    '../util': { workspaceLabel: () => 'Workspace' } }
+    '../util': { workspaceLabel: () => 'Workspace' },
+    './TerminalPickers': { claudeModelName: () => 'Claude' } }
   async function load(name, extra = '') {
     const source = await fs.readFile(new URL('../web/src/components/' + name + '.tsx', import.meta.url), 'utf8')
     const { outputText } = ts.transpileModule(source + extra, {
@@ -34,7 +37,7 @@ async function harness(execution) {
     new Function('require', 'exports', outputText)((name) => modules[name] ?? {}, exports)
     return exports
   }
-  const panel = await load('TeamPanel')
+  const panel = await load('TeamPanel', '\nexport { ChildCard }')
   modules['./TeamPanel'] = panel
   const thread = await load('ThreadView', '\nexport { Header }')
   const agent = await load('AgentView')
@@ -70,4 +73,38 @@ for (const mode of ['TM', 'eco']) {
     const h = await harness(mode === 'eco' ? {} : undefined)
     assert.equal(h.find(h.thread.ThreadView({ threadId: 'standalone' }), h.panel.TeamPanel), undefined)
   })
+}
+
+function nodes(node, match) {
+  if (!node || typeof node !== 'object') return []
+  return [...(match(node) ? [node] : []), ...[node.props?.children].flat(Infinity).flatMap((child) => nodes(child, match))]
+}
+
+for (const mode of ['TM', 'eco']) {
+  for (const kind of ['thread', 'terminal']) {
+    test(mode + '/' + kind + ': leader is the first card and sidebar selection follows navigation', async () => {
+      const h = await harness(mode === 'eco' ? {} : undefined)
+      h.team.leaderKind = kind
+      if (kind === 'terminal') h.state.server.terminals.push({ id: 'leader', title: 'Claude leader', activity: 'idle', state: 'running' })
+      const cards = () => nodes(h.panel.TeamPanel({ team: h.team }), (node) => node.type === h.panel.ChildCard || node.props?.title === 'リーダーの会話を開く')
+      assert.equal(cards().length, 3)
+      assert.equal(cards()[0].props.title, 'リーダーの会話を開く')
+      for (const child of h.team.children) {
+        const card = cards().find((card) => card.props.child === child)
+        assert.equal(card.props.selected, false)
+        h.panel.ChildCard(card.props).props.onClick()
+        assert.deepEqual(h.state.route, { view: child.kind, id: child.taskId })
+        assert.equal(h.state.teamPanel, true)
+        assert.equal(cards()[0].props['aria-current'], undefined)
+        const selected = cards().find((card) => card.props.child === child)
+        assert.equal(h.panel.ChildCard(selected.props).props['aria-current'], 'page')
+      }
+      cards()[0].props.onClick()
+      assert.deepEqual(h.state.route, { view: kind, id: 'leader' })
+      assert.equal(cards()[0].props['aria-current'], 'page')
+      assert.equal(h.state.teamPanel, true)
+      assert.ok(cards().slice(1).every((card) => !card.props.selected))
+      assert.equal(h.panel.BackToLeader, undefined)
+    })
+  }
 }

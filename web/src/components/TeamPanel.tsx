@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import {
-  ArrowLeft, CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Users, X, XCircle,
+  CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Users, X, XCircle,
 } from 'lucide-react'
 import { act, navigate, openTeamChild, setTeamPanel, useStore } from '../store'
 import type { AppState, TeamChild, TeamChildState, TeamSummary, TerminalSummary, ThreadSummary } from '../types'
@@ -94,26 +94,6 @@ export function useLedTeam(terminalId: string) {
 /** Whether a team needs the user: an approval nobody decided yet, or a question from the leader. */
 export const teamNeedsUser = (team: TeamSummary | undefined) => Boolean(team && (team.approvals.length || team.asks.length || team.delivery === 'failed'))
 
-/** First in a child's header: one button back to the team's leader (stays on a narrow screen, unlike the chips). */
-export function BackToLeader({ teamId, childId }: { teamId: string; childId?: string }) {
-  const team = useTeam(teamId)
-  const leader = useLeader(team)
-  const child = team?.children.find((entry) => entry.id === childId)
-  if (!team) return null
-  return (
-    <button
-      type="button"
-      className="button ghost back-to-leader"
-      title={`${child ? `チームの子「${child.name}」。` : ''}リーダー「${leader?.title ?? ''}」の会話に戻ります`}
-      onClick={() => navigate(leaderRoute(team))}
-    >
-      <ArrowLeft size={14} />
-      <span>リーダーに戻る</span>
-      {teamNeedsUser(team) && <span className="team-attention" aria-label="確認が必要です" />}
-    </button>
-  )
-}
-
 /** Shows or hides the team panel from either the leader or a child. */
 export function TeamToggle({ team }: { team: TeamSummary | undefined }) {
   const open = useStore((state) => state.teamPanel)
@@ -204,13 +184,14 @@ function Notices({ team }: { team: TeamSummary }) {
   )
 }
 
-function ChildCard({ child }: { child: TeamChild }) {
+function ChildCard({ child, selected }: { child: TeamChild; selected: boolean }) {
   const quiet = !isActive(child)
   const opens = Boolean(child.taskId) && child.state !== 'removed'
   return (
     <button
       type="button"
       className={`subagent-card team-card state-${childDisplayState(child)} ${quiet ? 'quiet' : ''}`}
+      aria-current={selected ? 'page' : undefined}
       onClick={() => openTeamChild(child)}
       disabled={!opens}
       title={opens ? `${child.name} の作業を開く` : undefined}
@@ -286,6 +267,11 @@ function UsageDialog({ onClose }: { onClose: () => void }) {
 
 /** The right-hand panel beside a leader or child: all children, live, and what needs the user. */
 export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }) {
+  const leader = useLeader(team)
+  const server = useStore((state) => state.server)
+  const route = useStore((state) => state.route)
+  const target = leaderRoute(team)
+  const status = leaderState(leader)
   const [diagram, setDiagram] = useState(false)
   const [editing, setEditing] = useState(false)
   const [usage, setUsage] = useState(false)
@@ -325,7 +311,24 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
           </div>
           <PtcToggle mode={team.config?.toolMode} disabled={team.toolModeBusy} onChange={(toolMode) => act('team.update', { teamId: team.id, patch: { toolMode } })} />
           <Notices team={team} />
-          {children.map((child) => <ChildCard key={child.id} child={child} />)}
+          <button
+            type="button"
+            className={`subagent-card team-card state-${status}`}
+            aria-current={route.view === target.view && route.id === target.id ? 'page' : undefined}
+            onClick={() => navigate(target)}
+            title="リーダーの会話を開く"
+          >
+            <div className="subagent-card-head">
+              <span className="team-card-status"><Crown size={14} /></span>
+              <span className="team-card-name">リーダー</span>
+              {teamNeedsUser(team) && <span className="team-attention" aria-label="確認が必要です" />}
+              <span className="subagent-time"><StateIcon state={status} size={12} /> {STATE_LABEL[status]}</span>
+            </div>
+            <div className="subagent-card-title">{leader?.title ?? 'リーダー'}</div>
+            <div className="subagent-card-activity">{leaderModel(server, leader)}</div>
+            <ChevronRight size={14} className="subagent-card-chev" />
+          </button>
+          {children.map((child) => <ChildCard key={child.id} child={child} selected={route.view === child.kind && route.id === child.taskId} />)}
         </div>
       </aside>
       {diagram && <TeamDiagram team={team} onClose={() => setDiagram(false)} />}

@@ -3,7 +3,7 @@ import { ArrowDown, Clock3, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen,
 import { act, isTouch, setState, teamChildOf, useRemote, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import { workspaceLabel } from '../util'
-import { BackToLeader, StateIcon, stateLabel, TeamPanel, TeamToggle } from './TeamPanel'
+import { StateIcon, stateLabel, TeamPanel, TeamToggle } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
 import { TurnView } from './TurnView'
 
@@ -64,7 +64,6 @@ export function AgentView({ taskId }: { taskId: string }) {
               <PanelLeftOpen size={16} />
             </button>
           )}
-          <BackToLeader teamId={team.id} childId={child.id} />
           <span className="cl-mark" aria-hidden="true">CL</span>
           <h1 className="thread-heading" title={child.title}>{child.name === child.title ? child.title : `${child.name}: ${child.title}`}</h1>
           <span className="header-chip" title={team.workspace}><FolderOpen size={13} />{workspaceLabel(team.workspace, myPc, names)}</span>

@@ -15,7 +15,7 @@ import { copyText, workspaceLabel } from '../util'
 import { sendTerminalMessage } from '../terminal-send'
 import { ConfirmDialog } from './Modal'
 import { Dropdown, MenuItem } from './Popover'
-import { BackToLeader, TeamPanel, TeamToggle, useLedTeam } from './TeamPanel'
+import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
 import { TerminalChat, useConversation } from './TerminalChat'
 import { TerminalModelPicker } from './TerminalPickers'
@@ -124,6 +124,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
   }
   const running = terminal.state === 'running'
   const team = useLedTeam(terminal.id)
+  const panelTeam = useTeam(terminal.team?.id) ?? team
   const leads = terminal.team?.role === 'leader'
   return (
     <header className="main-header">
@@ -133,7 +134,6 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
             <PanelLeftOpen size={16} />
           </button>
         )}
-        {terminal.team?.role === 'child' && <BackToLeader teamId={terminal.team.id} childId={terminal.team.childId} />}
         {leads
           ? <span className="cl-mark tm-mark" title={team?.execution ? 'エコモード' : 'エージェントチームのリーダー（Claude Code）'}>{team?.execution ? 'eco' : 'TM'}</span>
           : <span className="cl-mark" aria-hidden="true">CL</span>}
@@ -161,7 +161,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
         <StatusChip terminal={terminal} />
       </div>
       <div className="header-right">
-        {leads && <TeamToggle team={team} />}
+        {panelTeam && <TeamToggle team={panelTeam} />}
         <button
           type="button"
           className="icon-button"
@@ -432,7 +432,8 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
     } catch {}
   }
   const conversation = useConversation(terminalId, terminal, !screen)
-  const team = useLedTeam(terminalId)
+  const ledTeam = useLedTeam(terminalId)
+  const team = useTeam(terminal?.team?.id) ?? ledTeam
   const teamPanel = useStore((state) => state.teamPanel)
   const sizeRef = useRef<() => Size | null>(() => null)
 

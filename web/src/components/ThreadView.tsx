@@ -8,7 +8,7 @@ import { undoableRestore, workspaceLabel } from '../util'
 import { Composer } from './Composer'
 import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
-import { BackToLeader, TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
+import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
 import { TurnView } from './TurnView'
 import { scoresUpTo } from '../../../shared/usage-score.js'
 
@@ -120,7 +120,6 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
             <PanelLeftOpen size={16} />
           </button>
         )}
-        {thread.team?.childId && <BackToLeader teamId={thread.team.id} childId={thread.team.childId} />}
         {team && <span className="cl-mark tm-mark" title={team.execution ? 'エコモード' : 'エージェントチームのリーダー'}>{team.execution ? 'eco' : 'TM'}</span>}
         {renaming
           ? (
