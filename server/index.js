@@ -359,7 +359,7 @@ async function applyHomePatch() {
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
   // Read by each subagent_gpt call, so no runtime restarts for it.
   await writeGptSubagentPatch(paths.gptSubagentPatch, { subagents, persona, subagentsEnabled: settings.subagentsEnabled !== false })
-  const abChanged = await writeAbPatches(paths, { subagents })
+  const abChanged = await writeAbPatches(paths, { subagents, persona })
   return home || children || abChanged
 }
 await applyHomePatch()

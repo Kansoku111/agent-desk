@@ -169,6 +169,37 @@ test('task error stays actionable instead of the generic wait-or-switch-model su
   assert.match(accounts, /Manage usage/)
 })
 
+test('actual GPT transport preserves optional escalation controls in native and PTC schemas', async () => {
+  for (const name of ['pwsh', 'run_code']) {
+    const required = name === 'run_code' ? ['code', 'description'] : ['command', 'description']
+    const properties = Object.fromEntries([...required, 'justification'].map(key => [key, { type: 'string' }]))
+    properties.sandbox_permissions = { type: 'string', enum: ['workspace-write', 'danger-full-access'] }
+    let sent, upstream
+    const options = withSiwc(model, { maxRetries: 0, onPayload: (payload) => { upstream = payload; return payload } }, {
+      client: { auth: async () => ({ access_token: 'fixture-only' }) },
+      fetch: async (_url, init) => {
+        sent = JSON.parse(init.body)
+        const response = { id: 'fixture', status: 'completed', output: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } }
+        return new Response('data: ' + JSON.stringify({ type: 'response.completed', response }) + '\n\n', { headers: { 'content-type': 'text/event-stream' } })
+      },
+    })
+    const result = await stream(model, {
+      messages: [
+        { role: 'system', content: '', toolsAdded: [{ name, description: 'Inspect fixture source', parameters: { type: 'object', properties, required, additionalProperties: false } }], timestamp: 0 },
+        { role: 'user', content: 'Inspect fixture source', timestamp: 0 },
+      ],
+    }, options).result()
+    assert.equal(result.stopReason, 'stop', result.errorMessage)
+    assert.equal(upstream.tools[0].strict, undefined, 'exercise the installed provider default that omits strict')
+    const tool = sent.tools.find(tool => tool.name === 'agent_desk').tools[0]
+    assert.equal(tool.name, name)
+    assert.equal(tool.strict, false)
+    assert.deepEqual(tool.parameters.required, required)
+    assert.deepEqual(tool.parameters.properties.sandbox_permissions.enum, ['workspace-write', 'danger-full-access'])
+    assert.ok(!tool.parameters.required.includes('sandbox_permissions'))
+  }
+})
+
 test('HTTP429 and streamed usage-limit errors reach actual pi-ai task error with actionable Japanese link, no retries', async () => {
   for (const streamed of [false, true]) {
     let calls = 0

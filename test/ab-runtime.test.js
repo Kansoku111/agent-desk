@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import YAML from 'yaml'
-import { abPatch } from '../server/dsh-config.js'
+import { abPatch, homePatch } from '../server/dsh-config.js'
 import { abToolAllowed, apply } from '../server/ab-policy-plugin.js'
 import { AbRunner, abClaudeArgs } from '../server/ab-runner.js'
 import { AB_CONSULT } from '../server/ab.js'
@@ -37,6 +37,31 @@ test('AB guard fails closed for unknown tools and rejects sandbox escalation', (
   assert.equal(guard({ name: 'run_code', arguments: {} }), undefined)
   assert.ok(guard({ name: 'run_code', arguments: { sandbox_permissions: 'workspace-write' } }))
   assert.ok(guard({ name: 'subagent', arguments: {} }))
+})
+
+test('AB tells every role its standing permissions and how to avoid escalation', () => {
+  for (const writable of [false, true]) {
+    const sections = []
+    apply({ tools: { guard() {} }, systemPrompt: { section: (section) => sections.push(section) } }, { writable })
+    const text = sections[0].text
+    assert.match(text, writable ? /danger-full-access/ : /read-only/)
+    assert.match(text, /Approval prompts are unavailable in AB/)
+    assert.match(text, /Omit sandbox_permissions and justification/)
+    assert.match(text, /run_code.*nested.*native/)
+    assert.match(text, /do not retry escalation/)
+  }
+})
+
+test('AB removes inherited fixed-model delegation guidance without losing the base persona', () => {
+  const subagents = [{ provider: 'anthropic', model: 'claude-sonnet-5-5' }, { provider: 'openai-codex', model: 'gpt-6.1-sol' }]
+  const persona = { personaPrefix: 'Coding persona', personaSuffix: 'Workspace: {{cwd}}' }
+  const home = YAML.parse(homePatch({ subagents, persona }))
+  assert.match(home.find((row) => row.id === 'system-prompt').config.personaSuffix, /Subagents on a fixed model/)
+  for (const writable of [false, true]) for (const lean of [false, true]) {
+    const rows = YAML.parse(abPatch({ subagents, persona, writable, lean }))
+    assert.deepEqual(rows.find((row) => row.id === 'system-prompt'), { id: 'system-prompt', config: persona })
+    for (const id of ['agent-desk-subagent-claude', 'agent-desk-subagent-gpt']) assert.ok(rows.some((row) => row.id === id && row.disabled))
+  }
 })
 
 test('AB uses separate profiles and no mutating MCP in consultation even with tools ON', () => {

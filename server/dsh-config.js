@@ -329,13 +329,17 @@ export async function writeHomePatch(file, options) {
   return writePatch(file, homePatch(options))
 }
 
-export function abPatch({ subagents = [], writable = false, lean = true } = {}) {
+export function abPatch({ subagents = [], persona = null, writable = false, lean = true } = {}) {
   const disabled = [...BASE_SUBAGENT_TOOLS, 'tool-workflow', 'tool-goal', 'tool-plugin-manager', 'tool-ask-user',
     ...subagents.filter(({ provider }) => SUBAGENT_TOOLS[provider]).map(({ provider }) => `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`),
     ...(!writable ? ['tool-bash', 'tool-pwsh', 'tool-jobs', 'tool-skill'] : []),
     ...(!writable && lean ? ['tool-web'] : [])]
   return YAML.stringify([
     ...disabled.map((id) => ({ id, disabled: true })),
+    // Remove the home layer's fixed-model delegation advice with its tools,
+    // preserving the shipped persona just as teamChildPatch does.
+    ...(subagents.some(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
+      ? [{ id: 'system-prompt', config: { personaPrefix: persona?.personaPrefix ?? '', personaSuffix: persona?.personaSuffix ?? '' } }] : []),
     ...(!writable ? [{ id: 'tool-fs', config: { write: false, edit: false } }] : []),
     { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable } }] },
   ])

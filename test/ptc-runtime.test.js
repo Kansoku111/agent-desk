@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import YAML from 'yaml'
 import { AcpRuntime } from '../server/runtime.js'
 import { appPaths } from '../server/paths.js'
-import { abPatch, homePatch, teamChildPatch } from '../server/dsh-config.js'
+import { abPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
 import { localRoute } from '../server/local-llm.js'
 import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
 
@@ -41,13 +41,15 @@ async function setup(t, mode, profile) {
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
-  const rows = YAML.parse(homePatch({ localRoute: localRoute({ baseURL: `http://127.0.0.1:${server.address().port}/v1`, models: [{ id: 'ptc-fixture' }] }), subagentsEnabled: Boolean(profile) }))
+  const subagents = profile ? [{ provider: 'openai-codex', model: 'gpt-6.1-sol' }] : []
+  const persona = await shippedPersona()
+  const rows = YAML.parse(homePatch({ localRoute: localRoute({ baseURL: `http://127.0.0.1:${server.address().port}/v1`, models: [{ id: 'ptc-fixture' }] }), subagentsEnabled: Boolean(profile), subagents, persona }))
   rows.find((row) => row.id === 'acp').config = { provider: 'local-llm', model: 'ptc-fixture' }
   await fs.writeFile(paths.homePatch, YAML.stringify(rows))
   const patches = []
   if (profile) {
     const file = path.join(home, 'role.patch.yml')
-    await fs.writeFile(file, profile.startsWith('team') ? teamChildPatch() : abPatch({ writable: profile === 'ab-write' }))
+    await fs.writeFile(file, profile.startsWith('team') ? teamChildPatch({ subagents, persona }) : abPatch({ subagents, persona, writable: profile === 'ab-write', lean: profile !== 'ab-research' }))
     patches.push(file)
   }
   const permissions = []
@@ -139,17 +141,23 @@ test('real PTC timeout and cancellation settle, then the same ACP session can ex
   assert.ok(next.some((update) => update.status === 'completed' && JSON.stringify(update).includes('42')), JSON.stringify(next))
 })
 
-for (const profile of ['ab-read', 'ab-write', 'team', 'team-read']) {
+for (const profile of ['ab-read', 'ab-research', 'ab-write', 'team', 'team-read']) {
   test(`real ${profile} profile executes PTC without reopening delegation or role writes`, { timeout: 120_000 }, async (t) => {
-    const writable = profile !== 'ab-read' && profile !== 'team-read'
+    const writable = profile === 'ab-write' || profile === 'team'
     const f = await setup(t, writable ? 'danger-full-access' : 'read-only', profile)
+    f.queue.push({ name: 'read', args: { file_path: 'input.txt' } })
+    await f.prompt()
+    const system = f.requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
+    assert.doesNotMatch(system, /Subagents on a fixed model:/)
+    assert.equal(f.permissions.length, 0, 'native reads use standing role permissions')
+    if (profile.startsWith('ab')) {
+      assert.match(system, /Approval prompts are unavailable in AB/)
+      assert.match(system, /Omit sandbox_permissions and justification/)
+      assert.match(system, writable ? /already runs with danger-full-access/ : /worker in a read-only session/)
+    }
     if (profile === 'team-read') {
-      f.queue.push({ name: 'read', args: { file_path: 'input.txt' } })
-      await f.prompt()
-      const system = f.requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
       assert.match(system, /This child session runs in read-only mode, independently of the leader's permissions/)
       assert.match(system, /Omit sandbox_permissions and justification on run_code/)
-      assert.equal(f.permissions.length, 0)
     }
     await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
     // Reproduce the screenshot's initial investigation, without escalation controls.
@@ -185,6 +193,13 @@ for (const profile of ['ab-read', 'ab-write', 'team', 'team-read']) {
     }
     const target = path.join(f.workspace, 'role-write.txt')
     if (writable) {
+      if (profile === 'ab-write') {
+        const rejected = await f.run('return "must not execute";', { sandbox_permissions: 'danger-full-access', justification: 'Verify that AB still rejects escalation controls' })
+        assert.ok(rejected.some(update => update.status === 'failed' && JSON.stringify(update).includes('AB: escalation is disabled.')))
+        assert.equal(f.permissions.length, 0, 'AB guard rejects even redundant controls before asking for approval')
+        const recovered = await f.run('return await tools.read({ file_path: "input.txt" });')
+        assert.ok(recovered.some(update => update.title === 'read' && update.status === 'completed'))
+      }
       const written = await f.run(`return await tools.write({ file_path: ${JSON.stringify(target)}, content: 'role write' });`)
       assert.equal(await fs.readFile(target, 'utf8'), 'role write')
       assert.ok(written.some((update) => update.title === 'write' && update.status === 'completed'))
@@ -208,6 +223,11 @@ for (const profile of ['ab-read', 'ab-write', 'team', 'team-read']) {
 for (const mode of ['read-only', 'workspace-write']) {
   test(`real PTC direct Node writes respect ${mode} within fixture directories`, { timeout: 120_000 }, async (t) => {
     const f = await setup(t, mode)
+    f.queue.push({ name: 'read', args: { file_path: 'input.txt' } })
+    await f.prompt()
+    assert.match(JSON.stringify(f.updates), /PTC fixture content/, 'native read returns the fixture content')
+    assert.ok(!f.updates.some(update => update.status === 'failed'), JSON.stringify(f.updates))
+    assert.equal(f.permissions.length, 0, 'ordinary native reads do not ask for escalation')
     await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
     const target = path.join(f.workspace, 'inside.txt')
     const outside = path.join(f.home, 'outside.txt')
