@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import {
-  CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Users, X, XCircle,
+  CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, PanelRight, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Users, X, XCircle,
 } from 'lucide-react'
 import { act, navigate, openTeamChild, setTeamPanel, useStore } from '../store'
 import type { AppState, TeamChild, TeamChildState, TeamSummary, TerminalSummary, ThreadSummary } from '../types'
@@ -97,18 +97,20 @@ export const teamNeedsUser = (team: TeamSummary | undefined) => Boolean(team && 
 /** Shows or hides the team panel from either the leader or a child. */
 export function TeamToggle({ team }: { team: TeamSummary | undefined }) {
   const open = useStore((state) => state.teamPanel)
-  if (!team || (!team.children.length && !team.execution)) return null
+  if (!team) return null
   const running = team.children.filter(isActive).length
   return (
     <button
       type="button"
-      className={`button ghost subagent-toggle ${open ? 'active' : ''}`}
+      className={`button ghost subagent-toggle team-toggle ${open ? 'active' : ''}`}
       aria-pressed={open}
+      aria-label={open ? 'チームのパネルを閉じる' : 'チームのパネルを開く'}
       title={open ? 'チームのパネルを閉じる' : 'チームのパネルを開く'}
       onClick={() => setTeamPanel(!open)}
     >
-      <Users size={14} />
-      <span>{running > 0 ? `${running} 作業中` : team.children.length}</span>
+      <PanelRight size={16} />
+      <span className="team-toggle-label">チーム</span>
+      <span className="team-toggle-count">{running > 0 ? `${running} 作業中` : team.children.length}</span>
       {running > 0 && <span className="subagent-dot" aria-hidden="true" />}
       {teamNeedsUser(team) && <span className="team-attention" aria-label="確認が必要です" />}
     </button>

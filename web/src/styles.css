@@ -3793,6 +3793,29 @@ select:focus {
   font-size: 12.5px;
 }
 
+.team-toggle {
+  flex: none;
+}
+
+.team-toggle-label {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .team-toggle {
+    min-height: 40px;
+    padding: 0 10px;
+  }
+
+  .team-toggle-label {
+    display: inline;
+  }
+
+  .team-toggle-count {
+    display: none;
+  }
+}
+
 .subagent-dot {
   width: 6px;
   height: 6px;

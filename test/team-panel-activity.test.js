@@ -45,7 +45,7 @@ for (const [state, phase, active, label, icon] of [
     const current = { ...child, state, ...(phase ? { execution: { phase } } : {}) }
     const summary = { ...team, children: [current] }
     const toggle = panel.TeamToggle({ team: summary })
-    assert.equal(text(toggle), active ? '1 作業中' : '1')
+    assert.equal(text(toggle), active ? 'チーム1 作業中' : 'チーム1')
     const sidebar = panel.TeamPanel({ team: summary })
     assert.equal(text(withClass(sidebar, 'subagent-panel-count')[0]), active ? '作業中 1 / 1' : '1 人')
     const stop = nodes(sidebar, (node) => node.type === 'button' && text(node) === ' 全停止')[0]

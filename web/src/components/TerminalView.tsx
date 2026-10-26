@@ -758,7 +758,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
             />
           )}
         </div>
-        {team && teamPanel && team.children.length > 0 && <TeamPanel team={team} />}
+        {team && teamPanel && <TeamPanel team={team} />}
       </div>
     </div>
   )

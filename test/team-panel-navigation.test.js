@@ -108,3 +108,25 @@ for (const mode of ['TM', 'eco']) {
     })
   }
 }
+
+for (const mode of ['TM', 'eco']) {
+  test(mode + ': panel can be opened and reopened even before any child exists', async () => {
+    const h = await harness(mode === 'eco' ? {} : undefined)
+    h.team.children = []
+    h.state.teamPanel = false
+    const header = h.thread.Header({ thread: h.state.server.threads[0] })
+    const toggle = h.find(header, h.panel.TeamToggle)
+    const button = h.panel.TeamToggle(toggle.props)
+    assert.equal(button.props['aria-label'], 'チームのパネルを開く')
+    assert.match(button.props.className, /team-toggle/)
+    button.props.onClick()
+    assert.equal(h.state.teamPanel, true)
+    const view = h.thread.ThreadView({ threadId: 'leader' })
+    assert.equal(h.find(view, h.panel.TeamPanel).props.team, h.team)
+    h.panel.TeamToggle(toggle.props).props.onClick()
+    assert.equal(h.state.teamPanel, false)
+    h.panel.TeamToggle(toggle.props).props.onClick()
+    assert.equal(h.state.teamPanel, true)
+    assert.equal(h.panel.TeamToggle({ team: undefined }), null)
+  })
+}

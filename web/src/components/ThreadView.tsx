@@ -191,7 +191,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const team = useLedTeam(threadId)
   // Keep the same team beside its leader and its children.
   const panelTeam = useTeam(thread?.team?.id) ?? team
-  const teamPanel = useStore((state) => state.teamPanel) && Boolean(panelTeam?.children.length)
+  const teamPanel = useStore((state) => state.teamPanel)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const [showJump, setShowJump] = useState(false)

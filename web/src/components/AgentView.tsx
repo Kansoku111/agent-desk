@@ -174,7 +174,7 @@ export function AgentView({ taskId }: { taskId: string }) {
             </div>
           </div>
         </div>
-        {teamPanel && team.children.length > 0 && <TeamPanel team={team} />}
+        {teamPanel && <TeamPanel team={team} />}
       </div>
     </div>
   )
