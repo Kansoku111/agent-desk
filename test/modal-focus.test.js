@@ -19,7 +19,9 @@ test('a dialog takes focus once when it opens, not again on every re-render', as
 })
 
 test('the AB model fields use the app menu with plain model names, never a native select or a company suffix', async () => {
-  const code = await read('Ab.tsx')
+  const ab = await read('Ab.tsx')
+  const code = await read('WorkflowModelField.tsx')
+  assert.match(ab, /import \{ CLAUDE_CODE, ModelField, modelGroups \} from '\.\/WorkflowModelField'/)
   assert.doesNotMatch(code, /<select|<option/)
   assert.match(code, /<Dropdown/)
   assert.match(code, /CLAUDE_CODE = \[\{ value: 'claude:opus', name: 'Opus' \}, \{ value: 'claude:sonnet', name: 'Sonnet' \}, \{ value: 'claude:haiku', name: 'Haiku' \}\]/)
@@ -27,4 +29,16 @@ test('the AB model fields use the app menu with plain model names, never a nativ
   assert.match(code, /<MenuItem key=\{model\.value\} label=\{model\.name\}/)
   assert.doesNotMatch(code, /\$\{model\.name\} ·/)
   assert.doesNotMatch(code, /Claude Code · /)
+})
+
+test('Eco uses the same model menu for two fields, without a separate provider selector', async () => {
+  const code = await read('ExecutionSettings.tsx')
+  assert.match(code, /import \{ ModelField, modelGroups \} from '\.\/WorkflowModelField'/)
+  assert.equal((code.match(/<ModelField /g) ?? []).length, 2)
+  assert.match(code, /<ModelField label="親"/)
+  assert.match(code, /<ModelField label="子"/)
+  assert.doesNotMatch(code, /<select|<option|子のモデル/)
+  assert.match(code, /executionChildChoice\(server, value\)/)
+  assert.match(code, /if \(child\) changeModels\(child\)/)
+  assert.match(code, /groups=\{leaderGroups\}/)
 })

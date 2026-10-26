@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { isModelVisible, pickDefaultModel, visibleModels, executionModelSelection } from '../web/src/model-selection.ts'
+import { isModelVisible, pickDefaultModel, visibleModels, executionModelSelection, executionChildChoice } from '../web/src/model-selection.ts'
 
 const model = (provider, id) => ({ provider, id, value: JSON.stringify([provider, id]), name: id, description: null })
 const sol = model('openai-codex', 'gpt-6.1-sol')
@@ -41,6 +41,39 @@ test('EX rejects hidden, retired, removed and wrong-provider saved choices', () 
   assert.equal(executionModelSelection(state, 'claudeApi', 'missing', sol.id).model, '')
   assert.equal(executionModelSelection(state, 'claudeApi', 'missing', claude.id).leader, '')
   assert.equal(executionModelSelection(state, 'claudeApi', 'missing', claude.id).model, claude.id)
+})
+
+
+test('Eco picker selections preserve the exact provider route and round-trip saved pairs', () => {
+  const state = server({})
+  const routes = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' }
+  state.accounts.deepseek.configured = true
+  state.accounts.opencodeGo = { configured: true }
+  state.accounts.localLlm = { configured: true }
+  // The same model id on different routes must never switch billing routes.
+  state.catalog.models = Object.values(routes).map((provider) => model(provider, 'shared-id'))
+  for (const [provider, route] of Object.entries(routes)) {
+    const entry = model(route, 'shared-id')
+    const choice = executionChildChoice(state, entry.value)
+    assert.deepEqual(choice, { provider, model: entry.id })
+    const restored = executionModelSelection(state, choice.provider, 'claude:opus', choice.model)
+    assert.equal(restored.model, entry.id)
+    assert.equal(restored.childModels.find((item) => item.id === restored.model)?.value, entry.value)
+  }
+  for (const name of ['opus', 'sonnet', 'haiku']) assert.deepEqual(executionChildChoice(state, `claude:${name}`), { provider: 'claude', model: name })
+  assert.equal(executionModelSelection(state, 'claude', 'claude:haiku', 'haiku').leader, '')
+  assert.equal(executionModelSelection(state, 'local', model('local-llm', 'shared-id').value, 'shared-id').leader, '')
+})
+
+test('Eco picker never maps hidden, retired, disconnected or missing choices to another model', () => {
+  const state = server({ [sol.value]: false })
+  assert.equal(executionChildChoice(state, sol.value), null)
+  assert.equal(executionChildChoice(state, deepseek.value), null)
+  assert.equal(executionChildChoice(state, 'claude:missing'), null)
+  assert.equal(executionChildChoice(state, 'missing'), null)
+  state.catalog.models = [{ ...sol, retired: true }]
+  state.settings.modelVisibility[sol.value] = true
+  assert.equal(executionChildChoice(state, sol.value), null)
 })
 
 test('older settings show every model; hiding Terra leaves the catalog intact and checking restores it', () => {

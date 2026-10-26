@@ -1,4 +1,4 @@
-import type { AppState, CatalogModel } from './types'
+import type { AppState, CatalogModel, TeamProvider } from './types'
 
 export function providerReady(server: AppState, provider: string) {
   if (provider === 'openai-codex') return server.accounts.chatgpt.signedIn
@@ -19,9 +19,19 @@ export function visibleModels(server: AppState) {
   return server.catalog.models.filter((model) => isModelVisible(server, model))
 }
 
+const EXECUTION_ROUTES: Partial<Record<TeamProvider, string>> = { claudeApi: 'anthropic', gpt: 'openai-codex', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' }
+
+/** Translate a picker value to EX's persisted provider/model pair, without changing routes. */
+export function executionChildChoice(server: AppState, value: string): { provider: TeamProvider; model: string } | null {
+  if (['claude:opus', 'claude:sonnet', 'claude:haiku'].includes(value)) return { provider: 'claude', model: value.slice(7) }
+  const model = visibleModels(server).find((entry) => entry.value === value && !entry.retired && providerReady(server, entry.provider))
+  const provider = model && (Object.keys(EXECUTION_ROUTES) as TeamProvider[]).find((key) => EXECUTION_ROUTES[key] === model.provider)
+  return model && provider ? { provider, model: model.id } : null
+}
+
 /** EX restores exact choices only; never substitute a model or billing route. */
 export function executionModelSelection(server: AppState, provider: string, leader: string, child: string) {
-  const routes: Record<string, string> = { claudeApi: 'anthropic', gpt: 'openai-codex', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' }
+  const routes = EXECUTION_ROUTES as Record<string, string>
   const available = server.catalog.models.filter((entry) => !entry.retired && isModelVisible(server, entry) && providerReady(server, entry.provider))
   const leaderModels = available.filter((entry) => ['anthropic', 'openai-codex'].includes(entry.provider))
   const childModels = available.filter((entry) => entry.provider === routes[provider])

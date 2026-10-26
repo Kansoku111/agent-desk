@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { act, setState, startTeam, useStore } from '../store'
 import type { ExecutionCheck, TeamProvider, TeamSettings } from '../types'
-import { executionModelSelection } from '../model-selection'
-import { effortLabel } from '../util'
+import { executionChildChoice, executionModelSelection } from '../model-selection'
+import { ModelField, modelGroups } from './WorkflowModelField'
 import { workflowEffort, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { Modal } from './Modal'
 import { PtcToggle } from './PtcToggle'
@@ -124,7 +124,12 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
     }
   }, [modelsReady, selection?.leader, selection?.model, leader, model, leaderEffort, childEffort, levels.leader?.join(), levels.child?.join()])
   if (!server?.settings.agentTeams || !selection) return null
-  const { leaderModels, childModels } = selection
+  const groups = modelGroups(server)
+  const leaderGroups = groups.map((group) => ({
+    ...group,
+    models: group.models.filter((entry) => ['claude:opus', 'claude:sonnet'].includes(entry.value) || selection.leaderModels.some((model) => model.value === entry.value)),
+  })).filter((group) => group.models.length)
+  const childValue = provider === 'claude' ? (selection.model ? `claude:${selection.model}` : '') : selection.childModels.find((entry) => entry.id === selection.model)?.value ?? ''
   const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude')
   const start = async () => {
     if (startingRef.current || !modelsReady || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)) return
@@ -150,30 +155,16 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       }
     } finally { startingRef.current = false; setStarting(false) }
   }
-  const effortSelect = (key: 'leaderEffort' | 'childEffort', values: string[] | undefined, label: string) => {
-    const options = workflowOptions(choice[key], values)
-    const unsupported = Boolean(choice[key] && !options.includes(choice[key]))
-    return <select aria-label={label} className="ex-effort" disabled={!modelsReady || starting || !options.length} value={options.length ? choice[key] : ''} onChange={(event) => changeModels({ [key]: event.target.value })}>
-      {!options.length ? <option value="">指定不可</option> : unsupported && <option value={choice[key]} disabled>{effortLabel(choice[key])}（非対応）</option>}
-      {options.map((value) => <option key={value} value={value}>{effortLabel(value)}</option>)}
-    </select>
-  }
 
   return <Modal title="エコモード" onClose={close} width={620} className="team-start-modal">
     <div className="team-start-body">
       <section className="account-card ex-models">
-        <label>親<div className="ex-model-row"><select disabled={!modelsReady || starting} value={modelsReady ? selection.leader : ''} onChange={(e) => changeModels({ leader: e.target.value })}>
-          <option value="">モデルを選択</option>
-          <optgroup label="Claude Code"><option value="claude:opus">Opus</option><option value="claude:sonnet">Sonnet</option></optgroup>
-          <optgroup label="API / サブスクリプション">{leaderModels.map((entry) => <option key={entry.value} value={entry.value}>{entry.name} · {entry.provider === 'anthropic' ? 'API' : 'ChatGPT'}</option>)}</optgroup>
-        </select>{effortSelect('leaderEffort', levels.leader, '親の推論レベル')}</div></label>
-        <label>子<select disabled={!modelsReady || starting} value={provider} onChange={(e) => changeModels({ provider: e.target.value as TeamProvider, model: e.target.value === 'claude' ? 'haiku' : '' })}>
-          {providers.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
-        </select></label>
-        <label>子のモデル<div className="ex-model-row"><select disabled={!modelsReady || starting} value={modelsReady ? selection.model : ''} onChange={(e) => changeModels({ model: e.target.value })}>
-          <option value="">モデルを選択</option>
-          {provider === 'claude' ? <><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></> : <>{childModels.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</>}
-        </select>{effortSelect('childEffort', levels.child, '子の推論レベル')}</div></label>
+        <ModelField label="親" value={modelsReady ? selection.leader : ''} groups={leaderGroups} disabled={!modelsReady || starting}
+          effort={leaderEffort} efforts={workflowOptions(leaderEffort, levels.leader)} onEffort={(leaderEffort) => changeModels({ leaderEffort })}
+          onChange={(leader) => changeModels({ leader })} />
+        <ModelField label="子" value={modelsReady ? childValue : ''} groups={groups} disabled={!modelsReady || starting}
+          effort={childEffort} efforts={workflowOptions(childEffort, levels.child)} onEffort={(childEffort) => changeModels({ childEffort })}
+          onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
       </section>
       <PtcToggle mode={choice.toolMode} disabled={!modelsReady || starting} onChange={(toolMode) => changeModels({ toolMode })} />
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}

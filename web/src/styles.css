@@ -36,10 +36,10 @@
   .ab-content { padding: 16px; }
 }
 .ex-models { display: grid; gap: 12px; }
-.ex-models label { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: 12px; }
+.ex-models .ab-field { grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: 12px; }
 .ex-checks { display: grid; gap: 12px; }
 .ex-check { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
-.ex-check input:not([type="checkbox"]), .ex-models select { width: 100%; min-width: 0; }
+.ex-check input:not([type="checkbox"]) { width: 100%; min-width: 0; }
 .ex-check-heading { display: flex; align-items: center; gap: 10px; }
 .ex-check-heading label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
 
@@ -5109,6 +5109,4 @@ button.team-node:disabled {
   min-height: 110px;
 }
 
-.ex-model-row { display: flex; gap: 8px; min-width: 0; }
-.ex-model-row .ex-effort { flex: 0 0 96px; width: 96px; }
 .ab-followup > div { min-width: 0; width: 100%; }
