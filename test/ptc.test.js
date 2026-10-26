@@ -105,7 +105,7 @@ test('saved PTC is reapplied after restart/resume and native remains default for
   assert.equal((await legacy.get(f.thread.id)).thread.toolMode, 'native')
 })
 
-test('PTC cannot be changed while running or enabled for AB/team/eco; invalid selections never persist', async (t) => {
+test('PTC cannot be changed while running; workflow tasks accept creation but reject independent changes', async (t) => {
   const f = await fixture(t)
   assert.equal(f.thread.toolMode, 'native')
   await f.manager.send(f.thread.id, { text: 'run' })
@@ -114,10 +114,42 @@ test('PTC cannot be changed while running or enabled for AB/team/eco; invalid se
   await assert.rejects(f.manager.update(f.thread.id, { toolMode: 'bogus' }), /不明/)
   assert.equal(f.manager.threads.get(f.thread.id).toolMode, 'native')
   for (const metadata of [{ ab: {} }, { team: { role: 'leader' } }, { team: { childId: 'c' } }, { team: { execution: true } }]) {
-    await assert.rejects(f.manager.create({ workspace: f.base, toolMode: 'ptc', ...metadata }), /通常/)
-    const thread = await f.manager.create({ workspace: f.base, ...metadata })
-    await assert.rejects(f.manager.update(thread.id, { toolMode: 'ptc' }), /通常/)
+    const thread = await f.manager.create({ workspace: f.base, toolMode: 'ptc', ...metadata })
+    assert.equal(thread.toolMode, 'ptc')
+    await assert.rejects(f.manager.update(thread.id, { toolMode: 'native' }), /設定から/)
+    await assert.rejects(f.manager.create({ workspace: f.base, toolMode: 'bogus', ...metadata }), /不明/)
   }
+})
+
+test('team owner choice overrides stale task settings on sends and resumed sessions', async (t) => {
+  const f = await fixture(t)
+  let selected = 'ptc'
+  let applied = 'native'
+  const modes = []
+  f.manager.teamToolMode = (thread) => thread.team ? selected : undefined
+  const thread = await f.manager.create({ workspace: f.base, model: f.thread.model, team: { id: 'T', childId: 'C' } })
+  f.runtime.newSession = async () => {
+    f.runtime.liveSessions.add('team-session')
+    return { sessionId: 'team-session', configOptions: option('native') }
+  }
+  f.runtime.resumeSession = async (id) => { f.runtime.liveSessions.add(id); return { configOptions: option('native') } }
+  f.runtime.setOption = async (_id, config, value) => { assert.equal(config, TOOL_MODE_CONFIG); applied = value; return option(value) }
+  f.runtime.prompt = async () => { modes.push(applied); return { stopReason: 'end_turn' } }
+  const send = async () => {
+    const done = new Promise((resolve) => f.manager.once('turn-finished', resolve))
+    await f.manager.send(thread.id, { text: 'team followup' })
+    assert.equal((await done).status, 'done')
+  }
+  assert.equal((await f.manager.get(thread.id)).thread.toolMode, 'ptc')
+  await send()
+  selected = 'native'
+  await send()
+  f.runtime.liveSessions.clear()
+  f.manager.liveOptions.clear()
+  applied = 'native'
+  selected = 'ptc'
+  await send()
+  assert.deepEqual(modes, ['ptc', 'native', 'ptc'])
 })
 
 for (const behavior of ['missing', 'wrong', 'error']) {

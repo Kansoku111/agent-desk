@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readJson, writeJson } from './json-file.js'
+import { assertToolMode } from './ptc.js'
 
 const exec = promisify(execFile)
 const hash = (value) => createHash('sha256').update(value).digest('hex')
@@ -108,7 +109,9 @@ export function normalizeExecutionModels(value) {
   const leaderEffort = value.leaderEffort ?? ''
   const childEffort = value.childEffort ?? ''
   if ([leaderEffort, childEffort].some((effort) => typeof effort !== 'string' || effort.length > 100)) throw new Error('ecoの推論レベルが不正です')
-  return { leader: value.leader, provider: value.provider, model: value.model, leaderEffort, childEffort }
+  const toolMode = value.toolMode ?? 'native'
+  assertToolMode(toolMode)
+  return { leader: value.leader, provider: value.provider, model: value.model, leaderEffort, childEffort, toolMode }
 }
 
 export class ExecutionVerifier {

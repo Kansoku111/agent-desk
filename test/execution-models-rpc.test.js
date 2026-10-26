@@ -12,7 +12,7 @@ test('EX model RPC persists without creating a team or changing TM settings', as
   t.after(async () => { await execution.stop(); await fs.rm(dir, { recursive: true, force: true }) })
   const handlers = createTerminalHandlers({ teams: { execution, create() { throw new Error('must not start a team') } } })
   assert.deepEqual(await handlers['execution.models'](), { models: null })
-  const models = { leader: 'claude:sonnet', provider: 'claude', model: 'sonnet', leaderEffort: 'high', childEffort: 'medium' }
+  const models = { leader: 'claude:sonnet', provider: 'claude', model: 'sonnet', leaderEffort: 'high', childEffort: 'medium', toolMode: 'ptc' }
   assert.deepEqual(await handlers['execution.setModels']({ models }), { models })
   // A new handler/browser has no browser-local state; the server owns the choice.
   assert.deepEqual(await handlers['execution.models'](), { models })

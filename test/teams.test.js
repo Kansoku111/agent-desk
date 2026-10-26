@@ -237,15 +237,68 @@ async function setup(t, settings = {}, options = {}) {
   }
 }
 
-async function setupExecution(t, options = {}) {
-  const base = await setup(t, { leaderProvider: 'gpt' }, options)
+async function setupExecution(t, options = {}, settings = {}) {
+  const base = await setup(t, { leaderProvider: 'gpt', ...settings }, options)
   execFileSync('git', ['init', '-q', base.workspace])
   await fs.writeFile(path.join(base.workspace, 'source.txt'), 'original')
   const { team: view } = await base.manager.create({ workspace: base.workspace, execution: {} })
   const team = base.manager.teams.get(view.id)
   return { ...base, team, leader: team.leaderId, tool: (name, args = {}) => base.manager.call(team.id, team.secret, name, args) }
 }
+test('team PTC validates selections and stays off for legacy teams even when new-team defaults are on', async (t) => {
+  assert.equal(teamConfig({}).toolMode, 'native')
+  assert.equal(mergeTeamConfig({}, { toolMode: 'ptc' }).toolMode, 'ptc')
+  assert.throws(() => mergeTeamConfig({}, { toolMode: 'other' }), /不明/)
+  const f = await setup(t, { toolMode: 'ptc' })
+  await f.tool('spawn', { title: 'Claude stays native', task: 'bounded task', tier: 'low', provider: 'claude' })
+  assert.equal('toolMode' in f.agents.calls.find((call) => call[0] === 'create')[1], false)
+  f.terminals.set(f.leader, { activity: 'running' })
+  assert.throws(() => f.manager.updateConfig(f.team.id, { toolMode: 'native' }), /実行中/)
+  await f.manager.stop()
+  const saved = JSON.parse(await fs.readFile(f.manager.file, 'utf8'))
+  delete saved.teams[0].config
+  await fs.writeFile(f.manager.file, JSON.stringify(saved))
+  const restored = await new TeamManager({ file: f.manager.file, dir: path.join(f.dir, 'teams'), threads: f.threads,
+    terminals: f.terminals, agents: f.agents, catalog: CATALOG, getSettings: () => ({ toolMode: 'ptc' }), apiUrl: () => '' }).load()
+  t.after(() => restored.stop())
+  assert.equal(restored.teams.get(f.team.id).config.toolMode, 'native')
+})
+
 const exTask = { title: 'implement', task: 'do the bounded work', criteria: 'the test passes without unrelated changes', checks: [], tier: 'low', provider: 'gpt' }
+
+for (const mode of ['TM', 'eco']) {
+  test(`${mode} propagates PTC to parent and children, rejects busy switches and persists idle changes`, async (t) => {
+    const f = mode === 'eco' ? await setupExecution(t, {}, { toolMode: 'ptc' }) : await setup(t, { leaderProvider: 'gpt', toolMode: 'ptc' })
+    const { manager, team, threads, tool, leader } = f
+    assert.equal(threads.threads.get(leader).toolMode, 'ptc')
+    assert.equal(manager.summary(team).toolModeBusy, false)
+    const args = { ...exTask, ...(mode === 'eco' ? { mode: 'research' } : {}) }
+    await tool('spawn', args)
+    const child = team.children[0]
+    assert.equal(threads.threads.get(child.taskId).toolMode, 'ptc')
+    if (mode === 'eco') assert.equal(threads.threads.get(child.taskId).permissionMode, 'read-only')
+    assert.equal(manager.summary(team).toolModeBusy, true)
+    assert.throws(() => manager.updateConfig(team.id, { toolMode: 'native' }), /実行中/)
+    threads.finish(child.taskId, 'registered tool report')
+    await tick()
+    assert.equal(threads.threads.get(leader).status, 'running', 'child report reaches parent')
+    assert.throws(() => manager.updateConfig(team.id, { toolMode: 'native' }), /実行中/)
+    threads.finish(leader, 'parent assessed report')
+    await tick()
+    manager.updateConfig(team.id, { toolMode: 'native' })
+    assert.equal(threads.teamToolMode(threads.threads.get(child.taskId)), 'native', 'existing child follows owner choice')
+    assert.equal(threads.teamToolMode(threads.threads.get(leader)), 'native')
+    await tool('send', { child: child.id, message: 'next bounded task', fresh: true })
+    assert.equal(threads.threads.get(child.taskId).toolMode, 'native', 'replacement child uses current mode')
+    const stored = teamConfig(manager.summary(team).config)
+    assert.equal(stored.toolMode, 'native')
+    await manager.stop()
+    const restored = await new TeamManager({ file: path.join(f.dir, 'teams.json'), dir: path.join(f.dir, 'teams'),
+      threads, terminals: f.terminals, agents: f.agents, catalog: CATALOG, getSettings: () => ({ toolMode: 'ptc' }), apiUrl: () => '' }).load()
+    t.after(() => restored.stop())
+    assert.equal(restored.teams.get(team.id).config.toolMode, 'native', 'restart does not inherit new global defaults')
+  })
+}
 
 for (const mode of ['TM', 'eco']) {
   test(`${mode} sums parent and children once and preserves scores across restart`, async (t) => {
@@ -694,6 +747,7 @@ test('eco reserves a resumed writer during baseline capture and restores evidenc
   const pending = tool('send', { child: child.id, message: 'next work' })
   assert.equal(typeof release, 'function')
   await assert.rejects(tool('spawn', exTask), /作業|判定/)
+  assert.throws(() => manager.updateConfig(team.id, { toolMode: 'ptc' }), /実行中/)
   await assert.rejects(tool('send', { child: child.id, message: 'duplicate' }), /作業中/)
   await manager.stopAll(team.id)
   release({ error: 'test baseline' })
@@ -704,12 +758,14 @@ test('eco reserves a resumed writer during baseline capture and restores evidenc
 
 test('eco retries explicitly repairable failures once, then escalates repeated evidence', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
+  manager.updateConfig(team.id, { toolMode: 'ptc' })
   await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(123);process.exit(2)"', autoRepair: true }])
   await tool('spawn', { ...exTask, checks: ['test'] })
   const child = team.children[0]
   threads.finish(child.taskId, 'done')
   await Promise.all([...manager.exPending])
   assert.equal(child.execution.repairs, 1)
+  assert.equal(threads.teamToolMode(threads.threads.get(child.taskId)), 'ptc')
   assert.equal(child.execution.phase, 'working')
   assert.equal(child.reports.length, 0)
   assert.deepEqual(child.execution.instructions ?? [], [])
@@ -974,7 +1030,7 @@ test('a GPT child is a full-access dsh task whose first message names it and giv
   assert.match(text, /子「A」を起動しました（GPT-6 Luna・低）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
-    workspace, model: '["openai-codex","gpt-6-luna"]', effort: 'medium', permissionMode: 'danger-full-access',
+    workspace, model: '["openai-codex","gpt-6-luna"]', effort: 'medium', permissionMode: 'danger-full-access', toolMode: 'native',
     team: { id: team.id, childId: team.children[0].id },
   })
   const [, , message] = threads.calls.find((call) => call[0] === 'send')
@@ -1794,7 +1850,7 @@ test('a DeepSeek child is a full-access dsh task on a DeepSeek model', async (t)
   assert.match(await tool('spawn', { title: '翻訳', task: 'docs を訳す', tier: 'low', provider: 'deepseek', name: 'D' }), /子「D」を起動しました（DeepSeek V4 Flash・低）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
-    workspace, model: '["deepseek-official","deepseek-v4-flash"]', effort: '', permissionMode: 'danger-full-access',
+    workspace, model: '["deepseek-official","deepseek-v4-flash"]', effort: '', permissionMode: 'danger-full-access', toolMode: 'native',
     team: { id: team.id, childId: team.children[0].id },
   })
   assert.equal(manager.summary(team).children[0].kind, 'thread')
@@ -1813,7 +1869,7 @@ test('an OpenCode Go child is a full-access dsh task on an OpenCode Go model', a
   assert.match(await tool('spawn', { title: '調査', task: 'ログを読む', tier: 'mid', provider: 'opencodeGo', name: 'O' }), /子「O」を起動しました（GLM-5\.3・中）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
-    workspace, model: '["opencode-go","glm-5.3"]', effort: 'high', permissionMode: 'danger-full-access',
+    workspace, model: '["opencode-go","glm-5.3"]', effort: 'high', permissionMode: 'danger-full-access', toolMode: 'native',
     team: { id: team.id, childId: team.children[0].id },
   })
   assert.equal(manager.summary(team).children[0].kind, 'thread')
@@ -1837,7 +1893,7 @@ test('a Claude (API) child is a full-access dsh task on an Anthropic model, not 
   assert.match(await tool('spawn', { title: '要約', task: 'docs を要約', tier: 'low', provider: 'claudeApi', name: 'A' }), /子「A」を起動しました（Claude Haiku 5\.5・低）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
-    workspace, model: '["anthropic","claude-haiku-5-5"]', effort: '', permissionMode: 'danger-full-access',
+    workspace, model: '["anthropic","claude-haiku-5-5"]', effort: '', permissionMode: 'danger-full-access', toolMode: 'native',
     team: { id: team.id, childId: team.children[0].id },
   })
   assert.deepEqual([manager.summary(team).children[0].kind, manager.summary(team).children[0].provider], ['thread', 'claudeApi'])
@@ -1852,7 +1908,7 @@ test('a GPT leader is a dsh task whose session mounts the team tools with the le
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   // No model of its own: the GPT "mid" tier's.
   assert.deepEqual(options, {
-    workspace, model: '["openai-codex","gpt-6.1-sol"]', effort: 'high', permissionMode: 'danger-full-access', team: { id: team.id, role: 'leader' },
+    workspace, model: '["openai-codex","gpt-6.1-sol"]', effort: 'high', permissionMode: 'danger-full-access', toolMode: 'native', team: { id: team.id, role: 'leader' },
   })
   assert.equal(manager.teamLedBy(leader), team.id)
   assert.equal(manager.isChild(leader), false)

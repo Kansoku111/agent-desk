@@ -1,7 +1,9 @@
 // Defense in depth: the read-only AB runtime cannot gain write tools by escalation.
 export const name = 'agent-desk-ab-policy'
 export const inject = ['tools', 'systemPrompt']
-const READ = new Set(['read', 'read_image', 'glob', 'grep', 'working_directory', 'web_search', 'web_fetch', 'todo_write'])
+// run_code is only the transport; nested registered calls still pass this guard.
+// Direct Node operations use the role's OS sandbox, not this allowlist.
+const READ = new Set(['run_code', 'read', 'read_image', 'glob', 'grep', 'working_directory', 'web_search', 'web_fetch', 'todo_write'])
 const IMPLEMENT = new Set([...READ, 'write', 'edit', 'bash', 'pwsh', 'job_list', 'job_output', 'job_kill', 'skill',
   'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'])
 // Only the app's own optional implementation MCP servers. Newly introduced
@@ -11,7 +13,7 @@ export function abToolAllowed(name, writable) { return writable ? IMPLEMENT.has(
 export function apply(ctx, config) {
   ctx.tools.guard((exec) => {
     if (!abToolAllowed(exec.name, config?.writable === true)) return 'AB: this role cannot use this tool.'
-    if (!config?.writable && exec.arguments?.sandbox_permissions) return 'AB consultation is read-only; escalation is disabled.'
+    if (exec.arguments?.sandbox_permissions) return 'AB: escalation is disabled.'
   })
   ctx.systemPrompt.section({ name: 'agent-desk:ab', order: 950,
     text: config?.writable

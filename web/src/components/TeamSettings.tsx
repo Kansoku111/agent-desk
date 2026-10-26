@@ -9,6 +9,7 @@ import { byNewest } from './Pickers'
 import { claudeEfforts, claudeModelName, claudeModels } from './TerminalPickers'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { TeamGuides } from './TeamGuides'
+import { PtcToggle } from './PtcToggle'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 
 const MAX_CHILDREN = 12
@@ -349,6 +350,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
           <LeanChildrenSwitch config={draft} onChange={change} />
+          <PtcToggle mode={draft.toolMode} disabled={starting} onChange={(toolMode) => change({ toolMode })} />
         </section>
         {PROVIDERS.map((provider) => <ProviderCard key={provider} server={server} config={draft} provider={provider} onChange={change} />)}
         {!anyChildOn(draft) && <p className="team-warning">子に使うものを、少なくとも一つオンにしてください。オンにしたものだけが、リーダーから使えます。</p>}

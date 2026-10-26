@@ -24,12 +24,19 @@ test('AB runtime has no write/shell/delegation definitions during consultation',
 })
 
 test('AB guard fails closed for unknown tools and rejects sandbox escalation', () => {
-  for (const name of ['read', 'glob', 'grep', 'web_search', 'web_fetch']) assert.equal(abToolAllowed(name, false), true)
+  for (const name of ['run_code', 'read', 'glob', 'grep', 'web_search', 'web_fetch']) assert.equal(abToolAllowed(name, false), true)
   for (const name of ['write', 'edit', 'pwsh', 'bash', 'subagent', 'workflow', 'unknown_new_tool', 'mcp__chrome__evaluate_script']) assert.equal(abToolAllowed(name, false), false)
   let guard
   apply({ tools: { guard: (fn) => { guard = fn } }, systemPrompt: { section: () => {} } }, { writable: false })
   assert.ok(guard({ name: 'read', arguments: { sandbox_permissions: 'danger-full-access' } }))
   assert.equal(guard({ name: 'read', arguments: {} }), undefined)
+  assert.equal(guard({ name: 'run_code', arguments: { code: 'return 42' } }), undefined)
+  assert.ok(guard({ name: 'run_code', arguments: { sandbox_permissions: 'danger-full-access' } }))
+  for (const name of ['subagent', 'workflow', 'create_goal', 'unknown_new_tool']) assert.ok(guard({ name, arguments: {} }))
+  apply({ tools: { guard: (fn) => { guard = fn } }, systemPrompt: { section: () => {} } }, { writable: true })
+  assert.equal(guard({ name: 'run_code', arguments: {} }), undefined)
+  assert.ok(guard({ name: 'run_code', arguments: { sandbox_permissions: 'workspace-write' } }))
+  assert.ok(guard({ name: 'subagent', arguments: {} }))
 })
 
 test('AB uses separate profiles and no mutating MCP in consultation even with tools ON', () => {
@@ -58,9 +65,10 @@ test('AB adapter sends raw consultation and translates final results', async () 
   threads.send = async (_id, value) => { sent = value }
   threads.get = async () => ({ turns: [{ items: [{ type: 'agent', text: 'final report' }] }] })
   const runner = new AbRunner({ threads, agents })
-  await runner.start({ runId: 'R', jobId: 'J', model: '["openai-codex","test"]', workspace: '/project', writable: false, lean: true, instructions: AB_CONSULT, text: ' raw\nrequest ' })
+  await runner.start({ runId: 'R', jobId: 'J', model: '["openai-codex","test"]', workspace: '/project', writable: false, lean: true, toolMode: 'ptc', instructions: AB_CONSULT, text: ' raw\nrequest ' })
   assert.equal(sent.text, ' raw\nrequest ')
   assert.equal(created.permissionMode, 'read-only')
+  assert.equal(created.toolMode, 'ptc')
   assert.equal(created.ab.runId, 'R')
   const finished = new Promise((resolve) => runner.once('finished', resolve))
   threads.emit('turn-finished', { threadId: 'T', status: 'done' })

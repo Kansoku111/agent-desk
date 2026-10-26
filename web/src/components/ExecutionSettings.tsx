@@ -6,6 +6,7 @@ import { executionModelSelection } from '../model-selection'
 import { effortLabel } from '../util'
 import { workflowEffort, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { Modal } from './Modal'
+import { PtcToggle } from './PtcToggle'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import type { AuthConsentState } from '../team-auth-consent'
 
@@ -16,7 +17,7 @@ const providers: { id: TeamProvider; name: string; catalog?: string }[] = [
 ]
 
 const CHOICE_KEY = 'agent-desk.execution-models'
-const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '' }
+const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '', toolMode: 'native' as 'native' | 'ptc' }
 function readChoice() {
   try {
     const value = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? 'null')
@@ -139,6 +140,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       choices.leaderProvider = leader.startsWith('claude:') ? 'claude' : 'gpt'
       choices.leader = { model: leader.startsWith('claude:') ? leader.slice(7) : 'opus', effort: leaderEffort || null }
       choices.gptLeader = { model: null, effort: leaderEffort || null }
+      choices.toolMode = current.toolMode
       choices.leanChildren = false
       choices.batchReports = true
       choices.maxChildren = 6
@@ -173,6 +175,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
           {provider === 'claude' ? <><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></> : <>{childModels.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</>}
         </select>{effortSelect('childEffort', levels.child, '子の推論レベル')}</div></label>
       </section>
+      <PtcToggle mode={choice.toolMode} disabled={!modelsReady || starting} onChange={(toolMode) => changeModels({ toolMode })} />
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
     </div>

@@ -10,7 +10,7 @@ export type Theme = 'system' | 'light' | 'dark'
 export interface AbConfig {
   a: string; b: string; leader: string; implementer: string
   efforts: Record<'a' | 'b' | 'leader' | 'implementer', string>
-  lean: boolean; delegate: boolean; review: boolean
+  lean: boolean; delegate: boolean; review: boolean; toolMode?: ToolMode
 }
 export interface AbJob {
   id: string; role: string; model: string; effort?: string; status: string; report: string; error?: string
@@ -157,6 +157,7 @@ export interface TeamSummary {
   leaderKind: 'terminal' | 'thread'
   /** The team's own settings: chosen when it started, changed in its panel since. */
   config?: TeamSettings
+  toolModeBusy?: boolean
   execution?: { leaderModel?: string; stopped: boolean; metrics: { childTurns: number; parentTurns?: number; parentReports: number; verifications: number; repairs: number } }
   createdAt: number
   updatedAt: number
@@ -187,6 +188,7 @@ export interface TeamSettings {
   leader: { model: string | null; effort: string | null }
   /** A GPT leader's model (null: the GPT "mid" tier's). */
   gptLeader: { model: string | null; effort: string | null }
+  toolMode?: ToolMode
   leaderBypass: boolean
   /** Reports that wait while the leader works reach it in one message (older saves lack it: on). */
   batchReports?: boolean

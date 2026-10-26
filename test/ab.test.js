@@ -23,6 +23,47 @@ async function setup(t, config = {}) {
   return { dir, runner, manager, id: run.id, finish }
 }
 
+test('AB PTC is saved, inherited by every stage and switchable only between stages', async (t) => {
+  const { dir, runner, manager, id, finish } = await setup(t, { toolMode: 'ptc' })
+  assert.ok(runner.calls.every((call) => call.toolMode === 'ptc' && call.permissionMode === 'read-only'))
+  await assert.rejects(manager.update({ id, toolMode: 'native' }), /実行中/)
+  await finish('a'); await finish('b'); await finish('leader')
+  await manager.update({ id, toolMode: 'native' })
+  await assert.rejects(manager.update({ id, toolMode: 'invalid' }), /不明/)
+  assert.equal(manager.require(id).config.toolMode, 'native')
+  await manager.update({ id, toolMode: 'ptc' })
+  const restored = await new AbManager({ dir, runner }).load()
+  assert.equal(restored.require(id).config.toolMode, 'ptc')
+  await manager.approve({ id, revision: 1, delegate: true, review: true })
+  await finish('instructions'); await finish('implementer'); await finish('reviewer')
+  assert.ok(runner.calls.every((call) => call.toolMode === 'ptc'))
+  assert.equal(runner.calls.find((call) => call.writable).permissionMode, 'danger-full-access')
+  await manager.update({ id, toolMode: 'native' })
+  await manager.revise({ id, text: 'more research' })
+  assert.equal(runner.calls.at(-1).toolMode, 'native')
+  assert.equal(runner.calls.at(-1).permissionMode, 'read-only')
+})
+
+test('AB retry uses the new PTC selection without replaying completed stages', async (t) => {
+  const { runner, manager, id, finish } = await setup(t, { toolMode: 'ptc' })
+  await finish('a'); await finish('b'); await finish('leader')
+  await manager.approve({ id, revision: 1, delegate: false, review: false })
+  await finish('direct', 'interrupted implementation', 'error')
+  const run = manager.require(id)
+  const count = runner.calls.length
+  await manager.update({ id, toolMode: 'native' })
+  await manager.retry({ id, jobId: run.retryJobId })
+  assert.equal(runner.calls.length, count + 1)
+  assert.equal(runner.calls.at(-1).toolMode, 'native')
+  assert.equal(runner.calls.at(-1).permissionMode, 'danger-full-access')
+})
+
+test('AB PTC defaults off and rejects invalid selections', () => {
+  assert.equal(abConfig().toolMode, 'native')
+  assert.equal(abConfig({ toolMode: 'ptc' }).toolMode, 'ptc')
+  for (const toolMode of ['other', true, {}]) assert.throws(() => abConfig({ toolMode }), /不明/)
+})
+
 test('AB totals every stage and failed attempt once, including after restart', async (t) => {
   const { dir, runner, manager, id } = await setup(t)
   const finishScore = async (role, points, status = 'completed') => {

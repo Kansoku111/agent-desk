@@ -161,6 +161,11 @@ export class TeamManager extends EventEmitter {
     this.execution = new ExecutionVerifier({ dir: path.join(dir, 'execution'), now })
     this.executionReview = new ExecutionReview({ dir: path.join(dir, 'execution', 'reviews') })
     this.exPending = new Set()
+    // Read the owning team's current choice at send time, including resumed children.
+    threads.teamToolMode = (thread) => {
+      const team = thread.team && this.teams.get(thread.team.id)
+      return team ? this.config(team).toolMode : undefined
+    }
     threads.executionGuard = (record) => this.guardExecution(record)
     terminals.executionGuard = (record) => this.guardExecution(record)
 
@@ -290,6 +295,7 @@ export class TeamManager extends EventEmitter {
       leaderId: team.leaderId,
       leaderKind: team.leaderKind,
       config: this.config(team),
+      toolModeBusy: this.toolModeBusy(team),
       ...(team.execution ? { execution: { leaderModel: team.execution.leaderModel, stopped: team.execution.stopped, metrics: team.execution.metrics } } : {}),
       createdAt: team.createdAt,
       updatedAt: team.updatedAt,
@@ -390,6 +396,14 @@ export class TeamManager extends EventEmitter {
   }
 
   isExecution(threadId) { return Boolean(this.#byTask(threadId)?.team.execution) }
+
+  toolModeBusy(team) {
+    const leaderBusy = team.leaderKind === 'thread'
+      ? this.threads.threads.get(team.leaderId)?.status === 'running'
+      : this.terminals.status(team.leaderId)?.activity === 'running'
+    return Boolean(leaderBusy || this.delivering.has(team.id)
+      || team.children.some((child) => ['working', 'verifying'].includes(child.execution?.phase) || (child.taskId ? this.#childBusy(child) : !child.closed)))
+  }
 
   #childBusy(child) {
     if (!child.taskId) return true
@@ -556,7 +570,7 @@ export class TeamManager extends EventEmitter {
     try {
       // Marked as the leader from the start: its session mounts the team's tools (mcpServerFor).
       thread = await this.threads.create({
-        workspace: team.workspace, model, effort: config.gptLeader.effort ?? '',
+        workspace: team.workspace, model, effort: config.gptLeader.effort ?? '', toolMode: config.toolMode,
         permissionMode: config.leaderBypass ? 'danger-full-access' : 'workspace-write', team: { id: team.id, role: 'leader', ...(team.execution?.strictEffort ? { strictEffort: true } : {}) },
       })
     } catch (error) {
@@ -892,7 +906,7 @@ export class TeamManager extends EventEmitter {
         const value = this.catalog.data.models.find((entry) => entry.provider === catalogProvider && entry.id === child.model)?.value
           ?? JSON.stringify([catalogProvider, child.model])
         const thread = await this.threads.create({
-          workspace: team.workspace, model: value, effort: child.effort ?? '', permissionMode: child.execution?.mode === 'research' ? 'read-only' : 'danger-full-access',
+          workspace: team.workspace, model: value, effort: child.effort ?? '', toolMode: this.config(team).toolMode, permissionMode: child.execution?.mode === 'research' ? 'read-only' : 'danger-full-access',
           team: { id: team.id, childId: child.id, ...(child.execution ? { executionMode: child.execution.mode } : {}), ...(team.execution?.strictEffort ? { strictEffort: true } : {}) },
         })
         taskId = child.taskId = thread.id
@@ -1329,9 +1343,10 @@ export class TeamManager extends EventEmitter {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
     if (authConfirmation) return this.#confirmAuth(team, authConfirmation, true, () => this.teams.get(teamId) === team).then(() => this.updateConfig(teamId, patch))
-    const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren'].includes(key)))
+    const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren', 'toolMode'].includes(key)))
     const before = this.#tierLines(this.config(team)).join('\n') + this.config(team).maxChildren
     const next = mergeTeamConfig(this.config(team), allowed)
+    if (next.toolMode !== this.config(team).toolMode && this.toolModeBusy(team)) throw new Error('実行中はPTCを変更できません')
     if (team.execution) {
       for (const provider of TEAM_PROVIDERS) {
         next[provider].mid.enabled = false

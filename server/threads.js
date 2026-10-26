@@ -212,7 +212,7 @@ export class ThreadManager extends EventEmitter {
   // ---------------------------------------------------------------- views
 
   summary(thread) {
-    return { ...thread }
+    return { ...thread, toolMode: this.teamToolMode?.(thread) ?? thread.toolMode ?? 'native' }
   }
 
   list() {
@@ -274,7 +274,7 @@ export class ThreadManager extends EventEmitter {
     await assertDirectory(workspace)
     if (this.stopping) throw new Error('アプリを終了しています')
     if (!PERMISSION_MODES.includes(permissionMode)) throw new Error('不明な権限モードです')
-    assertToolMode(toolMode, { ab, team })
+    assertToolMode(toolMode)
     const now = Date.now()
     const thread = {
       id: randomUUID(),
@@ -311,7 +311,8 @@ export class ThreadManager extends EventEmitter {
     const thread = this.#available(threadId)
     const running = this.active.has(threadId)
     if (patch.toolMode !== undefined) {
-      assertToolMode(patch.toolMode, thread)
+      assertToolMode(patch.toolMode)
+      if ((thread.ab || thread.team) && patch.toolMode !== this.summary(thread).toolMode) throw new Error('PTCはAB・チームの設定から変更してください')
       if (running && patch.toolMode !== thread.toolMode) throw new Error('実行中はPTCを変更できません')
       // Persist the choice now; apply and verify it immediately before the next prompt.
     }
@@ -825,8 +826,8 @@ export class ThreadManager extends EventEmitter {
     this.sessionIndex.set(thread.sessionId, thread.id)
     if (options) this.#learnOptions(thread, options)
 
-    const toolMode = thread.toolMode ?? 'native'
-    assertToolMode(toolMode, thread)
+    const toolMode = this.summary(thread).toolMode
+    assertToolMode(toolMode)
     const modeOption = toolModeOption(this.liveOptions.get(thread.sessionId))
     // Older/unpatched runtimes remain usable in native mode only. Never send
     // a PTC request without an explicit acknowledgement of the selection.

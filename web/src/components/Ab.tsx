@@ -17,6 +17,7 @@ import { useWheelSelect } from './useWheelSelect'
 import { Markdown, CopyButton } from './Markdown'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { AbImages, AbInput, useAbDraft } from './AbInput'
+import { PtcToggle } from './PtcToggle'
 import type { AuthConsentState } from '../team-auth-consent'
 
 export const AB_PHASE: Record<string, string> = { consulting: '2社に相談中', judging: '判断中', 'awaiting-approval': '案を確認', preparing: '実装指示を作成中', implementing: '実装中', reviewing: 'レビュー中', completed: '実装担当の報告', reviewed: 'レビュー報告', 'needs-attention': '要確認', stopped: '停止', interrupted: '中断', error: 'エラー' }
@@ -157,6 +158,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
         ))}</div>
         <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
         <ImplementationOptions config={config} change={change} disabled={busy} />
+        <PtcToggle mode={config.toolMode} disabled={busy} onChange={(toolMode) => change({ toolMode })} />
         <AbInput draft={draft} label="相談内容" placeholder="相談したいこと" disabled={busy} rows={6} onSubmit={() => void start()} />
         {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
       </> : <Loader2 className="spin" size={20} />}
@@ -222,6 +224,7 @@ export function AbView({ id }: { id: string }) {
   return <div className="ab-view">
     <header className="ab-header"><button className="icon-button" aria-label="サイドバーを開く" onClick={() => setState({ sidebarOpen: true })}><PanelLeftOpen size={18} /></button><span className="cl-mark tm-mark">AB</span><h2>{run.title}</h2>
       <span className="ab-phase">{ACTIVE.includes(run.phase) && <Loader2 size={14} className="spin" />}{AB_PHASE[run.phase] ?? run.phase}</span>
+      <PtcToggle mode={run.config.toolMode} disabled={busy || running || ACTIVE.includes(run.phase)} onChange={(toolMode) => action('ab.update', { toolMode })} />
       {!remote && <OpenInMenu workspace={run.workspace} />}
       {(ACTIVE.includes(run.phase) || running) && <button className="icon-button" aria-label="ABを停止" disabled={busy} onClick={() => void action('ab.stop')}><Square size={16} /></button>}
       <button className="icon-button" aria-label="ABを削除" disabled={busy} onClick={() => setRemoving(true)}><Trash2 size={16} /></button>

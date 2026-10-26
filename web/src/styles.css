@@ -335,6 +335,11 @@ kbd {
   color: var(--text);
 }
 
+.ptc-chip {
+  align-self: flex-start;
+  justify-self: start;
+}
+
 .chip.ptc-chip.on {
   background: var(--bg-active);
   color: var(--text);

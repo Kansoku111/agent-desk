@@ -62,7 +62,7 @@ export class AbRunner extends EventEmitter {
     })
   }
   async start(input) {
-    const { runId, jobId, model, effort = '', workspace, text, images = [], writable, lean, instructions } = input
+    const { runId, jobId, model, effort = '', toolMode = 'native', workspace, text, images = [], writable, lean, instructions } = input
     this.guard({ workspace })
     const owner = { runId, jobId, writable, denials: [], deniedIds: new Set() }
     if (model.startsWith('claude:')) {
@@ -77,7 +77,7 @@ export class AbRunner extends EventEmitter {
       }
       return { kind: 'claude', id: session.id }
     }
-    const thread = await this.threads.create({ workspace, model, effort, permissionMode: abJobPermission(writable),
+    const thread = await this.threads.create({ workspace, model, effort, toolMode, permissionMode: abJobPermission(writable),
       ab: { runId, jobId, writable, lean, ...(input.strictEffort ? { strictEffort: true } : {}) } })
     this.owned.set(thread.id, owner)
     try {

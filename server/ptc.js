@@ -3,9 +3,8 @@ export const TOOL_MODE_CONFIG = 'agent_desk_tool_mode'
 export const PTC_META = 'agentDesk/ptc'
 export const TOOL_MODES = ['native', 'ptc']
 
-export function assertToolMode(mode, { ab, team } = {}) {
+export function assertToolMode(mode) {
   if (!TOOL_MODES.includes(mode)) throw new Error('不明なツール実行方式です')
-  if (mode === 'ptc' && (ab || team)) throw new Error('PTCは通常のdshタスクでのみ利用できます')
 }
 
 export function toolModeOption(options) {

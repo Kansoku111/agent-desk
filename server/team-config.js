@@ -4,6 +4,7 @@
 // leader only ever picks a tier and a provider; the user maps them to models
 // here, so new models need no change to how the leader works.
 import { ENTRY_ID } from './team-playbooks.js'
+import { assertToolMode } from './ptc.js'
 
 /**
  * Teams' children by provider: GPT, Claude (API), DeepSeek, OpenCode Go and
@@ -30,6 +31,7 @@ const EFFORT = /^[a-z]{1,16}$/
 export const TEAM_DEFAULTS = {
   /** Who leads a new team: Claude Code (`leader`) or GPT as a dsh task (`gptLeader`). */
   leaderProvider: 'claude',
+  toolMode: 'native',
   // null: Claude Code's own default.
   leader: { model: 'opus', effort: null },
   // null model: the GPT "mid" tier's.
@@ -74,6 +76,7 @@ export function teamConfig(saved) {
   })
   return {
     leaderProvider: LEADER_PROVIDERS.includes(value.leaderProvider) ? value.leaderProvider : TEAM_DEFAULTS.leaderProvider,
+    toolMode: value.toolMode ?? 'native',
     leader: { ...TEAM_DEFAULTS.leader, ...value.leader },
     gptLeader: { ...TEAM_DEFAULTS.gptLeader, ...value.gptLeader },
     ...Object.fromEntries(SWITCHES.map((name) => [name, typeof value[name] === 'boolean' ? value[name] : TEAM_DEFAULTS[name]])),
@@ -104,6 +107,10 @@ function choice(value, pattern, name) {
 export function mergeTeamConfig(current, patch) {
   if (!isRecord(patch)) throw new Error('agentTeams はオブジェクトで指定してください')
   const next = teamConfig(current)
+  if (Object.hasOwn(patch, 'toolMode')) {
+    assertToolMode(patch.toolMode)
+    next.toolMode = patch.toolMode
+  }
   if (Object.hasOwn(patch, 'leader')) {
     if (!isRecord(patch.leader)) throw new Error('agentTeams.leader はオブジェクトで指定してください')
     if (Object.hasOwn(patch.leader, 'model')) next.leader.model = choice(patch.leader.model, CLAUDE_MODEL, 'リーダーのモデル')

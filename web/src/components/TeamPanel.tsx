@@ -8,6 +8,7 @@ import { effortLabel, relativeTime, resetLabel } from '../util'
 import { ChatGptLimits } from './ChatGptUsage'
 import { ConfirmDialog, Modal } from './Modal'
 import { TeamConfigDialog } from './TeamSettings'
+import { PtcToggle } from './PtcToggle'
 import { ExecutionChecksDialog } from './ExecutionSettings'
 import { claudeModelName } from './TerminalPickers'
 
@@ -320,6 +321,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
               <Square size={13} /> 全停止
             </button>
           </div>
+          <PtcToggle mode={team.config?.toolMode} disabled={team.toolModeBusy} onChange={(toolMode) => act('team.update', { teamId: team.id, patch: { toolMode } })} />
           <Notices team={team} />
           {children.map((child) => <ChildCard key={child.id} child={child} />)}
         </div>
