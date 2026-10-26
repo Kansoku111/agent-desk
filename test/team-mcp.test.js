@@ -70,7 +70,7 @@ test('the team MCP server lists its tools and forwards calls with the team secre
     assert.equal(init.result.instructions, undefined)
 
     const listed = await mcp.request('tools/list', {})
-    assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['spawn', 'send', 'status', 'read_report', 'approve', 'ask_user', 'close'])
+    assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['spawn', 'send', 'status', 'wait', 'read_report', 'approve', 'ask_user', 'close'])
     for (const tool of listed.result.tools) assert.equal(tool.inputSchema.type, 'object')
 
     const status = await mcp.request('tools/call', { name: 'status', arguments: {} })

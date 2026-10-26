@@ -54,13 +54,11 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
     'thread.messageStatus': ({ threadId, messageId }) => threads.messageStatus(threadId, messageId),
 
     'thread.send': async ({ threadId, text, images, messageId }) => {
-      teams.userWrote(threadId)
-      return threads.send(threadId, { text: text ?? '', images: await saveImages(images), messageId })
+      return threads.send(threadId, { text: text ?? '', images: await saveImages(images), messageId }, { userInitiated: true })
     },
 
     'thread.steer': async ({ threadId, text, images, messageId }) => {
-      teams.userWrote(threadId)
-      return threads.steer(threadId, { text: text ?? '', images: await saveImages(images), messageId })
+      return threads.steer(threadId, { text: text ?? '', images: await saveImages(images), messageId }, { userInitiated: true })
     },
 
     'thread.cancel': ({ threadId }) => threads.cancel(threadId),

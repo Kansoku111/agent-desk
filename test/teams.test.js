@@ -19,6 +19,7 @@ function fakeThreads() {
     threads: new Map(),
     turns: new Map(),
     calls: [],
+    goalWaitCalls: [],
     permissions: [],
     removing: new Map(),
     async create(options) {
@@ -29,7 +30,8 @@ function fakeThreads() {
       threads.emit('thread', { ...thread })
       return { ...thread }
     },
-    async send(id, { text }) {
+    async send(id, { text }, { guard } = {}) {
+      guard?.()
       threads.calls.push(['send', id, text])
       const thread = threads.threads.get(id)
       thread.status = 'running'
@@ -41,7 +43,7 @@ function fakeThreads() {
       Object.assign(threads.threads.get(id), patch)
     },
     async setGoalWaiting(id, waiting) {
-      threads.calls.push(['goal-wait', id, waiting])
+      threads.goalWaitCalls.push([id, waiting])
       threads.threads.get(id).goalWaiting = waiting
     },
     async implementResearch(id) {
@@ -350,11 +352,108 @@ test('stopAll keeps the leader parked even after a cancellation report and only 
   assert.equal(f.threads.teamGoalWaiting(parent), false)
 })
 
-test('TM dispatch never enables an eco goal wait', async (t) => {
+
+for (const eco of [false, true]) {
+  const mode = eco ? 'eco' : 'TM'
+  test(mode + ' user decisions stay parked across reports and cannot be overridden by independent work', async (t) => {
+    const f = eco ? await setupExecution(t) : await setup(t, { leaderProvider: 'gpt' })
+    const parent = f.threads.threads.get(f.leader)
+    await f.tool('ask_user', { message: 'どちらの方式にしますか' })
+    assert.equal(parent.goalWaiting, true)
+    await f.tool('wait', { waiting: false })
+    assert.equal(parent.goalWaiting, true)
+    assert.equal(f.threads.teamGoalWaiting(parent, { userInput: true }), false)
+    await f.tool('spawn', { ...exTask, mode: 'research' })
+    assert.equal(f.threads.teamGoalWaiting(parent, { userInput: true }), true, 'an answer does not erase outstanding children')
+    const child = f.team.children[0]
+    f.threads.finish(child.taskId, 'research result')
+    await f.tool('read_report', { child: child.id })
+    assert.equal(f.team.asks[0].done, false, 'a child report is not a human answer')
+    assert.equal(parent.goalWaiting, true)
+    f.manager.userWrote(f.leader)
+    await f.tool('wait', {})
+    assert.equal(parent.goalWaiting, false)
+  })
+
+  test(mode + ' dismissing an unanswered question wakes the leader once, without granting approval', async (t) => {
+    const f = eco ? await setupExecution(t) : await setup(t, { leaderProvider: 'gpt' })
+    const parent = f.threads.threads.get(f.leader)
+    await f.tool('ask_user', { message: '外部公開していいですか' })
+    parent.status = 'idle'
+    f.manager.dismissAsk(f.team.id, f.team.asks[0].id)
+    await tick()
+    const sent = f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader)
+    assert.equal(sent.length, 1)
+    assert.match(sent[0][2], /回答・承認ではありません/)
+    assert.equal(f.threads.teamGoalWaiting(parent), false)
+    f.manager.dismissAsk(f.team.id)
+    assert.equal(f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).length, 1)
+  })
+
+  test(mode + ' stop cannot be bypassed by work override or a failed delegation', async (t) => {
+    const f = eco ? await setupExecution(t) : await setup(t, { leaderProvider: 'gpt' })
+    const parent = f.threads.threads.get(f.leader)
+    await f.manager.stopAll(f.team.id)
+    await f.tool('wait', { waiting: false })
+    assert.equal(parent.goalWaiting, true)
+    await assert.rejects(f.tool('spawn', { ...exTask, title: '' }))
+    assert.equal(f.team.stopped, true)
+    await f.tool('spawn', { ...exTask, mode: 'research' })
+    assert.equal(f.team.stopped, false)
+    await f.tool('wait', { waiting: false })
+    assert.equal(parent.goalWaiting, false)
+  })
+}
+
+test('a concurrent stop is not cleared by an older asynchronous team command', async (t) => {
   const f = await setup(t, { leaderProvider: 'gpt' })
+  const original = f.threads.send
+  let entered, release
+  const started = new Promise((resolve) => { entered = resolve })
+  const ready = new Promise((resolve) => { release = resolve })
+  f.threads.send = async (...args) => { entered(); await ready; return original(...args) }
+  const pending = f.tool('spawn', { ...exTask })
+  await started
+  await f.manager.stopAll(f.team.id)
+  release()
+  await assert.rejects(pending, /停止/)
+  assert.equal(f.team.stopped, true)
+  assert.equal(f.threads.teamGoalWaiting(f.threads.threads.get(f.leader)), true)
+})
+
+
+test('dismissing one question preserves the others and identifies only the dismissed question', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  await f.tool('ask_user', { message: 'first specific question' })
+  await f.tool('ask_user', { message: 'second specific question' })
+  const parent = f.threads.threads.get(f.leader)
+  parent.status = 'idle'
+  f.manager.dismissAsk(f.team.id, f.team.asks[0].id)
+  await tick()
+  const sent = f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).at(-1)[2]
+  assert.match(sent, /first specific question/)
+  assert.doesNotMatch(sent, /second specific question/)
+  assert.equal(f.team.asks[1].done, false)
+  assert.equal(f.threads.teamGoalWaiting(parent), true)
+})
+
+test('TM parks delegated waits but can keep independent work running until a report arrives', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  const parent = f.threads.threads.get(f.leader)
   await f.tool('spawn', { title: 'work', task: 'bounded work', tier: 'low', provider: 'gpt' })
-  assert.equal(f.threads.teamGoalWaiting(f.threads.threads.get(f.leader)), undefined)
-  assert.equal(f.threads.calls.some((call) => call[0] === 'goal-wait'), false)
+  const child = f.team.children[0]
+  assert.equal(parent.goalWaiting, true)
+  assert.equal(f.threads.teamGoalWaiting(f.threads.threads.get(child.taskId)), undefined)
+  await f.tool('wait', { waiting: false })
+  assert.equal(parent.goalWaiting, false, 'parent can keep doing independent work')
+  await f.tool('wait', {})
+  assert.equal(parent.goalWaiting, true)
+  await f.tool('wait', { waiting: false })
+  f.threads.finish(child.taskId, 'ready for review')
+  assert.equal(parent.goalWaiting, true, 'a report takes priority over independent automatic rounds')
+  await f.tool('read_report', { child: child.id })
+  assert.equal(f.threads.teamGoalWaiting(parent), false)
+  assert.ok(f.threads.goalWaitCalls.length > 0)
 })
 
 test('team PTC validates selections and stays off for legacy teams even when new-team defaults are on', async (t) => {

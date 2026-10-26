@@ -11,7 +11,7 @@
 // The patch keeps the prompt in flight while the goal continues: after the
 // agent goes idle it waits for the driver to start the next round, and only
 // settles once the goal stops (complete, paused, blocked, disarmed, out of
-// rounds), an eco leader is parked for external work, or no round starts in time. The prompt's stop reason then comes from
+// rounds), a team leader is parked for external work, or no round starts in time. The prompt's stop reason then comes from
 // the last turn. Cancelling the prompt also disarms the goal, so a round the
 // driver was about to queue does not run with no prompt waiting for it.
 

@@ -127,7 +127,7 @@ for (const toolMode of ['native', 'ptc']) {
 
 
 for (const toolMode of ['native', 'ptc']) {
-  test('real eco goal wait makes no automatic calls and accepts reports and user prompts (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
+  test('real team goal wait makes no automatic calls and accepts reports and user prompts (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
     const f = await setup(t, 'danger-full-access')
     await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
     const tool = (name, args) => ({ name: toolMode === 'ptc' ? 'run_code' : name, args: toolMode === 'ptc'
@@ -164,6 +164,44 @@ for (const toolMode of ['native', 'ptc']) {
     assert.match(JSON.stringify(f.requests.at(-1).messages), /goal_round/)
   })
 }
+
+
+for (const toolMode of ['native', 'ptc']) {
+  test('real answered-question steering releases only the accepted turn gate (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'danger-full-access')
+    await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
+    await f.runtime.setGoalWaiting(f.session.sessionId, true)
+    const args = { objective: 'Perform independent work after the human answers', max_goal_rounds: 1 }
+    f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'create_goal', args: toolMode === 'ptc'
+      ? { description: 'Create a waiting goal', code: 'return await tools.create_goal(' + JSON.stringify(args) + ');' } : args })
+    let entered, release
+    const started = new Promise((resolve) => { entered = resolve })
+    const ready = new Promise((resolve) => { release = resolve })
+    f.queue.push(async () => { entered(); await ready })
+    const prompt = f.prompt()
+    await started
+    const accepted = await f.runtime.steer(f.session.sessionId, [{ type: 'text', text: 'human-answer-for-atomic-admission' }], false)
+    assert.equal(accepted, true)
+    assert.equal(f.runtime.waitingSessions.has(f.session.sessionId), false)
+    release()
+    assert.equal((await prompt).stopReason, 'end_turn')
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /human-answer-for-atomic-admission/)
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /goal_round/, 'independent goal work continues, instead of getting stuck behind the old question')
+    assert.ok(f.requests.length <= 5, 'the one-round budget is not reset by steering')
+  })
+}
+
+test('a late steer into an idle parent cannot start an orphan model turn or clear its wait', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'danger-full-access')
+  await f.runtime.setGoalWaiting(f.session.sessionId, true)
+  await f.prompt()
+  const before = f.requests.length
+  await assert.rejects(f.runtime.steer(f.session.sessionId, [{ type: 'text', text: 'must not be admitted as a normal prompt' }], false), /steer-unavailable/)
+  assert.equal(f.requests.length, before)
+  assert.equal(f.runtime.waitingSessions.has(f.session.sessionId), true)
+  await f.prompt()
+  assert.equal(f.requests.length, before + 1, 'an explicit prompt is still admissible')
+})
 
 test('cancelling a parked parent disarms its goal without restarting it', { timeout: 120_000 }, async (t) => {
   const f = await setup(t, 'danger-full-access')

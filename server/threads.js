@@ -490,12 +490,12 @@ export class ThreadManager extends EventEmitter {
    * working in the background and reports through `turn` events. An optional
    * UUID messageId deduplicates across send/steer and application restarts.
    */
-  async send(threadId, input) {
+  async send(threadId, input, { userInitiated = false, guard } = {}) {
     const message = normalizeMessage(input)
-    return this.#request(threadId, () => this.#send(threadId, message))
+    return this.#request(threadId, () => this.#send(threadId, message, userInitiated, guard))
   }
 
-  async #send(threadId, message) {
+  async #send(threadId, message, userInitiated, guard) {
     const { text, images, messageId } = message
     const thread = this.#available(threadId)
     const turns = await this.#loadTurns(threadId)
@@ -510,6 +510,7 @@ export class ThreadManager extends EventEmitter {
     this.#assertNotRestoring(thread)
     if (this.active.has(threadId)) throw new Error('このタスクはまだ作業中です')
     this.executionGuard?.(thread)
+    guard?.()
 
     const turn = newTurn({ id: randomUUID(), text, images })
     if (messageId) turn.user.messageId = messageId
@@ -543,6 +544,7 @@ export class ThreadManager extends EventEmitter {
       resolveDone()
       throw error
     }
+    if (userInitiated) this.userMessageAccepted?.(threadId)
     this.#emitThread(thread)
     this.#emitTurn(threadId, turn, true)
     void this.#run(thread, active).finally(resolveDone).catch((error) => {
@@ -934,7 +936,7 @@ export class ThreadManager extends EventEmitter {
    *   this dsh has no steering), so the caller can send it after the turn.
    *   `status: uncertain` must NOT be automatically retried or sent instead.
    */
-  async steer(threadId, input) {
+  async steer(threadId, input, { userInitiated = false, guard } = {}) {
     const message = normalizeMessage(input)
     return this.#request(threadId, async () => {
       const thread = this.#available(threadId)
@@ -944,7 +946,7 @@ export class ThreadManager extends EventEmitter {
       if (known) return known.status === 'accepted' ? { ...known, steered: true } : known
       const active = this.active.get(threadId)
       if (!this.#canSteer(thread, active)) return { steered: false }
-      const delivery = this.#deliverSteer(thread, active, message)
+      const delivery = this.#deliverSteer(thread, active, message, userInitiated, guard)
       active.steers.add(delivery)
       try {
         return await delivery
@@ -960,7 +962,7 @@ export class ThreadManager extends EventEmitter {
       && !this.removing.has(thread.id) && active.runtime && thread.sessionId
   }
 
-  async #deliverSteer(thread, active, { text, images, messageId }) {
+  async #deliverSteer(thread, active, { text, images, messageId }, userInitiated, guard) {
     const threadId = thread.id
     const blocks = await this.#promptBlocks({ user: { text, images } })
     if (!this.#canSteer(thread, active)) return { steered: false }
@@ -980,7 +982,12 @@ export class ThreadManager extends EventEmitter {
     }
     let steered = false
     try {
-      if (this.#canSteer(thread, active)) steered = await active.runtime.steer(thread.sessionId, blocks)
+      if (this.#canSteer(thread, active)) {
+        guard?.()
+        const waiting = userInitiated ? this.teamGoalWaiting?.(thread, { userInput: true }) : undefined
+        steered = waiting === undefined ? await active.runtime.steer(thread.sessionId, blocks)
+          : await active.runtime.steer(thread.sessionId, blocks, waiting)
+      }
     } catch (error) {
       if (!/steer-unavailable|already in flight/.test(shortMessage(error))) {
         if (messageId) return { status: 'uncertain' }
@@ -1000,6 +1007,7 @@ export class ThreadManager extends EventEmitter {
       }
       return { steered: false }
     }
+    if (userInitiated) this.userMessageAccepted?.(threadId)
     const turn = active.turn
     const item = { type: 'steer', id: `steer-${randomUUID()}`, text, images, at: Date.now() }
     if (messageId) item.messageId = messageId
@@ -1033,7 +1041,13 @@ export class ThreadManager extends EventEmitter {
 
   async cancel(threadId) {
     const active = this.active.get(threadId)
-    if (!active) return
+    if (!active) {
+      const thread = this.threads.get(threadId)
+      if (thread?.sessionId && this.teamGoalWaiting?.(thread) !== undefined) {
+        await this.pool.holderOf(thread.sessionId)?.cancel(thread.sessionId, true)
+      }
+      return
+    }
     active.cancelled = true
     if (active.turn.outputSpeed?.state === 'streaming') {
       active.turn.outputSpeed = { ...active.turn.outputSpeed, state: 'paused' }
@@ -1041,8 +1055,10 @@ export class ThreadManager extends EventEmitter {
     }
     this.#resolvePermissions(threadId, null)
     const thread = this.threads.get(threadId)
-    if (active.runtime && thread?.sessionId && active.phase === 'prompting') {
-      active.cancelTask ??= active.runtime.cancel(thread.sessionId).catch(() => {})
+    const controlled = thread && this.teamGoalWaiting?.(thread) !== undefined
+    const runtime = active.runtime ?? (controlled && thread.sessionId ? this.pool.holderOf(thread.sessionId) : null)
+    if (runtime && thread?.sessionId && (controlled || active.phase === 'prompting')) {
+      active.cancelTask ??= (controlled ? runtime.cancel(thread.sessionId, true) : runtime.cancel(thread.sessionId)).catch(() => {})
       await active.cancelTask
     }
   }

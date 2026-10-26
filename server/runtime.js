@@ -12,7 +12,7 @@ import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } from '@agentclie
 import { dshEnv } from './dsh-env.js'
 import { dshBin } from './paths.js'
 import { STEERED_META, STEER_META } from './steer-patch.js'
-import { GOAL_WAIT_CONFIG } from './goal-wait.js'
+import { GOAL_WAIT_CONFIG, GOAL_WAIT_AFTER_STEER } from './goal-wait.js'
 
 // Runtime and update validation must compose the same hooks in the same order.
 import { runtimeHookArgs } from './dsh-compatibility.js'
@@ -50,6 +50,7 @@ export class AcpRuntime extends EventEmitter {
     this.stderr = ''
     this.liveSessions = new Set()
     this.waitingSessions = new Set()
+    this.goalWaitWrites = new Map()
     this.startPromise = null
   }
 
@@ -90,6 +91,7 @@ export class AcpRuntime extends EventEmitter {
       this.startPromise = null
       this.liveSessions.clear()
       this.waitingSessions.clear()
+      this.goalWaitWrites.clear()
       this.emit('exit', { code, signal, wasReady, stderr: this.stderr })
     })
     child.on('error', (error) => {
@@ -146,13 +148,26 @@ export class AcpRuntime extends EventEmitter {
   /** Set a session-local automatic-round gate; explicit prompts remain admissible. */
   async setGoalWaiting(sessionId, waiting) {
     await this.#goalWaitOption(sessionId, waiting ? 'waiting' : 'ready')
-    if (waiting) this.waitingSessions.add(sessionId)
-    else this.waitingSessions.delete(sessionId)
   }
 
-  async #goalWaitOption(sessionId, value) {
+  #goalWaitSerial(sessionId, write) {
+    const previous = this.goalWaitWrites.get(sessionId) ?? Promise.resolve()
+    const current = previous.catch(() => {}).then(write)
+    this.goalWaitWrites.set(sessionId, current)
+    return current.finally(() => {
+      if (this.goalWaitWrites.get(sessionId) === current) this.goalWaitWrites.delete(sessionId)
+    })
+  }
+
+  #goalWaitOption(sessionId, value) {
+    return this.#goalWaitSerial(sessionId, () => this.#applyGoalWaitOption(sessionId, value))
+  }
+
+  async #applyGoalWaitOption(sessionId, value) {
     const options = await this.setOption(sessionId, GOAL_WAIT_CONFIG, value)
-    if (options?.find((option) => option.id === GOAL_WAIT_CONFIG)?.currentValue !== value) throw new Error('eco goal-wait was not applied; restart Agent Desk')
+    if (options?.find((option) => option.id === GOAL_WAIT_CONFIG)?.currentValue !== value) throw new Error('team goal-wait was not applied; restart Agent Desk')
+    if (value === 'ready') this.waitingSessions.delete(sessionId)
+    else this.waitingSessions.add(sessionId)
   }
 
   prompt(sessionId, prompt) {
@@ -163,19 +178,33 @@ export class AcpRuntime extends EventEmitter {
    * Adds a message to the session's running turn (see steer-hook.js).
    * @returns whether dsh took it; false when it has no steering support
    */
-  async steer(sessionId, prompt) {
-    const result = await this.#requireConn().prompt({ sessionId, prompt, _meta: { [STEER_META]: true } })
-    return result?._meta?.[STEERED_META] === true
+  async steer(sessionId, prompt, goalWaiting) {
+    const write = async () => {
+      const meta = { [STEER_META]: true }
+      if (typeof goalWaiting === 'boolean') meta[GOAL_WAIT_AFTER_STEER] = goalWaiting
+      const result = await this.#requireConn().prompt({ sessionId, prompt, _meta: meta })
+      const accepted = result?._meta?.[STEERED_META] === true
+      if (accepted && typeof goalWaiting === 'boolean') {
+        if (goalWaiting) this.waitingSessions.add(sessionId)
+        else this.waitingSessions.delete(sessionId)
+      }
+      return accepted
+    }
+    return typeof goalWaiting === 'boolean' ? this.#goalWaitSerial(sessionId, write) : write()
   }
 
-  async cancel(sessionId) {
+  async cancel(sessionId, controlled = false) {
     if (!this.conn) return
-    if (this.waitingSessions.has(sessionId)) await this.#goalWaitOption(sessionId, 'cancelled')
-    else await this.conn.cancel({ sessionId })
+    await this.#goalWaitSerial(sessionId, async () => {
+      if (!this.conn) return
+      if (controlled || this.waitingSessions.has(sessionId)) await this.#applyGoalWaitOption(sessionId, 'cancelled')
+      else await this.conn.cancel({ sessionId })
+    })
   }
 
   async closeSession(sessionId) {
     if (!this.liveSessions.has(sessionId)) return
+    await this.goalWaitWrites.get(sessionId)?.catch(() => {})
     this.liveSessions.delete(sessionId)
     this.waitingSessions.delete(sessionId)
     if (this.conn) await this.conn.closeSession({ sessionId })

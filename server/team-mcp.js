@@ -67,6 +67,11 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'wait',
+    description: 'Control same-session automatic goal rounds, not the current turn. By default delegation parks the leader at its next turn end. Use wait({waiting:false}) to keep doing independent work over automatic rounds; use wait() when that work is done. Pending user decisions, stop requests and queued reports take priority. No polling or sleeping is needed.',
+    inputSchema: { type: 'object', properties: { waiting: { type: 'boolean', description: 'Default true: wait for reports. false: continue independent work, without blocking reports or user decisions.' } } },
+  },
+  {
     name: 'read_report',
     description: 'Read a child\'s latest report in full (the message that told you about it may be shortened), with its earlier reports that had not reached you yet; those are then not sent to you again.',
     inputSchema: { type: 'object', properties: { child }, required: ['child'] },

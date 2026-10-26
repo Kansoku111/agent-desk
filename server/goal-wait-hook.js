@@ -8,7 +8,7 @@ registerHooks({
     if (!url.startsWith('file:') || !TARGET.test(new URL(url).pathname) || result.source == null) return result
     const source = patchGoalDriverSource(String(result.source))
     if (!source) {
-      process.stderr.write('[agent-desk] goal-wait hook: driver did not match; eco goal-wait will refuse to run\n')
+      process.stderr.write('[agent-desk] goal-wait hook: driver did not match; team goal-wait will refuse to run\n')
       return result
     }
     return { ...result, source }

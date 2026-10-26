@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Windows file-link actions wait for the native launcher and report failures instead of silently succeeding. Explorer reveal uses the Shell selection API, matches the requested view and selection even in reused windows, restores minimized windows, and verifies foreground activation without raising unrelated new windows. Literal paths, executable-file guards and non-Windows launch behavior are preserved.
-- Eco dsh leaders stop automatic goal rounds while delegated children, verification or undelivered reports are pending, rather than repeatedly generating waiting messages. A session-local scheduling gate preserves the active goal and round budget, admits explicit user/report/approval messages, and leaves normal/TM/child goal continuation unchanged. Driver reservations, ACP settlement and runtime compatibility checks share the gate; unsupported application fails before a new parent prompt.
+- TM and Eco dsh leaders share event-driven goal waiting for delegated work, verification, reports and user decisions. Independent parent work can opt into automatic rounds with `wait({waiting:false})` and yield with `wait()`, while queued reports, approvals, pending user questions and stop requests take priority. Goals and round budgets are preserved; ordinary tasks and child goal continuation remain unchanged.
+- Questions are answered only by newly accepted human input, not rejected sends, duplicate retries or child reports. Accepted steering updates scheduling atomically; late steering cannot fall through to an orphan normal prompt. Parked-parent cancellation and concurrent wait writes are acknowledged in order, and stop generations fence delayed child starts, follow-ups and automatic retries. Dismissing a question notifies the parent without granting approval.
 
 ## [0.1.3] - 2026-10-26
 

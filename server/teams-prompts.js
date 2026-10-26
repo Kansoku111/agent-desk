@@ -42,6 +42,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
     `At most ${maxChildren} children can be open at once; \`status\` shows the team.`,
     '',
     '## How to work',
+    'Delegation parks automatic goal rounds at the next turn end; your current turn can still do useful parallel work. If you need additional automatic rounds for independent work, use `wait({waiting:false})`. When only reports remain, use `wait()` and end your turn. User decisions, stop requests and queued reports take priority over that override. Do not poll, sleep or generate waiting messages to stay alive. The goal stays active without consuming rounds while waiting.',
     execution
       ? '1. Delegate bounded work to children; only read-only research may run in parallel. Keep one writer through verification and judgment.'
       : '1. Split work that can run in parallel and start one child per part with `spawn`, all at once. Give each child its own scope (files, folders, items) so no two children edit the same files.',

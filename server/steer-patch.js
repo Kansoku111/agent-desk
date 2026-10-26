@@ -1,5 +1,6 @@
 // How steer-hook.js changes dsh-acp, kept apart so Agent Desk's own process can
 // use the names and tests can check the patch without registering the hook.
+import { GOAL_WAIT_AFTER_STEER } from './goal-wait.js'
 export const STEER_META = 'agentDesk/steer'
 export const STEERED_META = 'agentDesk/steered'
 
@@ -18,12 +19,13 @@ export function patchAcpSource(source) {
   // agent would start a turn no prompt waits for.
   const open = (inflight) => `this.inflight === ${inflight} && !${inflight}.cancelRequested && !${inflight}.admissionController?.signal.aborted && this.agent.status === "running"`
   const steer = [
-    `if (this.inflight !== void 0 && params._meta?.[${JSON.stringify(STEER_META)}] === true) {`,
+    `if (params._meta?.[${JSON.stringify(STEER_META)}] === true) {`,
     'const steerInflight = this.inflight;',
-    `if (!(${open('steerInflight')})) throw ${unavailable};`,
+    `if (steerInflight === void 0 || !(${open('steerInflight')})) throw ${unavailable};`,
     `const steerContent = await ${admit[1]}(this.ctx, this.modelControl.snapshot(), params.prompt, imageEnabled, requestSignal ?? new AbortController().signal);`,
     `if (!(${open('steerInflight')})) throw ${unavailable};`,
     `this.agent.steer(${message[1]}({ content: steerContent, source: { kind: "user" } }));`,
+    `if (typeof params._meta?.[${JSON.stringify(GOAL_WAIT_AFTER_STEER)}] === "boolean") agentDeskSetGoalWaiting(this, params._meta[${JSON.stringify(GOAL_WAIT_AFTER_STEER)}] ? "waiting" : "ready");`,
     `return { stopReason: "end_turn", _meta: { ${JSON.stringify(STEERED_META)}: true } };`,
     '}',
   ].join(' ')

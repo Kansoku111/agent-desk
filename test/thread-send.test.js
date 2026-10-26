@@ -9,6 +9,26 @@ import { ThreadManager } from '../server/threads.js'
 import { createSettingsService } from '../server/settings.js'
 import { fixture } from './helpers/thread-manager.js'
 
+
+test('thread RPC only marks accepted human input, never validation failures or an internal retry', async (t) => {
+  const f = await fixture(t)
+  let answered = 0
+  f.manager.userMessageAccepted = () => answered++
+  const handlers = createThreadHandlers({ paths: f.paths, threads: f.manager,
+    teams: { userWrote() { assert.fail('the RPC must not clear questions before acceptance') } },
+    subagents: { list: async () => [] } })
+  await assert.rejects(handlers['thread.send']({ threadId: f.thread.id, text: '', images: [] }))
+  assert.equal(answered, 0)
+  const message = { threadId: f.thread.id, text: 'the answer', images: [], messageId: 'ef4eddc9-01fa-4f15-8567-86c72d5164f3' }
+  await handlers['thread.send'](message)
+  await f.started.promise
+  assert.equal(answered, 1)
+  await handlers['thread.send'](message)
+  assert.equal(answered, 1)
+  await assert.rejects(handlers['thread.send']({ threadId: f.thread.id, text: 'not accepted', images: [] }), /まだ作業中/)
+  assert.equal(answered, 1)
+})
+
 test('two sends that arrive together start one turn; the other is refused', async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-send-'))
   t.after(() => fs.rm(base, { recursive: true, force: true }))

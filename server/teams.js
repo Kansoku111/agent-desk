@@ -161,14 +161,16 @@ export class TeamManager extends EventEmitter {
     this.execution = new ExecutionVerifier({ dir: path.join(dir, 'execution'), now })
     this.executionReview = new ExecutionReview({ dir: path.join(dir, 'execution', 'reviews') })
     this.exPending = new Set()
+    this.workingLeaders = new Set()
     // Read the owning team's current choice at send time, including resumed children.
     threads.teamToolMode = (thread) => {
       const team = thread.team && this.teams.get(thread.team.id)
       return team ? this.config(team).toolMode : undefined
     }
-    threads.teamGoalWaiting = (thread) => {
+    threads.userMessageAccepted = (threadId) => this.userWrote(threadId)
+    threads.teamGoalWaiting = (thread, options) => {
       const team = thread.team && this.teams.get(thread.team.id)
-      return team?.execution && team.leaderId === thread.id ? this.#goalWaiting(team) : undefined
+      return team && team.leaderId === thread.id ? this.#goalWaiting(team, options) : undefined
     }
     threads.executionGuard = (record) => this.guardExecution(record)
     terminals.executionGuard = (record) => this.guardExecution(record)
@@ -595,6 +597,7 @@ export class TeamManager extends EventEmitter {
     const team = this.teams.get(teamId)
     if (!team) return { removed: false }
     this.teams.delete(teamId)
+    this.workingLeaders.delete(teamId)
     for (const child of team.children) this.execution.cancel(child.id)
     for (const approval of [...this.approvals.values()]) {
       if (approval.teamId === teamId) this.#dropApproval(approval)
@@ -790,23 +793,49 @@ export class TeamManager extends EventEmitter {
       throw error
     }
     const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+    const stopVersion = team.stopVersion ?? 0
     const result = await this.#callTool(team, tool, input)
-    if (team.execution && team.leaderKind === 'thread' && this.teams.has(team.id)) {
-      await this.threads.setGoalWaiting(team.leaderId, this.#goalWaiting(team))
+    if (team.stopped && ['spawn', 'send', 'implement', 'verify'].includes(tool) && (team.stopVersion ?? 0) === stopVersion) {
+      team.stopped = false
+      await this.#save()
     }
+    await this.#syncGoalWaiting(team)
     return result
   }
 
   /** Keep the gate until queued reports are actually admitted as a new prompt. */
-  #goalWaiting(team) {
-    return team.execution.stopped || team.queue.length > 0 || team.children.some((child) => !child.closed
+  #goalWaiting(team, { userInput = false } = {}) {
+    if (team.stopped || team.execution?.stopped || (!userInput && team.asks.some((ask) => !ask.done))) return true
+    if (team.queue.length) return true // Reports/approvals must not starve behind independent goal rounds.
+    if (!userInput && this.workingLeaders.has(team.id)) return false
+    return team.children.some((child) => !child.closed
       && (child.awaiting || ['working', 'verifying'].includes(child.execution?.phase) || this.#childBusy(child)))
+  }
+
+  async #syncGoalWaiting(team) {
+    if (team.leaderKind === 'thread' && this.teams.get(team.id) === team) {
+      await this.threads.setGoalWaiting(team.leaderId, this.#goalWaiting(team))
+    }
+  }
+
+  #wait(team, args) {
+    if (args.waiting !== undefined && typeof args.waiting !== 'boolean') throw new Error('waiting は真偽値で指定してください')
+    if (args.waiting === false) this.workingLeaders.add(team.id)
+    else this.workingLeaders.delete(team.id)
+    if (team.stopped || team.execution?.stopped) return 'ユーザーの停止後です。自動継続は再開しません。新たな依頼があるまで待ってください。'
+    if (team.asks.some((ask) => !ask.done)) return 'ユーザーの回答待ちです。ターンを終えてください。報告の受信だけでは回答済みにしません。'
+    if (team.queue.length) return '未配送の報告があります。ターンを終えて受け取るか read_report で確認してください。'
+    return this.#goalWaiting(team)
+      ? '報告待ちに入りました。ターンを終えてください。目標は保持し、自動goal roundは起こしません。'
+      : args.waiting === false ? '独立した作業の自動継続を許可しました。報告・承認要求が届くか、wait() で待機に戻るまで有効です。'
+        : '待つ対象はありません。必要な作業や最終確認を進めてください。ユーザーの判断が要る場合は ask_user を使ってください。'
   }
 
   #callTool(team, tool, input) {
     switch (tool) {
       case 'spawn': return this.#spawn(team, input)
       case 'send': return this.#send(team, input)
+      case 'wait': return this.#wait(team, input)
       case 'status': return this.#status(team)
       case 'read_report': return this.#readReport(team, input)
       case 'approve': return this.#approve(team, input)
@@ -858,7 +887,15 @@ export class TeamManager extends EventEmitter {
     return name
   }
 
-  async #spawn(team, args) {
+  #stopGuard(team) {
+    const version = team.stopVersion ?? 0
+    return () => {
+      if (this.teams.get(team.id) !== team) throw new Error('team was removed')
+      if ((team.stopVersion ?? 0) !== version) throw new Error((team.execution ? 'eco' : 'チーム') + 'は作業開始前に停止されました')
+    }
+  }
+
+  async #spawn(team, args, guard = this.#stopGuard(team)) {
     const config = this.config(team)
     const title = oneLine(String(args.title ?? '')).slice(0, 80)
     const task = String(args.task ?? '').trim()
@@ -898,7 +935,7 @@ export class TeamManager extends EventEmitter {
     try {
       if (execution?.mode === 'write') child.execution.baseline = await this.executionReview.start(team.workspace, child.id)
       if (team.execution?.stopped) throw new Error('ecoは作業開始前に停止されました')
-      await this.#startTask(team, child, task)
+      await this.#startTask(team, child, task, guard)
     } catch (error) {
       team.children = team.children.filter((entry) => entry !== child)
       this.#emit(team)
@@ -911,7 +948,7 @@ export class TeamManager extends EventEmitter {
   }
 
   /** Starts a new conversation for the child on its task; on failure the child keeps the task it had. */
-  async #startTask(team, child, task) {
+  async #startTask(team, child, task, guard) {
     task = executionTask(task, child.execution)
     const { title } = child
     // The task's name in the lists; a leader that named the child after its job gets it once.
@@ -931,7 +968,8 @@ export class TeamManager extends EventEmitter {
         })
         taskId = child.taskId = thread.id
         if (!this.teams.has(team.id)) throw new Error('team was removed')
-        await this.threads.send(thread.id, { text: childTask(child.name, title, task) })
+        guard()
+        await this.threads.send(thread.id, { text: childTask(child.name, title, task) }, { guard })
         await this.threads.update(thread.id, { title: taskTitle })
       } else {
         const session = await this.agents.create({
@@ -939,6 +977,7 @@ export class TeamManager extends EventEmitter {
         })
         taskId = child.taskId = session.id
         if (!this.teams.has(team.id)) throw new Error('team was removed')
+        guard()
         this.agents.run(session.id, `# Task from the team leader: ${title}\n\n${task}`)
       }
     } catch (error) {
@@ -953,7 +992,7 @@ export class TeamManager extends EventEmitter {
   }
 
   /** A new work unit, but the same child and conversation as its accepted research. */
-  async #implement(team, args) {
+  async #implement(team, args, guard = this.#stopGuard(team)) {
     if (!team.execution) throw new Error('unknown tool: implement')
     const child = this.#child(team, args.child)
     if (child.execution?.mode !== 'research' || !child.closed || child.execution.outcome !== 'accepted') throw new Error('調査を確認し、根拠を指定して close してから implement してください')
@@ -974,6 +1013,7 @@ export class TeamManager extends EventEmitter {
     child.awaiting = true
     team.execution.stopped = false
     const assertStarting = () => {
+      guard()
       if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed || team.execution.stopped) throw new Error('ecoの実装開始は停止されました')
     }
     let switched = false
@@ -995,7 +1035,7 @@ export class TeamManager extends EventEmitter {
       if (child.kind === 'thread') {
         await this.threads.update(child.taskId, { title: child.name === title ? title : `${child.name}: ${title}` })
         assertStarting()
-        await this.#toThread(child, body)
+        await this.#toThread(child, body, guard)
       } else {
         this.#toAgent(child, body)
       }
@@ -1020,7 +1060,7 @@ export class TeamManager extends EventEmitter {
     return kind === 'thread' ? this.threads.remove(taskId) : this.agents.remove(taskId)
   }
 
-  async #send(team, args) {
+  async #send(team, args, guard = this.#stopGuard(team)) {
     const child = this.#child(team, args.child)
     this.guardExecution({ id: team.leaderId, workspace: team.workspace })
     if (team.execution && child.closed) this.#checkRoom(team)
@@ -1059,7 +1099,7 @@ export class TeamManager extends EventEmitter {
       }
     }
     if (args.fresh === true) {
-      try { return await this.#sendFresh(team, child, text) } catch (error) {
+      try { return await this.#sendFresh(team, child, text, guard) } catch (error) {
         child.closed = wasClosed
         if (executionBefore) child.execution = executionBefore
         throw error
@@ -1081,7 +1121,8 @@ export class TeamManager extends EventEmitter {
         else await this.agents.setArgs(child.taskId, this.#agentArgs(team, child))
         if (team.execution.stopped) throw new Error('ecoは作業開始前に停止されました')
       }
-      how = child.kind === 'thread' ? await this.#toThread(child, body) : this.#toAgent(child, body)
+      guard()
+      how = child.kind === 'thread' ? await this.#toThread(child, body, guard) : this.#toAgent(child, body)
     } catch (error) {
       child.closed = wasClosed
       child.awaiting = false
@@ -1096,7 +1137,7 @@ export class TeamManager extends EventEmitter {
   }
 
   /** The child starts over in a new conversation on the message: what it carried is dropped. */
-  async #sendFresh(team, child, text) {
+  async #sendFresh(team, child, text, guard) {
     if (child.kind === 'thread' && this.threads.threads.get(child.taskId)?.pendingApproval) {
       throw new Error(`子「${child.name}」は承認待ちです。approve で答えてから fresh で送ってください。`)
     }
@@ -1107,7 +1148,7 @@ export class TeamManager extends EventEmitter {
     child.closed = false
     child.awaiting = true
     try {
-      await this.#startTask(team, child, text)
+      await this.#startTask(team, child, text, guard)
     } catch (error) {
       Object.assign(child, before)
       throw error
@@ -1122,16 +1163,17 @@ export class TeamManager extends EventEmitter {
     return `子「${child.name}」を新しい会話で始めました。報告が届くまで、ターンを終えて待ってください。`
   }
 
-  async #toThread(child, body) {
+  async #toThread(child, body, guard) {
     const thread = this.threads.threads.get(child.taskId)
     if (!thread) throw new Error(`子「${child.name}」のタスクは削除されています`)
     if (thread.status === 'running') {
-      const result = await this.threads.steer(child.taskId, { text: body })
+      const result = await this.threads.steer(child.taskId, { text: body }, { guard })
+      guard()
       if (result?.steered) return '作業中のところへ割り込みで渡しました'
       child.pending.push(body)
       return 'いまの作業が終わりしだい渡します'
     }
-    await this.threads.send(child.taskId, { text: body })
+    await this.threads.send(child.taskId, { text: body }, { guard })
     return '送りました'
   }
 
@@ -1159,7 +1201,7 @@ export class TeamManager extends EventEmitter {
       child.pending = []
       child.awaiting = true
       try {
-        await this.threads.send(child.taskId, { text })
+        await this.threads.send(child.taskId, { text }, { guard: this.#stopGuard(team) })
       } catch (error) {
         child.awaiting = false
         this.#report(team, child, 'error', `リーダーからの指示を渡せませんでした: ${error.message}`)
@@ -1320,9 +1362,14 @@ export class TeamManager extends EventEmitter {
   dismissAsk(teamId, askId) {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
-    for (const ask of team.asks) if (ask.id === askId || askId === undefined) ask.done = true
+    const dismissed = team.asks.filter((ask) => !ask.done && (ask.id === askId || askId === undefined))
+    if (!dismissed.length) return { team: this.summary(team) }
+    for (const ask of dismissed) ask.done = true
+    team.queue.push({ id: randomUUID(), childId: null, kind: 'notice', at: this.now(), text: 'ユーザーが質問を閉じました。これは回答・承認ではありません。未確定の前提を承認済みとみなさず、必要な対応を判断してください。' + '\n' + dismissed.map((ask) => '- ' + clip(ask.text, 240)).join('\n') })
+    void this.#syncGoalWaiting(team).catch((error) => this.log(`team ${team.id}: goal wait update failed:`, error.message))
     void this.#save()
     this.#emit(team)
+    this.#pump(team)
     return { team: this.summary(team) }
   }
 
@@ -1393,6 +1440,9 @@ export class TeamManager extends EventEmitter {
   async stopAll(teamId) {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
+    team.stopped = true
+    team.stopVersion = (team.stopVersion ?? 0) + 1
+    this.workingLeaders.delete(team.id)
     if (team.execution) {
       team.execution.stopped = true
       for (const child of team.children) this.execution.cancel(child.id)
@@ -1421,7 +1471,8 @@ export class TeamManager extends EventEmitter {
       }
       stopped += 1
     }
-    if (team.execution && team.leaderKind === 'thread') await this.threads.setGoalWaiting(team.leaderId, this.#goalWaiting(team))
+    await this.#syncGoalWaiting(team)
+    await this.#save()
     return { team: this.summary(team), stopped }
   }
 
@@ -1487,6 +1538,7 @@ export class TeamManager extends EventEmitter {
     const preview = extra.review ? REPORT_KEEP : REPORT_PREVIEW
     const shown = body.length > preview ? `${body.slice(0, preview)}…\n（続きは read_report で読めます）` : body
     team.queue.push({ id: randomUUID(), childId: child.id, kind, text: shown, at, ...extra })
+    void this.#syncGoalWaiting(team).catch((error) => this.log(`team ${team.id}: goal wait update failed:`, error.message))
     team.updatedAt = at
     void this.#save()
     this.#emit(team)
@@ -1600,7 +1652,8 @@ export class TeamManager extends EventEmitter {
   /** The user wrote to a leader (a GPT leader's thread.send, or a Claude leader's own prompt, #onLeaderHook): the questions it asked are being answered. */
   userWrote(threadId) {
     const found = this.#byTask(threadId)
-    if (!found || found.child || !found.team.asks.some((ask) => !ask.done)) return
+    if (!found || found.child) return
+    this.workingLeaders.delete(found.team.id)
     for (const ask of found.team.asks) ask.done = true
     void this.#save()
     this.#emit(found.team)
@@ -1841,6 +1894,7 @@ export class TeamManager extends EventEmitter {
 
   /** A GPT leader's turn ended: why, if Agent Desk stopped it; then the next report. */
   #onLeaderFinished(team) {
+    this.workingLeaders.delete(team.id)
     if (team.execution) { team.execution.metrics.parentTurns = (team.execution.metrics.parentTurns ?? 0) + 1; void this.#save() }
     if (this.apiStopped.delete(`leader:${team.id}`)) {
       team.queue.unshift({
@@ -1929,7 +1983,7 @@ export class TeamManager extends EventEmitter {
         this.#report(team, child, 'error', `一時的なエラーのあと、自動で再開できませんでした: ${error.message}`)
       }
       try {
-        if (child.kind === 'thread') this.threads.send(child.taskId, { text: RESUME_TEXT }).catch(failed)
+        if (child.kind === 'thread') this.threads.send(child.taskId, { text: RESUME_TEXT }, { guard: this.#stopGuard(team) }).catch(failed)
         else this.agents.run(child.taskId, RESUME_TEXT)
       } catch (error) {
         failed(error)
