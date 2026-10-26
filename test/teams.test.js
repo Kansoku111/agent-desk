@@ -702,6 +702,58 @@ test('eco delivers actual review evidence beyond the ordinary preview and persis
   assert.match(JSON.stringify(saved), /source.txtの実際の変更を依頼と照合して確認した/)
 })
 
+
+for (const provider of ['gpt', 'claude']) {
+  test('eco ' + provider + ' delivers captured checks on new contexts and work units, not every follow-up', async (t) => {
+    const f = await setupExecution(t, {}, {
+      gpt: { enabled: provider === 'gpt', low: { model: 'gpt-6-luna' } },
+      claude: { enabled: provider === 'claude', low: { model: 'haiku' } },
+    })
+    const registered = { id: 'test', command: 'node -e "console.log(1)"' }
+    const extra = { id: 'task-only', cwd: 'checks', command: 'node -e "console.log(2)"' }
+    await fs.mkdir(path.join(f.workspace, 'checks'))
+    await f.manager.configureExecution(f.workspace, [registered, { id: 'unused', command: 'echo not-selected' }])
+    await f.tool('spawn', { ...exTask, provider, checks: ['test'], extraChecks: [extra] })
+    const child = f.team.children[0]
+    const captured = structuredClone(child.execution.checks)
+    const message = () => provider === 'gpt'
+      ? f.threads.calls.findLast((call) => call[0] === 'send' && call[1] === child.taskId)[2]
+      : f.agents.calls.findLast((call) => call[0] === 'run' && call[1] === child.taskId)[2]
+    const assertChecks = () => {
+      const payload = message()
+      const commands = payload.split('\n').filter((line) => line.startsWith('{')).map((line) => JSON.parse(line))
+      assert.deepEqual(commands, [{ cwd: '.', ...registered }, extra])
+      assert.equal(payload.split('[eco アプリの最終検証').length, 2, 'guidance is attached once')
+      assert.ok(payload.includes(exTask.criteria))
+      assert.doesNotMatch(payload, /not-selected|process.exit/)
+      assert.deepEqual(child.execution.checks, captured)
+    }
+    const finish = async () => {
+      if (provider === 'gpt') f.threads.finish(child.taskId, 'done')
+      else f.agents.finish(child.taskId, 'done')
+      await Promise.all([...f.manager.exPending])
+      assert.equal(child.execution.verification.status, 'passed')
+      assert.equal(child.execution.verification.checks[0].command, registered.command)
+    }
+    assertChecks()
+    await f.manager.configureExecution(f.workspace, [{ ...registered, command: 'node -e "process.exit(99)"' }])
+    await finish()
+    await f.tool('send', { child: child.id, message: '同じ範囲の手直し' })
+    assert.doesNotMatch(message(), /eco アプリの最終検証/)
+    assert.equal(child.execution.instructions.at(-1), '同じ範囲の手直し')
+    await finish()
+    const taskId = child.taskId
+    await f.tool('send', { child: child.id, message: '同じ範囲で会話をやり直す', fresh: true })
+    assert.notEqual(child.taskId, taskId)
+    assertChecks()
+    await finish()
+    await f.tool('close', { child: child.id, reason: '依頼と差分・検証結果を照合した' })
+    await f.tool('send', { child: child.id, message: '次の作業' })
+    assert.equal(child.execution.task, '次の作業', 'guidance stays out of the recorded user task')
+    assertChecks()
+  })
+}
+
 test('eco keeps the work-unit baseline through send/fresh and resets it for work after close', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await tool('spawn', exTask)
@@ -863,6 +915,12 @@ for (const provider of ['gpt', 'claude']) {
     await tool('spawn', { ...exTask, provider, mode: 'research' })
     const child = team.children[0]
     const taskId = child.taskId
+    const researchPayload = provider === 'gpt'
+      ? threads.calls.findLast((call) => call[0] === 'send' && call[1] === taskId)[2]
+      : agents.calls.findLast((call) => call[0] === 'run' && call[1] === taskId)[2]
+    assert.match(researchPayload, /根拠が十分なら実装方針・検証案も添え/)
+    assert.match(researchPayload, /読み取り専用の調査/)
+    assert.doesNotMatch(researchPayload, /eco アプリの最終検証/)
     if (provider === 'gpt') threads.finish(taskId, 'investigation evidence')
     else agents.finish(taskId, 'investigation evidence')
     await tool('close', { child: child.id, reason: '原因と参照コードを照合した' })
@@ -878,6 +936,12 @@ for (const provider of ['gpt', 'claude']) {
     assert.deepEqual(child.execution.research, research, 'retain the original research judgment')
     assert.ok(child.execution.baseline.commit)
     assert.equal(child.execution.checks[0].id, 'test')
+    const payload = provider === 'gpt'
+      ? threads.calls.findLast((call) => call[0] === 'send' && call[1] === taskId)[2]
+      : agents.calls.findLast((call) => call[0] === 'run' && call[1] === taskId)[2]
+    assert.match(payload, /eco アプリの最終検証/)
+    assert.ok(payload.includes(JSON.stringify({ id: 'test', cwd: '.', command: child.execution.checks[0].command })))
+    assert.equal(payload.split('[eco 完了条件]').length, 2)
     await assert.rejects(tool('spawn', { ...exTask, provider }), /作業中|終わっていません/)
     if (provider === 'gpt') {
       assert.equal(threads.threads.get(taskId).permissionMode, 'danger-full-access')

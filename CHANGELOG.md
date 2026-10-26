@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Eco leaders can continue related implementation with the same child after reviewing and accepting its research. The explicit `implement` tool retains the model and conversation, applies writer permissions through the app, captures a new baseline, and preserves serialized writes, verification and parent judgment. Ordinary research follow-ups remain read-only; failed session migration never silently starts a replacement conversation.
 
+### Changed
+
+- Eco guidance prioritizes inexpensive children for investigation and implementation while leaving research depth, planning detail and review needs to the leader. Eco launches no longer include TM parallel-writer or mid-tier advice. Children receive their work unit's captured verification commands and working directories at new-unit/conversation boundaries, with focused checks preferred but necessary full testing still allowed. Research reports can include evidence-backed implementation ideas; no presets, review caps, automatic acceptance or verification bypasses are added.
+
 ## [0.1.3] - 2026-10-26
 
 ### Changed

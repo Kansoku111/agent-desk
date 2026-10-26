@@ -34,6 +34,27 @@ test('eco leader prompts do not request opt-in tools even with saved lean settin
   assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /`spawn` with `tools: true`/)
 })
 
+test('eco leader guidance keeps strategy flexible without TM parallel-write or mid-tier advice', () => {
+  const options = {
+    team: { id: 'eco', secret: 's', workspace: 'C:/work', execution: {} },
+    config: teamConfig({}), models: [], dir: dir(),
+    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
+  }
+  const server = leaderMcpServer(options)
+  const file = server.env.find(({ name }) => name === 'AGENT_DESK_TEAM_INSTRUCTIONS').value
+  for (const prompt of [promptOf(leaderLaunch(options).args), fs.readFileSync(file, 'utf8')]) {
+    assert.match(prompt, /only read-only research may run in parallel/)
+    assert.match(prompt, /Keep one writer through verification and judgment/)
+    assert.match(prompt, /Children use only tier "low"/)
+    assert.match(prompt, /rather than following a fixed sequence or review count/)
+    assert.doesNotMatch(prompt, /start one child per part.*all at once|mid": work that needs judgment/)
+  }
+  const tm = promptOf(leaderLaunch({ ...options, team: { ...options.team, execution: undefined } }).args)
+  assert.match(tm, /start one child per part.*all at once/)
+  assert.match(tm, /mid": work that needs judgment/)
+  assert.doesNotMatch(tm, /rather than following a fixed sequence or review count/)
+})
+
 test('eco leaders ignore TM policy and playbooks even when explicitly supplied', () => {
   const options = {
     team: { id: 'eco', secret: 's', workspace: 'C:/work', execution: {} },

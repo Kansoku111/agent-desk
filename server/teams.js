@@ -22,7 +22,7 @@ import { sameToken } from './remote.js'
 import { workflowTeamEfforts } from '../shared/workflow-effort.js'
 import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
-import { CATALOG_PROVIDER, childTask, clip, describeTool, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
+import { CATALOG_PROVIDER, childTask, clip, describeTool, executionTask, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { leaderGuides, readPlaybook } from './team-playbooks.js'
 import { markOf, reportsMessage } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
@@ -880,7 +880,7 @@ export class TeamManager extends EventEmitter {
     try {
       if (execution?.mode === 'write') child.execution.baseline = await this.executionReview.start(team.workspace, child.id)
       if (team.execution?.stopped) throw new Error('ecoは作業開始前に停止されました')
-      await this.#startTask(team, child, execution ? `${task}\n\n[eco 完了条件]\n${execution.criteria}\n実装後にアプリが検証します。範囲外の変更はせず、結果・変更箇所・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。` : task)
+      await this.#startTask(team, child, task)
     } catch (error) {
       team.children = team.children.filter((entry) => entry !== child)
       this.#emit(team)
@@ -894,6 +894,7 @@ export class TeamManager extends EventEmitter {
 
   /** Starts a new conversation for the child on its task; on failure the child keeps the task it had. */
   async #startTask(team, child, task) {
+    task = executionTask(task, child.execution)
     const { title } = child
     // The task's name in the lists; a leader that named the child after its job gets it once.
     const taskTitle = child.name === title ? title : `${child.name}: ${title}`
@@ -972,7 +973,7 @@ export class TeamManager extends EventEmitter {
       }
       switched = true
       assertStarting()
-      const body = `[リーダーから: eco実装への切り替え]\n調査の内容を引き継ぎ、以下の依頼を実装してください。アプリが実装用の権限を適用しました。\n\n# Task: ${title}\n\n${task}\n\n[eco 完了条件]\n${execution.criteria}\n実装後にアプリが検証します。範囲外の変更はせず、結果・変更箇所・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。`
+      const body = executionTask(`[リーダーから: eco実装への切り替え]\n調査の内容を引き継ぎ、以下の依頼を実装してください。アプリが実装用の権限を適用しました。\n\n# Task: ${title}\n\n${task}`, child.execution)
       if (child.kind === 'thread') {
         await this.threads.update(child.taskId, { title: child.name === title ? title : `${child.name}: ${title}` })
         assertStarting()
@@ -1048,7 +1049,7 @@ export class TeamManager extends EventEmitter {
     }
     // A closed child takes a place again.
     if (child.closed) this.#checkRoom(team)
-    const body = `[リーダーから]\n${text}`
+    const body = executionTask(`[リーダーから]\n${text}`, wasClosed ? child.execution : undefined)
     child.closed = false
     child.awaiting = true
     delete child.resumed

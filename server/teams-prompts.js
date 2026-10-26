@@ -26,7 +26,7 @@ export const oneLine = (text) => text.replace(/\s+/g, ' ').trim()
  * The leader's standing instructions (a Claude leader's --append-system-prompt-file,
  * a GPT leader's MCP server instructions).
  */
-export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean = false, policy = '', playbooks = [] }) {
+export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean = false, execution = false, policy = '', playbooks = [] }) {
   return [
     '# Agent Desk team: you are the leader',
     '',
@@ -37,12 +37,14 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       ? ['To keep each turn small, a child starts without the browser, desktop-control and image-generation tools (a Claude child without MCP servers). `spawn` with `tools: true` the children that need them.']
       : []),
     'You never choose model names. Choose a tier and a provider:',
-    '- tier "low": simple, repetitive or high-volume work. tier "mid": work that needs judgment, design or quality.',
+    execution ? '- Children use only tier "low".' : '- tier "low": simple, repetitive or high-volume work. tier "mid": work that needs judgment, design or quality.',
     ...tiers,
     `At most ${maxChildren} children can be open at once; \`status\` shows the team.`,
     '',
     '## How to work',
-    '1. Split work that can run in parallel and start one child per part with `spawn`, all at once. Give each child its own scope (files, folders, items) so no two children edit the same files.',
+    execution
+      ? '1. Delegate bounded work to children; only read-only research may run in parallel. Keep one writer through verification and judgment.'
+      : '1. Split work that can run in parallel and start one child per part with `spawn`, all at once. Give each child its own scope (files, folders, items) so no two children edit the same files.',
     '2. Write each task so it can be done from that text alone: the goal, the exact scope, what "done" means, where results go, and what the report should say. Put long material in a file and pass its path.',
     '3. After starting children, end your turn and wait. Do not check `status` in a loop: an idle turn costs nothing, and reports arrive in this conversation by themselves, in the order the children finish (those that came while you worked arrive together). Handle them, then end your turn again. A child may also report again on its own (the user spoke to it directly); handle that the same way.',
     '4. Audit without reading everything: check the report and how the child checked its work, sample the results, and open details (`read_report`, the files) only when needed. Accepted: `close` the child. Needs fixes: `send` them to the same child, which keeps its context. Later work on the same scope (a second pass, a new requirement) also goes to the same child with `send`, even after `close`; add `fresh: true` when the work needs little of that conversation, so the child starts over without carrying it.',
@@ -104,6 +106,26 @@ export function childPrompt(name, { background = false } = {}) {
 /** The first message of a dsh child: who it is, and its task (its standing instructions are in its system prompt). */
 export function childTask(name, title, task) {
   return `${PREFIX}\nYou are the child agent "${name}" of this Agent Desk team.\n\n# Task: ${title}\n\n${task}`
+}
+
+/** Guidance for a new eco work unit or conversation, using its captured checks, not live settings. */
+export function executionTask(task, execution) {
+  if (!execution) return task
+  const guidance = execution.mode === 'research'
+    ? [
+      '読み取り専用の調査です。確認した事実と根拠、残る不明点を短く報告してください。根拠が十分なら実装方針・検証案も添え、不十分なら推測で埋めないでください。実装は行いません。',
+      'この調査でアプリのコマンド検証は行いません。',
+    ]
+    : [
+      '範囲外の変更はせず、結果・変更箇所・確認結果・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。',
+      '',
+      '[eco アプリの最終検証（cwdは作業フォルダからの相対パス）]',
+      ...execution.checks.map(({ id, cwd = '.', command }) => JSON.stringify({ id, cwd, command })),
+      execution.checks.length
+        ? '報告後にアプリが上記を実行します。子は再現・対象を絞った回帰確認を優先し、同じ全体検証の不要な重複を避けてください。ただし必要な検証は省かず、全体テストが必要なら実行してください。'
+        : 'アプリが実行する検証コマンドはありません（未実行扱い）。依頼に必要な確認を行い、未確認の点も報告してください。',
+    ]
+  return [task, '', '[eco 完了条件]', execution.criteria, ...guidance].join('\n')
 }
 
 /** A tool call an approval is about, in one line. */

@@ -63,7 +63,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
     },
   }, null, 2))
   const prompt = writeFile(dir, 'leader.md', withInstructions(leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: !team.execution && config.leanChildren, ...guides,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: !team.execution && config.leanChildren, execution: Boolean(team.execution), ...guides,
   }) + (team.execution ? EXECUTION_PROMPT : ''), instructions))
   return {
     args: [
@@ -85,7 +85,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
 export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl, guides = NO_GUIDES }) {
   if (team.execution) guides = NO_GUIDES
   const prompt = writeFile(dir, 'leader.md', leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: !team.execution && config.leanChildren, ...guides,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: !team.execution && config.leanChildren, execution: Boolean(team.execution), ...guides,
   }) + (team.execution ? EXECUTION_PROMPT : ''))
   return {
     name: MCP_SERVER,
