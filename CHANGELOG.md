@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Eco leaders can continue related implementation with the same child after reviewing and accepting its research. The explicit `implement` tool retains the model and conversation, applies writer permissions through the app, captures a new baseline, and preserves serialized writes, verification and parent judgment. Ordinary research follow-ups remain read-only; failed session migration never silently starts a replacement conversation.
+
 ## [0.1.3] - 2026-10-26
 
 ### Changed

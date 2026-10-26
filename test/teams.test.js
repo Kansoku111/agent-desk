@@ -40,6 +40,13 @@ function fakeThreads() {
       threads.calls.push(['update', id, patch])
       Object.assign(threads.threads.get(id), patch)
     },
+    async implementResearch(id) {
+      const thread = threads.threads.get(id)
+      if (thread.status === 'running') throw new Error('調査中です')
+      threads.calls.push(['implementResearch', id])
+      thread.permissionMode = 'danger-full-access'
+      thread.team.executionMode = 'write'
+    },
     async steer(id, { text }) {
       threads.calls.push(['steer', id, text])
       return { steered: threads.steerable ?? false }
@@ -148,6 +155,11 @@ function fakeAgents() {
       agents.calls.push(['run', id, text])
       session.running = true
       agents.emit('session', agents.get(id))
+    },
+    async setArgs(id, args) {
+      if (agents.running(id)) throw new Error('作業中です')
+      agents.sessions.get(id).args = [...args]
+      agents.calls.push(['setArgs', id, args])
     },
     /** A message added to the turn that is running (false when none runs, or `session.steerable` is off). */
     steer(id, text) {
@@ -806,7 +818,7 @@ test('eco reports research permissions and preserves them through send and fresh
   const spawned = await tool('spawn', { ...exTask, mode: 'research', name: 'R' })
   const child = team.children[0]
   assert.match(spawned, /mode: research（読み取り専用・昇格不可）/)
-  assert.match(spawned, /別の mode: write/)
+  assert.match(spawned, /implement で同じ子/)
   assert.match(await tool('status'), /R .*mode: research・読み取り専用・昇格不可/)
   const firstTask = child.taskId
   threads.finish(firstTask, 'investigated')
@@ -839,6 +851,159 @@ test('eco research reports skip verification but still require the parent review
   await assert.rejects(tool('close', { child: research.id }), /根拠/)
   await tool('close', { child: research.id, reason: '調査報告の参照先を依頼と照合した' })
   assert.equal(research.execution.outcome, 'accepted')
+})
+
+
+for (const provider of ['gpt', 'claude']) {
+  test(`eco implements accepted research in the same ${provider} child and verifies it`, async (t) => {
+    const { tool, team, manager, threads, agents, workspace } = await setupExecution(t, {}, {
+      gpt: { enabled: provider === 'gpt', low: { model: 'gpt-6-luna' } },
+      claude: { enabled: provider === 'claude', low: { model: 'haiku' } },
+    })
+    await tool('spawn', { ...exTask, provider, mode: 'research' })
+    const child = team.children[0]
+    const taskId = child.taskId
+    if (provider === 'gpt') threads.finish(taskId, 'investigation evidence')
+    else agents.finish(taskId, 'investigation evidence')
+    await tool('close', { child: child.id, reason: '原因と参照コードを照合した' })
+    const research = structuredClone(child.execution)
+    await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(1)"' }])
+    await tool('implement', { child: child.id, title: '関連箇所の修正', task: 'fix source.txt only', criteria: '修正と回帰確認', checks: ['test'], maxRepairs: 0 })
+    assert.equal(team.children.length, 1)
+    assert.equal(child.taskId, taskId)
+    assert.equal(child.execution.mode, 'write')
+    assert.equal(child.execution.phase, 'working')
+    assert.equal(child.title, '関連箇所の修正')
+    assert.equal(child.execution.criteria, '修正と回帰確認')
+    assert.deepEqual(child.execution.research, research, 'retain the original research judgment')
+    assert.ok(child.execution.baseline.commit)
+    assert.equal(child.execution.checks[0].id, 'test')
+    await assert.rejects(tool('spawn', { ...exTask, provider }), /作業中|終わっていません/)
+    if (provider === 'gpt') {
+      assert.equal(threads.threads.get(taskId).permissionMode, 'danger-full-access')
+      assert.equal(threads.threads.get(taskId).team.executionMode, 'write')
+      assert.match(threads.calls.findLast((call) => call[0] === 'send' && call[1] === taskId)[2], /修正と回帰確認/)
+    } else {
+      const args = agents.sessions.get(taskId).args
+      assert.equal(args.includes('--tools'), false, 'remove the research-only tool allowlist')
+      assert.ok(args.includes('--disallowedTools'), 'delegation remains unavailable')
+      assert.match(agents.calls.findLast((call) => call[0] === 'run')[2], /修正と回帰確認/)
+    }
+    await fs.writeFile(path.join(workspace, 'source.txt'), 'implemented')
+    if (provider === 'gpt') threads.finish(taskId, 'implemented')
+    else agents.finish(taskId, 'implemented')
+    await Promise.all([...manager.exPending])
+    assert.equal(child.execution.verification.status, 'passed')
+    assert.match(await fs.readFile(child.execution.review.patch, 'utf8'), /\+implemented/)
+    await assert.rejects(tool('close', { child: child.id }), /根拠/)
+    await tool('close', { child: child.id, reason: '元の原因と修正差分・回帰検証を確認した' })
+    assert.equal(child.execution.outcome, 'accepted')
+  })
+}
+
+test('eco implement rejects unreviewed/abandoned research, invalid checks and writer conflicts without changing permissions', async (t) => {
+  const { tool, team, threads } = await setupExecution(t)
+  await tool('spawn', { ...exTask, mode: 'research' })
+  const child = team.children[0]
+  const args = { ...exTask, child: child.id }
+  await assert.rejects(tool('implement', args), /close/)
+  threads.finish(child.taskId, 'evidence')
+  await assert.rejects(tool('implement', args), /close/)
+  await tool('close', { child: child.id, accept: false, reason: '調査が不十分' })
+  await assert.rejects(tool('implement', args), /close/)
+  await tool('send', { child: child.id, message: 'investigate further' })
+  threads.finish(child.taskId, 'more evidence')
+  await tool('close', { child: child.id, reason: '調査を確認した' })
+  await assert.rejects(tool('implement', { ...args, criteria: '' }), /criteria/)
+  await assert.rejects(tool('implement', { ...args, checks: ['missing'] }), /登録/)
+  await tool('spawn', exTask)
+  await assert.rejects(tool('implement', args), /作業中|終わっていません/)
+  assert.equal(child.closed, true)
+  assert.equal(child.execution.mode, 'research')
+  assert.equal(threads.threads.get(child.taskId).permissionMode, 'read-only')
+  assert.equal(threads.calls.some((call) => call[0] === 'implementResearch'), false)
+})
+
+test('eco reserves the writer during implementation setup and stop prevents permission switching', async (t) => {
+  const { tool, team, manager, threads } = await setupExecution(t)
+  await tool('spawn', { ...exTask, mode: 'research' })
+  const child = team.children[0]
+  threads.finish(child.taskId, 'evidence')
+  await tool('close', { child: child.id, reason: '調査を確認した' })
+  let release
+  manager.executionReview.start = () => new Promise((resolve) => { release = resolve })
+  const starting = tool('implement', { ...exTask, child: child.id })
+  await assert.rejects(tool('implement', { ...exTask, child: child.id }), /close/)
+  await assert.rejects(tool('spawn', exTask), /終わっていません/)
+  await manager.stopAll(team.id)
+  release({ commit: 'baseline' })
+  await assert.rejects(starting, /停止/)
+  assert.equal(child.closed, true)
+  assert.equal(child.execution.mode, 'research')
+  assert.equal(threads.threads.get(child.taskId).permissionMode, 'read-only')
+})
+
+test('eco preserves accepted research when its runtime cannot switch, and does not start a fresh child', async (t) => {
+  const { tool, team, threads } = await setupExecution(t)
+  await tool('spawn', { ...exTask, mode: 'research' })
+  const child = team.children[0]
+  threads.finish(child.taskId, 'evidence')
+  await tool('close', { child: child.id, reason: '調査を確認した' })
+  const before = structuredClone(child)
+  threads.implementResearch = async () => { throw new Error('session unavailable') }
+  await assert.rejects(tool('implement', { ...exTask, child: child.id }), /session unavailable/)
+  assert.deepEqual(child, before)
+  assert.equal(team.children.length, 1)
+})
+
+
+test('eco saves implementation scope before moving runtimes and can recover an interrupted move with send', async (t) => {
+  const { tool, team, manager, threads } = await setupExecution(t)
+  await tool('spawn', { ...exTask, mode: 'research' })
+  const child = team.children[0]
+  const taskId = child.taskId
+  threads.finish(taskId, 'evidence')
+  await tool('close', { child: child.id, reason: '調査を確認した' })
+  const move = threads.implementResearch
+  let interrupted
+  threads.implementResearch = async () => {
+    const saved = JSON.parse(await fs.readFile(manager.file, 'utf8'))
+    interrupted = saved.teams.find((entry) => entry.id === team.id).children.find((entry) => entry.id === child.id)
+    assert.equal(interrupted.execution.mode, 'write')
+    assert.equal(interrupted.execution.research.outcome, 'accepted')
+    assert.ok(interrupted.execution.baseline.commit)
+    throw new Error('interrupted before runtime move')
+  }
+  await assert.rejects(tool('implement', { ...exTask, child: child.id }), /interrupted/)
+  // Replay the last durable work unit, as after a process interruption.
+  Object.assign(child, interrupted)
+  threads.implementResearch = move
+  manager.start()
+  assert.equal(child.execution.phase, 'review')
+  assert.equal(threads.threads.get(taskId).permissionMode, 'read-only')
+  await tool('send', { child: child.id, message: 'continue the recorded implementation scope' })
+  assert.equal(child.taskId, taskId)
+  assert.equal(child.execution.mode, 'write')
+  assert.equal(threads.threads.get(taskId).permissionMode, 'danger-full-access')
+  assert.equal(threads.threads.get(taskId).status, 'running')
+})
+
+test('stopping during a runtime switch leaves a reviewable writer without starting an implementation turn', async (t) => {
+  const { tool, team, manager, threads } = await setupExecution(t)
+  await tool('spawn', { ...exTask, mode: 'research' })
+  const child = team.children[0]
+  threads.finish(child.taskId, 'evidence')
+  await tool('close', { child: child.id, reason: '調査を確認した' })
+  const move = threads.implementResearch
+  threads.implementResearch = async (id) => { await move(id); await manager.stopAll(team.id) }
+  const sends = threads.calls.filter((call) => call[0] === 'send' && call[1] === child.taskId).length
+  await assert.rejects(tool('implement', { ...exTask, child: child.id }), /停止/)
+  assert.equal(child.execution.mode, 'write')
+  assert.equal(child.execution.phase, 'review')
+  assert.equal(child.execution.verification, undefined)
+  assert.equal(threads.threads.get(child.taskId).permissionMode, 'danger-full-access')
+  assert.equal(threads.calls.filter((call) => call[0] === 'send' && call[1] === child.taskId).length, sends)
+  await assert.rejects(tool('close', { child: child.id, reason: 'cannot accept without verification' }), /成功していません/)
 })
 
 test('eco verify tool re-verifies the current files without a child turn', async (t) => {

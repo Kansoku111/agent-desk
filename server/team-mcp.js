@@ -127,6 +127,16 @@ if (process.env.AGENT_DESK_EXECUTION === '1') {
     maxRepairs: { type: 'integer', minimum: 0, maximum: 2 },
   })
   spawn.inputSchema.required.push('criteria', 'checks')
+  const implementationFields = ['title', 'task', 'criteria', 'checks', 'extraChecks', 'maxRepairs']
+  TOOLS.push({
+    name: 'implement',
+    description: 'Start implementation with the same child after accepting and closing its research. Keeps the investigation conversation and model; the app switches permissions, captures a new baseline and verifies the implementation. Prefer this over spawning a new child for related implementation. Requires a new bounded task, acceptance criteria and checks; no fresh or mode change through send.',
+    inputSchema: {
+      type: 'object',
+      properties: { child, ...Object.fromEntries(implementationFields.map((key) => [key, spawn.inputSchema.properties[key]])) },
+      required: ['child', 'title', 'task', 'criteria', 'checks'],
+    },
+  })
   TOOLS.push({
     name: 'verify',
     description: 'Run the unit\'s verification again on the current files, for after you edited them yourself. No child turn is used; the result is reported to you, so end your turn.',

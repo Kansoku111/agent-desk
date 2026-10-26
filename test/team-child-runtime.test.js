@@ -17,9 +17,10 @@ test('the team children\'s layer turns every subagent tool off and gives the chi
 test('the child plugin adds its text as one literal section after the persona', () => {
   const sections = []
   const systemPrompt = { getSectionOrder: (name) => ({ DEPLOYMENT_PERSONA_SUFFIX: 10200 })[name], section: (section) => sections.push(section) }
-  apply({ systemPrompt }, { text: ' ' })
+  const sandboxPolicy = { defaultMode: 'danger-full-access' }
+  apply({ systemPrompt, sandboxPolicy, on() {} }, { text: ' ' })
   assert.equal(sections.length, 0)
-  apply({ systemPrompt }, { text: childPrompt() })
+  apply({ systemPrompt, sandboxPolicy, on() {} }, { text: childPrompt() })
   assert.deepEqual(sections, [{ name: SECTION_NAME, order: 10250, text: childPrompt(), interpolate: false }])
 })
 
@@ -29,14 +30,14 @@ test('read-only child guidance comes from its own runtime, not leader messages',
     for (const mode of ['read-only', 'danger-full-access']) {
       process.env.DSH_PERMISSION_MODE = mode
       const sections = []
-      apply({ systemPrompt: { getSectionOrder: () => 10200, section: (section) => sections.push(section) } }, { text: childPrompt() })
+      apply({ systemPrompt: { getSectionOrder: () => 10200, section: (section) => sections.push(section) }, sandboxPolicy: { defaultMode: mode }, on() {} }, { text: childPrompt() })
       const readOnly = sections.find((section) => section.name === READ_ONLY_SECTION_NAME)
       if (mode === 'read-only') {
         assert.deepEqual(readOnly, { name: READ_ONLY_SECTION_NAME, order: 10251, text: READ_ONLY_PROMPT, interpolate: false })
         assert.match(readOnly.text, /independently of the leader's permissions/)
         assert.match(readOnly.text, /Omit sandbox_permissions and justification on run_code/)
         assert.match(readOnly.text, /do not retry escalation or work around the denial/)
-        assert.match(readOnly.text, /separate mode: write child/)
+        assert.match(readOnly.text, /Only the leader can start implementation through the app's implement tool/)
       } else assert.equal(readOnly, undefined)
     }
   } finally {
@@ -45,6 +46,26 @@ test('read-only child guidance comes from its own runtime, not leader messages',
   }
   assert.match(childPrompt(), /if this session permits file writes/)
 })
+
+
+for (const mode of ['read-only', 'danger-full-access']) {
+  test(`child lifecycle applies only its selected runtime policy on resume (${mode})`, async () => {
+    let listener
+    const events = [], flushed = []
+    let resolved = mode === 'read-only' ? 'danger-full-access' : 'read-only'
+    const session = { append: (type, data) => { events.push([type, data]); resolved = data.mode } }
+    apply({ systemPrompt: { getSectionOrder: () => 10200, section() {} },
+      sandboxPolicy: { defaultMode: mode, resolve: () => ({ mode: resolved }) },
+      sessions: { flush: async (value) => flushed.push(value) },
+      on: (name, handler) => { assert.equal(name, 'agent/created'); listener = handler },
+    }, { text: childPrompt() })
+    await listener({ agent: { session }, source: 'resume' })
+    assert.deepEqual(events, [['sandbox/mode', { mode }]])
+    assert.deepEqual(flushed, [session])
+    await listener({ agent: { session }, source: 'compact' })
+    assert.equal(events.length, 1, 'unchanged policy does not add another event')
+  })
+}
 
 test('the layer also removes the fixed-model tools the home patch adds, with their prompt section', () => {
   const subagents = [{ provider: 'anthropic', model: 'claude-sonnet-5-5' }, { provider: 'openai-codex', model: 'gpt-6.1-sol' }]

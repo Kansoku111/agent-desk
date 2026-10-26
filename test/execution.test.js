@@ -6,11 +6,12 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { ExecutionVerifier, normalizeChecks, sourceSnapshot, EXECUTION_PROMPT, workspaceKey, workspaceWithin, workspacesOverlap } from '../server/execution.js'
 
-test('eco leader knows research permissions are independent and immutable across follow-ups', () => {
+test('eco leader reuses accepted research only through explicit implementation', () => {
   assert.match(EXECUTION_PROMPT, /research child is read-only even when you have full access/)
   assert.match(EXECUTION_PROMPT, /Omit sandbox_permissions and justification/)
-  assert.match(EXECUTION_PROMPT, /spawn a separate mode: write child/)
-  assert.match(EXECUTION_PROMPT, /send and fresh preserve the child's original mode/)
+  assert.match(EXECUTION_PROMPT, /close the research unit with accept:true and a reason, then use implement on that same child/)
+  assert.match(EXECUTION_PROMPT, /send and fresh preserve the child's current mode/)
+  assert.match(EXECUTION_PROMPT, /only one writer is allowed through verification and judgment/)
 })
 
 test('workspace aliases preserve overlap for descendants that do not exist yet', async (t) => {

@@ -353,6 +353,45 @@ export class ThreadManager extends EventEmitter {
     return this.summary(thread)
   }
 
+  /** Team-manager only: move accepted research to its writer runtime without summarizing history. */
+  implementResearch(threadId) {
+    return this.#request(threadId, async () => {
+      const thread = this.#available(threadId)
+      if (thread.team?.childId && thread.team.executionMode === 'write' && thread.permissionMode === 'danger-full-access') return this.summary(thread)
+      if (!thread.team?.childId || thread.team.executionMode !== 'research' || thread.permissionMode !== 'read-only') throw new Error('ecoの調査専用タスクだけ実装へ切り替えられます')
+      if (this.active.has(threadId) || thread.pendingApproval) throw new Error('調査が終わってから実装へ切り替えてください')
+      if (!thread.sessionId) throw new Error('調査のセッションがありません。別の実装の子を起動してください')
+      const runtime = await this.pool.get('team:danger-full-access')
+      this.#available(threadId, thread)
+      const holder = this.pool.holderOf(thread.sessionId)
+      if (holder) await holder.closeSession(thread.sessionId)
+      this.#available(threadId, thread)
+      this.liveOptions.delete(thread.sessionId)
+      const previousTeam = thread.team
+      let resumed = false
+      try {
+        // No newSession fallback here: a missing log must not silently lose the investigation.
+        const result = await runtime.resumeSession(thread.sessionId, thread.workspace, this.getMcpServers(thread))
+        resumed = true
+        this.#available(threadId, thread)
+        thread.team = { ...thread.team, executionMode: 'write' }
+        thread.permissionMode = 'danger-full-access'
+        this.#learnOptions(thread, result?.configOptions)
+        this.#saveIndex()
+        await this.indexWriter.flush()
+      } catch (error) {
+        thread.team = previousTeam
+        thread.permissionMode = 'read-only'
+        this.liveOptions.delete(thread.sessionId)
+        if (resumed) await runtime.closeSession(thread.sessionId).catch(() => {})
+        this.#saveIndex()
+        throw error
+      }
+      this.#emitThread(thread)
+      return this.summary(thread)
+    })
+  }
+
   /** Applies an option to a live, idle session right away; otherwise on the next prompt. */
   async #applyLive(thread, configId, value) {
     if (!thread.sessionId || this.active.has(thread.id)) return

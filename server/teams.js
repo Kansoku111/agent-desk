@@ -795,6 +795,7 @@ export class TeamManager extends EventEmitter {
       case 'ask_user': return this.#askUser(team, input)
       case 'close': return this.#close(team, input)
       case 'verify': return this.#reverify(team, input)
+      case 'implement': return this.#implement(team, input)
       // TM only; reject direct calls and calls from an already-running eco MCP too.
       // Read when called: a playbook changed since the leader started is read as it is now.
       case 'playbook':
@@ -888,7 +889,7 @@ export class TeamManager extends EventEmitter {
     team.updatedAt = now
     await this.#save()
     this.#emit(team)
-    return `子「${child.name}」を起動しました（${this.#label(child)}）。${child.execution?.mode === 'research' ? 'mode: research（読み取り専用・昇格不可）。実装は別の mode: write の子へ依頼してください。' : ''}終わると報告がこの会話に届きます。ほかに任せる作業がなければ、ターンを終えて待ってください。`
+    return `子「${child.name}」を起動しました（${this.#label(child)}）。${child.execution?.mode === 'research' ? 'mode: research（読み取り専用・昇格不可）。調査を判定して close した後、implement で同じ子に実装を依頼できます。' : ''}終わると報告がこの会話に届きます。ほかに任せる作業がなければ、ターンを終えて待ってください。`
   }
 
   /** Starts a new conversation for the child on its task; on failure the child keeps the task it had. */
@@ -930,6 +931,69 @@ export class TeamManager extends EventEmitter {
     }
     // The conversation it replaces goes: the child is no longer found by it, so its removal leaves the child be.
     if (previous) await this.#removeTask(child.kind, previous).catch((error) => this.log(`team ${team.id}: removing ${child.name}'s old task:`, error.message))
+  }
+
+  /** A new work unit, but the same child and conversation as its accepted research. */
+  async #implement(team, args) {
+    if (!team.execution) throw new Error('unknown tool: implement')
+    const child = this.#child(team, args.child)
+    if (child.execution?.mode !== 'research' || !child.closed || child.execution.outcome !== 'accepted') throw new Error('調査を確認し、根拠を指定して close してから implement してください')
+    if (this.#childBusy(child)) throw new Error('調査が終わってから実装へ切り替えてください')
+    const title = oneLine(String(args.title ?? '')).slice(0, 80)
+    const task = String(args.task ?? '').trim()
+    if (!title) throw new Error('title（実装のタイトル）を指定してください')
+    if (!task) throw new Error('task（実装の依頼）を指定してください')
+    const execution = this.#exTask(team, { ...args, mode: 'write' })
+    this.guardExecution({ workspace: team.workspace, id: team.leaderId })
+    this.#exRoom(team, child)
+    this.#checkRoom(team)
+    const previous = { title: child.title, execution: child.execution, closed: child.closed, awaiting: child.awaiting }
+    // Reserve the writer synchronously, before capturing its baseline or moving runtimes.
+    child.title = title
+    child.execution = { ...execution, task, research: previous.execution }
+    child.closed = false
+    child.awaiting = true
+    team.execution.stopped = false
+    const assertStarting = () => {
+      if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed || team.execution.stopped) throw new Error('ecoの実装開始は停止されました')
+    }
+    let switched = false
+    try {
+      child.execution.baseline = await this.executionReview.start(team.workspace, child.id)
+      assertStarting()
+      // Commit the work unit before widening the task: a crash must never leave
+      // a saved research unit attached to a writable task. send can finish migration.
+      await this.#save()
+      assertStarting()
+      if (child.kind === 'thread') {
+        await this.threads.implementResearch(child.taskId)
+      } else {
+        await this.agents.setArgs(child.taskId, this.#agentArgs(team, child))
+      }
+      switched = true
+      assertStarting()
+      const body = `[リーダーから: eco実装への切り替え]\n調査の内容を引き継ぎ、以下の依頼を実装してください。アプリが実装用の権限を適用しました。\n\n# Task: ${title}\n\n${task}\n\n[eco 完了条件]\n${execution.criteria}\n実装後にアプリが検証します。範囲外の変更はせず、結果・変更箇所・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。`
+      if (child.kind === 'thread') {
+        await this.threads.update(child.taskId, { title: child.name === title ? title : `${child.name}: ${title}` })
+        assertStarting()
+        await this.#toThread(child, body)
+      } else {
+        this.#toAgent(child, body)
+      }
+    } catch (error) {
+      if (!switched) Object.assign(child, previous)
+      else {
+        child.awaiting = false
+        this.#report(team, child, team.execution.stopped ? 'cancelled' : 'error', `実装を開始できませんでした: ${error.message}`, { byUser: team.execution.stopped })
+      }
+      await this.#save()
+      this.#emit(team)
+      throw error
+    }
+    child.updatedAt = team.updatedAt = this.now()
+    await this.#save()
+    this.#emit(team)
+    return `子「${child.name}」に調査の会話を引き継いで実装を依頼しました。報告までターンを終えて待ってください。`
   }
 
   /** Async, so a removal that throws at once (a task already gone) is a rejection too. */
@@ -991,6 +1055,13 @@ export class TeamManager extends EventEmitter {
     child.updatedAt = this.now()
     let how
     try {
+      // A restart may have interrupted implement between saving the work unit
+      // and moving its read-only task; finish that move before resuming the writer.
+      if (child.execution?.research) {
+        if (child.kind === 'thread') await this.threads.implementResearch(child.taskId)
+        else await this.agents.setArgs(child.taskId, this.#agentArgs(team, child))
+        if (team.execution.stopped) throw new Error('ecoは作業開始前に停止されました')
+      }
       how = child.kind === 'thread' ? await this.#toThread(child, body) : this.#toAgent(child, body)
     } catch (error) {
       child.closed = wasClosed

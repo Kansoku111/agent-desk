@@ -1,6 +1,7 @@
-// One `dsh --profile acp` process per permission mode. dsh fixes the sandbox
-// mode for a process at launch (DSH_PERMISSION_MODE), so switching a thread to
-// another mode moves its session to that mode's process with session/resume.
+// One `dsh --profile acp` process per deployment permission mode. Ordinary
+// permission changes start a new session with carryover; eco's explicit research
+// transition resumes the same session in the writer process. The child plugin
+// applies that process's policy to the resumed session before it can act.
 // Agent teams' children have processes of their own, with an extra layer that
 // takes their subagent tools away (dsh-config.js teamChildPatch).
 import { spawn } from 'node:child_process'

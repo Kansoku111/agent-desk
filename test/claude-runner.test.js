@@ -104,6 +104,26 @@ test('a turn is one claude -p run: the prompt on stdin, its events folded into t
   assert.throws(() => runner.run(session.id, 'もう一つ'), /作業中/)
 })
 
+test('tool flags can change between research and implementation while resuming the same Claude conversation', async (t) => {
+  const { runner, spawned, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work', model: 'haiku', args: ['--tools', 'Read,Glob,Grep'] })
+  runner.run(session.id, 'investigate')
+  await assert.rejects(runner.setArgs(session.id, []), /作業中/)
+  const ended = done()
+  spawned[0].write(init())
+  spawned[0].write({ type: 'result', subtype: 'success', result: 'investigation evidence' })
+  spawned[0].end()
+  await ended
+  await runner.setArgs(session.id, ['--permission-mode', 'bypassPermissions'])
+  assert.equal(runner.get(session.id).sessionId, session.sessionId)
+  const saved = JSON.parse(await fs.readFile(path.join(runner.dir, `${session.id}.json`), 'utf8'))
+  assert.deepEqual(saved.args, ['--permission-mode', 'bypassPermissions'])
+  assert.equal(saved.turns[0].user.text, 'investigate')
+  runner.run(session.id, 'implement')
+  assert.deepEqual(spawned[1].args.slice(0, 2), ['--resume', session.sessionId])
+  assert.equal(spawned[1].args.includes('--tools'), false)
+})
+
 test('the token counts Claude Code reports with its result go out with the finished turn', async (t) => {
   const { runner, spawned, finished, done } = await setup(t)
   const session = await runner.create({ workspace: '/work', model: 'haiku', effort: 'low', args: [] })

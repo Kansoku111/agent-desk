@@ -57,8 +57,9 @@ async function setup(t, mode, profile) {
     permissions.push(request)
     return { outcome: { outcome: 'cancelled' } }
   } })
+  const runtimes = [runtime]
   t.after(async () => {
-    await runtime.stop()
+    for (const entry of runtimes) await entry.stop()
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
     assert.equal(path.dirname(home), os.tmpdir())
@@ -74,7 +75,53 @@ async function setup(t, mode, profile) {
     assert.equal(result.stopReason, 'end_turn')
     return updates.slice(from)
   }
-  return { runtime, session, prompt, run, requests, updates, permissions, workspace, home, queue }
+  return { runtime, session, prompt, run, requests, updates, permissions, workspace, home, queue, paths, patches, runtimes }
+}
+
+for (const toolMode of ['native', 'ptc']) {
+  test(`research → implementation preserves real ACP history and changes only that child's policy (${toolMode})`, { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'read-only', 'team-read')
+    await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
+    f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'read', args: toolMode === 'ptc'
+      ? { description: 'Read investigation evidence', code: 'return await tools.read({ file_path: "input.txt" });' }
+      : { file_path: 'input.txt' } })
+    await f.runtime.prompt(f.session.sessionId, [{ type: 'text', text: 'investigation-context-to-preserve' }])
+    const write = (file, content) => f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'write', args: toolMode === 'ptc'
+      ? { description: 'Write scoped implementation', code: `return await tools.write({ file_path: ${JSON.stringify(file)}, content: ${JSON.stringify(content)} });` }
+      : { file_path: file, content } })
+    write('blocked.txt', 'must not write during research')
+    await f.prompt()
+    await assert.rejects(fs.stat(path.join(f.workspace, 'blocked.txt')), { code: 'ENOENT' })
+    const writer = new AcpRuntime({ mode: 'danger-full-access', paths: f.paths, patches: f.patches,
+      onUpdate: (_id, update) => f.updates.push(update), onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
+    f.runtimes.push(writer)
+    await writer.start()
+    await f.runtime.closeSession(f.session.sessionId)
+    await writer.resumeSession(f.session.sessionId, f.workspace)
+    await writer.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
+    const from = f.requests.length
+    write('implementation.txt', 'same child implementation')
+    await writer.prompt(f.session.sessionId, [{ type: 'text', text: 'implement using the investigation' }])
+    assert.equal(await fs.readFile(path.join(f.workspace, 'implementation.txt'), 'utf8'), 'same child implementation')
+    const input = JSON.stringify(f.requests[from].messages)
+    assert.match(input, /investigation-context-to-preserve/)
+    assert.match(input, /PTC fixture content/, 'actual tool results survive, not only the final research report')
+    assert.match(input, /Current DSH file policy: danger-full-access/)
+    assert.doesNotMatch(input, /This child session runs in read-only mode, independently/)
+    await writer.stop()
+    await writer.start()
+    await writer.resumeSession(f.session.sessionId, f.workspace)
+    await writer.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
+    write('after-restart.txt', 'implementation survives restart')
+    await writer.prompt(f.session.sessionId, [{ type: 'text', text: 'continue implementation after restart' }])
+    assert.equal(await fs.readFile(path.join(f.workspace, 'after-restart.txt'), 'utf8'), 'implementation survives restart')
+    const sibling = await f.runtime.newSession(f.workspace)
+    await f.runtime.setOption(sibling.sessionId, TOOL_MODE_CONFIG, toolMode)
+    write('sibling-blocked.txt', 'must remain read-only')
+    await f.runtime.prompt(sibling.sessionId, [{ type: 'text', text: 'sibling research is still read-only' }])
+    await assert.rejects(fs.stat(path.join(f.workspace, 'sibling-blocked.txt')), { code: 'ENOENT' })
+    assert.equal(f.permissions.length, 0, 'no escalation prompt is used')
+  })
 }
 
 test('real ACP switches native → PTC → native, forwards internal tools, resumes and isolates sessions', { timeout: 120_000 }, async (t) => {

@@ -231,6 +231,15 @@ export class ClaudeRunner extends EventEmitter {
     return this.summary(record)
   }
 
+  /** Change the next turn's tool flags without replacing its Claude conversation. */
+  async setArgs(id, args) {
+    const record = this.records.get(id)
+    if (!record) throw new Error('このセッションは見つかりません')
+    if (this.live.has(id)) throw new Error('作業中です。終わってから変更してください')
+    record.args = [...args]
+    await this.#save(record)
+  }
+
   /** Starts a turn on `text`. Throws when the session is working already. */
   run(id, text, { images = [], blocks = [] } = {}) {
     const record = this.records.get(id)
