@@ -99,7 +99,7 @@ test('missing usage contributes one unpriced response even alongside known or du
   assert.deepEqual(total.score, { points: 1, priced: 1, unpriced: 1 })
   assert.equal(total.requests, 2)
   assert.equal(total.input, 1000)
-  assert.equal(formatEquivalentCost(total.score), '≥ $0.002')
+  assert.equal(formatEquivalentCost(total.score), '≥ $0')
   const unavailable = summarizeUsage([missing], 0, pricing)
   assert.deepEqual(unavailable.score, { points: 0, priced: 0, unpriced: 1 })
   assert.equal(formatEquivalentCost(unavailable.score), '—')

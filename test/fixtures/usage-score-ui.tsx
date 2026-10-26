@@ -68,7 +68,7 @@ const render = async (kind: string) => {
   }]
   const current = kind === 'partial' ? [{ ...turns[0], usage: { ...turns[0].usage, score: score(1.234, 1) } }]
     : kind === 'unknown' ? [{ ...turns[0], usage: { ...turns[0].usage, score: { points: 0, priced: 0, unpriced: 1 } } }]
-    : ['small', 'tiny', 'zero'].includes(kind) ? [{ ...turns[0], usage: { ...turns[0].usage, score: score(kind === 'small' ? 21.67 : kind === 'tiny' ? 0.00005 : 0) } }]
+    : ['small', 'tiny', 'zero', 'precision'].includes(kind) ? [{ ...turns[0], usage: { ...turns[0].usage, score: score(kind === 'precision' ? 9641.498 : kind === 'small' ? 21.67 : kind === 'tiny' ? 0.00005 : 0) } }]
     : ['billed', 'legacy'].includes(kind) ? turns.map((turn, index) => ({ ...turn, usage: { ...turn.usage,
       ...(kind === 'legacy' ? { score: undefined } : {}), cost: (index + 1) * 0.002, models: ['anthropic/fixture'] } })) : turns
   store.setState({ server: { ...server }, turns: { task: current } })
@@ -92,17 +92,17 @@ const api = {
     api.setDisplay(currency, 150)
     const before = JSON.stringify(turns)
     const passed: string[] = []
-    for (const [kind, usd, jpy] of [['normal', '$0.006', '¥0.9'], ['TM', '$0.06', '¥9'], ['eco', '$0.08', '¥12'],
-      ['CL', '$0.10', '¥15'], ['AB', '$0.12', '¥18'], ['partial', '≥ $0.002468', '≥ ¥0.3702'], ['unknown', '—', '—'],
-      ['small', '$0.04334', '¥6.501'], ['tiny', '< $0.000001', '¥0.000015'], ['zero', '$0.00', '¥0'],
-      ['billed', '$0.006', '¥0.9'], ['legacy', '—', '—']]) {
+    for (const [kind, usd, jpy] of [['normal', '< $0.1', '¥0.9'], ['TM', '< $0.1', '¥9'], ['eco', '< $0.1', '¥12'],
+      ['CL', '$0.1', '¥15'], ['AB', '$0.1', '¥18'], ['partial', '≥ $0', '≥ ¥0.3'], ['unknown', '—', '—'],
+      ['small', '< $0.1', '¥6.5'], ['tiny', '< $0.1', '< ¥0.1'], ['zero', '$0', '¥0'],
+      ['billed', '< $0.1', '¥0.9'], ['legacy', '—', '—'], ['precision', '$19.2', '¥2,892.4']]) {
       const expected = `API換算 ${currency === 'JPY' ? jpy : usd}`
       await render(kind)
       const costs = [...document.querySelectorAll<HTMLElement>('.usage-cost')]
       if (costs.at(-1)?.textContent?.trim() !== expected) throw new Error(`${kind}: expected ${expected}, got ${costs.at(-1)?.textContent}`)
       if (!costs.at(-1)?.title.includes('サブスク')) throw new Error(`${kind}: missing equivalent cost explanation`)
       if (kind !== 'AB' && !document.querySelector('.usage-line')?.textContent?.includes('入力')) throw new Error(`${kind}: original token counts disappeared`)
-      if (kind === 'normal' && costs[0]?.textContent?.trim() !== `API換算 ${currency === 'JPY' ? '¥0.3' : '$0.002'}`) throw new Error('historical cumulative amount')
+      if (kind === 'normal' && costs[0]?.textContent?.trim() !== `API換算 ${currency === 'JPY' ? '¥0.3' : '< $0.1'}`) throw new Error('historical cumulative amount')
       if (costs.some((element) => element.getBoundingClientRect().width > innerWidth)) throw new Error(`${kind}: overflow`)
       for (const line of document.querySelectorAll('.usage-line')) {
         if ((line.textContent?.match(/[$¥]/g) ?? []).length > 1 || line.textContent?.includes(' pt')) throw new Error(`${kind}: duplicated or stale currency display`)

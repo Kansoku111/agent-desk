@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Usage footers show cumulative **API-equivalent amounts** (`API換算 $…` / `API換算 ¥…`) instead of points across regular/CL/Eco/TM/AB. General settings selects USD (default) or JPY with a required positive manual USD/JPY rate; no rate is guessed or fetched. Settings validate/save before publication and need no model restart. Existing saved scores and USD equivalents remain unchanged; changing the manual rate changes only JPY presentation, including history. Small amounts keep up to six decimal places; unknown totals show `—` and partial totals show a rounded-down lower bound. Metered estimates and actual billing totals remain in USD, separate from the reference display.
+- Usage footers show cumulative **API-equivalent amounts** (`API換算 $…` / `API換算 ¥…`) instead of points across regular/CL/Eco/TM/AB. General settings selects USD (default) or JPY with a required positive manual USD/JPY rate; no rate is guessed or fetched. Settings validate/save before publication and need no model restart. Existing saved scores and USD equivalents remain unchanged; changing the manual rate changes only JPY presentation, including history. API-equivalent amounts truncate to at most one decimal (`$19.282996` → `$19.2`) without reducing stored-value or exchange-rate precision. Positive amounts below 0.1 remain distinct from zero (`< $0.1` / `< ¥0.1`); unknown totals show `—` and partial totals keep a rounded-down lower bound. Metered estimates and actual billing totals remain in USD, separate from the reference display.
 - Renamed EX to **eco** (エコモード / economy mode) across the UI and reports. Existing settings and workflow behavior are unchanged.
 
 ### Fixed
