@@ -233,7 +233,38 @@ test('thread.create returns the latest summary after delayed settings save on bo
     releaseSettings.resolve()
     const response = await request
     assert.equal(response.thread.status, latest.status)
+    // A task that still exists keeps the unchanged response shape.
+    assert.equal('removed' in response, false)
   }
+})
+
+test('a task deleted while its settings are saved returns the accepted summary, not a TypeError', async (t) => {
+  const f = await fixture(t)
+  const settings = { workspaces: [], lastWorkspace: null }
+  let deletedId
+  const handlers = createThreadHandlers({
+    paths: { ...f.paths, myPc: f.base },
+    threads: f.manager,
+    teams: { userWrote() {} },
+    subagents: { list: async () => [] },
+    mutateSettings: async (change) => {
+      // Another client removes the task while the settings save is still running.
+      deletedId = [...f.manager.threads.values()].at(-1).id
+      await f.manager.remove(deletedId)
+      change(settings)
+    },
+  })
+  const input = createInput(f, ID)
+  const result = await handlers['thread.create'](input)
+  assert.equal(result.thread.id, deletedId)
+  // The UI must not show a task the server no longer has.
+  assert.equal(result.removed, true)
+  assert.equal(f.manager.threads.has(deletedId), false)
+  assert.equal(f.manager.list().length, 1)
+  assert.equal(f.manager.threads.size, 1)
+  // The tombstone stands: an old retry neither recreates nor resends the task.
+  await assert.rejects(handlers['thread.create'](input), /作成済みタスクは削除済みです/)
+  assert.equal(f.manager.threads.size, 1)
 })
 
 test('storage failures before sending fail closed', () => {

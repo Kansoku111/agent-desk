@@ -10,6 +10,7 @@ import { assertToolMode } from './ptc.js'
 
 const exec = promisify(execFile)
 const hash = (value) => createHash('sha256').update(value).digest('hex')
+const PLAIN_IGNORED_DIRS = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', 'coverage', '.cache'])
 export const workspaceKey = (folder) => {
   let resolved = path.resolve(folder)
   let ancestor = resolved
@@ -57,6 +58,7 @@ export function normalizeChecks(value) {
  * Git status/diff alone does not identify untracked file contents. */
 export async function sourceSnapshot(folder) {
   let names
+  let git = true
   try {
     const { stdout } = await exec('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
       cwd: folder, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: 30_000,
@@ -65,12 +67,12 @@ export async function sourceSnapshot(folder) {
   } catch (error) {
     if (error.code !== 'ENOENT' && !/not a git repository/i.test(error.stderr ?? '')) throw error
     // Plain projects, including My PC: exclude generated/dependency directories.
-    const ignored = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', 'coverage', '.cache'])
+    git = false
     names = []
     async function walk(relative) {
       for (const entry of await fs.promises.readdir(path.join(folder, relative), { withFileTypes: true })) {
         const name = path.join(relative, entry.name)
-        if (entry.isDirectory()) { if (!ignored.has(entry.name)) await walk(name) }
+        if (entry.isDirectory()) { if (!PLAIN_IGNORED_DIRS.has(entry.name)) await walk(name) }
         else names.push(name)
         if (names.length > 100_000) throw new Error('検証対象が多すぎます。プロジェクト範囲を絞ってください')
       }
@@ -97,7 +99,31 @@ export async function sourceSnapshot(folder) {
     }
     digest.update('\0')
   }
-  return { hash: digest.digest('hex'), files }
+  return { hash: digest.digest('hex'), files, git }
+}
+
+/** Check all new watcher paths together, including paths already deleted. */
+async function ignoredByGit(folder, files) {
+  const pending = exec('git', ['check-ignore', '-z', '--stdin'], {
+    cwd: folder, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: 30_000,
+  })
+  // Git may exit before reading all input; its exit status still determines the result.
+  pending.child.stdin.on('error', () => {})
+  pending.child.stdin.end(files.join('\0') + '\0')
+  try {
+    return new Set((await pending).stdout.split('\0').filter(Boolean))
+  } catch (error) {
+    if (error.code === 1) return new Set() // No paths matched an ignore rule.
+    throw error
+  }
+}
+
+function parentDirectories(files) {
+  const dirs = new Set()
+  for (const file of files) {
+    for (let index = file.lastIndexOf('/'); index > 0; index = file.lastIndexOf('/', index - 1)) dirs.add(file.slice(0, index))
+  }
+  return dirs
 }
 
 export function normalizeExecutionModels(value) {
@@ -183,34 +209,64 @@ export class ExecutionVerifier {
     try {
       const before = await sourceSnapshot(folder)
       run.sourceHash = before.hash
-      // Watch only relevant source paths. Generated ignored files do not stale a
-      // result; any observed source write does, even if later reverted.
+      // A new path may disappear before the next snapshot. Collect its watcher
+      // events and classify them in batches rather than running Git per event.
       const known = new Set(before.files.map((file) => file.replaceAll('\\', '/')))
+      const knownDirs = parentDirectories(known)
+      const unknown = new Set()
       let changes = 0
       let uncertain = false
-      watcher = fs.watch(folder, { recursive: true }, (_event, name) => {
+      watcher = fs.watch(folder, { recursive: true }, (event, name) => {
         if (!name) { uncertain = true; return }
-        if (known.has(String(name).replaceAll('\\', '/'))) changes++
+        const file = String(name).replaceAll('\\', '/')
+        if (known.has(file) || (event === 'rename' && knownDirs.has(file))) changes++
+        else if (!(before.git && (file === '.git' || file.startsWith('.git/')))) {
+          if (!unknown.has(file) && unknown.size >= 100_000) uncertain = true
+          else unknown.add(file)
+        }
       })
       watcher.on('error', () => { uncertain = true })
+      const collectUnknown = async () => {
+        // A directory event is not itself a source file. Descendant events also
+        // identify short-lived directories that no longer exist by this point.
+        for (let batch = 0; unknown.size && batch < 3; batch++) {
+          const names = [...unknown]
+          unknown.clear()
+          const dirs = parentDirectories(names)
+          const files = names.filter((file) => !dirs.has(file) && !knownDirs.has(file))
+          if (!files.length) continue
+          const ignored = before.git ? await ignoredByGit(folder, files) : null
+          const relevant = ignored
+            ? files.some((file) => !ignored.has(file))
+            : files.some((file) => !file.split('/').slice(0, -1).some((part) => PLAIN_IGNORED_DIRS.has(part)))
+          if (relevant) changes++
+        }
+        // Do not let a continuously changing background process hold verification open.
+        if (unknown.size) { uncertain = true; unknown.clear() }
+      }
       let baseline = before
       let observed = 0
       let unapprovedChange = false
       for (const check of checks) {
         if (entry.cancelled) break
+        await collectUnknown()
+        if (entry.cancelled) break
         if (changes !== observed) unapprovedChange = true
         const startChanges = changes
         const result = await this.#command(entry, folder, check, runDir)
         const afterCheck = await sourceSnapshot(folder)
+        await collectUnknown()
         result.sourceChanged = changes !== startChanges || baseline.hash !== afterCheck.hash
         if (result.sourceChanged && !check.allowSourceChanges) unapprovedChange = true
         run.checks.push(result)
         baseline = afterCheck
         observed = changes
         for (const name of afterCheck.files) known.add(name.replaceAll('\\', '/'))
+        for (const dir of parentDirectories(known)) knownDirs.add(dir)
         if (result.status !== 'passed') break
       }
       const after = await sourceSnapshot(folder)
+      await collectUnknown()
       if (changes !== observed || baseline.hash !== after.hash) unapprovedChange = true
       const changed = uncertain || changes > 0 || before.hash !== after.hash
       run.status = entry.cancelled ? 'cancelled' : changed ? 'stale'
@@ -234,7 +290,7 @@ export class ExecutionVerifier {
     const root = await fs.promises.realpath(folder)
     const actual = await fs.promises.realpath(cwd)
     const relative = path.relative(root, actual)
-    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('検証の実行場所がプロジェクト外です')
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('検証の実行場所がプロジェクト外です')
     const log = path.join(runDir, `${check.id}.log`)
     const result = { ...check, cwd, log, startedAt: this.now() }
     const out = fs.openSync(log, 'w')

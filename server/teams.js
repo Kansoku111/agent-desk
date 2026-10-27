@@ -180,7 +180,7 @@ export class TeamManager extends EventEmitter {
     threads.on('turn-finished', (info) => this.#onThreadFinished(info))
     threads.on('approval-needed', (info) => this.#onThreadApproval(info))
     threads.on('removed', ({ threadId }) => this.#onTaskRemoved(threadId))
-    terminals.on('terminal', (summary) => this.#onTerminal(summary))
+    terminals.on('terminal', (summary, input) => this.#onTerminal(summary, input))
     terminals.on('removed', ({ terminalId }) => this.#onTaskRemoved(terminalId))
     terminals.on('hook', (info) => this.#onLeaderHook(info))
     agents.on('session', (session) => this.#onAgent(session))
@@ -258,7 +258,7 @@ export class TeamManager extends EventEmitter {
         }
         // The app stopped before the child's task was made: there is no conversation to go on with, so the child is dropped.
         if (!child.taskId) {
-          if (child.awaiting && !child.closed) this.#report(team, child, 'error', 'Agent Desk が再起動したため、子の作業を始める前に止まりました。必要なら spawn で任せ直してください。')
+          if (child.awaiting && !child.closed) this.#report(team, child, 'error', `子「${child.name}」の業務: ${child.title}\nAgent Desk が再起動したため、子の作業を始める前に止まりました。必要なら spawn で任せ直してください。`, { noTask: true })
           team.children = team.children.filter((entry) => entry !== child)
           void this.#save()
           continue
@@ -728,6 +728,9 @@ export class TeamManager extends EventEmitter {
 
   async #exVerify(team, child, text, { repair = true } = {}) {
     if (repair) child.execution.childReport = text
+    // Earlier evidence cannot be used while a new verification is incomplete.
+    delete child.execution.verification
+    delete child.execution.review
     child.execution.phase = 'verifying'
     await this.#save()
     this.#emit(team)
@@ -747,7 +750,6 @@ export class TeamManager extends EventEmitter {
         team.execution.metrics.verifications++
       }
       if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return
-      child.execution.verification = run
       if (run.status === 'cancelled' || team.execution.stopped) {
         child.execution.phase = 'review'
         this.#report(team, child, 'cancelled', verificationReport(run), { verified: true, byUser: true })
@@ -769,13 +771,15 @@ export class TeamManager extends EventEmitter {
       }
       const review = await this.executionReview.report({ folder: team.workspace, execution: child.execution, run, childReport: child.execution.childReport ?? text })
       if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return
-      child.execution.review = { record: review.record, patch: review.patch, warning: review.warning }
       await writeJson(run.record, run)
       child.execution.phase = 'review'
       if (team.execution.stopped) {
         this.#report(team, child, 'cancelled', review.text, { verified: true, review: true, byUser: true })
         return
       }
+      // Publish the result only when both the review and its record are complete.
+      child.execution.verification = run
+      child.execution.review = { record: review.record, patch: review.patch, warning: review.warning }
       this.#report(team, child, 'report', review.text, { verified: true, review: true })
     } catch (error) {
       child.execution.phase = 'review'
@@ -939,6 +943,8 @@ export class TeamManager extends EventEmitter {
       await this.#startTask(team, child, task, guard)
     } catch (error) {
       team.children = team.children.filter((entry) => entry !== child)
+      // A concurrent close or another child may have saved this unfinished child already.
+      await this.#save()
       this.#emit(team)
       throw error
     }
@@ -958,6 +964,10 @@ export class TeamManager extends EventEmitter {
     const previous = child.taskId
     child.taskId = null
     let taskId = null
+    const startGuard = () => {
+      guard()
+      if (child.closed) throw new Error(`子「${child.name}」は作業開始前に終了されました`)
+    }
     try {
       if (child.kind === 'thread') {
         const catalogProvider = CATALOG_PROVIDER[child.provider]
@@ -969,8 +979,8 @@ export class TeamManager extends EventEmitter {
         })
         taskId = child.taskId = thread.id
         if (!this.teams.has(team.id)) throw new Error('team was removed')
-        guard()
-        await this.threads.send(thread.id, { text: childTask(child.name, title, task) }, { guard })
+        startGuard()
+        await this.threads.send(thread.id, { text: childTask(child.name, title, task) }, { guard: startGuard })
         await this.threads.update(thread.id, { title: taskTitle })
       } else {
         const session = await this.agents.create({
@@ -978,7 +988,7 @@ export class TeamManager extends EventEmitter {
         })
         taskId = child.taskId = session.id
         if (!this.teams.has(team.id)) throw new Error('team was removed')
-        guard()
+        startGuard()
         this.agents.run(session.id, `# Task from the team leader: ${title}\n\n${task}`)
       }
     } catch (error) {
@@ -1101,7 +1111,7 @@ export class TeamManager extends EventEmitter {
     }
     if (args.fresh === true) {
       try { return await this.#sendFresh(team, child, text, guard) } catch (error) {
-        child.closed = wasClosed
+        if (!child.closed) child.closed = wasClosed
         if (executionBefore) child.execution = executionBefore
         throw error
       }
@@ -1125,7 +1135,7 @@ export class TeamManager extends EventEmitter {
       guard()
       how = child.kind === 'thread' ? await this.#toThread(child, body, guard) : this.#toAgent(child, body)
     } catch (error) {
-      child.closed = wasClosed
+      if (!child.closed) child.closed = wasClosed
       child.awaiting = false
       if (executionBefore) child.execution = executionBefore
       throw error
@@ -1151,7 +1161,7 @@ export class TeamManager extends EventEmitter {
     try {
       await this.#startTask(team, child, text, guard)
     } catch (error) {
-      Object.assign(child, before)
+      if (!child.closed) Object.assign(child, before)
       throw error
     }
     this.#cancelResume(child)
@@ -1448,6 +1458,8 @@ export class TeamManager extends EventEmitter {
       team.execution.stopped = true
       for (const child of team.children) this.execution.cancel(child.id)
     }
+    // No queued instruction should restart a child after the user's stop, even if its interrupted turn is already idle.
+    for (const child of team.children) { child.pending = []; child.followups = [] }
     let stopped = 0
     for (const child of team.children) {
       // One waiting to go on after a passing failure stops here, unless a turn runs now: that one is stopped below.
@@ -1459,9 +1471,6 @@ export class TeamManager extends EventEmitter {
         continue
       }
       if (!child.taskId || !this.#childBusy(child)) continue
-      // What waited for this turn to end would start the next one: stopped means stopped.
-      child.pending = []
-      child.followups = []
       this.userStopped.add(child.id)
       try {
         if (child.kind === 'thread') await this.threads.cancel(child.taskId)
@@ -1690,6 +1699,8 @@ export class TeamManager extends EventEmitter {
       const result = action()
       if (result?.then) await result
     } catch (error) {
+      // The prompt hook may already have returned this entry to the queue.
+      if (this.delivering.get(team.id) !== entry) return
       this.delivering.delete(team.id)
       team.queue.unshift(...items)
       team.deliveryFailed = true
@@ -1749,10 +1760,18 @@ export class TeamManager extends EventEmitter {
     // A prompt without team marks is the user's own: its answer to the questions the leader asked.
     if (!marks.length) this.userWrote(terminalId)
     const entry = this.delivering.get(team.id)
+    let returned = false
     if (entry?.items.some((item) => marks.includes(markOf(item)))) this.#delivered(team)
+    else if (entry) {
+      // The submitted prompt did not contain the report: offer it again after this turn.
+      clearTimeout(entry.timer)
+      this.delivering.delete(team.id)
+      team.queue.unshift(...entry.items)
+      returned = true
+    }
     const before = team.queue.length
     team.queue = team.queue.filter((item) => !marks.includes(markOf(item)))
-    if (team.queue.length === before && !team.deliveryFailed) return
+    if (team.queue.length === before && !team.deliveryFailed && !returned) return
     team.deliveryFailed = false
     void this.#save()
     this.#emit(team)
@@ -1798,11 +1817,18 @@ export class TeamManager extends EventEmitter {
       if (thread.status !== 'running') this.#pump(found.team)
       return this.#emit(found.team)
     }
-    if (!thread.pendingApproval) {
-      // Answered in the task itself, or the turn ended.
-      for (const approval of [...this.approvals.values()]) {
-        if (approval.taskId === thread.id) this.#dropApproval(approval)
+    // A child can have several concurrent approvals; a direct answer removes only its own request.
+    const pending = thread.pendingApproval ? new Set(this.threads.pendingPermissions(thread.id).map((entry) => entry.requestId)) : null
+    const dropped = new Set()
+    for (const approval of [...this.approvals.values()]) {
+      if (approval.taskId === thread.id && (!pending || !pending.has(approval.requestId))) {
+        dropped.add(approval.id)
+        this.#dropApproval(approval)
       }
+    }
+    if (dropped.size) {
+      found.team.queue = found.team.queue.filter((item) => !dropped.has(item.approvalId))
+      void this.#save()
     }
     this.#emit(found.team)
   }
@@ -1915,7 +1941,7 @@ export class TeamManager extends EventEmitter {
     this.#emit(team)
   }
 
-  #onTerminal(summary) {
+  #onTerminal(summary, input) {
     const found = this.#byTask(summary.id)
     if (!found) return
     const { team, child } = found
@@ -1925,7 +1951,8 @@ export class TeamManager extends EventEmitter {
       return this.#emit(team)
     }
     if (summary.state === 'running' && summary.activity !== 'idle') {
-      if (this.delivering.has(team.id)) this.#delivered(team)
+      // A submit hook carries the actual marks and is handled below, after this state event.
+      if (input?.hook_event_name !== 'UserPromptSubmit' && this.delivering.has(team.id)) this.#delivered(team)
     } else {
       this.#pump(team)
     }

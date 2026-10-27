@@ -317,8 +317,13 @@ function handleFrame(frame: any) {
       const draft = { ...state.draft }
       draft.workspace ??= server.settings.lastWorkspace ?? server.app.myPc ?? null
       draft.model ??= server.settings.defaultModel
-      draft.effort = draft.effort || server.settings.defaultEffort || 'medium'
-      if (!state.server) draft.permissionMode = server.settings.defaultPermissionMode ?? draft.permissionMode
+      draft.effort = draft.effort || 'medium'
+      // The saved default effort is read on the first hello only, like the
+      // default permission mode; a reconnect keeps the choice made in this session.
+      if (!state.server) {
+        draft.permissionMode = server.settings.defaultPermissionMode ?? draft.permissionMode
+        draft.effort = server.settings.defaultEffort || draft.effort || 'medium'
+      }
       const route = (state.route.view === 'thread' && !server.threads.some((thread) => thread.id === (state.route as { id: string }).id))
         || (state.route.view === 'terminal' && !server.terminals.some((terminal) => terminal.id === (state.route as { id: string }).id))
         || (state.route.view === 'agent' && !teamChildOf(server, state.route.id))
@@ -672,11 +677,17 @@ export async function startThread(text: string, images: Attachment[]) {
     toast(error instanceof Error ? error.message : String(error), 'error')
     return false
   }
-  const result = await act<{ thread: ThreadSummary }>('thread.create', { ...params, createId: intent.id })
+  const result = await act<{ thread: ThreadSummary; removed?: boolean }>('thread.create', { ...params, createId: intent.id })
   if (!result) return false
   try { completeCreateIntent(intent.id) } catch (error) {
     // The server receipt still prevents a duplicate if storage cannot be cleared.
     toast(error instanceof Error ? error.message : String(error), 'error')
+  }
+  // The create was accepted before this task was deleted: the receipt ends the retry
+  // (the same text gets a new key next time), but nothing may open or return on screen.
+  if (result.removed) {
+    toast('作成されたタスクはすでに削除されています', 'info')
+    return true
   }
   upsertThread(result.thread)
   setState((current) => ({ turns: { ...current.turns, [result.thread.id]: current.turns[result.thread.id] ?? [] }, draft: { ...current.draft, toolMode: 'native' } }))

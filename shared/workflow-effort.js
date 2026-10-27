@@ -23,6 +23,10 @@ export function workflowEffort(wanted, levels, modelChanged = false) {
 export function workflowOptions(wanted, levels) {
   return levels === undefined ? [...new Set(['medium', ...(wanted ? [wanted] : [])])] : levels
 }
+/** Whether a saved (or empty) effort may start a strict run: unknown capabilities never block. */
+export function workflowEffortSupported(effort, levels) {
+  return levels === undefined || (effort ? levels.includes(effort) : levels.length === 0)
+}
 // A fixed workflow choice must be acknowledged exactly; no nearest-level fallback.
 export function assertWorkflowEffort(wanted, parsed, label) {
   if (wanted ? !parsed.efforts.some(({ value }) => value === wanted) : parsed.efforts.some(({ value }) => value)) {

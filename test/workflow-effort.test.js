@@ -4,7 +4,7 @@ import { EventEmitter, once } from 'node:events'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { workflowEffort, workflowLevels, workflowOptions } from '../shared/workflow-effort.js'
+import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../shared/workflow-effort.js'
 import { AbManager } from '../server/ab.js'
 import { fixture } from './helpers/thread-manager.js'
 import { Catalog } from '../server/catalog.js'
@@ -22,6 +22,15 @@ test('workflow defaults distinguish known levels, no reasoning and unknown capab
   assert.equal(workflowEffort('max', ['low', 'medium'], true), 'medium', 'model change uses the nearest supported choice')
   assert.deepEqual(workflowOptions('', []), [])
   assert.deepEqual(workflowOptions('medium', undefined), ['medium'])
+})
+
+test('workflowEffortSupported allows saved efforts only where a strict run can apply them', () => {
+  assert.equal(workflowEffortSupported('high', undefined), true, 'unknown capabilities never block')
+  assert.equal(workflowEffortSupported('high', []), false, 'a known level-less model refuses an explicit effort')
+  assert.equal(workflowEffortSupported('', []), true, 'level-less models start with no effort')
+  assert.equal(workflowEffortSupported('', ['low', 'medium']), false, 'a model with levels needs an explicit choice')
+  assert.equal(workflowEffortSupported('high', ['low', 'medium']), false)
+  assert.equal(workflowEffortSupported('medium', ['low', 'medium']), true)
 })
 
 test('AB new runs materialize defaults without rewriting preferences or old runs and retry jobs', async (t) => {

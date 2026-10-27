@@ -212,8 +212,8 @@ export class TerminalManager extends EventEmitter {
     return ids() !== before
   }
 
-  #changed(record) {
-    this.emit('terminal', this.summary(record))
+  #changed(record, input) {
+    this.emit('terminal', this.summary(record), input)
   }
 
   /** Logs what happens to a task's process, with the time: the log is how a Claude Code that vanished is explained afterwards. */
@@ -933,7 +933,8 @@ export class TerminalManager extends EventEmitter {
     if (live.activity === 'running' && (before !== 'running' || event === 'UserPromptSubmit')) live.runningAt = Date.now()
     const backgroundChanged = effect.background ? this.#trackBackground(live, effect.background) : false
     if (save) void this.#save()
-    if (save || reported || backgroundChanged || before !== live.activity) this.#changed(record)
+    // The team must distinguish a submitted report from an unrelated prompt before acknowledging delivery.
+    if (save || reported || backgroundChanged || before !== live.activity) this.#changed(record, event === 'UserPromptSubmit' ? input : undefined)
     if (live.activity === 'approval' && before !== 'approval') this.emit('approval-needed', { terminalId: id, title: record.title })
     if (effect.finished) void this.#refreshUsage(id)
     if (effect.finished && before !== 'idle') this.emit('turn-finished', { terminalId: id, title: record.title, failed: Boolean(effect.failed) })

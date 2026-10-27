@@ -80,7 +80,9 @@ export class Outbox {
   remove(threadId: string, id: string) {
     const message = this.find(threadId, id)
     // Sending does not mean unsent: dismissing an unknown result cannot cancel the server action.
-    if (!message || message.phase === 'sending' || this.active.has(threadId)) return false
+    // Only the row being sent is guarded; another row can go at once, and a
+    // reserved operation for it finds nothing when its turn comes.
+    if (!message || message.phase === 'sending') return false
     this.change(threadId, (queue) => queue.filter((entry) => entry.id !== id))
     return true
   }
@@ -207,10 +209,13 @@ export class Outbox {
 
   private exclusive(threadId: string, work: () => Promise<void>): Promise<void> {
     const pending = this.active.get(threadId)
-    if (pending) return pending
-    // Defer work until the guard is installed: request callbacks can synchronously emit a thread event.
-    const run = Promise.resolve().then(work).catch((error) => this.options.report(this.errorText(error)))
-      .finally(() => { this.active.delete(threadId) })
+    // Explicit steering and retries wait their turn instead of being dropped.
+    // Receipt checks also stay serialized, so overlapping requests cannot send
+    // the same queued message concurrently.
+    const run = (pending ? pending.then(() => work()) : Promise.resolve().then(work))
+      .catch((error) => this.options.report(this.errorText(error)))
+      // The guard now names the newest tail; an older run finishing must not clear it.
+      .finally(() => { if (this.active.get(threadId) === run) this.active.delete(threadId) })
     this.active.set(threadId, run)
     return run
   }

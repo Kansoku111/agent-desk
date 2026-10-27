@@ -184,15 +184,16 @@ test('AB revisions cannot implement until approved again', async (t) => {
   await assert.rejects(manager.approve({ id, revision: 1, delegate: true, review: true }))
 })
 
-test('AB failed or stopped consultation cannot be mistaken for two successful reports', async (t) => {
+test('AB failed consultation cannot be mistaken for two successful reports', async (t) => {
   const { runner, manager, id, finish } = await setup(t)
   await finish('a', '', 'error')
   await finish('b')
   assert.equal(runner.calls.length, 2)
   assert.equal(manager.require(id).phase, 'error')
   await assert.rejects(manager.approve({ id, revision: 0, delegate: true, review: true }))
+  // A stop that arrives when nothing is running leaves the failure as it is.
   await manager.stop({ id })
-  assert.equal(manager.require(id).phase, 'stopped')
+  assert.equal(manager.require(id).phase, 'error')
 })
 
 test('AB restart never resumes interrupted implementation automatically', async (t) => {

@@ -346,6 +346,10 @@ export class AbManager extends EventEmitter {
   stop({ id }) {
     return this.lock(id, async () => {
       const run = this.require(id)
+      // A stop that arrives after its stage finished (or after the run stopped)
+      // must not discard a finished plan or a follow-up: nothing is running, so
+      // leave the state alone and report it as it is.
+      if (!ACTIVE.has(run.phase) && !run.jobs.some((job) => RUNNING.has(job.status))) return { run: this.summary(run) }
       const last = run.jobs.at(-1)
       if (RUNNING.has(last?.status) && run.approvedPlan && RETRY_PHASE[last.role]) run.retryJobId = last.id
       run.phase = 'stopped'

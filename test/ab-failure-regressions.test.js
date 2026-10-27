@@ -161,6 +161,64 @@ test('AB stop failure keeps busy/stop visible and forbids retry or deletion unti
   assert.equal(f.manager.busy, false)
 })
 
+for (const phase of ['awaiting-approval', 'reviewed', 'completed']) {
+  test(`AB late stop on ${phase} keeps the finished run, its plan and its next action`, async (t) => {
+    const f = await setup(t)
+    await f.finish('a'); await f.finish('b'); await f.finish('leader')
+    if (phase !== 'awaiting-approval') await f.manager.approve({ id: f.run.id, revision: 1, delegate: phase === 'reviewed', review: phase === 'reviewed' })
+    if (phase === 'reviewed') { await f.finish('instructions'); await f.finish('implementer'); await f.finish('reviewer') }
+    if (phase === 'completed') await f.finish('direct')
+    assert.equal(f.run.phase, phase)
+    const before = { revision: f.run.revision, plan: f.run.plan, approvedPlan: f.run.approvedPlan, retryJobId: f.run.retryJobId }
+    const statuses = f.run.jobs.map((job) => job.status)
+    const stops = f.stops.length
+    // A stop clicked while the stage was finishing arrives after it is done.
+    const { run: viewed } = await f.manager.stop({ id: f.run.id })
+    assert.equal(viewed.phase, phase)
+    assert.equal(f.run.phase, phase)
+    assert.deepEqual([f.run.revision, f.run.plan, f.run.approvedPlan, f.run.retryJobId], [before.revision, before.plan, before.approvedPlan, before.retryJobId])
+    assert.deepEqual(f.run.jobs.map((job) => job.status), statuses)
+    assert.equal(f.stops.length, stops)
+    // What the finished stage produced is still usable: approval at the plan, a follow-up afterwards.
+    if (phase === 'awaiting-approval') {
+      await f.manager.approve({ id: f.run.id, revision: before.revision, delegate: false, review: false })
+      assert.equal(f.run.phase, 'implementing')
+    } else {
+      await f.manager.revise({ id: f.run.id, text: 'follow-up after a late stop' })
+      assert.equal(f.run.phase, 'judging')
+    }
+  })
+}
+
+test('AB stop while a stage runs still stops it and offers that stage to retry', async (t) => {
+  const f = await setup(t)
+  await f.approve(false)
+  const job = f.run.jobs.at(-1)
+  assert.equal(job.status, 'running')
+  const { run: stopped } = await f.manager.stop({ id: f.run.id })
+  assert.equal(stopped.phase, 'stopped')
+  assert.equal(job.status, 'stopped')
+  assert.equal(f.run.retryJobId, job.id)
+  assert.deepEqual(f.stops.map((handle) => handle.id), [job.id])
+  assert.equal(f.manager.busy, false)
+  const count = f.calls.length
+  await f.manager.retry({ id: f.run.id, jobId: job.id })
+  assert.equal(f.calls.length, count + 1)
+  assert.equal(f.calls.at(-1).writable, true)
+  assert.equal(f.calls.at(-1).model, job.model)
+})
+
+test('AB deletion still removes a run whose stop had nothing to stop', async (t) => {
+  const removed = []
+  const f = await setup(t, { async remove(handle) { removed.push(handle) } })
+  await f.finish('a'); await f.finish('b'); await f.finish('leader')
+  await f.manager.stop({ id: f.run.id })
+  assert.equal(f.run.phase, 'awaiting-approval')
+  await f.manager.remove({ id: f.run.id })
+  assert.equal(f.manager.list().length, 0)
+  assert.equal(removed.length, f.run.jobs.length)
+})
+
 for (const role of ['instructions', 'implementer', 'direct', 'reviewer']) {
   test(`AB ${role} failure retries only that stage, on explicit latest-job request`, async (t) => {
     const f = await setup(t)

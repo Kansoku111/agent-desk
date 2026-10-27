@@ -1306,6 +1306,58 @@ test('eco verify tool re-verifies the current files without a child turn', async
   await assert.rejects(tool('verify', { child: child.id }), /判定待ち/)
 })
 
+for (const failure of ['verify error', 'review error', 'record error', 'stop before verify', 'stop during review']) {
+  test('eco revalidation invalidates earlier success on ' + failure, async (t) => {
+    const { tool, team, manager, threads, workspace } = await setupExecution(t)
+    await manager.configureExecution(workspace, [{ id: 'test', command: 'node -e "console.log(1)"' }])
+    await tool('spawn', { ...exTask, checks: ['test'] })
+    const child = team.children[0]
+    threads.finish(child.taskId, 'done')
+    await Promise.all([...manager.exPending])
+    assert.equal(child.execution.verification.status, 'passed')
+    assert.ok(child.execution.review)
+
+    let reviewStarted, releaseReview
+    const started = new Promise((resolve) => { reviewStarted = resolve })
+    const release = new Promise((resolve) => { releaseReview = resolve })
+    if (failure === 'verify error') manager.execution.verify = async () => { throw new Error('simulated verify I/O failure') }
+    if (failure === 'review error') manager.executionReview.report = async () => { throw new Error('simulated review I/O failure') }
+    if (failure === 'record error') {
+      const verify = manager.execution.verify.bind(manager.execution)
+      manager.execution.verify = async (args) => {
+        const run = await verify(args)
+        run.record = path.join(workspace, 'source.txt', 'result.json')
+        return run
+      }
+      manager.executionReview.report = async () => ({ record: 'review.md', patch: null, warning: null })
+    }
+    if (failure === 'stop during review') {
+      manager.executionReview.report = async () => {
+        reviewStarted()
+        await release
+        return { record: 'review.md', patch: null, warning: null }
+      }
+    }
+    const verifying = tool('verify', { child: child.id })
+    if (failure === 'stop before verify') {
+      const stopping = manager.stopAll(team.id)
+      await Promise.all([verifying, stopping])
+    } else {
+      await verifying
+      if (failure === 'stop during review') {
+        await started
+        await manager.stopAll(team.id)
+        releaseReview()
+      }
+    }
+    await Promise.all([...manager.exPending])
+    assert.equal(child.reports.at(-1).kind, failure.startsWith('stop') ? 'cancelled' : 'error')
+    await assert.rejects(tool('close', { child: child.id, reason: 'must not accept incomplete evidence' }), /成功していません/)
+    assert.equal(child.execution.verification, undefined)
+    assert.equal(child.execution.review, undefined)
+  })
+}
+
 test('eco re-verifies once when a check rewrites the sources itself', async (t) => {
   const { tool, team, manager, threads, workspace } = await setupExecution(t)
   await manager.configureExecution(workspace, [{ id: 'fmt', allowSourceChanges: true, command: 'node -e "const fs=require(\'fs\');if(fs.readFileSync(\'source.txt\',\'utf8\')!==\'formatted\')fs.writeFileSync(\'source.txt\',\'formatted\')"' }])

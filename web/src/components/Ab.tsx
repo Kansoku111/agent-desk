@@ -7,7 +7,7 @@ import { scoresUpTo } from '../../../shared/usage-score.js'
 import { OpenInMenu } from './ThreadView'
 import { TurnView } from './TurnView'
 import { abTimeline } from '../ab-transcript'
-import { workflowEffort, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
+import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { Modal, ConfirmDialog } from './Modal'
 import { effortLabel } from '../util'
 import { CLAUDE_CODE, ModelField, modelGroups } from './WorkflowModelField'
@@ -63,9 +63,12 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   if (!server) return null
   const groups = modelGroups(server)
   const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
-  const required = config ? [config.a, config.b, config.leader, ...(config.delegate ? [config.implementer] : [])] : []
+  const requiredKeys: ('a' | 'b' | 'leader' | 'implementer')[] = config ? (['a', 'b', 'leader', 'implementer'] as const).filter((key) => key !== 'implementer' || config.delegate) : []
+  const required = config ? requiredKeys.map((key) => config[key]) : []
   const usesClaude = config ? [config.a, config.b, config.leader, config.implementer].some((value) => value.startsWith('claude:')) : false
-  const ready = config && required.every(valid) && draft.ready && (!usesClaude || auth.ready)
+  // A strict AB run refuses an effort its model does not offer; block start instead of failing right after it.
+  const effortsReady = config ? requiredKeys.every((key) => workflowEffortSupported(config.efforts[key], workflowLevels(server.catalog, config[key]))) : false
+  const ready = config && required.every(valid) && effortsReady && draft.ready && (!usesClaude || auth.ready)
   const start = () => draft.submit(Boolean(ready), async () => {
     setBusy(true)
     try {
@@ -80,7 +83,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
       {config ? <>
         <div className="ab-model-grid">{FIELDS.map(([key, label]) => (
           <ModelField key={key} label={label} value={valid(config[key]) ? config[key] : ''} groups={groups} disabled={busy}
-            effort={config.efforts[key]} efforts={modelEfforts(server, config[key], config.efforts[key])}
+            effort={config.efforts[key]} efforts={modelEfforts(server, config[key], config.efforts[key])} allowClearUnavailableEffort
             onEffort={(value) => change({ efforts: { ...config.efforts, [key]: value } })}
             onChange={(value) => change({ [key]: value, efforts: { ...config.efforts, [key]: workflowEffort(config.efforts[key], workflowLevels(server.catalog, value), true) } })} />
         ))}</div>

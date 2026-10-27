@@ -65,7 +65,11 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
           ? '[agent-desk] task created; settings saved but effects failed:'
           : '[agent-desk] task created; saving settings failed:', error.message)
       }
-      return { thread: threads.summary(threads.threads.get(thread.id)) }
+      // Another client may have removed the accepted task while the settings save
+      // ran; report the summary taken at acceptance rather than a missing thread.
+      // The flag keeps the UI from showing the removed task as if it still existed.
+      const latest = threads.threads.get(thread.id)
+      return { thread: latest ? threads.summary(latest) : thread, ...(latest ? {} : { removed: true }) }
     },
 
     'thread.messageStatus': ({ threadId, messageId }) => threads.messageStatus(threadId, messageId),

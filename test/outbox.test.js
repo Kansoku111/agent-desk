@@ -221,3 +221,120 @@ test('a late acknowledgement cannot restore a deleted task queue', async () => {
   await sending
   assert.deepEqual(outbox.snapshot(), {})
 })
+
+// 明示操作 (割り込み・再試行・取り消し) は、実行中の RPC が終わるまで予約して消化する。
+const THIRD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+const callIds = (state) => state.calls.map((call) => `${call.type}:${call.messageId}`)
+
+test('a steer requested while a request is in flight is reserved, not dropped, and runs once', async () => {
+  const gate = deferred()
+  const { outbox, state } = fixture({
+    initial: { task: [
+      { id: ID, text: 'head', images: [], phase: 'sending' },
+      { id: NEXT_ID, text: 'next', images: [], phase: 'queued' },
+    ] },
+    request: async (type, params) => {
+      state.calls.push({ type, ...params })
+      if (type === 'thread.messageStatus') { await gate.promise; return { status: 'missing' } }
+      return { status: 'accepted', turnId: 'turn', kind: 'steer', steered: true }
+    },
+  })
+  state.status = 'running'
+  const flushing = outbox.flush('task')
+  const steering = outbox.steer('task', NEXT_ID)
+  gate.resolve()
+  await Promise.all([flushing, steering])
+  assert.deepEqual(callIds(state), [`thread.messageStatus:${ID}`, `thread.steer:${NEXT_ID}`])
+  assert.deepEqual(outbox.snapshot().task.map((message) => [message.id, message.phase]), [[ID, 'queued']])
+})
+
+test('a retry requested while a request is in flight is reserved, not dropped, and runs once', async () => {
+  const gate = deferred()
+  const { outbox, state } = fixture({
+    initial: { task: [
+      { id: ID, text: 'head', images: [], phase: 'sending' },
+      { id: NEXT_ID, text: 'rejected', images: [], phase: 'failed', error: 'x' },
+    ] },
+    request: async (type, params) => {
+      state.calls.push({ type, ...params })
+      if (type === 'thread.messageStatus') { await gate.promise; return { status: 'missing' } }
+      return { status: 'accepted', turnId: 'turn', kind: 'send' }
+    },
+  })
+  const flushing = outbox.flush('task')
+  const retrying = outbox.retry('task', NEXT_ID)
+  gate.resolve()
+  await Promise.all([flushing, retrying])
+  assert.deepEqual(callIds(state), [
+    `thread.messageStatus:${ID}`, `thread.send:${ID}`, `thread.send:${NEXT_ID}`,
+  ])
+  assert.deepEqual(outbox.snapshot(), {})
+})
+
+test('several operations reserved during one request run in order without duplicate sends', async () => {
+  const gate = deferred()
+  const { outbox, state } = fixture({
+    initial: { task: [
+      { id: ID, text: 'head', images: [], phase: 'sending' },
+      { id: NEXT_ID, text: 'second', images: [], phase: 'queued' },
+      { id: THIRD, text: 'third', images: [], phase: 'queued' },
+    ] },
+    request: async (type, params) => {
+      state.calls.push({ type, ...params })
+      if (type === 'thread.messageStatus') { await gate.promise; return { status: 'missing' } }
+      return { status: 'accepted', turnId: 'turn', kind: 'steer', steered: true }
+    },
+  })
+  state.status = 'running'
+  const flushing = outbox.flush('task')
+  const first = outbox.steer('task', NEXT_ID)
+  const second = outbox.steer('task', THIRD)
+  const stale = outbox.retry('task', THIRD) // 予約時点では存在したが、消化時には送り済み
+  gate.resolve()
+  await Promise.all([flushing, first, second, stale])
+  assert.deepEqual(callIds(state), [
+    `thread.messageStatus:${ID}`, `thread.steer:${NEXT_ID}`, `thread.steer:${THIRD}`,
+  ])
+  assert.equal(state.calls.some((call) => call.type === 'thread.send'), false)
+  assert.deepEqual(outbox.snapshot().task.map((message) => message.id), [ID])
+})
+
+test('another queued row can be dismissed while a request is in flight, the sending row cannot', async () => {
+  const gate = deferred()
+  const { outbox, state } = fixture({
+    initial: { task: [
+      { id: ID, text: 'head', images: [], phase: 'sending' },
+      { id: NEXT_ID, text: 'next', images: [], phase: 'queued' },
+    ] },
+    request: async (type, params) => {
+      state.calls.push({ type, ...params })
+      if (type === 'thread.messageStatus') { await gate.promise; return { status: 'missing' } }
+      return { status: 'accepted', turnId: 'turn', kind: 'send' }
+    },
+  })
+  state.status = 'running'
+  const flushing = outbox.flush('task')
+  assert.equal(outbox.remove('task', ID), false)
+  assert.equal(outbox.remove('task', NEXT_ID), true)
+  gate.resolve()
+  await flushing
+  assert.deepEqual(outbox.snapshot().task.map((message) => [message.id, message.phase]), [[ID, 'queued']])
+})
+
+test('a row removed during its receipt check is not restored by the late answer', async () => {
+  const gate = deferred()
+  const { outbox, state } = fixture({
+    initial: { task: [{ id: ID, text: 'steered', images: [], phase: 'uncertain' }] },
+    request: async (type, params) => {
+      state.calls.push({ type, ...params })
+      await gate.promise
+      return { status: 'accepted', turnId: 'turn', kind: 'steer' }
+    },
+  })
+  const flushing = outbox.flush('task')
+  assert.equal(outbox.remove('task', ID), true)
+  gate.resolve()
+  await flushing
+  assert.deepEqual(outbox.snapshot(), {})
+  assert.equal(state.saved, '{}')
+})

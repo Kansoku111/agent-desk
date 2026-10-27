@@ -8,7 +8,7 @@ import { notificationRoute, notificationText } from '../web/src/notification.ts'
 import * as turnUpdates from '../web/src/turn-updates.ts'
 import * as createIntent from '../web/src/create-intent.ts'
 
-async function fixture() {
+async function fixture(settings = {}) {
   const source = await fs.readFile(new URL('../web/src/store.ts', import.meta.url), 'utf8')
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
   const exports = {}
@@ -54,8 +54,8 @@ async function fixture() {
   exports.connect()
   socket.onopen()
   const frame = (value) => socket.onmessage({ data: JSON.stringify(value) })
-  const hello = () => frame({ event: 'hello', state: { app: { uiBuild: 'test' }, settings: {}, threads: [], terminals: [], teams: [] } })
-  hello()
+  const hello = (patch = {}) => frame({ event: 'hello', state: { app: { uiBuild: 'test' }, settings: patch, threads: [], terminals: [], teams: [] } })
+  hello(settings)
   return { store: exports, frame, hello, document, notifications, sent, storage, getSocket: () => socket, setOnSend: (callback) => { onSend = callback } }
 }
 
@@ -199,4 +199,52 @@ test('startThread retries a lost response with the same createId, then uses a fr
   assert.notEqual(newRequest.createId, firstRequest.createId)
   assert.equal(await newIntent, true)
   assert.equal(createRequests().length, 3)
+})
+
+test('the first hello reads the saved default effort and permission mode', async () => {
+  const { store } = await fixture({ defaultEffort: 'high', defaultPermissionMode: 'read-only' })
+  assert.equal(store.getState().draft.effort, 'high')
+  assert.equal(store.getState().draft.permissionMode, 'read-only')
+})
+
+test('a reconnect keeps the chosen effort instead of the saved default', async () => {
+  const { store, hello } = await fixture({ defaultEffort: 'high' })
+  store.setState({ draft: { ...store.getState().draft, effort: 'xhigh' } })
+  hello({ defaultEffort: 'low', defaultPermissionMode: 'danger-full-access' })
+  assert.equal(store.getState().draft.effort, 'xhigh')
+  assert.equal(store.getState().draft.permissionMode, 'workspace-write')
+})
+
+test('an empty saved default effort keeps the built-in medium', async () => {
+  const { store } = await fixture({ defaultEffort: '' })
+  assert.equal(store.getState().draft.effort, 'medium')
+})
+
+test('a create accepted and already deleted returns true without reviving the task', async () => {
+  const { store, frame, sent, setOnSend } = await fixture()
+  const draft = { workspace: 'C:/workspace', model: '["test","model"]', effort: '', permissionMode: 'workspace-write', toolMode: 'native' }
+  store.setState({ draft })
+  const REMOVED_ID = 'removed-while-creating'
+  setOnSend((request) => {
+    if (request.type === 'thread.get') {
+      frame({ id: request.id, ok: true, result: { thread: { id: request.threadId, workspace: draft.workspace }, turns: [] } })
+      return
+    }
+    if (request.type === 'thread.create') {
+      frame({ id: request.id, ok: true, result: { thread: { id: REMOVED_ID, workspace: draft.workspace, status: 'idle', updatedAt: 1 }, removed: true } })
+    }
+  })
+
+  const routeBefore = store.getState().route
+  assert.equal(await store.startThread('deleted at once', []), true)
+  assert.equal(store.getState().server.threads.some((thread) => thread.id === REMOVED_ID), false)
+  assert.equal(store.getState().turns[REMOVED_ID], undefined)
+  assert.equal(store.getState().route, routeBefore)
+  assert.equal(sent.filter((request) => request.type === 'thread.get' && request.threadId === REMOVED_ID).length, 0)
+
+  // 受理は完了しているので、同じ文は次の作成で新しい作成キーになる
+  assert.equal(await store.startThread('deleted at once', []), true)
+  const creates = sent.filter((request) => request.type === 'thread.create')
+  assert.equal(creates.length, 2)
+  assert.notEqual(creates[1].createId, creates[0].createId)
 })

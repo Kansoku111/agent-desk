@@ -179,6 +179,99 @@ test('EX changes reverted during a command still invalidate verification', async
   assert.equal(run.ownerId, 'a')
 })
 
+test('EX detects newly created and removed source files in Git and plain folders', async (t) => {
+  const { folder, root, verifier } = await fixture(t)
+  const plain = path.join(root, 'plain')
+  await fs.mkdir(plain)
+  await fs.writeFile(path.join(plain, 'source.txt'), 'before')
+  const command = `node -e "const fs=require('fs');fs.writeFileSync('temporary.js','source');fs.unlinkSync('temporary.js')"`
+  for (const [index, workspace] of [folder, plain].entries()) {
+    const run = await verifier.verify({ id: 'temporary-' + index, folder: workspace, checks: [{ id: 'test', command }] })
+    assert.equal(run.sourceHash, run.endHash)
+    assert.equal(run.status, 'stale')
+    assert.equal(run.checks[0].sourceChanged, true)
+    assert.equal(run.canRerun, false)
+    const allowed = await verifier.verify({ id: 'allowed-' + index, folder: workspace, checks: [{ id: 'test', command, allowSourceChanges: true }] })
+    assert.equal(allowed.status, 'stale')
+    assert.equal(allowed.canRerun, true)
+  }
+})
+
+test('EX ignores temporary generated files according to Git and plain folder exclusions', async (t) => {
+  const { folder, root, verifier } = await fixture(t)
+  await fs.writeFile(path.join(folder, '.gitignore'), 'output/\n*.log\nsrc/generated/\n')
+  const plain = path.join(root, 'plain')
+  await fs.mkdir(plain)
+  for (const workspace of [folder, plain]) {
+    await fs.mkdir(path.join(workspace, 'src'))
+    await fs.writeFile(path.join(workspace, 'src', 'source.js'), 'source')
+  }
+  const check = (dir, extra = '') => ({
+    id: 'generated',
+    command: `node -e "const fs=require('fs');fs.mkdirSync('${dir}',{recursive:true});fs.writeFileSync('${dir}/tmp.js','temporary');fs.rmSync('${dir}',{recursive:true});${extra}"`
+  })
+  const git = await verifier.verify({ id: 'git-ignored', folder, checks: [check('output', "fs.writeFileSync('tmp.log','log');fs.unlinkSync('tmp.log')")] })
+  assert.equal(git.status, 'passed')
+  assert.equal(git.checks[0].sourceChanged, false)
+  const noGit = await verifier.verify({ id: 'plain-ignored', folder: plain, checks: [check('node_modules')] })
+  assert.equal(noGit.status, 'passed')
+  assert.equal(noGit.checks[0].sourceChanged, false)
+  const nestedGit = await verifier.verify({ id: 'git-nested', folder, checks: [check('src/generated')] })
+  const nestedPlain = await verifier.verify({ id: 'plain-nested', folder: plain, checks: [check('src/node_modules')] })
+  assert.equal(nestedGit.status, 'passed')
+  assert.equal(nestedPlain.status, 'passed')
+})
+
+test('EX does not confuse a file with an excluded directory of the same name', async (t) => {
+  const { folder, root, verifier } = await fixture(t)
+  const plain = path.join(root, 'plain')
+  await fs.mkdir(plain)
+  for (const [id, workspace, name] of [['git', folder, 'output'], ['plain', plain, 'node_modules']]) {
+    const command = `node -e "const fs=require('fs');fs.writeFileSync('${name}','source');fs.unlinkSync('${name}')"`
+    const run = await verifier.verify({ id, folder: workspace, checks: [{ id: 'test', command }] })
+    assert.equal(run.status, 'stale')
+    assert.equal(run.checks[0].sourceChanged, true)
+  }
+})
+
+test('EX attributes new temporary source to its own check, not an allowed formatter', async (t) => {
+  const { folder, verifier } = await fixture(t)
+  const checks = [
+    { id: 'fmt', allowSourceChanges: true, command: `node -e "require('fs').writeFileSync('source.txt','formatted')"` },
+    { id: 'test', command: `node -e "const fs=require('fs');fs.mkdirSync('new-dir');fs.writeFileSync('new-dir/temp.js','source');fs.rmSync('new-dir',{recursive:true})"` },
+  ]
+  const run = await verifier.verify({ id: 'scoped', folder, checks })
+  assert.equal(run.status, 'stale')
+  assert.equal(run.canRerun, false)
+  assert.ok(run.checks.every((check) => check.sourceChanged))
+})
+
+test('EX detects a temporary source file replacing a source directory', async (t) => {
+  const { folder, verifier } = await fixture(t)
+  await fs.mkdir(path.join(folder, 'src'))
+  await fs.mkdir(path.join(folder, 'output'))
+  await fs.writeFile(path.join(folder, 'src', 'code.js'), 'original')
+  const command = `node -e "const fs=require('fs');fs.renameSync('src','output/backup');fs.writeFileSync('src','temporary');fs.unlinkSync('src');fs.renameSync('output/backup','src')"`
+  const run = await verifier.verify({ id: 'directory', folder, checks: [{ id: 'test', command }] })
+  assert.equal(run.sourceHash, run.endHash)
+  assert.equal(run.status, 'stale')
+  assert.equal(run.checks[0].sourceChanged, true)
+})
+
+test('EX accepts dot-prefixed child cwd and rejects a symlink escaping the project', async (t) => {
+  const { folder, root, verifier } = await fixture(t)
+  await fs.mkdir(path.join(folder, '..checks'))
+  const external = path.join(root, 'outside')
+  await fs.mkdir(external)
+  await fs.symlink(external, path.join(folder, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+  const check = { id: 'test', command: 'node -e "console.log(1)"' }
+  const inside = await verifier.verify({ id: 'inside', folder, checks: [{ ...check, cwd: '..checks' }] })
+  assert.equal(inside.status, 'passed')
+  const outside = await verifier.verify({ id: 'outside', folder, checks: [{ ...check, cwd: 'escape' }] })
+  assert.equal(outside.status, 'error')
+  assert.match(outside.error, /プロジェクト外/)
+})
+
 test('EX cancellation terminates verification and prevents later checks', async (t) => {
   const { folder, verifier } = await fixture(t)
   const pending = verifier.verify({ id: 'a', folder, checks: [{ id: 'slow', command: 'node -e "setTimeout(()=>{},60000)"' }, { id: 'next', command: 'echo next' }] })

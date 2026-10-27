@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Eco re-verification invalidates earlier evidence immediately; failed, cancelled or incomplete verification/review records cannot be accepted using an older success. Verification detects temporary new source files while retaining generated-file exclusions, and accepts legitimate dot-prefixed working directories without allowing project escapes.
+- Eco and AB start dialogs block known unsupported reasoning choices and let users explicitly clear stale levels on models without reasoning controls, without silently changing saved preferences.
+- Team report delivery preserves reports when a Claude leader submits an unrelated prompt. Stop-all clears idle/interrupted children's queued instructions too; closing a child during startup prevents later execution. Concurrent approval requests reconcile individually, and restart reports identify children lost before task creation and explain how to reassign them.
+- Interrupted regular turns persist their settled transcript and use the last recorded activity instead of the next load time. Task creation tolerates removal by another client while settings are saved, without creating or sending the task again.
+- Queued-message steering and retries wait for active delivery instead of disappearing; other unsent messages can still be removed. Initial connection restores the saved reasoning default without overwriting later user choices on reconnect.
+- AB stop requests arriving after a stage finishes preserve the completed plan/report and its approval or follow-up actions. Active-worker stopping and explicit retries remain unchanged.
 - Release ZIPs and standalone updaters include the shared runtime modules, preventing missing-module startup failures. Automatic UI rebuilds track shared code, public assets and Vite configuration; server fingerprints also track shared JavaScript.
 - A launch waiting for an older busy instance can take over after that instance disappears, while the data-folder lock still prevents duplicate writers.
 - Concurrent browser-tool sessions choose and atomically save one shared Chrome debugging port under a cross-process lock.

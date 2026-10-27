@@ -5,7 +5,7 @@ import type { ExecutionCheck, TeamProvider, TeamSettings } from '../types'
 import { executionChildChoice, executionModelSelection } from '../model-selection'
 import { nextCheckId } from '../execution-checks'
 import { ModelField, modelGroups } from './WorkflowModelField'
-import { workflowEffort, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
+import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { Modal } from './Modal'
 import { PtcToggle } from './PtcToggle'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
@@ -133,10 +133,13 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const childValue = provider === 'claude' ? (selection.model ? `claude:${selection.model}` : '') : selection.childModels.find((entry) => entry.id === selection.model)?.value ?? ''
   const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude')
   const start = async () => {
-    if (startingRef.current || !modelsReady || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)) return
+    const current = { ...latest.current }
+    const currentLevels = effortOptions(current)
+    if (startingRef.current || !modelsReady || !checks || !selection.leader || !selection.model
+      || !workflowEffortSupported(current.leaderEffort, currentLevels.leader) || !workflowEffortSupported(current.childEffort, currentLevels.child)
+      || (usesClaude && !auth.ready)) return
     startingRef.current = true
     setStarting(true)
-    const current = { ...latest.current }
     try {
       if (!await saves.current) return
       const { leader, provider, model, leaderEffort, childEffort } = current
@@ -162,15 +165,15 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       <section className="account-card ex-models">
         <ModelField label="親" value={modelsReady ? selection.leader : ''} groups={leaderGroups} disabled={!modelsReady || starting}
           effort={leaderEffort} efforts={workflowOptions(leaderEffort, levels.leader)} onEffort={(leaderEffort) => changeModels({ leaderEffort })}
-          onChange={(leader) => changeModels({ leader })} />
+          allowClearUnavailableEffort onChange={(leader) => changeModels({ leader })} />
         <ModelField label="子" value={modelsReady ? childValue : ''} groups={groups} disabled={!modelsReady || starting}
           effort={childEffort} efforts={workflowOptions(childEffort, levels.child)} onEffort={(childEffort) => changeModels({ childEffort })}
-          onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
+          allowClearUnavailableEffort onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
       </section>
       <PtcToggle mode={choice.toolMode} disabled={!modelsReady || starting} onChange={(toolMode) => changeModels({ toolMode })} />
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
     </div>
-    <div className="modal-actions"><button type="button" className="button" onClick={close}>キャンセル</button><button type="button" className="button primary" disabled={starting || !modelsReady || !checks || !selection.leader || !selection.model || (usesClaude && !auth.ready)} onClick={() => void start()}>始める</button></div>
+    <div className="modal-actions"><button type="button" className="button" onClick={close}>キャンセル</button><button type="button" className="button primary" disabled={starting || !modelsReady || !checks || !selection.leader || !selection.model || !workflowEffortSupported(leaderEffort, levels.leader) || !workflowEffortSupported(childEffort, levels.child) || (usesClaude && !auth.ready)} onClick={() => void start()}>始める</button></div>
   </Modal>
 }

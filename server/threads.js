@@ -24,6 +24,22 @@ export { carryoverText, describeError, isUndoable, restoreNoteText } from './thr
 
 const TURN_EMIT_MS = 60
 
+/**
+ * The last moment a turn is known to have been active: its start, a tool call,
+ * or a message added while it ran. The crash that ended it is unobserved, so
+ * the time the transcript is read must not stand in for it.
+ */
+function lastActivityAt(turn, fallback = Date.now()) {
+  let last = Number.isFinite(turn.startedAt) ? turn.startedAt : null
+  for (const item of turn.items ?? []) {
+    for (const at of [item.startedAt, item.endedAt, item.at]) {
+      if (!Number.isFinite(at)) continue
+      last = last === null ? at : Math.max(last, at)
+    }
+  }
+  return Math.min(last ?? fallback, Date.now())
+}
+
 export class ThreadManager extends EventEmitter {
   /**
    * @param {object} options
@@ -126,14 +142,16 @@ export class ThreadManager extends EventEmitter {
     const doc = await readJson(this.#turnFile(threadId), { version: 1, turns: [] }, { recoverCorrupt: false })
     this.#available(threadId, thread)
     const turns = doc.turns ?? []
+    let interrupted = false
     for (const turn of turns) {
       if (turn.status === 'running' && !this.active.has(threadId)) {
         if (turn.outputSpeed) delete turn.outputSpeed
         settleTurn(turn, {
           status: 'error',
           error: { message: 'アプリの終了により中断されました。' },
-          now: turn.endedAt ?? Date.now(),
+          now: lastActivityAt(turn),
         })
+        interrupted = true
       }
     }
     const repaired = await this.#recoverUsage(threadId, thread, turns)
@@ -143,10 +161,10 @@ export class ThreadManager extends EventEmitter {
     this.turns.set(threadId, turns)
     thread.score = scoresUpTo(turns).at(-1) ?? emptyScore()
     this.#saveIndex()
-    if (repaired.length) {
-      this.#saveTurns(threadId)
-      this.emit('usage-priced', this.summary(thread))
-    }
+    // Settled interrupted turns are transcript changes too: the file must say what
+    // the UI was shown (failed tools included), not that work is still running.
+    if (interrupted || repaired.length) this.#saveTurns(threadId)
+    if (repaired.length) this.emit('usage-priced', this.summary(thread))
     return turns
   }
 

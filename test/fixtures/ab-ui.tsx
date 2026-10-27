@@ -1,6 +1,5 @@
 // Open via Vite: /@fs/<repository>/test/fixtures/ab-ui.html?t=fixture
 // No real models, files or server state are touched. In DevTools: await abTest.run(), await abTest.openMenus(), or await abTest.remoteRestart() for the confirmed remote RPC.
-import React from 'react'
 import { createRoot } from 'react-dom/client'
 import '../../web/src/styles.css'
 
@@ -8,7 +7,8 @@ const requests: any[] = []
 let fail = '', delay = '', release: (() => void) | undefined
 const model = '["openai-codex","fixture"]'
 const config = { a: model, b: model, leader: model, implementer: model, efforts: { a: '', b: '', leader: '', implementer: '' }, lean: true, delegate: false, review: false }
-let savedModels = { leader: model, provider: 'gpt', model: 'fixture', leaderEffort: '', childEffort: '' }
+let savedAbConfig: any = config
+let savedModels = { leader: model, provider: 'gpt', model: 'fixture', leaderEffort: '', childEffort: '', toolMode: 'native' }
 const image = { file: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', mimeType: 'image/png', name: 'fixture.png' }
 const imageUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
 class Socket {
@@ -21,7 +21,7 @@ class Socket {
     const input = JSON.parse(body); requests.push(input)
     const reply = () => {
       let result: any = { saved: true }
-      if (input.type === 'ab.config') result = { config }
+      if (input.type === 'ab.config') result = { config: savedAbConfig }
       if (input.type === 'ab.create') result = { run }
       if (input.type === 'team.create') result = { team: { id: 'fixture-team' } }
       if (input.type === 'attachment.add') result = image
@@ -62,7 +62,18 @@ const paste = async () => {
   input().dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }))
   await tick()
 }
-const select = async (label: string, value: string) => { const element = document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!; element.value = value; element.dispatchEvent(new Event('change', { bubbles: true })); await tick() }
+const select = async (field: string, value: string) => {
+  const trigger = [...document.querySelectorAll<HTMLButtonElement>('.ab-effort')].find((button) => button.getAttribute('aria-label')?.startsWith(`${field}の推論レベル:`))
+  check(trigger, `workflow effort trigger: ${field}`)
+  check(!trigger!.disabled, `workflow effort trigger enabled: ${field}`)
+  trigger!.click(); await tick()
+  const menu = [...document.querySelectorAll<HTMLElement>('[role="menu"]')].find((entry) => entry.parentElement === document.body)
+  check(menu, `workflow effort portal menu: ${field}`)
+  const labels: Record<string, string> = { low: '低', medium: '中', high: '高', xhigh: '最高', max: '最大', '': '指定なし' }
+  const item = [...menu!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((entry) => entry.querySelector('.menu-label')?.textContent?.trim() === (labels[value] ?? value))
+  check(item, `workflow effort menu item: ${field}=${value}`)
+  item!.click(); await tick()
+}
 const openMenu = async () => {
   const trigger = [...document.querySelectorAll<HTMLButtonElement>('header button')].find((button) => button.textContent?.trim() === '開く')
   check(trigger, 'shared open menu trigger')
@@ -291,17 +302,62 @@ const api = {
       check(buttons.every((button) => button.textContent?.includes(expected)), `AB capability state: ${expected}`)
       check(buttons.every((button) => button.disabled === (expected === '指定不可')), `AB capability disabled: ${expected}`)
       await render('eco')
-      for (const label of ['親の推論レベル', '子の推論レベル']) {
-        const element = document.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!
-        check(element.selectedOptions[0]?.textContent === expected && element.disabled === (expected === '指定不可'), `eco capability state: ${expected}`)
-      }
-      savedModels = { leader: model, provider: 'gpt', model: 'fixture', leaderEffort: '', childEffort: '' }
+      const ecoEfforts = [...document.querySelectorAll<HTMLButtonElement>('.ab-effort')]
+      check(ecoEfforts.length === 2 && ecoEfforts.every((button) => button.textContent?.includes(expected)), `eco capability state: ${expected}`)
+      check(ecoEfforts.every((button) => button.disabled === (expected === '指定不可')), `eco capability disabled: ${expected}`)
+      savedModels = { leader: model, provider: 'gpt', model: 'fixture', leaderEffort: '', childEffort: '', toolMode: 'native' }
     }
     server.catalog.effortsByModel[model] = originalLevels
     passed.push('AB/eco legacy defaults: nearest / no reasoning disabled / unknown medium')
+
+    // A configured empty capability list makes saved explicit values invalid.
+    server.catalog.effortsByModel[model] = []
+    const originalAbConfig = savedAbConfig
+    savedAbConfig = { ...config, efforts: { a: 'high', b: 'high', leader: 'high', implementer: 'high' } }
+    await render('start')
+    await text('AB no-reasoning fixture')
+    const abStart = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === '2社に相談')!
+    const abCreatesBefore = count('ab.create')
+    check(abStart.disabled, 'AB blocks saved effort unavailable on known no-reasoning model')
+    abStart.click(); await tick()
+    check(count('ab.create') === abCreatesBefore, 'blocked AB start sends no create RPC')
+    await select('相談 A', '')
+    await select('相談 B', '')
+    await select('判断・報告リーダー', '')
+    check(Object.values(savedAbConfig.efforts as Record<string, string>).every((value) => value === 'high'), 'ab.configure mock does not persist the fixture config')
+    const clearedAbStart = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === '2社に相談')!
+    check(!clearedAbStart.disabled, 'AB permits start after explicit no-effort choices')
+    clearedAbStart.click(); await tick(); await tick()
+    const abCreate = requests.filter((request) => request.type === 'ab.create').at(-1)
+    check(count('ab.create') === abCreatesBefore + 1 && ['a', 'b', 'leader'].every((key) => abCreate.config.efforts[key] === ''), 'AB sends cleared no-effort choices')
+    savedAbConfig = originalAbConfig
+
+    const originalSavedModels = savedModels
+    savedModels = { leader: model, provider: 'gpt', model: 'fixture', leaderEffort: 'high', childEffort: 'high', toolMode: 'native' }
+    const ecoSetsOnOpen = count('execution.setModels')
     await render('eco')
-    check(document.querySelector<HTMLSelectElement>('[aria-label="親の推論レベル"]')!.value === 'medium' && document.querySelector<HTMLSelectElement>('[aria-label="子の推論レベル"]')!.value === 'medium', 'eco unspecified efforts display medium')
-    delay = 'execution.setModels'; await select('親の推論レベル', 'high'); await select('子の推論レベル', 'low')
+    const ecoUnsupported = [...document.querySelectorAll<HTMLButtonElement>('.ab-effort')]
+    const ecoStart = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === '始める')!
+    check(ecoUnsupported.length === 2 && ecoUnsupported.every((button) => button.getAttribute('aria-label')?.includes('非対応') && !button.disabled), 'eco shows unsupported saved efforts with a clearable control')
+    check(ecoStart.disabled && count('execution.setModels') === ecoSetsOnOpen, 'eco blocks start without rewriting saved values on open')
+    const teamsBeforeClear = count('team.create')
+    ecoStart.click(); await tick()
+    check(count('team.create') === teamsBeforeClear, 'blocked eco start sends no team.create RPC')
+    await select('親', '')
+    await select('子', '')
+    const clearedEcoStart = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === '始める')!
+    check(!clearedEcoStart.disabled, 'eco permits start after explicit no-effort choices')
+    clearedEcoStart.click(); await tick(); await tick()
+    const teamCreate = requests.filter((request) => request.type === 'team.create').at(-1)
+    check(count('team.create') === teamsBeforeClear + 1 && teamCreate.choices.gptLeader.effort === null && teamCreate.choices.gpt.low.effort === null, 'eco sends cleared effort values')
+    passed.push('AB/eco known no-effort: block stale values / clear and start')
+    savedModels = originalSavedModels
+    server.catalog.effortsByModel[model] = originalLevels
+
+    await render('eco')
+    const ecoDefaults = [...document.querySelectorAll<HTMLButtonElement>('.ab-effort')]
+    check(ecoDefaults.length === 2 && ecoDefaults.every((button) => button.textContent?.includes('中')), 'eco unspecified efforts display medium')
+    delay = 'execution.setModels'; await select('親', 'high'); await select('子', 'low')
     const before = count('team.create')
     const start = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === '始める')!
     start.click(); start.click(); await tick()
@@ -311,7 +367,8 @@ const api = {
     const choices = requests.filter((request) => request.type === 'team.create').at(-1).choices
     check(choices.gptLeader.effort === 'high' && choices.gpt.low.effort === 'low', 'eco parent/child execution values')
     await render('eco')
-    check(document.querySelector<HTMLSelectElement>('[aria-label="親の推論レベル"]')!.value === 'high' && document.querySelector<HTMLSelectElement>('[aria-label="子の推論レベル"]')!.value === 'low', 'eco restored efforts')
+    const restoredEcoEfforts = [...document.querySelectorAll<HTMLButtonElement>('.ab-effort')]
+    check(restoredEcoEfforts.length === 2 && restoredEcoEfforts[0].textContent?.includes('高') && restoredEcoEfforts[1].textContent?.includes('低'), 'eco restored efforts')
     passed.push('eco independent effort persistence / execution payload / ordered pending saves / duplicate start')
     passed.push(...await api.openMenus())
     passed.push(...await api.remoteRestart())
