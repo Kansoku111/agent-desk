@@ -22,7 +22,7 @@ const moduleSource = async (file) => fs.readFile(new URL(file, import.meta.url),
 const fieldSource = await moduleSource('../web/src/components/WorkflowModelField.tsx')
 const fieldComponents = compile(fieldSource, {
   react: {}, 'react/jsx-runtime': jsxRuntime, 'lucide-react': { ChevronDown: 'ChevronDown' },
-  '../model-selection': { providerReady: () => true, visibleModels: (server) => server.catalog.models },
+  '../model-selection': { isModelVisible: () => true, providerReady: () => true, visibleModels: (server) => server.catalog.models },
   '../util': { effortLabel: (value) => value || '指定なし', parseModel: (value) => { const [provider, model] = JSON.parse(value); return { provider, model } } },
   './Pickers': { byNewest: () => 0, providerHeading: (server, provider) => server.catalog.providers[provider] ?? provider, PROVIDER_NOTE: {}, PROVIDER_ORDER: ['openai-codex'] },
   './Popover': {
@@ -98,7 +98,7 @@ function mountAbStartDialog({ config, effortsByModel = { [NO_LEVELS]: [], [LOW_O
     react: { ...react, useLayoutEffect: react.useEffect }, 'react/jsx-runtime': jsxRuntime,
     'lucide-react': { Loader2: 'Loader2', PanelLeftOpen: 'PanelLeftOpen', Square: 'Square', Trash2: 'Trash2', X: 'X', ChevronDown: 'ChevronDown' },
     '../store': store,
-    '../model-selection': { providerReady: () => true, visibleModels: (server) => server.catalog.models },
+    '../model-selection': { isModelVisible: () => true, providerReady: () => true, visibleModels: (server) => server.catalog.models },
     './WorkflowModelField': fieldComponents,
     '../../../shared/workflow-effort.js': workflowEffort,
     '../../../shared/usage-score.js': { scoresUpTo: () => [] },

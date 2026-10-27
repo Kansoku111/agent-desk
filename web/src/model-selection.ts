@@ -23,7 +23,7 @@ const EXECUTION_ROUTES: Partial<Record<TeamProvider, string>> = { claudeApi: 'an
 
 /** Translate a picker value to EX's persisted provider/model pair, without changing routes. */
 export function executionChildChoice(server: AppState, value: string): { provider: TeamProvider; model: string } | null {
-  if (['claude:opus', 'claude:sonnet', 'claude:haiku'].includes(value)) return { provider: 'claude', model: value.slice(7) }
+  if (['claude:opus', 'claude:sonnet', 'claude:haiku'].includes(value)) return isModelVisible(server, { value }) ? { provider: 'claude', model: value.slice(7) } : null
   const model = visibleModels(server).find((entry) => entry.value === value && !entry.retired && providerReady(server, entry.provider))
   const provider = model && (Object.keys(EXECUTION_ROUTES) as TeamProvider[]).find((key) => EXECUTION_ROUTES[key] === model.provider)
   return model && provider ? { provider, model: model.id } : null
@@ -37,8 +37,8 @@ export function executionModelSelection(server: AppState, provider: string, lead
   const childModels = available.filter((entry) => entry.provider === routes[provider])
   return {
     leaderModels, childModels,
-    leader: ['claude:opus', 'claude:sonnet'].includes(leader) || leaderModels.some((entry) => entry.value === leader) ? leader : '',
-    model: (provider === 'claude' ? ['haiku', 'sonnet', 'opus'].includes(child) : childModels.some((entry) => entry.id === child)) ? child : '',
+    leader: (['claude:opus', 'claude:sonnet'].includes(leader) && isModelVisible(server, { value: leader })) || leaderModels.some((entry) => entry.value === leader) ? leader : '',
+    model: (provider === 'claude' ? ['haiku', 'sonnet', 'opus'].includes(child) && isModelVisible(server, { value: `claude:${child}` }) : childModels.some((entry) => entry.id === child)) ? child : '',
   }
 }
 

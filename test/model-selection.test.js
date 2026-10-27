@@ -65,6 +65,18 @@ test('Eco picker selections preserve the exact provider route and round-trip sav
   assert.equal(executionModelSelection(state, 'local', model('local-llm', 'shared-id').value, 'shared-id').leader, '')
 })
 
+test('Claude Code visibility is independent of API visibility in eco choices', () => {
+  const state = server({ [claude.value]: false, 'claude:haiku': false })
+  assert.equal(executionChildChoice(state, claude.value), null)
+  assert.equal(executionChildChoice(state, 'claude:haiku'), null)
+  assert.deepEqual(executionChildChoice(state, 'claude:sonnet'), { provider: 'claude', model: 'sonnet' })
+  assert.equal(executionModelSelection(state, 'claude', 'claude:sonnet', 'haiku').model, '')
+  state.settings.modelVisibility['claude:sonnet'] = false
+  assert.equal(executionModelSelection(state, 'claude', 'claude:sonnet', 'opus').leader, '')
+  state.settings.modelVisibility[claude.value] = true
+  assert.deepEqual(executionChildChoice(state, claude.value), { provider: 'claudeApi', model: claude.id })
+})
+
 test('Eco picker never maps hidden, retired, disconnected or missing choices to another model', () => {
   const state = server({ [sol.value]: false })
   assert.equal(executionChildChoice(state, sol.value), null)

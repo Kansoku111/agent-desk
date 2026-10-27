@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Brain, ChevronDown } from 'lucide-react'
 import { act, useStore } from '../store'
 import type { AppState, TerminalSummary } from '../types'
-import { visibleModels } from '../model-selection'
+import { isModelVisible } from '../model-selection'
 import { effortLabel, pickableEfforts } from '../util'
 import { byNewest } from './Pickers'
 import { Dropdown, MenuHeading, MenuItem } from './Popover'
@@ -25,10 +25,12 @@ const family = (id: string) => ALIASES.findIndex((alias) => id.includes(alias.id
 
 /** Claude models from the model list (Claude Code takes their ids, claude-opus-5-5), Opus first. */
 export function claudeModels(server: AppState | null) {
-  const listed = server ? visibleModels(server).filter((model) => model.provider === 'anthropic') : []
+  const listed = server ? server.catalog.models.filter((model) => model.provider === 'anthropic'
+    && isModelVisible(server, { ...model, value: `claude:${model.id}` })) : []
   const rank = (id: string) => (family(id) < 0 ? ALIASES.length : family(id))
   listed.sort((a, b) => rank(a.id) - rank(b.id) || byNewest(a, b))
-  const aliases = ALIASES.filter((alias) => !listed.some((model) => model.id.includes(alias.id)))
+  const aliases = ALIASES.filter((alias) => (!server || isModelVisible(server, { value: `claude:${alias.id}` }))
+    && !listed.some((model) => model.id.includes(alias.id)))
   return [...aliases, ...listed]
 }
 

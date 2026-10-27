@@ -1,6 +1,6 @@
 import { ChevronDown } from 'lucide-react'
 import type { AppState } from '../types'
-import { providerReady, visibleModels } from '../model-selection'
+import { isModelVisible, providerReady, visibleModels } from '../model-selection'
 import { effortLabel, parseModel } from '../util'
 import { byNewest, providerHeading, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
@@ -19,12 +19,12 @@ export function modelGroups(server: AppState): ModelGroup[] {
   }
   const order = [...new Set([...PROVIDER_ORDER, ...byProvider.keys()])].filter((provider) => byProvider.has(provider))
   return [
-    { id: 'claude-code', heading: 'Claude Code', note: '', models: CLAUDE_CODE },
+    { id: 'claude-code', heading: 'Claude Code', note: '', models: CLAUDE_CODE.filter((model) => isModelVisible(server, model)) },
     ...order.map((provider) => ({
       id: provider, heading: providerHeading(server, provider), note: PROVIDER_NOTE[provider] ?? '',
       models: byProvider.get(provider)!.sort(byNewest),
     })),
-  ]
+  ].filter((group) => group.models.length)
 }
 
 function selectedName(groups: ModelGroup[], value: string | null) {
