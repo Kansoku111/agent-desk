@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises'
 import { SIWC_LIMIT_TEXT } from './siwc-usage-error.js'
 
+export const PLAN_INSTRUCTION = '今回は相談のみです。このメッセージへの対応は提案・調査・説明にとどめ、ファイルの作成・編集・削除や、変更を伴うコマンドの実行はしないでください。'
+
 function validateMessageId(messageId) {
   if (messageId === undefined) return undefined
   if (typeof messageId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {

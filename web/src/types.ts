@@ -289,6 +289,7 @@ export interface SteerItem {
   id: string
   text: string
   images: ImageRef[]
+  plan?: boolean
   at: number
   /** In a subagent's view: sent by another agent (its parent) rather than given as its task. */
   from?: 'agent'

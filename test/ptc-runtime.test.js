@@ -5,6 +5,7 @@ import fs from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import YAML from 'yaml'
 import { AcpRuntime, RuntimePool } from '../server/runtime.js'
@@ -14,7 +15,7 @@ import { appPaths } from '../server/paths.js'
 import { abPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
 import { localRoute } from '../server/local-llm.js'
 import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
-import { assertPlanPolicy } from '../server/plan-policy-plugin.js'
+import { PLAN_INSTRUCTION } from '../server/thread-utils.js'
 
 async function setup(t, mode, profile) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ptc-'))
@@ -53,7 +54,7 @@ async function setup(t, mode, profile) {
   const patches = []
   if (profile) {
     const file = path.join(home, 'role.patch.yml')
-    await fs.writeFile(file, profile.startsWith('team') ? teamChildPatch({ subagents, persona }) : abPatch({ subagents, persona, writable: profile === 'ab-write', lean: profile !== 'ab-research' && profile !== 'plan', plan: profile === 'plan' }))
+    await fs.writeFile(file, profile.startsWith('team') ? teamChildPatch({ subagents, persona }) : abPatch({ subagents, persona, writable: profile === 'ab-write', lean: profile !== 'ab-research' }))
     patches.push(file)
   }
   const permissions = []
@@ -392,19 +393,15 @@ test('real PTC timeout and cancellation settle, then the same ACP session can ex
 
 for (const permissionMode of ['workspace-write', 'danger-full-access', 'read-only']) {
   for (const toolMode of ['native', 'ptc']) {
-    test(`Plan round-trip preserves real history and restores policy (${permissionMode}, ${toolMode})`, { timeout: 120_000 }, async (t) => {
+    test('Plan suffix preserves runtime, tools and history (' + permissionMode + ', ' + toolMode + ')', { timeout: 120_000 }, async (t) => {
       const f = await setup(t, permissionMode)
-      await fs.writeFile(f.paths.planPatch, abPatch({ plan: true, lean: false }))
-      const pool = new RuntimePool({ paths: f.paths, onUpdate() {}, onPermission: async () => { assert.fail('Plan must not ask for escalation') } })
-      const planRuntime = pool.runtimes.get('plan')
-      f.runtimes.push(planRuntime)
       const threads = new ThreadManager({ paths: f.paths, pool: Object.assign(new EventEmitter(), {
-        get: async (key) => (key === 'plan' ? planRuntime : f.runtime).start(),
-        holderOf: (id) => [f.runtime, planRuntime].find((runtime) => runtime.liveSessions.has(id)), status: () => ({}),
+        get: async (key) => { assert.equal(key, permissionMode); return f.runtime.start() },
+        holderOf: (id) => f.runtime.liveSessions.has(id) ? f.runtime : null, status: () => ({}),
       }), catalog: { learn: () => false }, getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null })
       f.cleanups.push(() => threads.shutdown())
       const collect = f.runtime.onUpdate
-      for (const runtime of [f.runtime, planRuntime]) runtime.onUpdate = (id, update) => { collect(id, update); threads.onUpdate(id, update) }
+      f.runtime.onUpdate = (id, update) => { collect(id, update); threads.onUpdate(id, update) }
       const thread = await threads.create({ workspace: f.workspace, model: '["local-llm","ptc-fixture"]', permissionMode, toolMode })
       const send = async (text, plan) => {
         await threads.send(thread.id, { text, plan })
@@ -416,52 +413,67 @@ for (const permissionMode of ['workspace-write', 'danger-full-access', 'read-onl
       f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'read', args: toolMode === 'ptc'
         ? { description: 'Read original evidence', code: 'return await tools.read({ file_path: "input.txt" });' } : { file_path: 'input.txt' } })
       const id = await send('original-context-before-plan', false)
+      const schemas = f.requests.at(-1).tools
+      const process = f.runtime.child
       const from = f.requests.length
-      f.queue.push({ name: 'write', args: { file_path: 'input.txt', content: 'forbidden' } })
-      f.queue.push({ name: 'read', args: { file_path: 'input.txt' } })
-      assert.equal(await send('consult-without-editing', true), id)
-      assertPlanPolicy(threads.liveOptions.get(id), true, 'read-only')
-      assert.equal(await fs.readFile(path.join(f.workspace, 'input.txt'), 'utf8'), 'PTC fixture content')
-      const planInput = JSON.stringify(f.requests[from].messages)
-      assert.match(planInput, /original-context-before-plan/)
-      assert.match(planInput, /PTC fixture content/, 'original tool results survive intact')
-      assert.match(planInput, /Current DSH file policy: read-only/)
-      const schemas = f.requests[from].tools.map((tool) => tool.function.name)
-      for (const name of ['write', 'edit', 'pwsh', 'bash', 'run_code', 'subagent', 'create_goal']) assert.ok(!schemas.includes(name), name)
-      await planRuntime.stop()
-      assert.equal(await send('consult-after-runtime-restart', true), id)
-      assertPlanPolicy(threads.liveOptions.get(id), true, 'read-only')
-      await f.runtime.stop()
-      const back = f.requests.length
+      // Deliberately non-compliant mock: prove Plan is a request, not an execution guard.
       f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'write', args: toolMode === 'ptc'
-        ? { description: 'Implement after Plan', code: 'return await tools.write({ file_path: "after-plan.txt", content: "implemented" });' }
-        : { file_path: 'after-plan.txt', content: 'implemented' } })
+        ? { description: 'Test ordinary file permissions', code: 'return await tools.write({ file_path: "plan-fixture.txt", content: "ordinary permission" });' }
+        : { file_path: 'plan-fixture.txt', content: 'ordinary permission' } })
+      assert.equal(await send('consult-without-editing', true), id)
+      const messages = f.requests[from].messages
+      assert.match(JSON.stringify(messages), /original-context-before-plan/)
+      assert.match(JSON.stringify(messages), /PTC fixture content/)
+      const lastUser = messages.findLast((message) => message.role === 'user')
+      assert.ok(JSON.stringify(lastUser).includes(PLAN_INSTRUCTION))
+      assert.deepEqual(f.requests[from].tools, schemas)
+      assert.equal(f.runtime.child, process)
+      if (permissionMode === 'read-only') await assert.rejects(fs.stat(path.join(f.workspace, 'plan-fixture.txt')), { code: 'ENOENT' })
+      else assert.equal(await fs.readFile(path.join(f.workspace, 'plan-fixture.txt'), 'utf8'), 'ordinary permission')
+      const off = f.requests.length
       assert.equal(await send('implement-after-plan', false), id)
-      assertPlanPolicy(threads.liveOptions.get(id), false, permissionMode)
-      const resumedInput = JSON.stringify(f.requests[back].messages)
-      assert.match(resumedInput, /original-context-before-plan/)
-      assert.match(resumedInput, /consult-after-runtime-restart/)
-      const system = f.requests[back].messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
-      assert.doesNotMatch(system, /This request is in Plan mode/)
+      assert.ok(!JSON.stringify(f.requests[off].messages.findLast((message) => message.role === 'user')).includes(PLAN_INSTRUCTION))
       assert.equal(toolModeOption(threads.liveOptions.get(id)).currentValue, toolMode)
-      if (permissionMode === 'read-only') await assert.rejects(fs.stat(path.join(f.workspace, 'after-plan.txt')), { code: 'ENOENT' })
-      else assert.equal(await fs.readFile(path.join(f.workspace, 'after-plan.txt'), 'utf8'), 'implemented')
-      assert.equal(threads.threads.get(thread.id).carryover, undefined)
+      assert.equal(f.runtime.child, process)
+      assert.equal(threads.threads.get(thread.id).sessionPlan, undefined)
     })
   }
 }
 
-test('real Plan profile exposes reads but not writing or delegation', { timeout: 120_000 }, async (t) => {
-  const f = await setup(t, 'read-only', 'plan')
-  f.queue.push({ name: 'read', args: { file_path: 'input.txt' } })
-  await f.prompt()
-  assert.ok(f.updates.some((update) => update.toolCallId === 'call-1' && update.status === 'completed' && JSON.stringify(update).includes('PTC fixture content')), JSON.stringify(f.updates))
-  const schemas = f.requests.at(-1).tools.map((tool) => tool.function.name)
-  for (const name of ['write', 'edit', 'pwsh', 'bash', 'run_code', 'subagent', 'create_goal']) assert.ok(!schemas.includes(name), name)
-  const system = f.requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
-  assert.match(system, /Plan mode/)
-  assert.equal(f.permissions.length, 0)
-})
+
+for (const [permissionMode, toolMode] of [['workspace-write', 'ptc'], ['danger-full-access', 'native']]) {
+  test('legacy Plan restores saved read-only override (' + permissionMode + ', ' + toolMode + ')', { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'read-only')
+    const plugin = path.join(f.home, 'legacy-policy.mjs')
+    const patch = path.join(f.home, 'legacy-policy.patch.yml')
+    await fs.writeFile(plugin, "export const inject = ['sessions']; export function apply(ctx) { ctx.on('agent/created', async ({agent}) => { agent.session.append('sandbox/mode', {mode: 'read-only'}); await ctx.sessions.flush(agent.session); }); }")
+    await fs.writeFile(patch, YAML.stringify([{ insert: [{ id: 'legacy-policy', name: pathToFileURL(plugin).href }] }]))
+    const legacy = new AcpRuntime({ mode: 'read-only', paths: f.paths, patches: [patch], onUpdate: (_id, update) => f.updates.push(update), onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
+    const writer = new AcpRuntime({ mode: permissionMode, paths: f.paths, onUpdate() {}, onPermission: async () => assert.fail('restored session should write normally') })
+    f.runtimes.push(legacy, writer)
+    await legacy.start()
+    const session = await legacy.newSession(f.workspace)
+    await legacy.prompt(session.sessionId, [{ type: 'text', text: 'legacy-consultation-context' }])
+    const threads = new ThreadManager({ paths: f.paths, pool: Object.assign(new EventEmitter(), {
+      get: async () => writer.start(), holderOf: (id) => [legacy, writer].find((runtime) => runtime.liveSessions.has(id)), status: () => ({}),
+    }), catalog: { learn: () => false }, getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null })
+    f.cleanups.push(() => threads.shutdown())
+    writer.onUpdate = (id, update) => threads.onUpdate(id, update)
+    const thread = await threads.create({ workspace: f.workspace, model: '["local-llm","ptc-fixture"]', permissionMode, toolMode })
+    Object.assign(threads.threads.get(thread.id), { sessionId: session.sessionId, sessionPlan: true })
+    f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'write', args: toolMode === 'ptc'
+      ? { description: 'Verify restored permissions', code: 'return await tools.write({ file_path: "restored.txt", content: "restored" });' }
+      : { file_path: 'restored.txt', content: 'restored' } })
+    await threads.send(thread.id, { text: 'consult using the new suffix', plan: true })
+    await threads.active.get(thread.id).done
+    const view = await threads.get(thread.id)
+    assert.equal(view.turns.at(-1).status, 'done', JSON.stringify(view.turns.at(-1)))
+    assert.equal(view.thread.sessionId, session.sessionId)
+    assert.equal(threads.threads.get(thread.id).sessionPlan, undefined)
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /legacy-consultation-context/)
+    assert.equal(await fs.readFile(path.join(f.workspace, 'restored.txt'), 'utf8'), 'restored')
+  })
+}
 
 for (const profile of ['ab-read', 'ab-research', 'ab-write', 'team', 'team-read']) {
   test(`real ${profile} profile executes PTC without reopening delegation or role writes`, { timeout: 120_000 }, async (t) => {

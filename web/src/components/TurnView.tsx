@@ -227,7 +227,7 @@ function UserBubble({ text, images, note, plan }: { text: string; images: ImageR
 
 /** A message the user sent into the running turn. */
 function Steer({ item }: { item: SteerItem }) {
-  return <UserBubble text={item.text} images={item.images} note="作業中に送信" />
+  return <UserBubble text={item.text} images={item.images} plan={item.plan} note="作業中に送信" />
 }
 
 export const Item = memo(function Item({ item, workspace }: { item: TurnItem; workspace: string }) {

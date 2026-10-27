@@ -112,7 +112,7 @@ export class Outbox {
   steer(threadId: string, id: string): Promise<void> {
     return this.exclusive(threadId, async () => {
       const message = this.find(threadId, id)
-      if (!message || message.plan || message.phase !== 'queued' || !this.canConnect() || this.options.thread(threadId)?.status !== 'running') return
+      if (!message || message.phase !== 'queued' || !this.canConnect() || this.options.thread(threadId)?.status !== 'running') return
       this.update(threadId, id, { phase: 'sending', operation: 'steer', error: undefined })
       try {
         const result = await this.options.request('thread.steer', this.params(threadId, message)) as { status?: string; steered?: boolean }

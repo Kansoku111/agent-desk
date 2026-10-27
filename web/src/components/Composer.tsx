@@ -167,7 +167,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
                   {message.phase === 'failed' ? '再試行' : '受領を確認'}
                 </button>
               )}
-              {thread?.status === 'running' && message.phase === 'queued' && !message.plan && (
+              {thread?.status === 'running' && message.phase === 'queued' && (
                 <button
                   type="button"
                   className="steer-button"
@@ -237,7 +237,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
           {!thread?.ab && (
             <button type="button" className={`chip ptc-chip ${plan ? 'on' : ''}`}
               aria-label="Plan" aria-pressed={plan} disabled={sending}
-              title="Plan: この設定で送信するメッセージはファイル編集を禁止します"
+              title="Plan: メッセージ末尾に「相談のみ・ファイル変更しない」の依頼を付けます（権限は変わりません）"
               onClick={() => setPlan((value) => !value)}>
               Plan {plan ? 'ON' : 'OFF'}
             </button>

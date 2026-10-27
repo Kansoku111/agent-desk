@@ -1,6 +1,6 @@
 // One `dsh --profile acp` process per deployment permission mode. Ordinary
-// permission-picker changes start a new session with carryover; Plan and eco's
-// explicit research transition resume the same session in the selected process.
+// permission-picker changes start a new session with carryover; eco's research
+// transition resumes the same session in the selected process.
 // The session-policy plugin applies that process's policy before it can act.
 // Agent teams' children have processes of their own, with an extra layer that
 // takes their subagent tools away (dsh-config.js teamChildPatch).
@@ -265,7 +265,7 @@ export class RuntimePool extends EventEmitter {
         this.runtimes.set(key, runtime)
       }
     }
-    for (const [key, mode, patch] of [['ab:lean', 'read-only', paths.abLeanPatch], ['ab:research', 'read-only', paths.abResearchPatch], ['ab:write', 'danger-full-access', paths.abWritePatch], ['plan', 'read-only', paths.planPatch]]) {
+    for (const [key, mode, patch] of [['ab:lean', 'read-only', paths.abLeanPatch], ['ab:research', 'read-only', paths.abResearchPatch], ['ab:write', 'danger-full-access', paths.abWritePatch]]) {
       if (!patch) continue
       const runtime = new AcpRuntime({ mode, paths, patches: [patch], onUpdate, onPermission })
       runtime.on('exit', (info) => this.emit('exit', { mode, key, ...info }))

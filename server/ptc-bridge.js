@@ -1,7 +1,7 @@
 // Loaded only inside dsh. Each ACP root owns its own presentation declaration;
 // this does not change the deployment default or a subagent's composition.
 import { TOOL_MODE_CONFIG, TOOL_MODES } from './ptc.js'
-import { PLAN_POLICY_CONFIG, planPolicyOption } from './plan-policy-plugin.js'
+import { SESSION_POLICY_CONFIG, sessionPolicyOption } from './session-policy-plugin.js'
 const states = new WeakMap()
 const stateOf = (record) => {
   if (!states.has(record)) states.set(record, { mode: 'native', dispose: null, changing: false })
@@ -10,7 +10,7 @@ const stateOf = (record) => {
 
 export function withToolMode(record, options) {
   assertPresentationReady(record)
-  return [...options.filter((option) => option.id !== TOOL_MODE_CONFIG && option.id !== PLAN_POLICY_CONFIG), ...planPolicyOption(record.agent), {
+  return [...options.filter((option) => option.id !== TOOL_MODE_CONFIG && option.id !== SESSION_POLICY_CONFIG), ...sessionPolicyOption(record.agent), {
     id: TOOL_MODE_CONFIG, name: 'PTC', type: 'select', currentValue: stateOf(record).mode,
     options: [{ value: 'native', name: 'Off' }, { value: 'ptc', name: 'On' }],
   }]

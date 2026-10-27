@@ -220,7 +220,7 @@ export function homePatch({
     ...(acpModel ? [{ id: 'acp', config: { provider: 'openai-codex', model: acpModel } }] : []),
     // Its tool and prompt section go together; delegation is configured below.
     { id: 'tool-workflow', disabled: true },
-    { insert: [{ id: 'agent-desk-plan-session-policy', name: new URL('./plan-policy-plugin.js', import.meta.url).href, config: { plan: false } }] },
+    { insert: [{ id: 'agent-desk-session-policy', name: new URL('./session-policy-plugin.js', import.meta.url).href }] },
   ]
   if (settingsFile) rows.push({ insert: [{
     id: 'agent-desk-subagent-policy',
@@ -330,27 +330,25 @@ export async function writeHomePatch(file, options) {
   return writePatch(file, homePatch(options))
 }
 
-export function abPatch({ subagents = [], persona = null, writable = false, lean = true, plan = false } = {}) {
+export function abPatch({ subagents = [], persona = null, writable = false, lean = true } = {}) {
   const disabled = [...BASE_SUBAGENT_TOOLS, 'tool-workflow', 'tool-goal', 'tool-plugin-manager', 'tool-ask-user',
     ...subagents.filter(({ provider }) => SUBAGENT_TOOLS[provider]).map(({ provider }) => `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`),
     ...(!writable ? ['tool-bash', 'tool-pwsh', 'tool-jobs', 'tool-skill'] : []),
     ...(!writable && lean ? ['tool-web'] : [])]
   return YAML.stringify([
     ...disabled.map((id) => ({ id, disabled: true })),
-    ...(plan ? [{ id: 'agent-desk-plan-session-policy', config: { plan: true } }] : []),
     // Remove the home layer's fixed-model delegation advice with its tools,
     // preserving the shipped persona just as teamChildPatch does.
     ...(subagents.some(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
       ? [{ id: 'system-prompt', config: { personaPrefix: persona?.personaPrefix ?? '', personaSuffix: persona?.personaSuffix ?? '' } }] : []),
     ...(!writable ? [{ id: 'tool-fs', config: { write: false, edit: false } }] : []),
-    { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable, ...(plan ? { plan: true } : {}) } }] },
+    { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable } }] },
   ])
 }
 export async function writeAbPatches(paths, options) {
   const results = await Promise.all([
     writePatch(paths.abLeanPatch, abPatch({ ...options, lean: true })),
     writePatch(paths.abResearchPatch, abPatch({ ...options, lean: false })),
-    writePatch(paths.planPatch, abPatch({ ...options, lean: false, plan: true })),
     writePatch(paths.abWritePatch, abPatch({ ...options, writable: true })),
   ])
   return results.some(Boolean)
