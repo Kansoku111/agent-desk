@@ -6,7 +6,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import zlib from 'node:zlib'
 import { applyCatalogAdditions } from '../server/model-catalog.js'
-import { downloadTarball, ModelCatalogUpdater, newerModels, readFetchedCatalog, readTarFiles } from '../server/model-updates.js'
+import { downloadTarball, ModelCatalogUpdater, newerModels, newerPricing, readFetchedCatalog, readTarFiles } from '../server/model-updates.js'
 
 /** A gzipped ustar archive; `pax` entries name their file through a pax header. */
 function tgz(entries) {
@@ -113,6 +113,21 @@ test('a fetched definition wins over the bundled one and carries its own marker'
   assert.equal(off.data['anthropic-messages']['claude-sonnet-5-5'].agentDeskAdded, 'bundled')
 })
 
+test('price updates include known ids without changing their execution definitions', () => {
+  const original = shippedAnthropic['anthropic-messages']['claude-sonnet-5']
+  const data = { 'anthropic-messages': {
+    'chat:claude-sonnet-5': { ...original, type: 'chat', cost: { input: 1, output: 5, cacheRead: 0.1 } },
+    'chat:bad': { ...model('bad'), type: 'chat', cost: { input: -1, output: 2 } },
+    'chat:unsafe': { ...model('unsafe'), type: 'chat', baseUrl: 'https://evil.example' },
+  }, 'new-wire': { 'chat:future': { id: 'future', provider: 'anthropic', type: 'chat',
+    baseUrl: original.baseUrl, cost: { input: 4, output: 8 } } } }
+  assert.deepEqual(newerPricing({ provider: 'anthropic', data, shipped: shippedAnthropic }),
+    { 'anthropic/claude-sonnet-5': { input: 1, output: 5, cacheRead: 0.1 },
+      'anthropic/future': { input: 4, output: 8 } })
+  assert.equal(newerModels({ provider: 'anthropic', data, shipped: shippedAnthropic, keys }).groups['anthropic-messages']?.['claude-sonnet-5'], undefined)
+  assert.deepEqual(shippedAnthropic['anthropic-messages']['claude-sonnet-5'].cost, { input: 3, output: 15 })
+})
+
 test('downloadTarball refuses a file that does not match the registry hash', async () => {
   const body = Buffer.from('package bytes')
   const fetchImpl = async () => new Response(body)
@@ -174,6 +189,43 @@ test('the updater reads a newer release once, keeps its models and reports the n
   } finally {
     await fs.rm(home, { recursive: true, force: true })
   }
+})
+
+test('a price-only revision is persisted, applied and survives restart', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'model-prices-'))
+  t.after(() => fs.rm(home, { recursive: true, force: true }))
+  let version = '99.0.0', input = 4, applied = 0
+  const updater = await new ModelCatalogUpdater({
+    root: home, home, enabled: () => true, onCatalog: async () => { applied++ },
+    lookup: async () => ({ version, tarball: 'https://example.test/models.tgz' }),
+    download: async () => tgz([{ name: 'package/dist/providers/data/anthropic.json', body: JSON.stringify({
+      'anthropic-messages': { 'chat:claude-sonnet-5': { ...model('claude-sonnet-5'), type: 'chat', cost: { input, output: 10 } } },
+    }) }]),
+    shipped: async () => ({ providers: { anthropic: shippedAnthropic }, keys }),
+  }).load()
+  await updater.check()
+  assert.equal(updater.fetched.pricing['anthropic/claude-sonnet-5'].input, 4)
+  assert.equal(applied, 1)
+  input = 6
+  version = '99.0.1'
+  await updater.check()
+  assert.equal(updater.fetched.pricing['anthropic/claude-sonnet-5'].input, 6)
+  assert.equal(applied, 2, 'price changes apply even when no model was added')
+  const reload = await new ModelCatalogUpdater({ home, root: home, enabled: () => true, onCatalog: async () => {} }).load()
+  assert.equal(reload.fetched.pricing['anthropic/claude-sonnet-5'].input, 6)
+  assert.equal((await readFetchedCatalog(home)).pricing['anthropic/claude-sonnet-5'].input, 6)
+})
+
+test('a fetched catalog older than the installed engine cannot override its prices', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'model-prices-older-'))
+  t.after(() => fs.rm(home, { recursive: true, force: true }))
+  await fs.writeFile(path.join(home, 'model-updates.json'), JSON.stringify({ catalog: {
+    format: 3, source: '1.4.0', providers: {}, pricing: { 'anthropic/claude-sonnet-5': { input: 1, output: 2 } },
+  } }))
+  const updater = await new ModelCatalogUpdater({ home, root: home, enabled: () => true, onCatalog: async () => {},
+    catalogVersion: async () => '1.5.0' }).load()
+  assert.deepEqual(updater.fetched.pricing, {})
+  assert.equal(updater.catalog.pricing['anthropic/claude-sonnet-5'].input, 1, 'retain the cache for possible later use')
 })
 
 test('OpenCode definitions are fetched, persisted and migrated even at the same pi-ai version', async (t) => {

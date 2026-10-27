@@ -28,10 +28,12 @@ import { readJson, UnmovableFileError, writeJson } from './json-file.js'
 import { catalogModelLimits, configuredModelCatalog, readOpenCodeCatalog } from './model-catalog.js'
 import { combineOpenCodeAdditions, openCodeModels } from './opencode-go-catalog.js'
 import { OpenCodeGoRegistry } from './opencode-go-registry.js'
+import { ModelRegistry } from './model-registry.js'
+import { EquivalentPricing } from './equivalent-pricing.js'
 import { SiwcModelCatalog } from './siwc-models.js'
 import { ModelCatalogUpdater } from './model-updates.js'
 import { installedModels, OpenCodeGoModels } from './opencode-go-models.js'
-import { resetPricing, setCatalogPricing, setFastPricing } from './usage.js'
+import { resetPricing, setCatalogPricing, setEquivalentPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
 import { ChatGptUsage } from './chatgpt-usage.js'
@@ -135,6 +137,7 @@ const codexApp = new CodexAppServer({ home: paths.codexHome, openUrl: openExtern
 
 // Agent teams (teams.js) give their leader's Claude Code its flags.
 let teams = null
+let threads = null
 // Claude Code tasks: the user's own `claude` CLI in a terminal (see terminals.js).
 const terminals = await new TerminalManager({
   file: path.join(paths.home, 'terminals.json'),
@@ -217,9 +220,17 @@ const modelUpdater = await new ModelCatalogUpdater({
   onCatalog: () => updateModelCatalog().then(() => {}),
   log: (...parts) => log('model update:', ...parts),
 }).load()
+const modelRegistry = new ModelRegistry()
+const equivalentPricing = await new EquivalentPricing({
+  file: path.join(paths.home, 'equivalent-pricing.json'), registry: modelRegistry, log,
+  enabled: () => settings.modelAutoUpdate !== false, onChange: (rates) => {
+    if (setEquivalentPricing(rates) && threads) void threads.refreshUnpricedUsage()
+  },
+}).load()
+setEquivalentPricing(equivalentPricing.rates)
 const opencodeRegistry = await new OpenCodeGoRegistry({
   file: path.join(paths.home, 'opencode-go-definitions.json'),
-  base: () => readOpenCodeCatalog(modelUpdater.fetched),
+  base: () => readOpenCodeCatalog(modelUpdater.fetched), registry: modelRegistry,
 }).load()
 /** pi-ai stays authoritative for known definitions; official metadata fills exact-id gaps. */
 const openCodeFetched = () => settings.modelAutoUpdate === false ? null : ({
@@ -297,7 +308,10 @@ async function syncModelCatalog() {
       result.added.push(`opencode-go/${model.id}`)
       result.models.push({ provider: 'opencode-go', id: model.id, name: model.name, source: piGo.has(model.id) ? 'fetched' : 'registry' })
     }
-    setCatalogPricing(result.pricing)
+    Object.assign(result.pricing, modelUpdater.fetched?.pricing ?? {})
+    const equivalentChanged = setEquivalentPricing(equivalentPricing.rates)
+    const catalogChanged = setCatalogPricing(result.pricing)
+    if ((equivalentChanged || catalogChanged) && threads) void threads.refreshUnpricedUsage()
   } catch (error) {
     result = { changed: false, added: [], models: [], skipped: [], warnings: [error.message] }
   }
@@ -389,7 +403,6 @@ async function refreshCodexModels() {
   }
 }
 
-let threads
 const pool = new RuntimePool({
   paths,
   onUpdate: (sessionId, update) => threads.onUpdate(sessionId, update),
@@ -496,6 +509,7 @@ const login = new ChatGptLogin({
   },
 })
 
+threads.on('usage-priced', (thread) => broadcast('thread', { thread }))
 threads.on('thread', (thread) => {
   broadcast('thread', { thread })
   followSubagents(thread.id)
@@ -716,7 +730,7 @@ const settingsService = createSettingsService({
   updateModelCatalog: () => updateModelCatalog({ deferRuntimeEffects: true }),
   restartRuntimesWhenIdle,
   onChannelChange: () => updates.channelChanged(),
-  checkModelUpdate: () => modelUpdater.check(),
+  checkModelUpdate: () => Promise.all([modelUpdater.check(), equivalentPricing.refresh()]),
   onBackgroundError: (error) => log('settings update check:', error.message),
 })
 
@@ -738,6 +752,7 @@ const handlers = {
   ...createModelHandlers({
     threads, catalog, catalogState, updates, modelUpdater, modelUpdateState,
     updateModelCatalog, refreshCodexModels, checkOpenCodeGoModels,
+    checkEquivalentPricing: () => equivalentPricing.refresh({ force: true }),
   }),
   ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
 
@@ -869,6 +884,7 @@ async function shutdown(code = 0) {
   login.cancel()
   updates.stop()
   modelUpdater.stop()
+  const pricingDrained = equivalentPricing.stop()
   clearInterval(codexModelsTimer)
   clearInterval(opencodeGoTimer)
   // Request cancellation first, then close the transports as well. A stalled
@@ -878,6 +894,7 @@ async function shutdown(code = 0) {
   await pool.pause().catch((error) => log('runtime shutdown:', error.message))
   await drained
   await abDrained
+  await pricingDrained
   await abAgents.shutdown().catch((error) => log('AB agents shutdown:', error.message))
   await teams.stop().catch((error) => log('team shutdown:', error.message))
   await terminals.shutdown().catch((error) => log('terminal shutdown:', error.message))
@@ -930,3 +947,4 @@ threads.warmCatalog().catch((error) => log('model catalog warm-up failed:', erro
 
 updates.start()
 modelUpdater.start()
+equivalentPricing.start()

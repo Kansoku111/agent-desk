@@ -3,7 +3,9 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { test } from 'node:test'
-import { turnUsage } from '../server/usage.js'
+import { loadPricing, setCatalogPricing, setEquivalentPricing, turnUsage } from '../server/usage.js'
+import { EquivalentPricing } from '../server/equivalent-pricing.js'
+import { formatEquivalentCost } from '../shared/usage-score.js'
 import { fixture, deferred } from './helpers/thread-manager.js'
 
 const usage = { requests: 1, input: 100, output: 10, cacheRead: 1000, cacheWrite: 0,
@@ -29,6 +31,15 @@ test('opening a historical DeepSeek turn fills its cost from the matching bounde
   assert.equal(calls[0].waitMs, 0)
   await f.manager.shutdown()
   assert.equal((await f.disk()).turns[0].usage.cost, 0.000024)
+})
+
+test('DeepSeek bill recovery keeps an already determined score unchanged', async (t) => {
+  const prior = { ...usage, score: { points: 12, priced: 1, unpriced: 0 } }
+  const f = await fixture(t, { getTurnUsage: async () => ({ ...usage, cost: 0.5, score: { points: 99, priced: 1, unpriced: 0 } }) })
+  await savedTurn(f, prior)
+  const result = (await f.manager.get(f.thread.id)).turns[0].usage
+  assert.equal(result.cost, 0.5)
+  assert.deepEqual(result.score, prior.score)
 })
 
 test('a changed session or missing log cannot overwrite a historical usage record', async (t) => {
@@ -89,13 +100,116 @@ test('partly missing Terra usage remains explicitly unpriced after recovery', as
   assert.deepEqual((await f.manager.get(f.thread.id)).thread.score, recovered.score)
 })
 
-test('Terra recovery never changes known, mixed, mismatched, or missing usage', async (t) => {
+test('an older usage record without a score is recovered from its matching log', async (t) => {
+  const prior = { ...terra, score: undefined }
+  const f = await fixture(t, { getTurnUsage: async () => terraRepaired })
+  await savedTurn(f, prior)
+  const loaded = await f.manager.get(f.thread.id)
+  assert.deepEqual(loaded.turns[0].usage.score, terraRepaired.score)
+})
+
+test('wholly unpriced mixed-model usage can be recovered without changing billing', async (t) => {
+  const prior = { ...terra, requests: 2, models: ['openai-codex/gpt-new', 'anthropic/other'],
+    score: { points: 0, priced: 0, unpriced: 2 } }
+  const fromLog = { ...prior, cost: 9, score: { points: 4, priced: 2, unpriced: 0 } }
+  const f = await fixture(t, { getTurnUsage: async () => fromLog })
+  await savedTurn(f, prior)
+  const result = (await f.manager.get(f.thread.id)).turns[0].usage
+  assert.deepEqual(result.score, fromLog.score)
+  assert.equal(result.cost, null, 'known billing is never invented by score recovery')
+})
+
+test('new prices update an already open unpriced turn and notify the viewer', async (t) => {
+  let available = false
+  const f = await fixture(t, { getTurnUsage: async () => available ? terraRepaired : null })
+  await savedTurn(f, terra)
+  assert.deepEqual((await f.manager.get(f.thread.id)).thread.score, terra.score)
+  const notifications = []
+  f.manager.on('turn', (event) => notifications.push(event))
+  available = true
+  await f.manager.refreshUnpricedUsage()
+  assert.deepEqual((await f.manager.get(f.thread.id)).thread.score, terraRepaired.score)
+  assert.deepEqual(notifications.map((event) => event.turn.usage.score), [terraRepaired.score])
+  await f.manager.shutdown()
+  assert.deepEqual((await f.disk()).turns[0].usage.score, terraRepaired.score)
+})
+
+test('a new exact-id registry price repairs an open turn from its actual log', async (t) => {
+  setCatalogPricing({})
+  setEquivalentPricing({})
+  t.after(() => { setCatalogPricing({}); setEquivalentPricing({}) })
+  const id = 'gpt-new-family'
+  assert.equal((await loadPricing()).has('openai-codex/' + id), false)
+  const f = await fixture(t, { getTurnUsage: turnUsage })
+  const prior = { ...usage, models: ['openai-codex/' + id], score: { points: 0, priced: 0, unpriced: 1 } }
+  await savedTurn(f, prior)
+  const events = [{ type: 'session', id: 'old-session' },
+    { type: 'assistant/message', seq: 1, time: 110, data: { message: { id: 'm1', source: { provider: 'openai-codex', model: id } },
+      usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 1000 } } }, { type: 'turn/end', time: 150 }]
+  const file = path.join(f.paths.dshHome, 'sessions', 'work', 'old-session', 'session.v4.jsonl.zstd')
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(file, zlib.zstdCompressSync(Buffer.from(events.map((entry) => JSON.stringify(entry)).join('\n') + '\n')))
+  assert.equal(formatEquivalentCost((await f.manager.get(f.thread.id)).thread.score), '—')
+  let update
+  const pricing = new EquivalentPricing({ file: path.join(f.base, 'prices.json'), enabled: () => true,
+    registry: { get: async () => ({ openai: { id: 'openai', models: { [id]: { id, cost: { input: 1, output: 5, cache_read: 0.05 } } } } }) },
+    onChange: (rates) => { setEquivalentPricing(rates); update = f.manager.refreshUnpricedUsage() },
+  })
+  await pricing.refresh()
+  await update
+  const restored = (await f.manager.get(f.thread.id)).turns[0].usage
+  assert.equal(restored.score.priced, 1)
+  assert.equal(formatEquivalentCost(restored.score, { usageCurrency: 'JPY', usdJpyRate: 150 }), '< ¥0.1')
+  assert.equal(restored.cost, null)
+})
+
+test('new prices wait for an active turn before repairing earlier usage', { timeout: 5000 }, async (t) => {
+  let available = false
+  const f = await fixture(t, { getTurnUsage: async ({ since }) => since === 100 && available ? terraRepaired : null })
+  await savedTurn(f, terra)
+  await f.manager.get(f.thread.id)
+  f.runtime.liveSessions.add('old-session')
+  await f.manager.send(f.thread.id, { text: 'continue', images: [] })
+  await f.started.promise
+  const repaired = new Promise((resolve) => f.manager.on('turn', ({ turn }) => {
+    if (turn.id === 'old-turn' && turn.usage.score.priced === 1) resolve()
+  }))
+  available = true
+  await f.manager.refreshUnpricedUsage()
+  assert.deepEqual(f.manager.turns.get(f.thread.id)[0].usage.score, terra.score)
+  f.finish.resolve()
+  await repaired
+  assert.deepEqual(f.manager.turns.get(f.thread.id)[0].usage.score, terraRepaired.score)
+})
+
+test('prices arriving during log collection also repair the current turn', { timeout: 5000 }, async (t) => {
+  const collecting = deferred(), release = deferred()
+  let calls = 0
+  const f = await fixture(t, { getTurnUsage: async () => {
+    if (++calls === 1) { collecting.resolve(); await release.promise; return terra }
+    return terraRepaired
+  } })
+  const repaired = new Promise((resolve) => f.manager.on('usage-priced', (thread) => {
+    if (thread.id === f.thread.id && thread.score.priced === 1) resolve()
+  }))
+  await f.manager.send(f.thread.id, { text: 'start', images: [] })
+  await f.started.promise
+  f.finish.resolve()
+  await collecting.promise
+  await f.manager.refreshUnpricedUsage()
+  assert.ok(f.manager.pendingUsageRefresh.has(f.thread.id))
+  release.resolve()
+  await repaired
+  assert.deepEqual((await f.manager.get(f.thread.id)).thread.score, terraRepaired.score)
+})
+
+test('recovery never changes known, mismatched, or missing usage', async (t) => {
   for (const [saved, found, extra, shouldRead] of [
     [terra, null, {}, true],
     [terra, { ...terraRepaired, input: 101 }, {}, true],
     [terra, { ...terraRepaired, models: ['openai-codex/other'] }, {}, true],
     [{ ...terra, score: { points: 5, priced: 1, unpriced: 0 } }, terraRepaired, {}, false],
-    [{ ...terra, models: [...terra.models, 'anthropic/claude-sonnet-5-5'] }, terraRepaired, {}, false],
+    [{ ...terra, models: [...terra.models, 'anthropic/claude-sonnet-5-5'] }, terraRepaired, {}, true],
     [terra, terraRepaired, { totalScore: { points: 4, priced: 1, unpriced: 1 } }, false],
     [terra, terraRepaired, { endedAt: null }, false],
   ]) {

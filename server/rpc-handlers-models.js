@@ -2,15 +2,15 @@
 // catalog refresh (see index.js).
 
 /** Handlers for models and updates; index.js merges them into the request table. */
-export function createModelHandlers({ threads, catalog, catalogState, updates, modelUpdater, modelUpdateState, refreshCodexModels, checkOpenCodeGoModels = async () => {} }) {
+export function createModelHandlers({ threads, catalog, catalogState, updates, modelUpdater, modelUpdateState, refreshCodexModels, checkOpenCodeGoModels = async () => {}, checkEquivalentPricing = async () => {} }) {
   return {
     'updates.check': async () => ({ updates: await updates.check() }),
     'updates.updateClaude': async () => ({ updates: await updates.updateClaude() }),
     'updates.installApp': async () => ({ updates: await updates.installApp() }),
 
     'modelUpdate.check': async () => {
-      // The ChatGPT account's own list first (the authoritative one), then pi-ai's newest release
-      // and OpenCode Go's own list.
+      // Fetch the shared anonymous registry once before either model list can need it.
+      await checkEquivalentPricing()
       await refreshCodexModels()
       await modelUpdater.check()
       await checkOpenCodeGoModels()

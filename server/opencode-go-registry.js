@@ -4,9 +4,9 @@
 import { readJson, writeJson } from './json-file.js'
 import { isModelId } from './model-catalog.js'
 import { mergeOpenCodeCatalog, openCodeModels } from './opencode-go-catalog.js'
+import { MODEL_REGISTRY_URL, readModelRegistry } from './model-registry.js'
 
-export const OPENCODE_GO_REGISTRY_URL = 'https://models.opencode.ai/api.json'
-const MAX_BYTES = 16 * 1024 * 1024
+export const OPENCODE_GO_REGISTRY_URL = MODEL_REGISTRY_URL
 const MAX_AGE_MS = 6 * 60 * 60 * 1000
 const RETRY_MS = 60_000
 const LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -97,30 +97,9 @@ function supportedGroups(base, groups) {
   return result
 }
 
-async function registryBody(response) {
-  if (!response.ok) throw new Error(`OpenCode registry HTTP ${response.status}`)
-  if (Number(response.headers.get('content-length')) > MAX_BYTES) throw new Error('OpenCode registry is too large')
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error('OpenCode registry has no body')
-  const chunks = []
-  let size = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      size += value.byteLength
-      if (size > MAX_BYTES) throw new Error('OpenCode registry is too large')
-      chunks.push(value)
-    }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  } finally {
-    await reader.cancel().catch(() => {})
-  }
-}
-
 export class OpenCodeGoRegistry {
-  constructor({ file, base, fetchImpl = fetch }) {
-    Object.assign(this, { file, base, fetchImpl })
+  constructor({ file, base, fetchImpl = fetch, registry = null }) {
+    Object.assign(this, { file, base, fetchImpl, registry })
     this.groups = {}
     this.checkedAt = null
     this.failed = false
@@ -129,6 +108,7 @@ export class OpenCodeGoRegistry {
     this.unlisted = []
     this.lastAttempt = 0
     this.lastInventory = ''
+    this.lastRegistryBody = null
     this.queue = Promise.resolve()
   }
 
@@ -162,10 +142,12 @@ export class OpenCodeGoRegistry {
       this.lastAttempt = Date.now()
       this.lastInventory = inventory
       try {
-        const response = await this.fetchImpl(OPENCODE_GO_REGISTRY_URL, {
-          redirect: 'error', signal: AbortSignal.timeout(12_000),
-        })
-        const body = await registryBody(response)
+        // Reuse another consumer's newer snapshot, but refresh when this Go
+        // registry already used it and a force/new id calls for a new read.
+        const body = this.registry ? await this.registry.get({
+          force: Boolean(this.registry.body && this.registry.body === this.lastRegistryBody),
+        }) : await readModelRegistry(this.fetchImpl)
+        if (this.registry) this.lastRegistryBody = body
         const fresh = registryDefinitions(body, liveIds, base)
         // /models also retains legacy/preview ids absent from the curated Go
         // catalog. They are not evidence that a pi-ai update is still pending.

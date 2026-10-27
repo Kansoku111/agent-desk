@@ -15,9 +15,11 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import zlib from 'node:zlib'
 import { fastMultiplier } from './fast-mode.js'
-import { catalogDataDirs } from './model-catalog.js'
+import { catalogDataDirs, isModelId } from './model-catalog.js'
+import { catalogRates } from './pricing-rates.js'
 import { deepSeekPricing, deepSeekRatesAt } from './deepseek-pricing.js'
 import { addScores, emptyScore, scoreFromUsd } from '../shared/usage-score.js'
+import fallbackPricing from './usage-pricing-fallback.json' with { type: 'json' }
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 /** Providers whose API use is billed per token with catalog rates. */
@@ -241,24 +243,33 @@ export function mergeUsage(a, b) {
   return total
 }
 
-// Official GPT-6.1 Terra standard API rates, USD per million tokens (checked 2026-10-27):
-// https://developers.openai.com/api/docs/models/gpt-6.1-terra
-// Fallback only: installed or fetched model-specific catalog rates take precedence.
-const EQUIVALENT_FALLBACKS = [
-  ['openai-codex/gpt-6.1-terra', {
-    input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25,
-    tiers: [{ inputTokensAbove: 272_000, input: 2, output: 7.5, cacheRead: 0.1, cacheWrite: 2.5 }],
-  }],
-]
-
 let pricingCache = null
+let pricingRevision = 0
 let fastPricingState = null
 let catalogPricing = new Map()
+let equivalentPricing = new Map()
+
+/** Public first-party rates fill missing GPT equivalents only, not metered bills. */
+export function setEquivalentPricing(rates) {
+  const next = new Map()
+  for (const [key, raw] of Object.entries(rates)) {
+    const [provider, id, extra] = key.split('/')
+    const valid = catalogRates(raw)
+    if (provider === 'openai-codex' && isModelId(id) && extra === undefined && valid) next.set(key, valid)
+  }
+  const changed = JSON.stringify([...equivalentPricing]) !== JSON.stringify([...next])
+  equivalentPricing = next
+  resetPricing()
+  return changed
+}
 
 /** App-owned bundled/fetched definitions; never borrow rates from a custom template. */
 export function setCatalogPricing(rates) {
-  catalogPricing = new Map(Object.entries(rates))
+  const next = new Map(Object.entries(rates))
+  const changed = JSON.stringify([...catalogPricing]) !== JSON.stringify([...next])
+  catalogPricing = next
   resetPricing()
+  return changed
 }
 
 /**
@@ -267,7 +278,9 @@ export function setCatalogPricing(rates) {
  */
 export async function loadPricing() {
   if (pricingCache) return pricingCache
-  const pricing = new Map([...EQUIVALENT_FALLBACKS, ...deepSeekPricing()])
+  const revision = pricingRevision
+  const bundled = Object.entries(fallbackPricing.models).map(([key, entry]) => [key, entry.rates])
+  const pricing = new Map([...bundled, ...equivalentPricing, ...deepSeekPricing()])
   pricing.fast = fastPricingState
   const [dir] = catalogDataDirs()
   for (const provider of ['openai-codex', 'anthropic', 'opencode-go']) {
@@ -282,6 +295,7 @@ export async function loadPricing() {
     } catch {}
   }
   for (const [key, rates] of catalogPricing) pricing.set(key, rates)
+  if (revision !== pricingRevision) return loadPricing()
   pricingCache = pricing
   return pricing
 }
@@ -289,6 +303,7 @@ export async function loadPricing() {
 /** Drops cached rates after the catalog changed. */
 export function resetPricing() {
   pricingCache = null
+  pricingRevision++
 }
 
 /** Sets the fast-mode periods (fast-mode.js's `fastPricing`); drops cached rates. */

@@ -51,6 +51,7 @@ export class ThreadManager extends EventEmitter {
     this.threads = new Map()
     this.turns = new Map()
     this.turnLoads = new Map()
+    this.pendingUsageRefresh = new Set()
     this.receipts = new Map()
     this.createReceipts = new Map()
     this.createFlights = new Map()
@@ -125,7 +126,6 @@ export class ThreadManager extends EventEmitter {
     const doc = await readJson(this.#turnFile(threadId), { version: 1, turns: [] }, { recoverCorrupt: false })
     this.#available(threadId, thread)
     const turns = doc.turns ?? []
-    let repriced = false
     for (const turn of turns) {
       if (turn.status === 'running' && !this.active.has(threadId)) {
         if (turn.outputSpeed) delete turn.outputSpeed
@@ -136,36 +136,47 @@ export class ThreadManager extends EventEmitter {
         })
       }
     }
-    // Recover old DeepSeek bills and wholly unpriced Terra turns only from a
-    // matching log interval. Never change previously priced scores; a stored
-    // cumulative snapshot cannot safely be rebuilt from an individual turn.
-    const canRecoverTerra = !turns.some((turn) => turn.totalScore)
-    for (const turn of turns) {
-      const prior = turn.usage
-      const deepSeek = prior?.cost === null && prior.models?.some((model) => model.startsWith('deepseek-official/'))
-      const terra = canRecoverTerra && prior?.models?.length === 1 && prior.models[0] === 'openai-codex/gpt-6.1-terra'
-        && prior.score?.points === 0 && prior.score.priced === 0 && prior.requests > 0 && prior.score.unpriced === prior.requests
-      if ((!deepSeek && !terra) || !Number.isFinite(turn.endedAt) || !thread.sessionId) continue
-      try {
-        const usage = await this.getTurnUsage({ dshHome: this.paths.dshHome, sessionId: thread.sessionId,
-          since: turn.startedAt, until: turn.endedAt, waitMs: 0 })
-        this.#available(threadId, thread)
-        if (!usage || (deepSeek && usage.cost == null)
-          || (terra && (!usage.score?.priced || usage.score.priced + usage.score.unpriced !== prior.requests))) continue
-        if (['requests', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'].some((key) => prior[key] !== usage[key])) continue
-        if (!isDeepStrictEqual([...prior.models].sort(), [...usage.models].sort())) continue
-        turn.usage = terra ? { ...prior, score: usage.score } : usage
-        repriced = true
-      } catch {}
-    }
+    const repaired = await this.#recoverUsage(threadId, thread, turns)
     this.#available(threadId, thread)
     const receipts = new Map((doc.receipts ?? []).map((entry) => [entry.messageId, entry]))
     this.receipts.set(threadId, receipts)
     this.turns.set(threadId, turns)
     thread.score = scoresUpTo(turns).at(-1) ?? emptyScore()
     this.#saveIndex()
-    if (repriced) this.#saveTurns(threadId)
+    if (repaired.length) {
+      this.#saveTurns(threadId)
+      this.emit('usage-priced', this.summary(thread))
+    }
     return turns
+  }
+
+  // Recover wholly unpriced turns and old DeepSeek bills only from matching
+  // log intervals. Never change a known score or a cumulative snapshot.
+  async #recoverUsage(threadId, thread, turns) {
+    const repaired = []
+    const canRecoverScores = !turns.some((turn) => turn.totalScore)
+    for (const turn of turns) {
+      const prior = turn.usage
+      const deepSeek = prior?.cost === null && prior.models?.some((model) => model.startsWith('deepseek-official/'))
+      const unpriced = canRecoverScores && prior?.models?.length > 0 && prior.requests > 0
+        && (!prior.score || (prior.score.points === 0 && prior.score.priced === 0 && prior.score.unpriced === prior.requests))
+      if ((!deepSeek && !unpriced) || !Number.isFinite(turn.endedAt) || !thread.sessionId) continue
+      try {
+        const usage = await this.getTurnUsage({ dshHome: this.paths.dshHome, sessionId: thread.sessionId,
+          since: turn.startedAt, until: turn.endedAt, waitMs: 0 })
+        this.#available(threadId, thread)
+        if (!usage) continue
+        if (['requests', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'].some((key) => prior[key] !== usage[key])) continue
+        if (!isDeepStrictEqual([...prior.models].sort(), [...usage.models].sort())) continue
+        const recoverCost = deepSeek && usage.cost != null
+        const recoverScore = unpriced && usage.score?.priced > 0 && usage.score.priced + usage.score.unpriced === prior.requests
+        if (!recoverCost && !recoverScore) continue
+        turn.usage = { ...prior, ...(recoverCost ? { cost: usage.cost } : {}),
+          ...((recoverScore || (recoverCost && !prior.score && usage.score)) ? { score: usage.score } : {}) }
+        repaired.push(turn)
+      } catch {}
+    }
+    return repaired
   }
 
   #turnWriter(threadId) {
@@ -225,6 +236,40 @@ export class ThreadManager extends EventEmitter {
       await this.#loadTurns(threadId)
       this.#available(threadId, thread)
       return receiptStatus(this.receipts.get(threadId)?.get(id))
+    })
+  }
+
+  /** Apply newly available prices to already open, wholly unpriced turns. */
+  async refreshUnpricedUsage() {
+    await Promise.allSettled([...this.turnLoads.values()])
+    const ids = new Set(this.active.keys())
+    for (const [id, turns] of this.turns) {
+      if (turns.some((turn) => {
+        const usage = turn.usage
+        return usage?.models?.length > 0 && usage.requests > 0 && (!usage.score
+          || (usage.score.points === 0 && usage.score.priced === 0 && usage.score.unpriced === usage.requests))
+      })) ids.add(id)
+    }
+    await Promise.allSettled([...ids].map((id) => this.#refreshLoadedUsage(id)))
+  }
+
+  #refreshLoadedUsage(threadId) {
+    return this.#request(threadId, async () => {
+      const thread = this.threads.get(threadId)
+      const turns = this.turns.get(threadId)
+      if (!thread || !turns || this.stopping || this.removing.has(threadId)) return
+      if (this.active.has(threadId)) {
+        this.pendingUsageRefresh.add(threadId)
+        return
+      }
+      const repaired = await this.#recoverUsage(threadId, thread, turns)
+      this.#available(threadId, thread)
+      if (!repaired.length) return
+      thread.score = scoresUpTo(turns).at(-1) ?? emptyScore()
+      this.#saveIndex()
+      this.#saveTurns(threadId)
+      for (const turn of repaired) this.#emitTurn(threadId, turn, true)
+      this.emit('usage-priced', this.summary(thread))
     })
   }
 
@@ -589,6 +634,7 @@ export class ThreadManager extends EventEmitter {
       }
     }
     this.turns.delete(threadId)
+    this.pendingUsageRefresh.delete(threadId)
     this.receipts.delete(threadId)
     this.turnWriters.delete(threadId)
     // Garbage collection can queue behind another task's snapshots and take
@@ -744,6 +790,7 @@ export class ThreadManager extends EventEmitter {
     this.#saveIndex()
     this.#saveTurns(thread.id)
     this.active.delete(thread.id)
+    if (this.pendingUsageRefresh.delete(thread.id)) void this.#refreshLoadedUsage(thread.id).catch(() => {})
     this.#emitTurn(thread.id, turn, true)
     this.#emitThread(thread)
     this.emit('turn-finished', { threadId: thread.id, title: thread.title, status: outcome.status })

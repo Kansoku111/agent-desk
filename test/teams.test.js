@@ -542,6 +542,19 @@ for (const mode of ['TM', 'eco']) {
   })
 }
 
+test('team usage recovery updates totals without starting another leader turn', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  const parent = f.threads.threads.get(f.leader)
+  parent.score = { points: 0, priced: 0, unpriced: 1 }
+  f.threads.emit('thread', { ...parent })
+  const calls = f.threads.calls.length
+  parent.score = { points: 2, priced: 1, unpriced: 0 }
+  f.threads.emit('usage-priced', { ...parent })
+  await f.manager.writes
+  assert.equal(f.manager.summary(f.team).score.points, 2)
+  assert.equal(f.threads.calls.length, calls)
+})
+
 const GUIDES = {
   policies: [{ id: 'p1', name: 'TMの方針', text: 'TM専用の方針本文' }],
   playbooks: [{ id: 'b1', name: 'TM専用の手順', description: 'TM専用の場面', body: 'TM専用の手順本文' }],

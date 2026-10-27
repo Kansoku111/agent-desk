@@ -20,11 +20,19 @@ export class AbRunner extends EventEmitter {
     this.guard = guard
     this.stopTimeoutMs = stopTimeoutMs
     this.owned = new Map()
+    this.finishing = new Map()
+    threads.on('usage-priced', (thread) => {
+      if (!thread.ab?.runId || !thread.ab?.jobId || !thread.score) return
+      const event = { runId: thread.ab.runId, jobId: thread.ab.jobId, threadId: thread.id, score: thread.score }
+      const finishing = this.finishing.get(thread.id)
+      if (finishing) void finishing.then(() => this.emit('score', event))
+      else this.emit('score', event)
+    })
     threads.on('turn-finished', ({ threadId, status }) => {
       const owner = this.owned.get(threadId)
       if (!owner) return
       this.owned.delete(threadId)
-      void threads.get(threadId).then(({ thread, turns }) => {
+      const finishing = threads.get(threadId).then(({ thread, turns }) => {
         const turn = turns.at(-1)
         this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: status === 'done' ? 'completed' : status,
           text: turn?.items?.filter((item) => item.type === 'agent').at(-1)?.text ?? '', error: turn?.error?.message,
@@ -33,6 +41,8 @@ export class AbRunner extends EventEmitter {
             .filter((item) => item.type === 'tool' && item.status === 'failed' && /SetNamedSecurityInfoW failed \(Win32 5\)/i.test(item.output ?? ''))
             .map((item) => `${describeTool(item.name, item.input)}\n${item.output}`) } : {}) })
       }).catch((error) => this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: 'error', error: error.message, denials: owner.denials }))
+      this.finishing.set(threadId, finishing)
+      void finishing.finally(() => { if (this.finishing.get(threadId) === finishing) this.finishing.delete(threadId) }).catch(() => {})
     })
     agents.on('finished', ({ id, status, text, error, denials, score }) => {
       const owner = this.owned.get(id)

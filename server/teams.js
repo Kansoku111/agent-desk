@@ -176,6 +176,7 @@ export class TeamManager extends EventEmitter {
     terminals.executionGuard = (record) => this.guardExecution(record)
 
     threads.on('thread', (thread) => this.#onThread(thread))
+    threads.on('usage-priced', (thread) => this.#onUsagePriced(thread))
     threads.on('turn-finished', (info) => this.#onThreadFinished(info))
     threads.on('approval-needed', (info) => this.#onThreadApproval(info))
     threads.on('removed', ({ threadId }) => this.#onTaskRemoved(threadId))
@@ -1780,6 +1781,13 @@ export class TeamManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------- task events
+
+  #onUsagePriced(thread) {
+    const found = this.#byTask(thread.id)
+    if (!found) return
+    if (this.#captureScores(found.team)) void this.#save()
+    this.#emit(found.team)
+  }
 
   #onThread(thread) {
     const found = this.#byTask(thread.id)

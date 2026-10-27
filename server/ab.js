@@ -58,6 +58,9 @@ export class AbManager extends EventEmitter {
     runner.on('finished', (event) => {
       void this.lock(event.runId, () => this.finished(event)).catch((error) => this.emit('fault', error))
     })
+    runner.on('score', (event) => {
+      void this.lock(event.runId, () => this.updateScore(event)).catch((error) => this.emit('fault', error))
+    })
   }
   async load() {
     // readJson preserves malformed JSON in a .corrupt-* backup before falling
@@ -192,6 +195,14 @@ export class AbManager extends EventEmitter {
     await this.save(run)
     await this.launch(run, job)
     if (job.error) await this.fail(run, job)
+  }
+  async updateScore({ runId, jobId, threadId, score }) {
+    const run = this.runs.get(runId)
+    const job = run?.jobs.find((entry) => entry.id === jobId)
+    if (!job || RUNNING.has(job.status) || job.handle?.kind !== 'thread' || job.handle.id !== threadId
+      || !score || JSON.stringify(job.score) === JSON.stringify(score)) return
+    job.score = score
+    await this.save(run)
   }
   async finished({ runId, jobId, status, text, error, denials = [], blockers = [], score }) {
     const run = this.runs.get(runId)

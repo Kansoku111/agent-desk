@@ -6,8 +6,9 @@
 // the newest pi-ai release is looked up on npm; when it is newer than the one
 // last read, its tarball is downloaded and checked against the registry's
 // sha512, the catalog files Agent Desk uses are read straight from it, and
-// the models the installed catalog lacks are kept in the data folder. Nothing
-// is installed: model-catalog.js adds the kept definitions like its bundled ones.
+// missing definitions and validated model prices are kept in the data folder.
+// Nothing is installed: model-catalog.js adds the kept definitions like its bundled ones.
+// Prices are separate so changes to an existing model do not alter its runtime definition.
 //
 // Only what the installed pi-ai can use is kept: chat models of an API it
 // speaks, sent to a base URL it already uses for that provider, with the
@@ -21,7 +22,8 @@ import { GPT_PROVIDER, siwcCatalog } from './siwc-route.js'
 import { canonicalOpenCodeCatalog, canonicalOpenCodeModel } from './opencode-go-catalog.js'
 import { compareVersions, isVersion, runNpm } from './update-checks.js'
 import { readJson, writeJson } from './json-file.js'
-import { BUNDLED_SOURCE, UPDATE_MODEL_PROVIDERS, isModelId, shippedCatalog } from './model-catalog.js'
+import { BUNDLED_SOURCE, UPDATE_MODEL_PROVIDERS, catalogDataVersion, isModelId, shippedCatalog } from './model-catalog.js'
+import { catalogRates } from './pricing-rates.js'
 
 export const PI_AI_PACKAGE = '@earendil-works/pi-ai'
 
@@ -31,7 +33,13 @@ function routedUpdates(catalog) {
   const providers = { ...catalog.providers }
   if (providers[GPT_PROVIDER]) providers[GPT_PROVIDER] = siwcCatalog(providers[GPT_PROVIDER])
   if (providers['opencode-go']) providers['opencode-go'] = canonicalOpenCodeCatalog(providers['opencode-go'])
-  return { ...catalog, providers }
+  const pricing = {}
+  for (const [key, raw] of Object.entries(catalog.pricing ?? {})) {
+    const [provider, id, extra] = key.split('/')
+    const rates = catalogRates(raw)
+    if (UPDATE_MODEL_PROVIDERS.includes(provider) && isModelId(id) && extra === undefined && rates) pricing[key] = rates
+  }
+  return { ...catalog, providers, pricing }
 }
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
@@ -147,6 +155,31 @@ export function newerModels({ provider, data, shipped, keys }) {
   return { groups, models }
 }
 
+/** Prices from the newer catalog, including models already installed. */
+export function newerPricing({ provider, data, shipped }) {
+  if (!data || typeof data !== 'object' || !shipped) return {}
+  if (provider === GPT_PROVIDER) {
+    data = siwcCatalog(data)
+    shipped = siwcCatalog(shipped)
+  }
+  if (provider === 'opencode-go') data = canonicalOpenCodeCatalog(data)
+  const baseUrls = new Set(Object.values(shipped).flatMap((group) => Object.values(group).map((model) => model.baseUrl)))
+  const prices = {}
+  for (const group of Object.values(data)) {
+    if (!group || typeof group !== 'object') continue
+    for (const [key, model] of Object.entries(group)) {
+      const colon = key.indexOf(':')
+      const type = colon >= 0 ? key.slice(0, colon) : 'chat'
+      const id = colon >= 0 ? key.slice(colon + 1) : key
+      if (type !== 'chat' || (model?.type ?? 'chat') !== 'chat' || !isModelId(id)
+        || model?.id !== id || model.provider !== provider || !baseUrls.has(model.baseUrl)) continue
+      const rates = catalogRates(model.cost)
+      if (rates) prices[provider + '/' + id] = rates
+    }
+  }
+  return prices
+}
+
 /** The ids, by provider, of a `{ providers: { [provider]: { [api]: { [id]: model } } } }` set. */
 function modelIds(set) {
   const ids = new Set()
@@ -166,10 +199,10 @@ export class ModelCatalogUpdater extends EventEmitter {
    */
   constructor({
     root, home, enabled, onCatalog,
-    npm = runNpm, lookup = lookupLatest, download = downloadTarball, shipped = shippedCatalog, log = () => {},
+    npm = runNpm, lookup = lookupLatest, download = downloadTarball, shipped = shippedCatalog, catalogVersion = catalogDataVersion, log = () => {},
   }) {
     super()
-    Object.assign(this, { root, enabled, onCatalog, npm, lookup, download, shipped, log })
+    Object.assign(this, { root, enabled, onCatalog, npm, lookup, download, shipped, catalogVersion, log })
     this.file = path.join(home, 'model-updates.json')
     /** @type {{ source: string, fetchedAt: number, providers: object } | null} */
     this.catalog = null
@@ -179,6 +212,7 @@ export class ModelCatalogUpdater extends EventEmitter {
 
   async load() {
     const saved = await readJson(this.file, {})
+    this.installedVersion = await this.catalogVersion()
     if (isVersion(saved.catalog?.source) && saved.catalog.providers && typeof saved.catalog.providers === 'object') this.catalog = routedUpdates(saved.catalog)
     this.state.checkedAt = saved.checkedAt ?? null
     this.state.latest = saved.latest ?? null
@@ -190,7 +224,13 @@ export class ModelCatalogUpdater extends EventEmitter {
 
   /** The definitions model-catalog.js should add, or null while turned off. */
   get fetched() {
-    return this.enabled() ? this.catalog : null
+    if (!this.enabled() || !this.catalog) return null
+    // An engine upgrade can overtake the last downloaded catalog. Never replace
+    // its newer shipped rates with stale rates from that older download.
+    if (isVersion(this.installedVersion) && compareVersions(this.catalog.source, this.installedVersion) < 0) {
+      return { ...this.catalog, pricing: {} }
+    }
+    return this.catalog
   }
 
   snapshot() {
@@ -224,14 +264,14 @@ export class ModelCatalogUpdater extends EventEmitter {
     clearTimeout(this.timer)
   }
 
-  /** Looks for a newer pi-ai release and keeps the models it adds. */
+  /** Looks for a newer pi-ai release and keeps missing definitions and prices. */
   async check() {
     if (this.state.phase === 'checking') return this.snapshot()
     this.#set({ phase: 'checking', error: null })
     try {
       const release = await this.lookup({ cwd: this.root, npm: this.npm })
       const have = this.catalog?.source ?? BUNDLED_SOURCE
-      if (!have || compareVersions(release.version, have) > 0 || this.catalog?.format !== 2) await this.#read(release)
+      if (!have || compareVersions(release.version, have) > 0 || this.catalog?.format !== 3) await this.#read(release)
       this.#set({ phase: 'idle', checkedAt: Date.now(), latest: release.version })
       await this.#save()
     } catch (error) {
@@ -247,14 +287,17 @@ export class ModelCatalogUpdater extends EventEmitter {
     const files = readTarFiles(tgz, wanted)
     const { providers: shipped, keys } = await this.shipped()
     const providers = {}
+    const pricing = {}
     for (const provider of UPDATE_MODEL_PROVIDERS) {
       if (!shipped[provider]) continue
       const file = files.get(`${CATALOG_PATH}/${provider}.json`)
       if (!file) throw new Error(`pi-ai ${release.version} に ${provider} のモデル一覧がありません`)
-      const { groups } = newerModels({ provider, data: JSON.parse(file.toString('utf8')), shipped: shipped[provider], keys })
+      const data = JSON.parse(file.toString('utf8'))
+      const { groups } = newerModels({ provider, data, shipped: shipped[provider], keys })
       if (Object.keys(groups).length) providers[provider] = groups
+      Object.assign(pricing, newerPricing({ provider, data, shipped: shipped[provider] }))
     }
-    const next = { format: 2, source: release.version, fetchedAt: Date.now(), providers }
+    const next = { format: 3, source: release.version, fetchedAt: Date.now(), providers, pricing }
     // What this release brings that Agent Desk did not offer before.
     const before = new Set([...modelIds(extras), ...modelIds(this.catalog)])
     const fresh = []
@@ -263,7 +306,9 @@ export class ModelCatalogUpdater extends EventEmitter {
         for (const [id, model] of Object.entries(group)) if (!before.has(`${provider}/${id}`)) fresh.push({ provider, id, name: model.name ?? id })
       }
     }
-    const changed = JSON.stringify(providers) !== JSON.stringify(this.catalog?.providers ?? null)
+    const changed = JSON.stringify({ providers, pricing }) !== JSON.stringify({
+      providers: this.catalog?.providers ?? null, pricing: this.catalog?.pricing ?? {},
+    })
     this.catalog = next
     if (fresh.length) {
       this.state.lastAdded = { at: Date.now(), source: release.version, models: fresh }

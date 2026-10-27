@@ -82,6 +82,22 @@ test('Claude consultation is an allowlist with no inherited MCP or browser', () 
   assert.ok(!abClaudeArgs({ writable: true }).includes('--tools'))
 })
 
+test('AB pricing updates follow the pending completion notification', async () => {
+  const threads = new EventEmitter(), agents = new EventEmitter(), gate = deferred()
+  threads.get = async () => { await gate.promise; return { thread: { score: { points: 0, priced: 0, unpriced: 1 } }, turns: [] } }
+  const runner = new AbRunner({ threads, agents })
+  runner.owned.set('T', { runId: 'R', jobId: 'J', writable: false, denials: [] })
+  const events = []
+  runner.on('finished', () => events.push('finished'))
+  const scored = new Promise((resolve) => runner.on('score', (value) => { events.push('score'); resolve(value) }))
+  threads.emit('turn-finished', { threadId: 'T', status: 'done' })
+  threads.emit('usage-priced', { id: 'T', ab: { runId: 'R', jobId: 'J' }, score: { points: 3, priced: 1, unpriced: 0 } })
+  assert.deepEqual(events, [])
+  gate.resolve()
+  assert.deepEqual(await scored, { runId: 'R', jobId: 'J', threadId: 'T', score: { points: 3, priced: 1, unpriced: 0 } })
+  assert.deepEqual(events, ['finished', 'score'])
+})
+
 test('AB adapter sends raw consultation and translates final results', async () => {
   const threads = new EventEmitter()
   const agents = new EventEmitter()

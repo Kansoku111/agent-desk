@@ -51,6 +51,17 @@ export function catalogDataDirs() {
   return [...dirs]
 }
 
+/** Version of the same pi-ai copy whose data directory is used by dsh. */
+export async function catalogDataVersion() {
+  const [dir] = catalogDataDirs()
+  if (!dir) return null
+  try {
+    return JSON.parse(await fs.readFile(path.resolve(dir, '../../..', 'package.json'), 'utf8')).version ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
  * pi-ai 0.x uses bare ids; 1.x uses `<type>:<id>` keys. Validate the key
  * against the model rather than treating unrelated entries as chat models.

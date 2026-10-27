@@ -87,6 +87,23 @@ test('AB totals every stage and failed attempt once, including after restart', a
   assert.equal(restored.require(id).phase, 'reviewed')
 })
 
+test('AB updates a finished job after its previously unknown score is recovered', async (t) => {
+  const { dir, runner, manager, id } = await setup(t)
+  const job = manager.require(id).jobs[0]
+  job.handle = { kind: 'thread', id: 'T' }
+  await manager.lock(id, () => manager.finished({ runId: id, jobId: job.id, status: 'completed', text: 'report',
+    score: { points: 0, priced: 0, unpriced: 1 } }))
+  runner.emit('score', { runId: id, jobId: job.id, threadId: 'wrong', score: { points: 100, priced: 1, unpriced: 0 } })
+  await manager.lock(id, () => {})
+  assert.equal(job.score.unpriced, 1)
+  runner.emit('score', { runId: id, jobId: job.id, threadId: 'T', score: { points: 3, priced: 1, unpriced: 0 } })
+  await manager.lock(id, () => {})
+  assert.equal(job.score.points, 3)
+  assert.equal(manager.require(id).phase, 'consulting', 'pricing never advances the workflow')
+  const restored = await new AbManager({ dir, runner }).load()
+  assert.equal(restored.require(id).jobs[0].score.points, 3)
+})
+
 test('AB keeps late consumption after stop without restarting a stage', async (t) => {
   const { manager, id, runner } = await setup(t)
   await manager.stop({ id })

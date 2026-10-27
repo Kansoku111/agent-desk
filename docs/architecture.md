@@ -23,7 +23,7 @@ OpenCode Go は提供中のIDを `/inference/go/v1/models` から取得し、pi-
 
 設定更新の確定順序・更新経路と保証しないリソース境界は [設定更新の整合性](settings-consistency.md) を参照してください。
 
-API換算の累計表示は `shared/usage-score.js` の固定基準・集約処理を共有し、単価計算は `server/usage.js` を再利用します。保存済みの `points` は変更せず、表示時に `USD_PER_POINT`（$0.002）を掛けます。一般設定の `usageCurrency`（既定USD）と `usdJpyRate`（既定null）を共有し、JPYだけ手動レートを乗算します。通貨・レートは通常の設定コミットで一括検証・保存してから公開し、モデルの再起動や為替取得は行いません。追加カタログの単価もアプリ内で渡し、料金表の別同期は追加しません。dshは各ターンの `usage.score`、非対話Claudeは担当記録の累計と `totalScore`、対話型Claudeはアプリ側の端末記録に応答ID別の確定ptを保存します。Claude Code自身の会話ログは変更しません。対話型Claudeの表示対象は直近80ターンで、省略後の重複判定には応答ID・ターンIDと数値の使用量だけを残し、古い本文・思考・ツール出力への参照は保持しません。チームは担当IDごとの累計を保存し、同じ通知で加算せず置き換えるため、再試行・fresh・子削除でも二重計上や消費の消失を防ぎます。ABは各段階の記録を合算します。[集計範囲](usage.md)。
+API換算の累計表示は `shared/usage-score.js` の固定基準・集約処理を共有し、単価計算は `server/usage.js` を再利用します。保存済みの `points` は変更せず、表示時に `USD_PER_POINT`（$0.002）を掛けます。一般設定の `usageCurrency`（既定USD）と `usdJpyRate`（既定null）を共有し、JPYだけ手動レートを乗算します。通貨・レートは通常の設定コミットで一括検証・保存してから公開し、モデルの再起動や為替取得は行いません。pi-aiの価格更新はモデル定義と別に取り込み、GPTの固有単価がない分はOpenCodeの公開JSONからID完全一致で補完します。取得・検証した単価は出典・日時付きで保存し、回答処理では通信しません。自動更新オフ・通信失敗時は新たな取得を行わず、不明な部分を未算定として扱います。dshは各ターンの `usage.score`、非対話Claudeは担当記録の累計と `totalScore`、対話型Claudeはアプリ側の端末記録に応答ID別の確定ptを保存します。Claude Code自身の会話ログは変更しません。対話型Claudeの表示対象は直近80ターンで、省略後の重複判定には応答ID・ターンIDと数値の使用量だけを残し、古い本文・思考・ツール出力への参照は保持しません。チームは担当IDごとの累計を保存し、同じ通知で加算せず置き換えるため、再試行・fresh・子削除でも二重計上や消費の消失を防ぎます。ABは各段階の記録を合算します。[集計範囲](usage.md)。
 
 ## データの保存場所
 
@@ -43,6 +43,6 @@ API キーと公式 SIWC の登録・トークンは `dsh-home/.credentials.yaml
 - **チームの実行方式と互換性:** Claude（API）の子は dsh で動き、Claude Code とは実行方式・履歴を分離します。既存のチームの選択・モデル・履歴はそのまま残し、自動移行・有効化・フォールバックは行いません。
 - **Claude Code（CL）の会話:** 画面に表示し、再開するために、Claude Code が自分で保存した会話記録（`~/.claude/projects` の中）を読みます。この PC の中だけで扱い、書き換えません。作業中の表示が終わらないときのために、Claude Code が自分の状態（作業中か待機中か）を書く `~/.claude/sessions` のファイルも、その確認のためだけに読みます。
 - **チームの Claude の子:** 起動した `claude -p` の出力（返答・ツールの実行と結果・利用上限の情報）を読み、直近60ターンぶんを、データフォルダの `team-agents/` に保存します。
-- **Agent Desk 自身の通信先:** OpenAI（ChatGPT・Codex のサインインと利用）、DeepSeek・Anthropic・OpenCode Go の API（それぞれの API キーを登録して使うときや、キーの確認・料金の取得）です。OpenCode Go のモデル定義補完では `models.opencode.ai` の公開JSONも取得しますが、APIキー・会話・プロンプトは送信しません。Claude Code の通信は Claude Code 自身が行います。
+- **Agent Desk 自身の通信先:** OpenAI（ChatGPT・Codex のサインインと利用）、DeepSeek・Anthropic・OpenCode Go の API（それぞれの API キーを登録して使うときや、キーの確認・料金の取得）です。OpenCode Go のモデル定義補完とGPTのAPI換算単価の補完では `models.opencode.ai` の公開JSONも取得しますが、APIキー・会話・プロンプト・選択モデルは送信しません。Claude Code の通信は Claude Code 自身が行います。
 - **スマホから使う設定:** 有効にすると、会話の内容は Tailscale 経由で、あなたの端末に表示されます。
 - **保存先:** 上の表のデータフォルダだけです。リポジトリ（ソースコード）の中には保存しません。`AGENT_DESK_HOME` をリポジトリの中に向けた場合に備えて、`.gitignore` でデータフォルダの中身を除外しています。
