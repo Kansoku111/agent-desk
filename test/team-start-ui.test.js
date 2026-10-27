@@ -6,7 +6,7 @@ test('TM startup and running-team dialogs expose both model modes and the saved 
   const code = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
   assert.match(code, /defaultModelMode.*free.*tiers/)
   assert.match(code, /モデルを追加/)
-  assert.match(code, /models.length >= MAX_CHILDREN/)
+  assert.ok(code.includes('models.length + pending.length >= MAX_CHILDREN'))
   assert.ok(code.includes('Array.isArray(value)'))
   assert.match(code, /<ModelField label=/)
   assert.match(code, /const groups = teamModelGroups\(server\)/)
