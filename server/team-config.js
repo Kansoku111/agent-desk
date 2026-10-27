@@ -1,8 +1,6 @@
 // Settings of the agent teams (設定 → エージェントチーム): who leads (Claude
 // Code or a GPT dsh task, on which model), and which model each provider's
-// "low" and "mid" tier means (or that the tier is not used). The
-// leader only ever picks a tier and a provider; the user maps them to models
-// here, so new models need no change to how the leader works.
+// "low" and "mid" tier means, or a list of directly selected child models.
 import { ENTRY_ID } from './team-playbooks.js'
 import { assertToolMode } from './ptc.js'
 
@@ -18,6 +16,8 @@ export const LEADER_PROVIDERS = ['claude', 'gpt']
 export const TEAM_TIERS = ['low', 'mid']
 export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', local: 'ローカル LLM' }
 export const MAX_CHILDREN_LIMIT = 12
+export const MAX_TEAM_MODELS = 12
+export const TEAM_MODEL_MODES = ['tiers', 'free']
 
 /** A Claude Code model alias (opus) or full name (claude-haiku-5-5), as `claude --model` takes it. */
 const CLAUDE_MODEL = /^[a-z0-9][a-z0-9.\-[\]]{0,79}$/i
@@ -32,9 +32,13 @@ export const TEAM_DEFAULTS = {
   /** Who leads a new team: Claude Code (`leader`) or GPT as a dsh task (`gptLeader`). */
   leaderProvider: 'claude',
   toolMode: 'native',
+  // The default applies to new teams; modelMode is the mode of this team.
+  defaultModelMode: 'tiers',
+  modelMode: 'tiers',
+  freeModels: [],
   // null: Claude Code's own default.
   leader: { model: 'opus', effort: null },
-  // null model: the GPT "mid" tier's.
+  // null model: GPT's mid, low, then the first selected GPT model in free mode.
   gptLeader: { model: null, effort: 'high' },
   // The leader runs with --permission-mode bypassPermissions (children always do).
   leaderBypass: true,
@@ -77,6 +81,9 @@ export function teamConfig(saved) {
   return {
     leaderProvider: LEADER_PROVIDERS.includes(value.leaderProvider) ? value.leaderProvider : TEAM_DEFAULTS.leaderProvider,
     toolMode: value.toolMode ?? 'native',
+    defaultModelMode: TEAM_MODEL_MODES.includes(value.defaultModelMode) ? value.defaultModelMode : 'tiers',
+    modelMode: TEAM_MODEL_MODES.includes(value.modelMode) ? value.modelMode : 'tiers',
+    freeModels: Array.isArray(value.freeModels) ? value.freeModels.map((model) => ({ ...model })) : [],
     leader: { ...TEAM_DEFAULTS.leader, ...value.leader },
     gptLeader: { ...TEAM_DEFAULTS.gptLeader, ...value.gptLeader },
     ...Object.fromEntries(SWITCHES.map((name) => [name, typeof value[name] === 'boolean' ? value[name] : TEAM_DEFAULTS[name]])),
@@ -107,6 +114,24 @@ function choice(value, pattern, name) {
 export function mergeTeamConfig(current, patch) {
   if (!isRecord(patch)) throw new Error('agentTeams はオブジェクトで指定してください')
   const next = teamConfig(current)
+  for (const name of ['defaultModelMode', 'modelMode']) {
+    if (!Object.hasOwn(patch, name)) continue
+    if (!TEAM_MODEL_MODES.includes(patch[name])) throw new Error('モデルの選び方は低中モードか自由モードで指定してください')
+    next[name] = patch[name]
+  }
+  if (Object.hasOwn(patch, 'freeModels')) {
+    if (!Array.isArray(patch.freeModels) || patch.freeModels.length > MAX_TEAM_MODELS) throw new Error(`子のモデルは ${MAX_TEAM_MODELS} 個まで選べます`)
+    const seen = new Set()
+    next.freeModels = patch.freeModels.map((entry) => {
+      if (!isRecord(entry) || !TEAM_PROVIDERS.includes(entry.provider)) throw new Error('子のモデルのプロバイダーが不正です')
+      const model = choice(entry.model, entry.provider === 'claude' ? CLAUDE_MODEL : entry.provider === 'local' ? LOCAL_MODEL : DSH_MODEL, '子のモデル')
+      if (!model) throw new Error('子のモデルを選んでください')
+      const key = JSON.stringify([entry.provider, model])
+      if (seen.has(key)) throw new Error('同じモデルは複数選べません')
+      seen.add(key)
+      return { provider: entry.provider, model, effort: choice(entry.effort ?? null, EFFORT, '子の推論レベル') }
+    })
+  }
   if (Object.hasOwn(patch, 'toolMode')) {
     assertToolMode(patch.toolMode)
     next.toolMode = patch.toolMode
@@ -168,6 +193,10 @@ export function mergeTeamConfig(current, patch) {
 
 /** A team needs a provider to hand work to: throws when the settings turn every one off. */
 export function assertChildrenOn(config) {
+  if (config.modelMode === 'free') {
+    if (!config.freeModels.length) throw new Error('子に使うモデルを少なくとも一つ選んでください')
+    return
+  }
   if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled)) {
     throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek・OpenCode Go・ローカル LLM の少なくとも一つをオンにしてください')
   }

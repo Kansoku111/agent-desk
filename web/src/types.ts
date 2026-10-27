@@ -85,6 +85,8 @@ export type TeamProvider = 'gpt' | 'claude' | 'claudeApi' | 'deepseek' | 'openco
 /** Who can lead a team. */
 export type TeamLeaderProvider = 'gpt' | 'claude'
 export type TeamTier = 'low' | 'mid'
+export type TeamModelMode = 'tiers' | 'free'
+export type TeamModelChoice = { provider: TeamProvider; model: string; effort: string | null }
 /** `removed`: the child's task was deleted on its own. */
 export type TeamChildState = 'running' | 'approval' | 'idle' | 'closed' | 'error' | 'stopped' | 'removed' | 'resuming'
 
@@ -95,7 +97,7 @@ export interface TeamChild {
   /** The job the leader gave it, shown to the user. */
   title: string
   provider: TeamProvider
-  tier: TeamTier
+  tier: TeamTier | null
   model: string
   modelName: string
   effort: string | null
@@ -189,9 +191,12 @@ export interface TeamSettings {
   leaderProvider: TeamLeaderProvider
   /** A Claude Code leader's model. */
   leader: { model: string | null; effort: string | null }
-  /** A GPT leader's model (null: the GPT "mid" tier's). */
+  /** A GPT leader's model (null: GPT's mid, low, then a selected free-mode model). */
   gptLeader: { model: string | null; effort: string | null }
   toolMode?: ToolMode
+  defaultModelMode?: TeamModelMode
+  modelMode?: TeamModelMode
+  freeModels?: TeamModelChoice[]
   leaderBypass: boolean
   /** Reports that wait while the leader works reach it in one message (older saves lack it: on). */
   batchReports?: boolean

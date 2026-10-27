@@ -15,7 +15,7 @@ const PROVIDER_WHAT = {
   claudeApi: 'Claude through dsh on the user\'s Anthropic API key, billed per token (credits depend on their plan)',
   deepseek: 'DeepSeek, billed per token to the user\'s DeepSeek API key (low cost)',
   opencodeGo: 'open models (GLM, Kimi, DeepSeek, Qwen and others) on the user\'s OpenCode Go subscription, with 5-hour, weekly and monthly usage limits',
-  local: 'a model on the user\'s own model server: free, but slower and weaker than the others; give it small, well-defined tasks',
+  local: 'a model on the user\'s own model server',
 }
 const CLAUDE_ALIASES = { opus: 'Opus（最新）', sonnet: 'Sonnet（最新）', haiku: 'Haiku（最新）', fable: 'Fable（最新）' }
 
@@ -36,8 +36,9 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
     ...(lean
       ? ['To keep each turn small, a child starts without the browser, desktop-control and image-generation tools (a Claude child without MCP servers). `spawn` with `tools: true` the children that need them.']
       : []),
-    'You never choose model names. Choose a tier and a provider:',
-    execution ? '- Children use only tier "low".' : '- tier "low": simple, repetitive or high-volume work. tier "mid": work that needs judgment, design or quality.',
+    ...(execution
+      ? ['Children use only tier "low".']
+      : ['By default omit model, tier and provider when calling spawn: Agent Desk uses the selected models evenly. If the user, the team policy or an applicable playbook specifies a model, tier or provider, pass the requested choice to spawn instead. Only the models listed below are available; use status for the current list.']),
     ...tiers,
     `At most ${maxChildren} children can be open at once; \`status\` shows the team.`,
     '',
@@ -63,7 +64,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       ? [
         '',
         '## The user\'s policy for this team',
-        'The user wrote this for how you lead: which provider and tier suits what, how to split and word tasks, how to audit. Follow it. Where it says how to choose a tier or provider, it replaces the general descriptions of the tiers above; it does not make a provider or tier available that the list above turns off.',
+        'The user wrote this for how you lead. Follow it: model, tier or provider choices here take precedence over the default even distribution, but do not make unavailable models available.',
         `<team_policy>\n${policy}\n</team_policy>`,
       ]
       : []),
@@ -71,7 +72,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       ? [
         '',
         '## Playbooks',
-        'The user wrote playbooks for kinds of work. When a job matches one, read it with `playbook` before you split the work, and follow it.',
+        'The user wrote playbooks for kinds of work. When a job matches one, read it with `playbook` before you split the work, and follow it. Its model choices take precedence over the default even distribution.',
         ...playbooks.map(({ name, description }) => `- "${name}"${description ? `: ${oneLine(description)}` : ''}`),
       ]
       : []),
@@ -146,6 +147,10 @@ export function modelName(child, models) {
 
 /** The providers and tiers the leader may use, for its instructions and `status`. */
 export function tierLines(config, models) {
+  if (config.modelMode === 'free') {
+    return ['Free mode: choose only from these models; omit model and provider for even distribution.', ...config.freeModels.map(({ provider, model, effort }) =>
+      `- provider "${provider}", model "${model}": ${modelName({ provider, model }, models)}${effort ? `, effort ${effort}` : ""}.`)]
+  }
   const lines = []
   for (const provider of TEAM_PROVIDERS) {
     const part = config[provider]
@@ -155,10 +160,8 @@ export function tierLines(config, models) {
       continue
     }
     const tiers = TEAM_TIERS.map((tier) => `${tier} = ${!part[tier].enabled ? 'turned off by the user (do not use)'
-      : part[tier].model ? modelName({ provider, model: part[tier].model }, models) : 'not set (do not use)'}`)
+      : part[tier].model ? `${modelName({ provider, model: part[tier].model }, models)} [${part[tier].model}]${part[tier].effort ? `, effort ${part[tier].effort}` : ""}` : 'not set (do not use)'}`)
     lines.push(`- provider "${provider}" (${what}): ${tiers.join(', ')}.`)
   }
-  const enabled = TEAM_PROVIDERS.filter((provider) => config[provider].enabled)
-  if (enabled.length > 1) lines.push('Pick the provider that suits each part, or mix them.')
   return lines
 }

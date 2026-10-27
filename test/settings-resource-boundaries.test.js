@@ -147,6 +147,16 @@ test('team defaults do not share nested references with the created resource', a
   assert.deepEqual(h.events, ['save', 'notice'])
 })
 
+test('a temporary team mode does not overwrite the user default', async () => {
+  const h = setup()
+  h.live.agentTeams.defaultModelMode = 'free'
+  const config = { ...structuredClone(h.live.agentTeams), defaultModelMode: 'tiers', modelMode: 'tiers' }
+  const handlers = createTerminalHandlers({ ...h.deps, teams: { create: async () => ({ team: { workspace: 'folder', config } }) } })
+  await handlers['team.create']({})
+  assert.equal(h.live.agentTeams.defaultModelMode, 'free')
+  assert.equal(h.live.agentTeams.modelMode, 'tiers')
+})
+
 test('thread.update preserves no-settings-notice behavior and save failure does not leak defaults', async () => {
   for (const fail of [false, true]) {
     const h = setup({ fail })

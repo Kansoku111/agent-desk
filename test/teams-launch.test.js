@@ -51,7 +51,8 @@ test('eco leader guidance keeps strategy flexible without TM parallel-write or m
   }
   const tm = promptOf(leaderLaunch({ ...options, team: { ...options.team, execution: undefined } }).args)
   assert.match(tm, /start one child per part.*all at once/)
-  assert.match(tm, /mid": work that needs judgment/)
+  assert.match(tm, /omit model, tier and provider.*selected models evenly/)
+  assert.doesNotMatch(tm, /mid": work that needs judgment/)
   assert.doesNotMatch(tm, /rather than following a fixed sequence or review count/)
 })
 

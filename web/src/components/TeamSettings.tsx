@@ -1,15 +1,16 @@
 import { useState } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { act, setState, startTeam, useStore } from '../store'
-import type { AppState, TeamPolicy, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
+import type { AppState, TeamModelChoice, TeamPolicy, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
 import { isModelVisible } from '../model-selection'
-import { effortLabel, pickableEfforts, workspaceLabel } from '../util'
+import { effortLabel, parseModel, pickableEfforts, workspaceLabel } from '../util'
 import { Modal } from './Modal'
 import { byNewest } from './Pickers'
 import { claudeEfforts, claudeModelName, claudeModels } from './TerminalPickers'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { TeamGuides } from './TeamGuides'
 import { PtcToggle } from './PtcToggle'
+import { ModelField, modelGroups } from './WorkflowModelField'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 
 const MAX_CHILDREN = 12
@@ -31,7 +32,7 @@ type Change = (patch: Patch) => void
 const tierOn = (tier: { enabled?: boolean }) => tier.enabled !== false
 
 /** Every provider starts off; a team needs at least one on to hand work to. */
-const anyChildOn = (config: Config) => PROVIDERS.some((provider) => config[provider]?.enabled)
+const anyChildOn = (config: Config) => config.modelMode === 'free' ? Boolean(config.freeModels?.length) : PROVIDERS.some((provider) => config[provider]?.enabled)
 
 /** The settings with every field (settings saved by an older version lack the GPT leader's and DeepSeek's). */
 function fullConfig(saved: Config): Config {
@@ -39,6 +40,9 @@ function fullConfig(saved: Config): Config {
     ...saved,
     leaderProvider: saved.leaderProvider ?? 'claude',
     gptLeader: saved.gptLeader ?? { model: null, effort: 'high' },
+    modelMode: saved.modelMode ?? 'tiers',
+    defaultModelMode: saved.defaultModelMode ?? 'tiers',
+    freeModels: saved.freeModels ?? [],
     claudeApi: saved.claudeApi ?? OFF_PROVIDER,
     deepseek: saved.deepseek ?? OFF_PROVIDER,
     opencodeGo: saved.opencodeGo ?? OFF_PROVIDER,
@@ -53,7 +57,7 @@ const part = (config: Config, provider: TeamProvider) => config[provider]!
 function applyPatch(config: Config, patch: Patch): Config {
   const next: Record<string, unknown> = { ...config }
   for (const [key, value] of Object.entries(patch)) {
-    if (!value || typeof value !== 'object') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
       next[key] = value
       continue
     }
@@ -199,6 +203,64 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
   )
 }
 
+/** The same grouped picker as eco and AB, with one field per selected model. */
+function FreeModels({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
+  const [adding, setAdding] = useState(false)
+  const models = config.freeModels ?? []
+  const catalogToTeam: Record<string, TeamProvider> = { 'openai-codex': 'gpt', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'local-llm': 'local' }
+  const valueOf = (entry: TeamModelChoice) => entry.provider === 'claude' ? `claude:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
+  const fromValue = (value: string): TeamModelChoice | null => {
+    if (value.startsWith('claude:')) return { provider: 'claude', model: value.slice(7), effort: null }
+    const parsed = parseModel(value)
+    const provider = parsed && catalogToTeam[parsed.provider]
+    return parsed && provider ? { provider, model: parsed.id, effort: null } : null
+  }
+  const groups = modelGroups(server).filter((group) => group.id === 'claude-code' || catalogToTeam[group.id])
+  const row = (entry: TeamModelChoice | null, index: number) => {
+    const value = entry ? valueOf(entry) : ''
+    const used = new Set(models.filter((_, i) => i !== index).map(valueOf))
+    const choices = groups.map((group) => ({ ...group, models: group.models.filter((model) => !used.has(model.value)) })).filter((group) => group.models.length)
+    if (entry && !choices.some((group) => group.models.some((model) => model.value === value))) {
+      choices.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === value)?.name ?? entry.model }] })
+    }
+    const levels = entry ? entry.provider === 'claude' ? claudeEfforts(server, entry.model) : dshEfforts(server, entry.model, entry.provider) : []
+    return <div className="team-free-model-row" key={index}>
+      <ModelField label={`モデル ${index + 1}`} value={value} groups={choices} disabled={false} effort={entry?.effort ?? ''} efforts={levels} allowDefaultEffort
+        onChange={(next) => {
+          if (next === value) return
+          const chosen = fromValue(next)
+          if (!chosen) return
+          onChange({ freeModels: entry ? models.map((model, i) => i === index ? chosen : model) : [...models, chosen] })
+          setAdding(false)
+        }}
+        onEffort={(effort) => onChange({ freeModels: models.map((model, i) => i === index ? { ...model, effort: effort || null } : model) })} />
+      <button type="button" className="icon-button" title="削除" aria-label={`モデル ${index + 1}を削除`}
+        onClick={() => entry ? onChange({ freeModels: models.filter((_, i) => i !== index) }) : setAdding(false)}><Trash2 size={15} /></button>
+    </div>
+  }
+  return <section className="account-card team-free-models">
+    <div className="account-head"><h3>子のモデル <span className="muted">{models.length} / {MAX_CHILDREN}</span></h3>
+      <button type="button" className="button ghost" disabled={adding || models.length >= MAX_CHILDREN} onClick={() => setAdding(true)}><Plus size={14} /> モデルを追加</button>
+    </div>
+    {models.map((model, index) => row(model, index))}
+    {adding && row(null, models.length)}
+    {models.some((model) => model.provider === 'claudeApi') && <p className="team-warning">Claude（API）は従量課金です。並列数や長い会話で費用が増えます。</p>}
+  </section>
+}
+
+function ChildModels({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
+  return <>
+    <section className="account-card"><div className="setting compact">
+      <h3>モデルの選び方</h3>
+      <select aria-label="モデルの選び方" value={config.modelMode ?? 'tiers'} onChange={(event) => onChange({ modelMode: event.target.value })}>
+        <option value="tiers">低中モード</option><option value="free">自由モード</option>
+      </select>
+    </div></section>
+    {config.modelMode === 'free' ? <FreeModels server={server} config={config} onChange={onChange} />
+      : PROVIDERS.map((provider) => <ProviderCard key={provider} server={server} config={config} provider={provider} onChange={onChange} />)}
+  </>
+}
+
 /** Who leads, on which model, and with which of the user's policies. */
 function LeaderSection({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
   const policies: TeamPolicy[] = server.settings.teamPolicies ?? []
@@ -221,16 +283,16 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
       <div className="setting compact team-tier-row">
         <div>
           <h3>リーダーのモデル</h3>
-          {gptLeads && <p className="muted">未設定なら中枠のモデル</p>}
+          {gptLeads && <p className="muted">{config.modelMode === 'free' ? '未設定なら GPT の中枠、低枠、選択したモデルの順' : '未設定なら GPT の中枠、低枠の順'}</p>}
         </div>
         {gptLeads
           ? (
             <ModelPickers
               models={dshModels(server).map((model) => ({ id: model.id, name: model.name }))}
-              levels={dshEfforts(server, config.gptLeader.model ?? config.gpt.mid.model)}
+              levels={dshEfforts(server, config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels?.find((model) => model.provider === 'gpt')?.model : null) ?? null)}
               model={config.gptLeader.model}
               effort={config.gptLeader.effort}
-              unset="未設定（中枠と同じ）"
+              unset="未設定（GPT の子と同じ）"
               unsetEffort="モデルの既定"
               label="GPT のリーダー"
               onChange={(patch) => onChange({ gptLeader: patch })}
@@ -321,7 +383,7 @@ function Switch({ title, note, checked, onChange }: { title: string; note: strin
  */
 export function TeamStartDialog({ workspace }: { workspace: string }) {
   const server = useStore((state) => state.server)
-  const [draft, setDraft] = useState<Config | null>(() => (server?.settings.agentTeams ? fullConfig(server.settings.agentTeams) : null))
+  const [draft, setDraft] = useState<Config | null>(() => (server?.settings.agentTeams ? { ...fullConfig(server.settings.agentTeams), modelMode: server.settings.agentTeams.defaultModelMode ?? 'tiers' } : null))
   const [details, setDetails] = useState(false)
   const [starting, setStarting] = useState(false)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
@@ -352,8 +414,8 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
           <LeanChildrenSwitch config={draft} onChange={change} />
           <PtcToggle mode={draft.toolMode} disabled={starting} onChange={(toolMode) => change({ toolMode })} />
         </section>
-        {PROVIDERS.map((provider) => <ProviderCard key={provider} server={server} config={draft} provider={provider} onChange={change} />)}
-        {!anyChildOn(draft) && <p className="team-warning">子に使うものを、少なくとも一つオンにしてください。オンにしたものだけが、リーダーから使えます。</p>}
+        <ChildModels server={server} config={draft} onChange={change} />
+        {!anyChildOn(draft) && <p className="team-warning">子に使うモデルを少なくとも一つ選んでください。</p>}
         <button type="button" className={`link-button team-start-details ${details ? 'open' : ''}`} onClick={() => setDetails(!details)}>
           <ChevronRight size={13} /> 詳しい設定
         </button>
@@ -396,7 +458,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const save = async () => {
     if (needsAuth && !auth.ready) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, local: draft.local, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, local: draft.local, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
@@ -406,13 +468,13 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
     <Modal title="このチームの設定" onClose={onClose} width={620} className="team-start-modal">
       <div className="team-start-body">
         <p className="muted">
-          リーダー（{leader}）はこのままです。子の枠と数の変更は、次に起動する子から反映し、リーダーにも伝えます。動いている子はそのモデルのまま続けます。
+          リーダー（{leader}）はこのままです。子のモデルと数の変更は、次に起動する子から反映し、リーダーにも伝えます。動いている子はそのモデルのまま続けます。
         </p>
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
         </section>
-        {PROVIDERS.map((provider) => <ProviderCard key={provider} server={server} config={draft} provider={provider} onChange={change} />)}
-        {!anyChildOn(draft) && <p className="team-warning">子に使うものを、少なくとも一つオンにしてください。</p>}
+        <ChildModels server={server} config={draft} onChange={change} />
+        {!anyChildOn(draft) && <p className="team-warning">子に使うモデルを少なくとも一つ選んでください。</p>}
         {showAuth && <ClaudeAuthConsent key={authRevision} workspace={team.workspace} teamId={team.id} onChange={setAuth} />}
       </div>
       <div className="modal-actions">
@@ -443,6 +505,8 @@ export function TeamSettings() {
             </p>
           </div>
         </div>
+        <Switch title="自由モードを標準にする" note="オフの場合は低中モード" checked={config.defaultModelMode === 'free'}
+          onChange={(value) => save({ defaultModelMode: value ? 'free' : 'tiers' })} />
         <BypassSwitch config={config} onChange={save} />
         <Switch title="報告をまとめて渡す" note="近い時間に届いた報告を1ターンにまとめます。"
           checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />

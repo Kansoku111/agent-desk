@@ -67,7 +67,7 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
       const folder = result.team.workspace
       await mutateSettings(candidate => {
         if (folder !== paths.myPc && !candidate.workspaces.includes(folder)) candidate.workspaces.unshift(folder)
-        if (!execution) candidate.agentTeams = structuredClone(result.team.config)
+        if (!execution) candidate.agentTeams = { ...structuredClone(result.team.config), defaultModelMode: candidate.agentTeams.defaultModelMode }
       })
       return result
     },

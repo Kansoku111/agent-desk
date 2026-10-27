@@ -27,13 +27,13 @@ export function modelGroups(server: AppState): ModelGroup[] {
   ]
 }
 
-export function ModelField({ label, value, groups, disabled, onChange, effort, efforts, onEffort, allowClearUnavailableEffort = false }: {
+export function ModelField({ label, value, groups, disabled, onChange, effort, efforts, onEffort, allowClearUnavailableEffort = false, allowDefaultEffort = false }: {
   label: string; value: string; groups: ModelGroup[]; disabled: boolean; onChange: (value: string) => void
-  effort: string; efforts: string[]; onEffort: (value: string) => void; allowClearUnavailableEffort?: boolean
+  effort: string; efforts: string[]; onEffort: (value: string) => void; allowClearUnavailableEffort?: boolean; allowDefaultEffort?: boolean
 }) {
   const clearUnavailableEffort = allowClearUnavailableEffort && !efforts.length && Boolean(effort)
-  const effortChoices = clearUnavailableEffort ? [''] : efforts
-  const effortName = clearUnavailableEffort ? `${effortLabel(effort)}（非対応）` : !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : '中'
+  const effortChoices = clearUnavailableEffort ? [''] : allowDefaultEffort && efforts.length ? ['', ...efforts] : efforts
+  const effortName = clearUnavailableEffort ? `${effortLabel(effort)}（非対応）` : !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : allowDefaultEffort ? '既定' : '中'
   const name = groups.flatMap((group) => group.models).find((model) => model.value === value)?.name ?? 'モデルを選択'
   const modelWheel = useWheelSelect<HTMLButtonElement>(disabled ? [] : groups.flatMap((group) => group.models.map((model) => model.value)), value, onChange)
   const effortWheel = useWheelSelect<HTMLButtonElement>(disabled || !value ? [] : effortChoices, effortChoices.includes(effort) ? effort : null, onEffort)
@@ -72,7 +72,7 @@ export function ModelField({ label, value, groups, disabled, onChange, effort, e
       </button>
     )}>
       {(close) => <>
-        {clearUnavailableEffort && <MenuItem key="none" label="指定なし" selected={!effort} onSelect={() => { onEffort(''); close() }} />}
+        {(clearUnavailableEffort || (allowDefaultEffort && efforts.length > 0)) && <MenuItem key="none" label={allowDefaultEffort ? '既定' : '指定なし'} selected={!effort} onSelect={() => { onEffort(''); close() }} />}
         {efforts.map((value) => <MenuItem key={value} label={effortLabel(value)} selected={effort === value} onSelect={() => { onEffort(value); close() }} />)}
       </>}
     </Dropdown></div>

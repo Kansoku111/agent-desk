@@ -1533,7 +1533,7 @@ test('the leader starts with the team tools and instructions; other options come
   const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
   assert.match(prompt, /you are the leader/)
   assert.ok(prompt.includes(workspace))
-  assert.match(prompt, /provider "gpt".*low = GPT-6 Luna, mid = GPT-6\.1 Sol/)
+  assert.match(prompt, /provider "gpt".*low = GPT-6 Luna.*mid = GPT-6\.1 Sol/)
   assert.match(prompt, /provider "claude".*low = Claude Haiku（最新）/)
 })
 
@@ -1564,7 +1564,7 @@ test('a GPT child is a full-access dsh task whose first message names it and giv
 test('spawn explains what the leader got wrong', async (t) => {
   const { tool, manager, team } = await setup(t)
   await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'high', provider: 'gpt' }), /tier は "low" か "mid"/)
-  await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'low' }), /provider を "gpt" \/ "claude" のどれか/)
+  await assert.rejects(tool('spawn', { title: 'x', task: 'y', provider: 'unknown' }), /provider は/)
   await assert.rejects(tool('spawn', { title: '', task: 'y', tier: 'low', provider: 'gpt' }), /title/)
   // Changed in the team's panel while it runs.
   manager.updateConfig(team.id, { gpt: { enabled: false } })
@@ -2334,6 +2334,113 @@ test('team settings: defaults fill in, patches are checked', () => {
   assert.throws(() => mergeTeamConfig(undefined, { leaderProvider: 'opencodeGo' }), /リーダー/)
 })
 
+test('free model settings validate the limit, uniqueness and provider-specific IDs', () => {
+  assert.equal(teamConfig({}).defaultModelMode, 'tiers')
+  assert.equal(teamConfig({}).modelMode, 'tiers')
+  assert.deepEqual(teamConfig({}).freeModels, [])
+  const twelve = Array.from({ length: 12 }, (_, i) => ({ provider: 'gpt', model: `model-${i}`, effort: null }))
+  const config = mergeTeamConfig({}, { defaultModelMode: 'free', modelMode: 'free', freeModels: twelve })
+  assert.doesNotThrow(() => assertChildrenOn(config))
+  assert.equal(config.freeModels.length, 12)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [...twelve, { provider: 'gpt', model: 'extra' }] }), /12 個/)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [twelve[0], twelve[0]] }), /同じモデル/)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'gpt', model: 'bad model' }] }), /モデル/)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'unknown', model: 'x' }] }), /プロバイダー/)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'gpt', model: 'x', effort: '???' }] }), /推論/)
+  assert.throws(() => mergeTeamConfig({}, { defaultModelMode: 'other' }), /選び方/)
+  assert.throws(() => assertChildrenOn(mergeTeamConfig({}, { modelMode: 'free' })), /少なくとも一つ/)
+  assert.equal(mergeTeamConfig({}, { freeModels: [{ provider: 'local', model: 'org/model:8b' }] }).freeModels[0].model, 'org/model:8b')
+})
+
+test('free mode balances concurrent spawns and honors explicit model choices', async (t) => {
+  const freeModels = [
+    { provider: 'gpt', model: 'gpt-6-luna', effort: 'medium' },
+    { provider: 'claudeApi', model: 'claude-haiku-5-5', effort: null },
+    { provider: 'claude', model: 'sonnet', effort: 'high' },
+  ]
+  const { team, tool, threads, agents, manager } = await setup(t, { defaultModelMode: 'free', freeModels, maxChildren: 12 })
+  assert.equal(team.config.modelMode, 'free')
+  const status = await tool('status')
+  assert.match(status, /provider "claudeApi", model "claude-haiku-5-5"/)
+  await Promise.all(Array.from({ length: 6 }, (_, i) => tool('spawn', { title: `work ${i}`, task: 'work' })))
+  assert.deepEqual(team.children.map((child) => child.model), ['gpt-6-luna', 'claude-haiku-5-5', 'sonnet', 'gpt-6-luna', 'claude-haiku-5-5', 'sonnet'])
+  assert.ok(team.children.every((child) => child.tier === null))
+  assert.equal(manager.summary(team).children[0].modelName, 'GPT-6 Luna')
+  assert.equal(threads.calls.filter((call) => call[0] === 'create').length, 4)
+  assert.equal(agents.calls.filter((call) => call[0] === 'create').length, 2)
+  await tool('spawn', { title: 'explicit', task: 'work', provider: 'claudeApi', model: 'claude-haiku-5-5' })
+  assert.equal(team.children.at(-1).provider, 'claudeApi')
+  await assert.rejects(tool('spawn', { title: 'bad', task: 'work', model: 'not-selected' }), /使えません/)
+  await assert.rejects(tool('spawn', { title: 'bad', task: 'work', tier: 'low' }), /自由モード/)
+  assert.equal(team.children.length, 7)
+})
+
+test('both modes balance available models and a running team switches without changing existing children', async (t) => {
+  const { team, tool, manager, terminals, leader, typed } = await setup(t, { maxChildren: 12 })
+  await Promise.all(Array.from({ length: 4 }, (_, i) => tool('spawn', { title: String(i), task: 'work' })))
+  assert.deepEqual(team.children.map((child) => child.model), ['gpt-6-luna', 'gpt-6.1-sol', 'haiku', 'sonnet'])
+  terminals.set(leader, { activity: 'idle' })
+  const before = team.children.map(({ model, tier }) => ({ model, tier }))
+  assert.throws(() => manager.updateConfig(team.id, { modelMode: 'free', freeModels: [] }), /少なくとも一つ/)
+  manager.updateConfig(team.id, { modelMode: 'free', freeModels: [{ provider: 'gpt', model: 'gpt-6.1-sol', effort: 'high' }] })
+  assert.match(typed().at(-1), /model "gpt-6.1-sol"/)
+  assert.deepEqual(team.children.map(({ model, tier }) => ({ model, tier })), before)
+  await tool('spawn', { title: 'new', task: 'work' })
+  assert.equal(team.children.at(-1).model, 'gpt-6.1-sol')
+  assert.equal(team.children.at(-1).tier, null)
+  await manager.writes
+  const stored = JSON.parse(await fs.readFile(path.join(manager.file), 'utf8'))
+  assert.equal(stored.teams.find((entry) => entry.id === team.id).config.modelMode, 'free')
+})
+
+test('tier slots using the same model still share the work and keep their effort', async (t) => {
+  const f = await setup(t, { claude: { enabled: false }, gpt: { enabled: true, low: { model: 'gpt-6-luna', effort: 'low' }, mid: { model: 'gpt-6-luna', effort: 'high' } } })
+  await Promise.all(Array.from({ length: 4 }, (_, i) => f.tool('spawn', { title: String(i), task: 'work' })))
+  assert.deepEqual(f.team.children.map(({ tier, effort }) => [tier, effort]), [['low', 'low'], ['mid', 'high'], ['low', 'low'], ['mid', 'high']])
+})
+
+test('a new team uses the configured default instead of the previous team mode', async (t) => {
+  const f = await setup(t)
+  f.setSettings(mergeTeamConfig(f.team.config, { defaultModelMode: 'free', modelMode: 'tiers', freeModels: [{ provider: 'gpt', model: 'gpt-6-luna', effort: 'low' }] }))
+  const defaultTeam = await f.manager.create({ workspace: f.workspace })
+  assert.equal(defaultTeam.team.config.modelMode, 'free')
+  const temporaryTierTeam = await f.manager.create({ workspace: f.workspace, choices: { modelMode: 'tiers' } })
+  assert.equal(temporaryTierTeam.team.config.modelMode, 'tiers')
+  assert.equal((await f.manager.create({ workspace: f.workspace })).team.config.modelMode, 'free')
+})
+
+test('free mode and usage balance survive a restart', async (t) => {
+  const freeModels = [
+    { provider: 'gpt', model: 'gpt-6-luna', effort: 'low' },
+    { provider: 'claudeApi', model: 'claude-haiku-5-5', effort: null },
+  ]
+  const { team, tool, threads, terminals, agents, manager, dir } = await setup(t, { defaultModelMode: 'free', freeModels })
+  await tool('spawn', { title: 'first', task: 'work' })
+  assert.equal(team.children[0].model, 'gpt-6-luna')
+  await manager.stop()
+  const again = await new TeamManager({
+    file: path.join(dir, 'teams.json'), dir: path.join(dir, 'teams'), threads, terminals, agents, catalog: CATALOG,
+    getSettings: () => ({}), apiUrl: () => '',
+  }).load()
+  t.after(() => again.stop())
+  const restored = again.teams.get(team.id)
+  assert.equal(restored.config.modelMode, 'free')
+  assert.deepEqual(restored.config.freeModels, freeModels)
+  await again.call(restored.id, restored.secret, 'spawn', { title: 'next', task: 'work' })
+  assert.equal(restored.children.at(-1).model, 'claude-haiku-5-5')
+})
+
+test('a free-mode default leaves eco on low tiers', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt', defaultModelMode: 'free', freeModels: [{ provider: 'gpt', model: 'gpt-6.1-sol', effort: null }] })
+  const { team } = await f.manager.create({ workspace: f.workspace, execution: {} })
+  assert.equal(team.config.modelMode, 'tiers')
+  const raw = f.manager.teams.get(team.id)
+  await f.manager.call(team.id, raw.secret, 'spawn', { ...exTask, mode: 'research' })
+  assert.equal(raw.children[0].tier, 'low')
+  assert.equal(raw.children[0].model, 'gpt-6-luna')
+  assert.throws(() => f.manager.updateConfig(team.id, { modelMode: 'free' }), /低枠/)
+})
+
 test('a team starts only with a provider turned on, and cannot be left without one', async (t) => {
   const { manager, workspace, team, setSettings } = await setup(t)
   // Nothing is saved as on in a new install: the start dialog has to turn something on.
@@ -2365,7 +2472,7 @@ test('a DeepSeek child is a full-access dsh task on a DeepSeek model', async (t)
   })
   const args = terminals.records.get(leader).launch.args
   const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
-  assert.match(prompt,/provider "deepseek" \(DeepSeek, billed per token.*low = DeepSeek V4 Flash, mid = turned off/)
+  assert.match(prompt,/provider "deepseek" \(DeepSeek, billed per token.*low = DeepSeek V4 Flash.*mid = turned off/)
   assert.match(await tool('spawn', { title: '翻訳', task: 'docs を訳す', tier: 'low', provider: 'deepseek', name: 'D' }), /子「D」を起動しました（DeepSeek V4 Flash・低）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
@@ -2375,7 +2482,7 @@ test('a DeepSeek child is a full-access dsh task on a DeepSeek model', async (t)
   assert.equal(manager.summary(team).children[0].kind, 'thread')
   assert.equal(manager.summary(team).children[0].provider, 'deepseek')
   await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'mid', provider: 'deepseek' }), /DeepSeekの中枠はユーザーがオフ/)
-  await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'low' }), /"gpt" \/ "claude" \/ "deepseek"/)
+  assert.match(await tool('spawn', { title: 'x', task: 'y', tier: 'low' }), /GPT-6 Luna・低/)
 })
 
 test('an OpenCode Go child is a full-access dsh task on an OpenCode Go model', async (t) => {
@@ -2406,7 +2513,7 @@ test('a Claude (API) child is a full-access dsh task on an Anthropic model, not 
   })
   const args = terminals.records.get(leader).launch.args
   const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
-  assert.match(prompt, /provider "claudeApi" \(Claude through dsh on the user's Anthropic API key.*low = Claude Haiku 5\.5, mid = turned off/)
+  assert.match(prompt, /provider "claudeApi" \(Claude through dsh on the user's Anthropic API key.*low = Claude Haiku 5\.5.*mid = turned off/)
   assert.match(prompt, /Claude Code using its own user-confirmed subscription, API key or cloud authentication/)
   assert.doesNotMatch(prompt, /monthly API credits/)
   assert.match(await tool('spawn', { title: '要約', task: 'docs を要約', tier: 'low', provider: 'claudeApi', name: 'A' }), /子「A」を起動しました（Claude Haiku 5\.5・低）/)

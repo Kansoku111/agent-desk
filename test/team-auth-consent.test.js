@@ -28,6 +28,13 @@ test('missing challenges and logged-out states cannot be accepted; existing matc
   assert.deepEqual(authConsentState(inspection('api', { confirmed: true })), { ready: true })
 })
 
+test('free mode requires consent for Claude Code children, not for API children or inactive tiers', () => {
+  const config = { leaderProvider: 'gpt', modelMode: 'free', claude: { enabled: true }, freeModels: [{ provider: 'claudeApi', model: 'claude-haiku-5-5', effort: null }] }
+  assert.equal(needsClaudeAuth(config), false)
+  assert.equal(needsClaudeAuth({ ...config, freeModels: [...config.freeModels, { provider: 'claude', model: 'sonnet', effort: null }] }), true)
+  assert.equal(needsClaudeAuth({ ...config, leaderProvider: 'claude' }), true)
+})
+
 test('auth requirement preserves choices and allows disabling Claude without accepting charges', () => {
   const config = { leaderProvider: 'gpt', claude: { enabled: false }, claudeApi: { enabled: true } }
   const snapshot = structuredClone(config)

@@ -370,7 +370,7 @@ export class TeamManager extends EventEmitter {
   }
 
   #label(child) {
-    return `${this.#modelName(child)}・${TIER_LABEL[child.tier]}`
+    return child.tier ? `${this.#modelName(child)}・${TIER_LABEL[child.tier]}` : this.#modelName(child)
   }
 
   #emit(team) {
@@ -519,7 +519,8 @@ export class TeamManager extends EventEmitter {
    * the result's `config` is what the team runs with, to remember for the next one.
    */
   async create({ workspace, size, choices = {}, authConfirmation, execution = null }) {
-    const config = mergeTeamConfig(this.getSettings(), choices ?? {})
+    const saved = teamConfig(this.getSettings())
+    const config = mergeTeamConfig(saved, { modelMode: saved.defaultModelMode, ...(choices ?? {}), ...(execution ? { modelMode: 'tiers' } : {}) })
     assertChildrenOn(config)
     const now = this.now()
     const gpt = config.leaderProvider === 'gpt'
@@ -568,7 +569,7 @@ export class TeamManager extends EventEmitter {
   }
 
   async #createGptLed(team, config) {
-    const id = config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model
+    const id = config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels.find((model) => model.provider === 'gpt')?.model : null)
     if (!id && !team.execution?.leaderModel) throw new Error('GPT のリーダーのモデルが決まっていません。チームを始める画面で選んでください')
     const model = team.execution?.leaderModel ?? (this.catalog.data.models.find((entry) => entry.provider === 'openai-codex' && entry.id === id)?.value
       ?? JSON.stringify(['openai-codex', id]))
@@ -910,28 +911,43 @@ export class TeamManager extends EventEmitter {
     if (team.execution) this.#exRoom(team, null, args.mode === 'research')
     const execution = team.execution ? this.#exTask(team, args) : null
     const tier = team.execution ? 'low' : args.tier
-    if (!TEAM_TIERS.includes(tier)) throw new Error('tier は "low" か "mid" で指定してください')
+    if (tier != null && !TEAM_TIERS.includes(tier)) throw new Error('tier は "low" か "mid" で指定してください')
     const enabled = TEAM_PROVIDERS.filter((provider) => config[provider].enabled)
     let provider = args.provider && args.provider !== 'auto' ? args.provider : null
     if (provider && !TEAM_PROVIDERS.includes(provider)) throw new Error(`provider は ${providerList(TEAM_PROVIDERS)} のどれかで指定してください`)
-    if (provider && !config[provider].enabled) {
-      throw new Error(`${PROVIDER_NAMES[provider]} の子はユーザーが設定でオフにしています。${providerList(enabled)} を使ってください。`)
+    let selected
+    if (team.execution || (config.modelMode === 'tiers' && provider && tier)) {
+      if (provider && !config[provider].enabled) throw new Error(`${PROVIDER_NAMES[provider]} の子はユーザーが設定でオフにしています。${providerList(enabled)} を使ってください。`)
+      if (!provider) {
+        if (enabled.length !== 1) throw new Error(`provider を ${providerList(enabled)} のどれかで指定してください`)
+        provider = enabled[0]
+      }
+      const choice = config[provider][tier]
+      if (!choice.enabled) throw new Error(`${PROVIDER_NAMES[provider]}の${TIER_LABEL[tier]}枠はユーザーがオフにしています。使える枠は status で確かめてください。`)
+      if (!choice.model) throw new Error(`${PROVIDER_NAMES[provider]}の${TIER_LABEL[tier]}枠のモデルが設定されていません。別の枠を使うか、ask_user でユーザーにチームパネルの「このチームの設定」で選んでもらってください。`)
+      if (args.model && args.model !== choice.model) throw new Error('指定したモデルはこの枠にありません')
+      selected = { provider, tier, model: choice.model, effort: choice.effort }
+    } else {
+      if (config.modelMode === 'free' && tier) throw new Error('自由モードでは tier を指定せず、model を選んでください')
+      if (config.modelMode === 'tiers' && provider && !config[provider].enabled) throw new Error(`${PROVIDER_NAMES[provider]} の子はユーザーが設定でオフにしています。${providerList(enabled)} を使ってください。`)
+      if (args.model != null && (typeof args.model !== 'string' || !args.model)) throw new Error('model の値が不正です')
+      const choices = config.modelMode === 'free' ? config.freeModels.map((entry) => ({ ...entry, tier: null }))
+        : enabled.flatMap((name) => TEAM_TIERS.filter((slot) => config[name][slot].enabled && config[name][slot].model)
+          .map((slot) => ({ provider: name, tier: slot, model: config[name][slot].model, effort: config[name][slot].effort })))
+      const candidates = choices.filter((entry) => (!provider || entry.provider === provider) && (!tier || entry.tier === tier) && (!args.model || entry.model === args.model))
+      if (!candidates.length) throw new Error('指定されたモデルはチームで使えません。status で利用可能なモデルを確認してください。')
+      if (args.model && !provider && new Set(candidates.map((entry) => entry.provider)).size > 1) throw new Error('同じモデル名が複数のプロバイダーにあります。provider も指定してください')
+      // Children are reserved before the first await, so concurrent spawns see one another; closed children still count.
+      const count = (entry) => team.children.filter((child) => child.provider === entry.provider && child.model === entry.model).length
+      const tierCount = (entry) => team.children.filter((child) => child.provider === entry.provider && child.model === entry.model && child.tier === entry.tier).length
+      selected = candidates.reduce((best, entry) => count(entry) < count(best) || (count(entry) === count(best) && tierCount(entry) < tierCount(best)) ? entry : best)
     }
-    if (!provider) {
-      if (enabled.length !== 1) throw new Error(`provider を ${providerList(enabled)} のどれかで指定してください`)
-      provider = enabled[0]
-    }
-    const { enabled: tierOn, model, effort } = config[provider][tier]
-    if (!tierOn) {
-      throw new Error(`${PROVIDER_NAMES[provider]}の${TIER_LABEL[tier]}枠はユーザーがオフにしています。使える枠は status で確かめてください。`)
-    }
-    if (!model) {
-      throw new Error(`${PROVIDER_NAMES[provider]}の${TIER_LABEL[tier]}枠のモデルが設定されていません。別の枠を使うか、ask_user でユーザーにチームパネルの「このチームの設定」で選んでもらってください。`)
-    }
+    const { model, effort } = selected
+    provider = selected.provider
     this.#checkRoom(team)
     const now = this.now()
     const child = {
-      id: randomUUID(), name: this.#childName(team, args.name), title, provider, tier, model, effort: effort ?? null,
+      id: randomUUID(), name: this.#childName(team, args.name), title, provider, tier: selected.tier, model, effort: effort ?? null,
       kind: provider === 'claude' ? 'agent' : 'thread', taskId: null, createdAt: now, updatedAt: now,
       closed: false, awaiting: true, pending: [], followups: [], reports: [], ...(args.tools === true ? { tools: true } : {}),
     }
@@ -1244,7 +1260,7 @@ export class TeamManager extends EventEmitter {
     const open = team.children.filter((entry) => !entry.closed)
     const lines = [
       `開いている子: ${open.length} / ${config.maxChildren} 人。リーダーへの報告待ち: ${team.queue.length} 件。`,
-      '使える枠:',
+      config.modelMode === 'free' ? '使えるモデル:' : '使える枠:',
       ...this.#tierLines(config),
     ]
     if (team.execution) lines.push('eco: 子は低枠のみ。完了条件 criteria と検証ID checks を指定して spawn。書き込み・検証・判定は直列です。', `登録済み検証: ${JSON.stringify(this.execution.checks(team.workspace))}`)
@@ -1495,11 +1511,12 @@ export class TeamManager extends EventEmitter {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
     if (authConfirmation) return this.#confirmAuth(team, authConfirmation, true, () => this.teams.get(teamId) === team).then(() => this.updateConfig(teamId, patch))
-    const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren', 'toolMode'].includes(key)))
+    const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren', 'toolMode', 'modelMode', 'freeModels'].includes(key)))
     const before = this.#tierLines(this.config(team)).join('\n') + this.config(team).maxChildren
     const next = mergeTeamConfig(this.config(team), allowed)
     if (next.toolMode !== this.config(team).toolMode && this.toolModeBusy(team)) throw new Error('実行中はPTCを変更できません')
     if (team.execution) {
+      if (next.modelMode !== 'tiers') throw new Error('ecoは低枠のみ使用できます')
       for (const provider of TEAM_PROVIDERS) {
         next[provider].mid.enabled = false
         if (next[provider].enabled && !next[provider].low.enabled) throw new Error('ecoは低枠のみ使用できます')
@@ -1512,8 +1529,10 @@ export class TeamManager extends EventEmitter {
     if (this.#tierLines(config).join('\n') + config.maxChildren !== before) {
       team.queue.push({
         id: randomUUID(), childId: null, kind: 'notice', at: team.updatedAt,
-        text: [`ユーザーがこのチームの設定を変えました。いまから使える枠（同時に開ける子は ${config.maxChildren} 人まで）:`, ...this.#tierLines(config),
-          'すでに動いている子はそのままのモデルで続けます。返事は要りません。次に spawn するときから、この枠で選んでください。'].join('\n'),
+        text: [`ユーザーがこのチームの設定を変えました。いまから使えるモデル（同時に開ける子は ${config.maxChildren} 人まで）:`, ...this.#tierLines(config),
+          team.execution
+            ? 'すでに動いている子はそのままのモデルで続けます。次の spawn から低枠の設定を使ってください。返事は要りません。'
+            : 'すでに動いている子はそのままのモデルで続けます。次の spawn は指定がなければ均等に選びます。自由モードでは tier を使わず、指定する場合は model と provider を使ってください。返事は要りません。'].join('\n'),
       })
     }
     void this.#save()
