@@ -136,20 +136,25 @@ export class ThreadManager extends EventEmitter {
         })
       }
     }
-    // Older DeepSeek turns already have token counts but no price. Recover
-    // only from a matching log interval, so a later turn/session cannot bill twice.
+    // Recover old DeepSeek bills and wholly unpriced Terra turns only from a
+    // matching log interval. Never change previously priced scores; a stored
+    // cumulative snapshot cannot safely be rebuilt from an individual turn.
+    const canRecoverTerra = !turns.some((turn) => turn.totalScore)
     for (const turn of turns) {
       const prior = turn.usage
-      if (prior?.cost !== null || !prior.models?.some((model) => model.startsWith('deepseek-official/'))
-        || !Number.isFinite(turn.endedAt) || !thread.sessionId) continue
+      const deepSeek = prior?.cost === null && prior.models?.some((model) => model.startsWith('deepseek-official/'))
+      const terra = canRecoverTerra && prior?.models?.length === 1 && prior.models[0] === 'openai-codex/gpt-6.1-terra'
+        && prior.score?.points === 0 && prior.score.priced === 0 && prior.requests > 0 && prior.score.unpriced === prior.requests
+      if ((!deepSeek && !terra) || !Number.isFinite(turn.endedAt) || !thread.sessionId) continue
       try {
         const usage = await this.getTurnUsage({ dshHome: this.paths.dshHome, sessionId: thread.sessionId,
           since: turn.startedAt, until: turn.endedAt, waitMs: 0 })
         this.#available(threadId, thread)
-        if (usage?.cost == null) continue
+        if (!usage || (deepSeek && usage.cost == null)
+          || (terra && (!usage.score?.priced || usage.score.priced + usage.score.unpriced !== prior.requests))) continue
         if (['requests', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'].some((key) => prior[key] !== usage[key])) continue
         if (!isDeepStrictEqual([...prior.models].sort(), [...usage.models].sort())) continue
-        turn.usage = usage
+        turn.usage = terra ? { ...prior, score: usage.score } : usage
         repriced = true
       } catch {}
     }

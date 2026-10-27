@@ -241,6 +241,16 @@ export function mergeUsage(a, b) {
   return total
 }
 
+// Official GPT-6.1 Terra standard API rates, USD per million tokens (checked 2026-10-27):
+// https://developers.openai.com/api/docs/models/gpt-6.1-terra
+// Fallback only: installed or fetched model-specific catalog rates take precedence.
+const EQUIVALENT_FALLBACKS = [
+  ['openai-codex/gpt-6.1-terra', {
+    input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25,
+    tiers: [{ inputTokensAbove: 272_000, input: 2, output: 7.5, cacheRead: 0.1, cacheWrite: 2.5 }],
+  }],
+]
+
 let pricingCache = null
 let fastPricingState = null
 let catalogPricing = new Map()
@@ -257,7 +267,7 @@ export function setCatalogPricing(rates) {
  */
 export async function loadPricing() {
   if (pricingCache) return pricingCache
-  const pricing = new Map(deepSeekPricing())
+  const pricing = new Map([...EQUIVALENT_FALLBACKS, ...deepSeekPricing()])
   pricing.fast = fastPricingState
   const [dir] = catalogDataDirs()
   for (const provider of ['openai-codex', 'anthropic', 'opencode-go']) {

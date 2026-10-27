@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { addScores, emptyScore, formatEquivalentCost, isUsdJpyRate, scoreFromUsd, scoresUpTo } from '../shared/usage-score.js'
-import { loadPricing, resetPricing, responseCost, scoreResponse, setCatalogPricing, summarizeUsage } from '../server/usage.js'
+import { loadPricing, priceResponse, resetPricing, responseCost, scoreResponse, setCatalogPricing, summarizeUsage } from '../server/usage.js'
+import { accountModelAdditions } from '../server/codex-models.js'
+import { configuredModelCatalog } from '../server/model-catalog.js'
 
 const sol = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }
 const luna = { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
@@ -111,6 +113,38 @@ test('JPY never invents an exchange rate or formats invalid converted amounts as
   }
   assert.equal(isUsdJpyRate(150.25), true)
   assert.equal(formatEquivalentCost(scoreFromUsd(2), { usageCurrency: 'JPY', usdJpyRate: Number.MAX_VALUE }), '—')
+})
+
+test('GPT-6.1 Terra has official fallback rates until its real catalog rates arrive', async () => {
+  const key = 'openai-codex/gpt-6.1-terra'
+  const availability = { offered: [{ id: 'gpt-6.1-terra', name: 'GPT-6.1 Terra' }, { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }],
+    known: ['gpt-6.1-terra', 'gpt-6.1-sol'] }
+  const catalog = await configuredModelCatalog(accountModelAdditions(availability))
+  assert.ok(catalog.definitions['openai-codex'].some((model) => model.id === 'gpt-6.1-terra'))
+  assert.equal(catalog.pricing[key], undefined, 'account clones must not lend their template rates')
+  setCatalogPricing(catalog.pricing)
+  try {
+    const rates = await loadPricing()
+    const usage = { inputTokens: 120000, cacheReadTokens: 150000, outputTokens: 1000, cacheWriteTokens: 2000 }
+    const expected = (120000 + 150000 * 0.05 + 1000 * 5 + 2000 * 1.25) / 1e6
+    const total = summarizeUsage([response(1, 'gpt-6.1-terra', usage)], 0, rates)
+    near(total.score.points * 0.002, expected)
+    assert.equal(total.score.unpriced, 0)
+    assert.equal(formatEquivalentCost(total.score, { usageCurrency: 'JPY', usdJpyRate: 150 }), '¥20.2')
+    assert.equal(total.cost, null, 'the subscription is not a metered bill')
+    assert.equal(priceResponse(rates, key, usage, 0), null)
+    // The complete request switches rates only above 272,000 input + cached tokens.
+    near(scoreResponse(rates, key, { inputTokens: 272000, outputTokens: 1000 }, 0).points * 0.002, 0.277)
+    near(scoreResponse(rates, key, { inputTokens: 272001, outputTokens: 1000, cacheWriteTokens: 10 }, 0).points * 0.002,
+      (272001 * 2 + 1000 * 7.5 + 10 * 2.5) / 1e6)
+    assert.equal(scoreResponse(rates, 'openai-codex/unknown-terra', usage, 0).unpriced, 1)
+
+    setCatalogPricing({ [key]: sol })
+    near(scoreResponse(await loadPricing(), key, { inputTokens: 1000 }, 0).points, 1)
+  } finally {
+    setCatalogPricing({})
+    resetPricing()
+  }
 })
 
 test('catalog overlays carry new-model rates without changing a previously recorded score', async () => {
