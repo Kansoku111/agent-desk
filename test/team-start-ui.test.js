@@ -9,6 +9,8 @@ test('TM startup and running-team dialogs expose both model modes and the saved 
   assert.match(code, /models.length >= MAX_CHILDREN/)
   assert.ok(code.includes('Array.isArray(value)'))
   assert.match(code, /<ModelField label=/)
+  assert.match(code, /const groups = teamModelGroups\(server\)/)
+  assert.match(code, /<TeamGuides .*modelGroups=\{teamModelGroups\(server\)\}/)
   assert.ok(code.includes('if (next === value) return'))
   assert.match(code, /modelMode: draft.modelMode, freeModels: draft.freeModels/)
   assert.ok(code.includes('<ChildModels server={server} config={draft} onChange={change} />'))

@@ -20,6 +20,7 @@ type DshProvider = 'gpt' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'local'
 /** Each dsh provider's models in the model list. */
 const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' } as const
 const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'local-llm': 'local' }
+const teamModelGroups = (server: AppState) => modelGroups(server).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
 const modelValue = (entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? `claude:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
 function pickerChoice(value: string): TeamModelChoice | null {
   if (value.startsWith('claude:')) return { provider: 'claude', model: value.slice(7), effort: null }
@@ -215,7 +216,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
 function FreeModels({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
   const [adding, setAdding] = useState(false)
   const models = config.freeModels ?? []
-  const groups = modelGroups(server).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
+  const groups = teamModelGroups(server)
   const row = (entry: TeamModelChoice | null, index: number) => {
     const value = entry ? modelValue(entry) : ''
     const used = new Set(models.filter((_, i) => i !== index).map(modelValue))
@@ -270,7 +271,7 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
     : config.dshLeader?.model ?? null
   const effort = provider === 'claude' ? config.leader.effort : provider === 'gpt' ? config.gptLeader.effort : config.dshLeader?.effort ?? null
   const value = provider === 'claude' ? modelValue({ provider, model: model ?? '' }) : model ? modelValue({ provider, model }) : ''
-  const groups = modelGroups(server).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
+  const groups = teamModelGroups(server)
   if (value && !groups.some((group) => group.models.some((entry) => entry.value === value))) {
     const name = provider === 'claude' ? claudeModelName(server, model ?? null) ?? 'Claude Code の既定'
       : server.catalog.models.find((entry) => entry.value === value)?.name ?? model ?? ''
@@ -495,7 +496,7 @@ export function TeamSettings() {
           checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />
         <LeanChildrenSwitch config={config} onChange={save} />
       </section>
-      <TeamGuides policies={server.settings.teamPolicies ?? []} playbooks={server.settings.teamPlaybooks ?? []} />
+      <TeamGuides policies={server.settings.teamPolicies ?? []} playbooks={server.settings.teamPlaybooks ?? []} modelGroups={teamModelGroups(server)} catalogLoaded={server.catalog.models.length > 0} />
       {apiSubagent && (
         <p className="team-warning">
           サブエージェントに Claude（API の従量課金）が選ばれています。

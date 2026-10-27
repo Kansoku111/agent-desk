@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { createSettingsService, migrateSettings } from '../server/settings.js'
+import { providerReady, visibleModels } from '../web/src/model-selection.ts'
 
 // Keep the editor's conflict-handling contract covered independently of a browser.
 const source = () => fs.readFile(new URL('../web/src/components/TeamGuides.tsx', import.meta.url), 'utf8')
@@ -35,7 +36,7 @@ async function editor(setting, initial, hooks = {}) {
     } },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     'lucide-react': {},
-    '../util': { copyText: async (text) => hooks.copy?.(text) },
+    '../util': { copyText: async (text) => hooks.copy?.(text), parseModel: (value) => { const [provider, id] = JSON.parse(value); return { provider, id } } },
     '../store': {
       request: async (method, { patch }) => {
         calls.push({ method, patch: structuredClone(patch) })
@@ -44,7 +45,7 @@ async function editor(setting, initial, hooks = {}) {
       toast: (...args) => notices.push(args),
     },
   }
-  const { outputText } = ts.transpileModule(`${await source()}\nexport { GuideList }`, {
+  const { outputText } = ts.transpileModule(`${await source()}\nexport { GuideList, policyPrompt }`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   })
   const exports = {}
@@ -57,7 +58,7 @@ async function editor(setting, initial, hooks = {}) {
     .map((key) => ({ key, placeholder: key, label: key, max: 20_000 }))
   const render = () => {
     cursor = 0
-    return exports.GuideList({ title, setting, saved, fields })
+    return exports.GuideList({ title, setting, saved, fields, prompt: exports.policyPrompt(hooks.groups ?? [], hooks.catalogLoaded ?? true) })
   }
   const find = (predicate, node = render()) => {
     if (!node || typeof node !== 'object') return undefined
@@ -138,12 +139,26 @@ for (const [setting, body] of [['teamPolicies', { text: 'original' }], ['teamPla
 
 test('policy prompt copy includes benchmark research without changing settings', async () => {
   let copied
-  const h = await editor('teamPolicies', [], { copy: (text) => { copied = text } })
+  const groups = [
+    { id: 'claude-code', heading: 'Claude Code', models: [{ value: 'claude:haiku', name: 'Haiku' }] },
+    { id: 'opencode-go', heading: 'OpenCode Go', models: [
+      { value: JSON.stringify(['opencode-go', 'first-model']), name: 'First Model' },
+      { value: JSON.stringify(['opencode-go', 'second-model']), name: 'Second Model' },
+    ] },
+    { id: 'anthropic', heading: 'Claude API', models: [{ value: JSON.stringify(['anthropic', 'first-model']), name: 'First Model' }] },
+  ]
+  const h = await editor('teamPolicies', [], { groups, copy: (text) => { copied = text } })
   const button = h.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー'))
   assert.ok(button)
   button.props.onClick()
   await new Promise((resolve) => setImmediate(resolve))
-  assert.match(copied, /モデルピッカーに表示されるモデル/)
+  assert.match(copied, /現在のチームで選択中のモデル一覧ではありません/)
+  assert.match(copied, /チームのstatusや実行時の許可一覧だけで対象を絞らず/)
+  assert.match(copied, /OpenCode Go.*first-model/)
+  assert.match(copied, /OpenCode Go.*second-model/)
+  assert.match(copied, /Claude API.*first-model/)
+  assert.match(copied, /Claude Code.*haiku/)
+  assert.match(copied, /未接続・非表示のモデルは含まれません/)
   assert.match(copied, /ベンチマーク/)
   assert.match(copied, /2,000文字以内/)
   assert.match(copied, /設定やモデルの選択は勝手に変更しない/)
@@ -151,6 +166,42 @@ test('policy prompt copy includes benchmark research without changing settings',
   assert.deepEqual(h.notices, [['方針作成指示文をコピーしました', 'success']])
   const playbooks = await editor('teamPlaybooks', [])
   assert.equal(playbooks.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー')), undefined)
+})
+
+test('policy prompt receives the real picker candidates, including all OpenCode Go models', async () => {
+  const source = await fs.readFile(new URL('../web/src/components/WorkflowModelField.tsx', import.meta.url), 'utf8')
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
+  const modules = {
+    'react/jsx-runtime': {}, 'lucide-react': {}, '../model-selection': { providerReady, visibleModels },
+    '../util': {}, './Pickers': { byNewest: (a, b) => a.id.localeCompare(b.id), PROVIDER_NOTE: {}, PROVIDER_ORDER: ['opencode-go', 'anthropic'] },
+    './Popover': {}, './useWheelSelect': {},
+  }
+  const exports = {}
+  new Function('require', 'exports', outputText)((name) => { assert.ok(name in modules, name); return modules[name] }, exports)
+  const model = (provider, id, extra = {}) => ({ provider, id, name: id, value: JSON.stringify([provider, id]), ...extra })
+  const hidden = model('opencode-go', 'hidden')
+  const server = {
+    catalog: { providers: { 'opencode-go': 'OpenCode Go' }, models: [model('opencode-go', 'model-a'), model('opencode-go', 'model-b'), hidden, model('opencode-go', 'retired', { retired: true }), model('anthropic', 'disconnected')] },
+    settings: { modelVisibility: { [hidden.value]: false } },
+    accounts: { chatgpt: { signedIn: false }, claude: { configured: false }, deepseek: { configured: false }, opencodeGo: { configured: true } },
+  }
+  const groups = exports.modelGroups(server)
+  let copied
+  const h = await editor('teamPolicies', [], { groups, copy: (text) => { copied = text } })
+  h.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー')).props.onClick()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.match(copied, /OpenCode Go.*model-a/)
+  assert.match(copied, /OpenCode Go.*model-b/)
+  assert.doesNotMatch(copied, /ID: \"(?:hidden|retired|disconnected)\"/)
+})
+
+test('policy prompt warns when the catalog is empty', async () => {
+  let copied
+  const h = await editor('teamPolicies', [], { catalogLoaded: false, copy: (text) => { copied = text } })
+  h.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー')).props.onClick()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.match(copied, /カタログが空のため、一覧は不完全/)
+  assert.match(copied, /候補を取得できませんでした/)
 })
 
 test('policy prompt copy reports clipboard errors', async () => {
