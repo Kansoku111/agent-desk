@@ -178,10 +178,10 @@ async function firstEvent(file) {
 
 /**
  * The responses logged in [since, until] by the subagents a session started in
- * that time, one list per subagent. A child runs in the parent's folder and
- * names it in its header (`parentSession`); only folders touched since the turn
- * began are looked at, and a log that is not a child's is read no further than
- * its first frame.
+ * that time, grandchildren included, one list per subagent. A child runs in the
+ * parent's folder and names its parent in its header (`parentSession`); only
+ * folders touched since the turn began are looked at, each header is read once,
+ * and a log that is not a child's is read no further than its first frame.
  */
 async function childSessionLogs(parentLog, sessionId, since, until) {
   const root = path.dirname(path.dirname(parentLog))
@@ -191,7 +191,7 @@ async function childSessionLogs(parentLog, sessionId, since, until) {
   } catch {
     return []
   }
-  const children = []
+  const candidates = []
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === sessionId) continue
     const file = path.join(root, entry.name, 'session.v4.jsonl.zstd')
@@ -201,10 +201,30 @@ async function childSessionLogs(parentLog, sessionId, since, until) {
       if (first === null) continue
       if (first === undefined) {
         const events = await decodeSessionRange(await fs.readFile(file))
-        if (events[0]?.type === 'session' && events[0].parentSession === sessionId) children.push(events)
-      } else if (first.type === 'session' && first.parentSession === sessionId) {
-        children.push(await decodeSessionRange(await fs.readFile(file), { keep: isResponse, since, until }))
+        if (events[0]?.type === 'session') candidates.push({ id: entry.name, parent: events[0].parentSession, file, events })
+      } else if (first.type === 'session') {
+        candidates.push({ id: entry.name, parent: first.parentSession, file, events: null })
       }
+    } catch {}
+  }
+  // A subagent's own subagents sit in the same folder. Each pass adds the
+  // candidates whose parent is already in the family; the Set keeps a log from
+  // being added twice, and folders that only name each other are never reached.
+  const family = new Set([sessionId])
+  const found = []
+  for (let grew = true; grew;) {
+    grew = false
+    for (const candidate of candidates) {
+      if (family.has(candidate.id) || !family.has(candidate.parent)) continue
+      family.add(candidate.id)
+      found.push(candidate)
+      grew = true
+    }
+  }
+  const children = []
+  for (const { file, events } of found) {
+    try {
+      children.push(events ?? await decodeSessionRange(await fs.readFile(file), { keep: isResponse, since, until }))
     } catch {}
   }
   return children

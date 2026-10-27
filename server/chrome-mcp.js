@@ -11,10 +11,10 @@
 // Usage: node chrome-mcp.js --state <file> --profile <dir> --workspace <dir> [--headless]
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
-import net from 'node:net'
 import path from 'node:path'
 import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
+import { debugPort } from './chrome-state.js'
 import { findChromium } from './system.js'
 
 const args = process.argv.slice(2)
@@ -32,35 +32,6 @@ if (!stateFile || !profileDir) {
 }
 
 const log = (...parts) => console.error('[agent-desk chrome]', ...parts)
-
-function readState() {
-  try {
-    return JSON.parse(fs.readFileSync(stateFile, 'utf8'))
-  } catch {
-    return {}
-  }
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address()
-      server.close(() => resolve(port))
-    })
-  })
-}
-
-/** The debugging port the shared Chrome uses; chosen once and remembered. */
-async function debugPort() {
-  const state = readState()
-  if (Number.isInteger(state.port)) return state.port
-  const port = await freePort()
-  fs.mkdirSync(path.dirname(stateFile), { recursive: true })
-  fs.writeFileSync(stateFile, JSON.stringify({ ...state, port }))
-  return port
-}
 
 async function chromeAnswers(port) {
   try {
@@ -109,7 +80,7 @@ function ensureChrome(port) {
   return starting
 }
 
-const port = await debugPort()
+const port = await debugPort(stateFile)
 const mcpBin = fileURLToPath(import.meta.resolve('chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js'))
 const mcpArgs = [
   mcpBin,

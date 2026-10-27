@@ -498,7 +498,7 @@ export class TerminalManager extends EventEmitter {
       // Background lifecycle agents and registry tasks (namespaced id -> when seen).
       background: new Map(),
       // When it started, when Claude Code said its session started, and when someone last typed in it.
-      startedAt: Date.now(), sessionAt: null, inputAt: 0,
+      startedAt: Date.now(), sessionAt: null, inputAt: 0, sendBlocked: false,
       // Started on a prompt: working from the start, until its turn is seen.
       promptPending: Boolean(prompt),
       // When the turn now working began (0 while idle): an idle report from before it says nothing about it.
@@ -663,27 +663,62 @@ export class TerminalManager extends EventEmitter {
   /** A message typed outside the terminal screen: pasted (keeping its line breaks) and sent with Enter. */
   async sendMessage(id, text) {
     const live = await this.#whenReady(id)
-    this.executionGuard?.(this.records.get(id))
+    const record = this.#record(id)
     if (typeof text !== 'string') return
-    // A paste marker inside the text would end the paste early and send the rest as typed keys.
-    if (text) live.proc.write(live.term.modes.bracketedPasteMode ? `\x1b[200~${text.replace(PASTE_MARKERS, '')}\x1b[201~` : text)
-    // Enter right after a paste can be taken as part of it; Claude Code needs longer for a long paste or an image path.
-    const wait = SEND_ENTER_MS + Math.min(text.length / 10, SEND_ENTER_MAX_MS)
-    const enter = (retries) => {
-      if (!live.alive) return
+    const current = () => this.records.get(id) === record && this.live.get(id) === live
+      && live.alive && !live.stopRequested && !live.replacing && !this.closing
+    const previous = live.sendQueue ?? Promise.resolve()
+    let resolveDelivery
+    let rejectDelivery
+    const delivery = new Promise((resolve, reject) => {
+      resolveDelivery = resolve
+      rejectDelivery = reject
+    })
+    const sequence = previous.catch(() => {}).then(async () => {
+      let bodyAttempted = false
+      let delivered = false
       try {
+        if (!current()) throw new Error('Claude Code が動いていません')
+        if (live.sendBlocked) throw new Error('前回の送信状態が不明です。再起動してから送信してください。')
+        this.executionGuard?.(record)
+        // A paste marker inside the text would end the paste early and send the rest as typed keys.
+        if (text) {
+          bodyAttempted = true
+          live.proc.write(live.term.modes.bracketedPasteMode ? `\x1b[200~${text.replace(PASTE_MARKERS, '')}\x1b[201~` : text)
+        }
+        // Enter right after a paste can be taken as part of it; Claude Code needs longer for a long paste or an image path.
+        const wait = SEND_ENTER_MS + Math.min(text.length / 10, SEND_ENTER_MAX_MS)
+        await new Promise((resolve) => setTimeout(resolve, wait))
+        if (!current()) throw new Error('Claude Code が動いていません')
         live.proc.write('\r')
-      } catch {
-        return
+        delivered = true
+        resolveDelivery()
+
+        // Keep this terminal's queue until the retries are done: an old Enter must
+        // never land in the next message's input box. A successful first Enter is
+        // already the delivery receipt; later retries are best effort.
+        for (let retries = SEND_RETRIES; retries > 0; retries--) {
+          if (live.activity !== 'idle') break
+          await new Promise((resolve) => setTimeout(resolve, SEND_RETRY_MS))
+          if (!current() || live.activity !== 'idle') break
+          try {
+            live.proc.write('\r')
+          } catch {
+            break
+          }
+        }
+      } catch (error) {
+        if (!delivered) {
+          if (bodyAttempted) {
+            live.sendBlocked = true
+            rejectDelivery(new Error('Claude Code への送信状態が不明です。再起動してから送信してください。'))
+          } else rejectDelivery(error)
+        }
       }
-      // The prompt hook turns the task to working once the message is taken; if not, press Enter again (on an empty box it does nothing).
-      if (retries > 0) {
-        setTimeout(() => {
-          if (live.alive && live.activity === 'idle') enter(retries - 1)
-        }, SEND_RETRY_MS)
-      }
-    }
-    setTimeout(() => enter(SEND_RETRIES), wait)
+    })
+    // A failed transaction must not prevent later messages on this terminal.
+    live.sendQueue = sequence.catch(() => {})
+    return delivery
   }
 
   /**

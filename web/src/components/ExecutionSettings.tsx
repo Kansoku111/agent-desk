@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import { act, setState, startTeam, useStore } from '../store'
 import type { ExecutionCheck, TeamProvider, TeamSettings } from '../types'
 import { executionChildChoice, executionModelSelection } from '../model-selection'
+import { nextCheckId } from '../execution-checks'
 import { ModelField, modelGroups } from './WorkflowModelField'
 import { workflowEffort, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { Modal } from './Modal'
@@ -29,7 +30,7 @@ function readChoice() {
 function CheckEditor({ checks, onChange }: { checks: ExecutionCheck[]; onChange: (checks: ExecutionCheck[]) => void }) {
   const update = (index: number, patch: Partial<ExecutionCheck>) => onChange(checks.map((check, i) => i === index ? { ...check, ...patch } : check))
   return <section className="account-card ex-checks">
-    <div className="account-head"><h3>検証コマンド</h3><button type="button" className="button ghost" onClick={() => onChange([...checks, { id: `check-${checks.length + 1}`, command: '', cwd: '.', timeoutMs: 300000 }])}><Plus size={14} />追加</button></div>
+    <div className="account-head"><h3>検証コマンド</h3><button type="button" className="button ghost" onClick={() => onChange([...checks, { id: nextCheckId(checks), command: '', cwd: '.', timeoutMs: 300000 }])}><Plus size={14} />追加</button></div>
     {checks.map((check, i) => <div className="ex-check" key={i}>
       <div className="ex-check-heading"><input aria-label={`検証${i + 1}のID`} placeholder="ID" value={check.id} onChange={(e) => update(i, { id: e.target.value })} />
         <button type="button" className="icon-button small" aria-label={`検証${i + 1}を削除`} onClick={() => onChange(checks.filter((_, index) => index !== i))}><Trash2 size={14} /></button></div>

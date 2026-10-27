@@ -574,19 +574,21 @@ test('a message sent without the screen is pasted into Claude Code, then Enter f
   // Claude Code reported its session a while ago: its input box is up.
   manager.live.get(terminal.id).sessionAt = Date.now() - 5000
   await manager.sendMessage(terminal.id, 'one\ntwo')
-  assert.deepEqual(proc.written, ['one\ntwo'])
+  assert.deepEqual(proc.written, ['one\ntwo', '\r'])
   await new Promise((resolve) => setTimeout(resolve, 250))
   assert.deepEqual(proc.written, ['one\ntwo', '\r'])
   // Claude Code stayed idle (the Enter was taken as part of the paste): Enter is pressed once more.
   await new Promise((resolve) => setTimeout(resolve, 1700))
   assert.deepEqual(proc.written, ['one\ntwo', '\r', '\r'])
+  // The hook reports that Claude took the prompt; the pending retry must stop.
+  manager.live.get(terminal.id).activity = 'running'
 
   // Claude Code asked for bracketed paste: the message goes inside it, so its line breaks stay in the message.
   proc.emit('\x1b[?2004h')
   await settle()
   proc.written.length = 0
   await manager.sendMessage(terminal.id, 'a\nb')
-  assert.deepEqual(proc.written, ['\x1b[200~a\nb\x1b[201~'])
+  assert.deepEqual(proc.written, ['\x1b[200~a\nb\x1b[201~', '\r'])
   await assert.rejects(manager.sendMessage('nope', 'x'), /動いていません/)
 })
 
@@ -600,7 +602,7 @@ test('a message sent while Claude Code starts waits for its input box, which wou
   assert.deepEqual(proc.written, [])
   manager.live.get(terminal.id).sessionAt = Date.now() - 5000
   await Promise.all([sent, file])
-  assert.deepEqual(proc.written, ['hello', 'C:\\a.png '])
+  assert.deepEqual(proc.written, ['hello', 'C:\\a.png ', '\r'])
 
   // Claude Code ended before its box came up: the sender hears it.
   const second = await manager.create({ workspace })

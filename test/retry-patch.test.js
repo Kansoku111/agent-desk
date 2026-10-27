@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry'
 import { patchPayloadSource, patchPiAiSource, PAYLOAD_KEY, replayGuard, RETRYABLE_KEY, retryableCheck } from '../server/retry-patch.js'
 
@@ -13,17 +13,25 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /** The dsh-llm-pi-ai module the installed dsh loads. */
 function installedSource() {
-  const dshRequire = createRequire(path.join(root, 'node_modules/@deepseek-ai/dsh/package.json'))
-  const dir = path.dirname(dshRequire.resolve('@deepseek-ai/dsh-llm-pi-ai/package.json'))
-  return fs.readFileSync(path.join(dir, 'lib/index.js'), 'utf8')
+  return fs.readFileSync(path.join(piAiDir(), 'lib/index.js'), 'utf8')
 }
+
+/** The dsh-llm-pi-ai package the installed dsh loads. */
+function piAiDir() {
+  const dshRequire = createRequire(path.join(root, 'node_modules/@deepseek-ai/dsh/package.json'))
+  return path.dirname(dshRequire.resolve('@deepseek-ai/dsh-llm-pi-ai/package.json'))
+}
+
+/** dsh-llm as the installed dsh-llm-pi-ai imports it: its own quota rule and codes. */
+const dshLlm = await import(pathToFileURL(createRequire(path.join(piAiDir(), 'package.json')).resolve('@deepseek-ai/dsh-llm')).href)
 
 /** dsh's classifyPiAiError from a module source, as a callable function. */
 function classifier(source) {
   const start = source.indexOf('function classifyPiAiError(message) {')
   const end = source.indexOf('\n}', start)
-  // The quota check lives elsewhere in the module; these messages never hit it.
-  return new Function(`const isQuotaExceededError = () => false; const QUOTA_EXCEEDED_CODE = "QUOTA"; ${source.slice(start, end + 2)} return classifyPiAiError`)()
+  // The rule the installed dsh judges an exhausted quota with, and the code it
+  // reports for one, are dsh-llm's own.
+  return new Function('isQuotaExceededError', 'QUOTA_EXCEEDED_CODE', `${source.slice(start, end + 2)} return classifyPiAiError`)(dshLlm.isQuotaExceededError, dshLlm.QUOTA_EXCEEDED_CODE)
 }
 
 test('the installed dsh-llm-pi-ai takes the retry patch, and still parses', () => {
@@ -57,10 +65,10 @@ test('failures pi-ai knows as transient become retryable, other failures keep th
     assert.equal(after('WebSocket closed 1009 message too big'), 'PI_AI_ERROR')
     // dsh's own classes come first and stay as they were.
     assert.equal(after('401 Unauthorized'), 'AUTH')
-    assert.equal(after('429 rate limit'), 'INVALID_REQUEST')
+    assert.equal(after('429 rate limit'), 'RATE_LIMIT')
     assert.equal(after('400 invalid request'), 'INVALID_REQUEST')
     assert.equal(after('pi-ai provider "anthropic" has no configured model "gpt"'), 'PI_AI_ERROR')
-    assert.equal(after('insufficient_quota: billing hard limit'), 'PI_AI_ERROR')
+    assert.equal(after('insufficient_quota: billing hard limit'), 'QUOTA')
   } finally {
     delete globalThis[key]
   }
@@ -69,6 +77,39 @@ test('failures pi-ai knows as transient become retryable, other failures keep th
 test('without pi-ai\'s check the patched rule changes nothing', () => {
   const after = classifier(patchPiAiSource(installedSource()))
   assert.equal(after('WebSocket closed 1000'), 'PI_AI_ERROR')
+})
+
+test('a rate limit is a rate limit again, and a hard limit stays a hard limit', () => {
+  const key = Symbol.for(RETRYABLE_KEY)
+  globalThis[key] = retryableCheck(isRetryableAssistantError)
+  try {
+    const upstream = classifier(installedSource())
+    const patched = classifier(patchPiAiSource(installedSource()))
+    // dsh retries the failures it classes as transient, and only those.
+    const retried = new Set(dshLlm.resolveRetryPolicy(undefined, 'llm-pi-ai').retryableCodes)
+    // The failures a provider reports with its own wording, the class the
+    // installed dsh gives them, and the class the patched rule gives them.
+    const cases = [
+      ['a rate limit', 'openai-codex API error (429): 429 {"error":{"message":"Rate limit reached for gpt-5.1 in organization org-x on requests per min. Limit: 1000, Used: 1000.","type":"requests","code":"rate_limit_exceeded"}}', 'RATE_LIMIT', 'RATE_LIMIT'],
+      ['a rate limit', '429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit. Please try again later."}}', 'RATE_LIMIT', 'RATE_LIMIT'],
+      ['a bad request', 'openai-codex API error (400): 400 {"error":{"message":"Invalid request","type":"invalid_request_error"}}', 'INVALID_REQUEST', 'INVALID_REQUEST'],
+      ['a refused key', 'openai-codex API error (401): 401 {"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}', 'AUTH', 'AUTH'],
+      ['a forbidden model', 'openai-codex API error (403): 403 {"error":{"message":"Your API key does not have access to this model","type":"forbidden"}}', 'AUTH', 'AUTH'],
+      ['an exhausted quota', 'openai-codex API error (429): 429 {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}', 'QUOTA', 'QUOTA'],
+      // A shared subscription limit and a free-tier limit are permanent too,
+      // though the installed dsh cannot tell them from a rate limit.
+      ['a shared subscription limit', 'openai-codex API error (429): 429 {"error":{"message":"subscription_sharing_usage_limit_exceeded: ChatGPT のプランの利用上限に達しました。","type":"invalid_request_error","code":"subscription_sharing_usage_limit_exceeded"}}', 'RATE_LIMIT', 'PI_AI_ERROR'],
+      ['a free-tier limit', 'opencode-go API error (429): 429 {"error":{"type":"FreeUsageLimitError","message":"Your free usage limit has been reached."}}', 'RATE_LIMIT', 'QUOTA'],
+    ]
+    for (const [name, message, upstreamClass, patchedClass] of cases) {
+      assert.equal(upstream(message), upstreamClass, `${name}: ${message}`)
+      assert.equal(patched(message), patchedClass, `${name}: ${message}`)
+      // A rate limit is retried; a hard limit is not.
+      assert.equal(retried.has(patchedClass), name === 'a rate limit', `${name}: ${message}`)
+    }
+  } finally {
+    delete globalThis[key]
+  }
 })
 
 test('leaves an unexpected dsh-llm-pi-ai alone', () => {

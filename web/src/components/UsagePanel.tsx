@@ -9,6 +9,10 @@ const COST_URL = 'https://platform.claude.com/cost'
 
 const tokensOf = (totals: UsageTotals) => totals.input + totals.output + totals.cacheRead + totals.cacheWrite
 const money = (value: number | null | undefined) => (value ? formatUsd(value) : '$0')
+/** A metered cost: '≥' when some billed usage has no known price, '—' when none is priced. */
+const priced = (cost: number | null, unpriced: number) => (unpriced > 0 ? (cost ? `≥ ${money(cost)}` : '—') : cost === null ? '—' : money(cost))
+/** An estimate: '約' for a known amount (zero when no billed usage), otherwise as priced. */
+const estimate = (cost: number | null, unpriced: number) => (unpriced > 0 ? priced(cost, unpriced) : `約 ${money(cost)}`)
 const modelName = (model: string) => model.split('/').slice(1).join('/') || model
 const shortDay = (day: string) => `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}`
 const fetchedLabel = (at: number) => new Date(at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -214,9 +218,9 @@ function LocalUsageCard({ local }: { local: LocalUsage }) {
       </div>
 
       <div className="usage-tiles">
-        <Tile label="今日" value={`約 ${money(local.today.cost)}`} sub={`全モデルで ${formatTokens(tokensOf(local.today))} トークン`} />
-        <Tile label="今月" value={`約 ${money(local.month.cost)}`} sub={`全モデルで ${formatTokens(tokensOf(local.month))} トークン`} />
-        <Tile label="全期間" value={`約 ${money(local.all.cost)}`} sub={local.since ? `${local.since} から` : undefined} />
+        <Tile label="今日" value={estimate(local.today.cost, local.today.unpriced)} sub={`全モデルで ${formatTokens(tokensOf(local.today))} トークン`} />
+        <Tile label="今月" value={estimate(local.month.cost, local.month.unpriced)} sub={`全モデルで ${formatTokens(tokensOf(local.month))} トークン`} />
+        <Tile label="全期間" value={estimate(local.all.cost, local.all.unpriced)} sub={local.since ? `${local.since} から` : undefined} />
       </div>
       <h4 className="usage-caption">過去 30 日の API 概算料金</h4>
       <Bars
@@ -225,7 +229,7 @@ function LocalUsageCard({ local }: { local: LocalUsage }) {
           key: point.day,
           label: shortDay(point.day),
           value: point.cost,
-          title: `${point.day}: 約 ${money(point.cost)} · ${formatTokensExact(point.tokens)} トークン`,
+          title: `${point.day}: ${estimate(point.cost, point.unpriced)} · ${formatTokensExact(point.tokens)} トークン`,
         }))}
       />
 
@@ -254,7 +258,7 @@ function LocalUsageCard({ local }: { local: LocalUsage }) {
                       {formatTokens(totals.input + totals.cacheRead + totals.cacheWrite)}
                     </td>
                     <td>{formatTokens(totals.output)}</td>
-                    <td>{totals.cost === null ? '—' : money(totals.cost)}</td>
+                    <td>{priced(totals.cost, totals.unpriced)}</td>
                   </tr>
                 )
               })}
@@ -287,9 +291,10 @@ export function UsageSummaryButton() {
   const claudeConfigured = useStore((state) => Boolean(state.server?.accounts.claude.configured || state.server?.accounts.claudeAdmin?.configured))
   if (!usage) return null
   const billed = usage.claude.status === 'ok' && usage.claude.summary ? usage.claude.summary.month : null
-  const estimated = usage.local?.providers.anthropic?.month.cost ?? null
+  const anthropic = usage.local?.providers.anthropic?.month
+  const estimated = anthropic?.cost ?? null
   if (billed === null && !estimated && !claudeConfigured) return null
-  const value = billed !== null ? money(billed) : `約 ${money(estimated)}`
+  const value = billed !== null ? money(billed) : estimate(estimated, anthropic?.unpriced ?? 0)
   const title = billed !== null
     ? `Claude の今月の請求額（Anthropic の集計）${estimated ? `\nAgent Desk での概算: ${money(estimated)}` : ''}`
     : 'Agent Desk で使った Claude の今月の概算料金'

@@ -23,6 +23,14 @@ export function codeStamp(root = projectRoot) {
     .filter((name) => /\.(js|json|ps1)$/.test(name))
     .sort()
     .map((name) => path.join(serverDir, name))
+  // The code the server shares with the UI: an older install may not have it.
+  const sharedDir = path.join(root, 'shared')
+  if (fs.existsSync(sharedDir)) {
+    files.push(...fs.readdirSync(sharedDir)
+      .filter((name) => name.endsWith('.js'))
+      .sort()
+      .map((name) => path.join(sharedDir, name)))
+  }
   files.push(
     path.join(root, 'package.json'),
     path.join(root, 'node_modules', '.package-lock.json'),

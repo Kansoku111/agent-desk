@@ -108,12 +108,12 @@ export class ChatGptLogin {
         return response.writeHead(400).end('Invalid request URL')
       }
       if (url.pathname !== '/auth/callback') return response.writeHead(404).end('Not found')
+      // Only a GET carrying this attempt's state answers it; other requests are refused without consuming it.
+      if (request.method !== 'GET' || !same(url.searchParams.get('state'), state)) {
+        return response.writeHead(400).end('Sign-in could not be verified')
+      }
       if (consumed) return response.writeHead(409).end('Attempt already consumed')
       consumed = true
-      if (request.method !== 'GET' || !same(url.searchParams.get('state'), state)) {
-        response.writeHead(400).end('Sign-in could not be verified')
-        return reject(new Error('state mismatch'))
-      }
       if (url.searchParams.has('error')) {
         response.writeHead(400).end('Authorization was not completed')
         return reject(new Error('authorization denied'))

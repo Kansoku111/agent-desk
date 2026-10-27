@@ -16,8 +16,29 @@ function newest(dir) {
   return latest
 }
 
+/** A folder that may be missing (an older install): 0 then. */
+function newestIfPresent(dir) {
+  return fs.existsSync(dir) ? newest(dir) : 0
+}
+
+/** A file that may be missing (an older install): 0 then. */
+function mtime(file) {
+  try {
+    return fs.statSync(file).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
 const built = fs.existsSync(dist) ? fs.statSync(dist).mtimeMs : 0
-const sources = Math.max(newest(path.join(root, 'web', 'src')), fs.statSync(path.join(root, 'web', 'index.html')).mtimeMs)
+// Everything the UI build reads: the sources, the static files, the config and the shared code.
+const sources = Math.max(
+  newest(path.join(root, 'web', 'src')),
+  newestIfPresent(path.join(root, 'web', 'public')),
+  newestIfPresent(path.join(root, 'shared')),
+  fs.statSync(path.join(root, 'web', 'index.html')).mtimeMs,
+  mtime(path.join(root, 'web', 'vite.config.ts')),
+)
 if (built < sources) {
   console.log('[agent-desk] building the UI…')
   execFileSync(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', '--config', 'web/vite.config.ts', '--logLevel', 'warn'], { cwd: root, stdio: 'inherit' })

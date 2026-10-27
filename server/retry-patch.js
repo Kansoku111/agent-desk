@@ -18,15 +18,22 @@
 
 import { createHash } from 'node:crypto'
 
-/** Terminal SIWC/auth/client errors must precede dsh's rate-limit/5xx rules. */
+/** Where retry-hook.js puts pi-ai's check, for the patched module to call. */
+export const RETRYABLE_KEY = 'agentDesk.isRetryableProviderError'
+
+/**
+ * Terminal SIWC/auth/client errors must precede dsh's rate-limit/5xx rules.
+ * A 429 is dsh's rate-limit class, which dsh retries, so it is not one of the
+ * client errors here: dsh's own quota rule judges the hard limits below it.
+ * A 429 that names a permanent limit stays terminal, because pi-ai knows those
+ * limits by their wording (its quota, billing and free-tier wording).
+ */
 export const TERMINAL_RULE = [
   'if (/subscription[_\\s]sharing[_\\s]usage[_\\s]/i.test(message)) return "PI_AI_ERROR";',
   'if (/\\b(?:401|403)\\b/.test(message)) return "AUTH";',
-  'if (/\\b4\\d\\d\\b/.test(message)) return "INVALID_REQUEST";',
+  `if (/\\b429\\b/.test(message) && globalThis[Symbol.for(${JSON.stringify(RETRYABLE_KEY)})]?.(message) === false) return QUOTA_EXCEEDED_CODE;`,
+  'if (/\\b4\\d\\d\\b/.test(message) && !/\\b429\\b/.test(message)) return "INVALID_REQUEST";',
 ].join(' ')
-
-/** Where retry-hook.js puts pi-ai's check, for the patched module to call. */
-export const RETRYABLE_KEY = 'agentDesk.isRetryableProviderError'
 
 /** The rule added in place of dsh's final catch-all. */
 export const EXTRA_RULE = [

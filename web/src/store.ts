@@ -7,6 +7,7 @@ import { Outbox, readQueues, type QueuedMessage } from './outbox'
 import { RpcClient } from './rpc-client'
 import { shareTurn, withSpeed } from './turn-updates'
 import { notificationRoute, notificationText, type TaskNotification } from './notification'
+import { beginCreateIntent, completeCreateIntent, createIntentFingerprint } from './create-intent'
 export type { QueuedMessage } from './outbox'
 
 type Route = { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string } | { view: 'ab'; id: string }
@@ -655,7 +656,7 @@ export async function startThread(text: string, images: Attachment[]) {
     toast('ワークスペースを選択してください', 'error')
     return false
   }
-  const result = await act<{ thread: ThreadSummary }>('thread.create', {
+  const params = {
     workspace: draft.workspace,
     model: draft.model,
     effort: draft.effort,
@@ -663,8 +664,20 @@ export async function startThread(text: string, images: Attachment[]) {
     toolMode: draft.toolMode,
     text,
     images: wire(images),
-  })
+  }
+  let intent: ReturnType<typeof beginCreateIntent>
+  try {
+    intent = beginCreateIntent(createIntentFingerprint(params))
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error), 'error')
+    return false
+  }
+  const result = await act<{ thread: ThreadSummary }>('thread.create', { ...params, createId: intent.id })
   if (!result) return false
+  try { completeCreateIntent(intent.id) } catch (error) {
+    // The server receipt still prevents a duplicate if storage cannot be cleared.
+    toast(error instanceof Error ? error.message : String(error), 'error')
+  }
   upsertThread(result.thread)
   setState((current) => ({ turns: { ...current.turns, [result.thread.id]: current.turns[result.thread.id] ?? [] }, draft: { ...current.draft, toolMode: 'native' } }))
   navigate({ view: 'thread', id: result.thread.id })

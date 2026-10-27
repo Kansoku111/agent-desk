@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import fs from 'node:fs/promises'
 import YAML from 'yaml'
 import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import { patchPiAiSource, RETRYABLE_KEY, retryableCheck, replayGuard } from '../server/retry-patch.js'
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry'
 import { applyCatalogAdditions, configuredModelCatalog, shippedCatalog } from '../server/model-catalog.js'
@@ -36,9 +37,11 @@ async function classify() {
   const source = patchPiAiSource(await fs.readFile(require.resolve('@deepseek-ai/dsh-llm-pi-ai'), 'utf8'))
   const start = source.indexOf('function classifyPiAiError(message) {')
   const end = source.indexOf('\n}', start)
-  return new Function(`const isQuotaExceededError = () => false; const QUOTA_EXCEEDED_CODE = 'QUOTA'; ${source.slice(start, end + 2)} return classifyPiAiError`)()
+  // dsh's own quota rule, as the installed dsh judges an exhausted quota.
+  const dshLlm = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-llm')).href)
+  return new Function('isQuotaExceededError', 'QUOTA_EXCEEDED_CODE', `${source.slice(start, end + 2)} return classifyPiAiError`)(dshLlm.isQuotaExceededError, dshLlm.QUOTA_EXCEEDED_CODE)
 }
-test('DSH retry policy restores eight retries while usage/auth/4xx stay terminal before transient rules', async () => {
+test('DSH retry policy restores eight retries while usage/auth/4xx stay terminal and a rate limit is retried', async () => {
   globalThis[Symbol.for(RETRYABLE_KEY)] = retryableCheck(isRetryableAssistantError)
   try {
     const classifier = await classify()
@@ -46,7 +49,9 @@ test('DSH retry policy restores eight retries while usage/auth/4xx stay terminal
     assert.equal(profile.retryPolicy.maxRetries, 8)
     for (const text of ['503 subscription_sharing_usage_unavailable network timeout', '429 subscription_sharing_usage_limit_exceeded', 'response.failed subscription_sharing_usage_limit_exceeded', 'The ChatGPT user reached their Subscription Sharing usage limit']) assert.equal(classifier(text), 'PI_AI_ERROR', text)
     for (const text of ['401 Unauthorized', '403 forbidden']) assert.equal(classifier(text), 'AUTH', text)
-    for (const text of ['400 invalid request', '404 not found', '429 rate limit']) assert.equal(classifier(text), 'INVALID_REQUEST', text)
+    for (const text of ['400 invalid request', '404 not found']) assert.equal(classifier(text), 'INVALID_REQUEST', text)
+    // A rate limit is dsh's transient class, so the request is sent again.
+    assert.equal(classifier('429 rate limit'), 'RATE_LIMIT')
     assert.equal(classifier('503 server unavailable'), 'SERVER')
     assert.equal(classifier('network fetch failed'), 'TRANSPORT')
     assert.equal(classifier('SIWC stream did not complete (interrupted)'), 'TRANSPORT')

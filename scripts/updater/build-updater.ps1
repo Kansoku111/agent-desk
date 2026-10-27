@@ -22,7 +22,7 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ('AgentDeskUpdaterBuild-' + [Guid]:
 $stage = Join-Path $work 'payload'
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 try {
-  foreach ($name in 'assets', 'scripts', 'server', 'web', 'AgentDesk.cmd', 'README.md', 'package.json', 'package-lock.json') {
+  foreach ($name in 'assets', 'scripts', 'server', 'shared', 'web', 'AgentDesk.cmd', 'README.md', 'package.json', 'package-lock.json') {
     Copy-Item -LiteralPath (Join-Path $root $name) -Destination (Join-Path $stage $name) -Recurse -Force
   }
   # Licence and docs: skipped when an older checkout does not have them yet.

@@ -91,7 +91,7 @@ export async function claimDataFolder({ paths, serverInfoFile, codeStamp, openWi
    * task running, then lets the normal takeover replace it. A launch used to
    * give up when the instance was busy, so with tasks always running the new
    * code never took over. Returns the idle instance, or null when it went away
-   * or something else replaced it (then this launch has nothing to do).
+   * or something else replaced it; the caller then re-checks through the lock.
    */
   async function waitToReplace(running) {
     fs.writeFileSync(successorFile, JSON.stringify({ pid: process.pid, codeStamp }))
@@ -150,10 +150,10 @@ export async function claimDataFolder({ paths, serverInfoFile, codeStamp, openWi
       log('an instance running older code is busy; replacing it once its tasks finish')
       waited = true
       running = await waitToReplace(running)
-      if (!running) {
-        log('the older instance went away or was replaced; nothing to do')
-        process.exit(0)
-      }
+      // Gone, or another launch of this code already took over while waiting.
+      // Do not decide here: fall through to the data lock, which admits one
+      // writer and makes this launch re-check (and join) any replacement.
+      if (!running) log('the older instance went away or was replaced; re-checking')
     }
     releaseDataLock = await tryAcquireDataLock(paths.home)
     if (!releaseDataLock) {

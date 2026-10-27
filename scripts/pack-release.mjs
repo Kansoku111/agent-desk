@@ -28,7 +28,7 @@ if (!fs.existsSync(path.join(root, 'web', 'dist', 'index.html'))) fail('web/dist
 
 // What an install holds, as the updater (scripts/updater) also ships it.
 const ENTRIES = [
-  'assets', 'docs', 'scripts', 'server', 'web',
+  'assets', 'docs', 'scripts', 'server', 'shared', 'web',
   'AgentDesk.cmd', 'CHANGELOG.md', 'LICENSE', 'README.md', 'README.en.md', 'THIRD_PARTY_NOTICES.md',
   'package.json', 'package-lock.json',
 ]

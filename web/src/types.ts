@@ -577,7 +577,7 @@ export interface AppState {
   remoteAccess: RemoteAccessState
 }
 
-/** Tokens summed over many responses; `cost` (USD) only for per-token billed models. */
+/** Tokens summed over many responses; `cost` (USD) only for per-token billed models; `unpriced` counts billed responses with no known price. */
 export interface UsageTotals {
   requests: number
   input: number
@@ -586,6 +586,7 @@ export interface UsageTotals {
   cacheWrite: number
   reasoning: number
   cost: number | null
+  unpriced: number
 }
 
 /** Usage estimated from dsh's logs, across every task. Days are local. */
@@ -596,7 +597,7 @@ export interface LocalUsage {
   since: string | null
   providers: Record<string, { today: UsageTotals; month: UsageTotals; all: UsageTotals }>
   models: { model: string; month: UsageTotals; all: UsageTotals }[]
-  daily: { day: string; cost: number; tokens: number }[]
+  daily: { day: string; cost: number; tokens: number; unpriced: number }[]
   updatedAt: number
 }
 

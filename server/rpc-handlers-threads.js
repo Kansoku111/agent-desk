@@ -1,6 +1,6 @@
 // RPC handlers for thread tasks (see index.js): create, send, steer, update and
 // remove, checkpoints, permission answers, subagents, and message attachments.
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { IMAGE_TYPES, isImageFile, isOtherFile, MAX_ATTACHMENT_BYTES, otherFileId } from './attachments.js'
@@ -26,13 +26,30 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
       return { subagents: await subagents.list(thread.id, thread.sessionId) }
     },
 
-    'thread.create': async ({ workspace, model, effort, permissionMode, toolMode, text, images }) => {
-      const thread = await threads.create({ workspace, model, effort, permissionMode, toolMode })
-      try {
-        await threads.send(thread.id, { text: text ?? '', images: await saveImages(images) })
-      } catch (error) {
-        await threads.remove(thread.id)
-        throw error
+    'thread.create': async ({ workspace, model, effort, permissionMode, toolMode, text, images, createId }) => {
+      const options = { workspace, model, effort, permissionMode, toolMode }
+      let thread
+      if (createId !== undefined) {
+        const message = { text: text ?? '', images: await saveImages(images) }
+        const fingerprint = createHash('sha256').update(JSON.stringify({
+          workspace: path.resolve(workspace),
+          model: model ?? null,
+          effort: effort ?? '',
+          permissionMode: permissionMode ?? 'workspace-write',
+          toolMode: toolMode ?? 'native',
+          ...message,
+        })).digest('hex')
+        const result = await threads.createWithFirstMessage({ createId, payloadHash: fingerprint, options, message })
+        thread = result.thread
+      } else {
+        thread = await threads.create(options)
+        try {
+          await threads.send(thread.id, { text: text ?? '', images: await saveImages(images) })
+        } catch (error) {
+          await threads.remove(thread.id)
+          throw error
+        }
+        thread = threads.summary(threads.threads.get(thread.id))
       }
       try {
         await mutateSettings(candidate => {

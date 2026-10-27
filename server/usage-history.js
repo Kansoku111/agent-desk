@@ -25,16 +25,17 @@ export function localDay(time) {
 }
 
 /**
- * Billing policy and metered rates invalidate cached costs; point-only rates
- * do not. Fast-mode periods only
+ * Billing policy, the unpriced count and metered rates invalidate cached costs;
+ * point-only rates do not. Fast-mode periods only
  * grow, and a log is repriced whenever it changes, so they need not count.
  */
 export function pricingSignature(pricing) {
   const entries = [...pricing.entries()].filter(([key]) => isBilledModel(key)).sort(([a], [b]) => a.localeCompare(b))
-  return createHash('sha256').update(JSON.stringify({ billing: 'metered-only', rates: entries })).digest('hex').slice(0, 16)
+  return createHash('sha256').update(JSON.stringify({ billing: 'metered-only', unpriced: 'counted', rates: entries })).digest('hex').slice(0, 16)
 }
 
-const emptyTotals = () => ({ requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: null })
+// `unpriced` counts billed responses whose price is unknown; `cost` sums only the priced ones.
+const emptyTotals = () => ({ requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: null, unpriced: 0 })
 
 function addTotals(into, from) {
   into.requests += from.requests
@@ -44,6 +45,7 @@ function addTotals(into, from) {
   into.cacheWrite += from.cacheWrite
   into.reasoning += from.reasoning
   if (from.cost !== null) into.cost = (into.cost ?? 0) + from.cost
+  into.unpriced = (into.unpriced ?? 0) + (from.unpriced ?? 0)
   return into
 }
 
@@ -68,6 +70,7 @@ function addResponses(days, events, pricing) {
     const model = source.provider && source.model ? `${source.provider}/${source.model}` : 'unknown'
     const day = (days[localDay(event.time)] ??= {})
     const totals = (day[model] ??= emptyTotals())
+    const price = priceResponse(pricing, model, usage, event.time)
     addTotals(totals, {
       requests: 1,
       input: usage.inputTokens ?? 0,
@@ -75,7 +78,8 @@ function addResponses(days, events, pricing) {
       cacheRead: usage.cacheReadTokens ?? 0,
       cacheWrite: usage.cacheWriteTokens ?? 0,
       reasoning: usage.reasoningTokens ?? 0,
-      cost: priceResponse(pricing, model, usage, event.time),
+      cost: price,
+      unpriced: price === null && isBilledModel(model) ? 1 : 0,
     })
   }
   return added
@@ -116,8 +120,9 @@ export function summarizeHistory(files, now = Date.now()) {
           if (day === today && scope.today) addTotals(scope.today, totals)
         }
         if (day >= firstDaily) {
-          const point = daily.get(day) ?? { day, cost: 0, tokens: 0 }
+          const point = daily.get(day) ?? { day, cost: 0, tokens: 0, unpriced: 0 }
           point.cost += totals.cost ?? 0
+          point.unpriced += totals.unpriced ?? 0
           point.tokens += totals.input + totals.output + totals.cacheRead + totals.cacheWrite
           daily.set(day, point)
         }
@@ -127,7 +132,7 @@ export function summarizeHistory(files, now = Date.now()) {
   const days = []
   for (let index = DAILY_DAYS - 1; index >= 0; index -= 1) {
     const day = dayAgo(index)
-    if (!days.some((point) => point.day === day)) days.push(daily.get(day) ?? { day, cost: 0, tokens: 0 })
+    if (!days.some((point) => point.day === day)) days.push(daily.get(day) ?? { day, cost: 0, tokens: 0, unpriced: 0 })
   }
   const weight = (totals) => totals.cost ?? 0
   const tokens = (totals) => totals.input + totals.output + totals.cacheRead + totals.cacheWrite
@@ -169,7 +174,11 @@ export class UsageHistory extends EventEmitter {
     for (const entry of Object.values(this.cache.files)) {
       for (const days of [entry.days, entry.base]) {
         for (const models of Object.values(days ?? {})) {
-          for (const [model, totals] of Object.entries(models)) if (!isBilledModel(model)) totals.cost = null
+          for (const [model, totals] of Object.entries(models)) {
+            if (!isBilledModel(model)) totals.cost = null
+            // Rows cached before the unpriced count: a billed row without a cost had no priced response.
+            totals.unpriced ??= isBilledModel(model) && totals.cost === null ? totals.requests : 0
+          }
         }
       }
     }

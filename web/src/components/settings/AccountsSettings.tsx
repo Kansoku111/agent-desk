@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw } from 'lucide-react'
 import { act, openExternal, request, toast, useStore } from '../../store'
 import { ChatGptConnections } from './ChatGptConnections'
+import { selectedWorkspace } from '../../workspace-choice'
 
 function ChatGptCard() { return <ChatGptConnections /> }
 
@@ -14,7 +15,8 @@ function ClaudeWorkspace({ current, choices, onDone }: {
   choices: WorkspaceOption[] | null
   onDone: () => void
 }) {
-  const [value, setValue] = useState(current ?? choices?.[0]?.id ?? '')
+  const [picked, setPicked] = useState<string | null>(null)
+  const value = selectedWorkspace(picked, current, choices)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const apply = async (workspaceId: string | null) => {
@@ -40,14 +42,14 @@ function ClaudeWorkspace({ current, choices, onDone }: {
       >
         {choices?.length
           ? (
-            <select value={value} onChange={(event) => setValue(event.target.value)} aria-label="Claude のワークスペース">
+            <select value={value} onChange={(event) => setPicked(event.target.value)} aria-label="Claude のワークスペース">
               {choices.map((option) => (
                 <option key={option.id} value={option.id}>{option.name === option.id ? option.id : `${option.name}（${option.id}）`}</option>
               ))}
             </select>
           )
           : (
-            <input value={value} onChange={(event) => setValue(event.target.value)} placeholder="wrkspc_…" aria-label="Claude のワークスペース ID" />
+            <input value={value} onChange={(event) => setPicked(event.target.value)} placeholder="wrkspc_…" aria-label="Claude のワークスペース ID" />
           )}
         <button type="submit" className="button primary" disabled={!value.trim() || busy}>
           {busy && <Loader2 size={14} className="spin" />} 設定

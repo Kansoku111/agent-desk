@@ -52,6 +52,8 @@ export class ThreadManager extends EventEmitter {
     this.turns = new Map()
     this.turnLoads = new Map()
     this.receipts = new Map()
+    this.createReceipts = new Map()
+    this.createFlights = new Map()
     this.requests = new Map()
     this.removing = new Map()
     this.indexRemovals = new Set()
@@ -79,13 +81,25 @@ export class ThreadManager extends EventEmitter {
       this.threads.set(thread.id, thread)
       if (thread.sessionId) this.sessionIndex.set(thread.sessionId, thread.id)
     }
+    const createReceipts = index.createReceipts ?? []
+    if (!Array.isArray(createReceipts)) throw new Error('初回作成の受領記録が壊れています')
+    for (const entry of createReceipts) {
+      if (!entry || !validateMessageId(entry.createId) || typeof entry.payloadHash !== 'string'
+        || !/^[a-f0-9]{64}$/.test(entry.payloadHash) || typeof entry.threadId !== 'string'
+        || typeof entry.deleted !== 'boolean' || this.createReceipts.has(entry.createId)) {
+        throw new Error('初回作成の受領記録が壊れています')
+      }
+      if (!entry.deleted && !this.threads.has(entry.threadId)) throw new Error('初回作成の受領先タスクが見つかりません')
+      this.createReceipts.set(entry.createId, entry)
+    }
   }
 
   #saveIndex() {
     const threads = [...this.threads.values()]
       .filter((thread) => !this.indexRemovals.has(thread.id))
       .map(({ status, pendingApproval, ...stored }) => stored)
-    this.indexWriter.schedule({ version: 1, threads })
+    const createReceipts = [...this.createReceipts.values()]
+    this.indexWriter.schedule({ version: 1, threads, ...(createReceipts.length ? { createReceipts } : {}) })
   }
 
   #turnFile(threadId) {
@@ -268,13 +282,83 @@ export class ThreadManager extends EventEmitter {
 
   // ---------------------------------------------------------------- commands
 
+  /**
+   * Creates and sends a new-thread message once per durable createId. The
+   * promise covers reservation, admission and failure cleanup so a parallel
+   * handler can never remove another handler's accepted thread.
+   */
+  createWithFirstMessage({ createId, payloadHash, options, message }) {
+    const id = validateMessageId(createId)
+    if (!id) return Promise.reject(new Error('createId が必要です'))
+    if (typeof payloadHash !== 'string' || !/^[a-f0-9]{64}$/.test(payloadHash)) return Promise.reject(new Error('初回作成のfingerprintが不正です'))
+    const pending = this.createFlights.get(id)
+    if (pending) {
+      if (pending.payloadHash !== payloadHash) return Promise.reject(new Error('同じ初回作成キーに異なる内容は使えません'))
+      return pending.promise
+    }
+    const promise = Promise.resolve().then(() => this.#createWithFirstMessage(id, payloadHash, options, message))
+    this.createFlights.set(id, { payloadHash, promise })
+    void promise.finally(() => {
+      if (this.createFlights.get(id)?.promise === promise) this.createFlights.delete(id)
+    }).catch(() => {})
+    return promise
+  }
+
+  async #createWithFirstMessage(createId, payloadHash, options, message) {
+    let thread
+    const known = this.createReceipts.get(createId)
+    if (known) {
+      if (known.payloadHash !== payloadHash) throw new Error('同じ初回作成キーに異なる内容は使えません')
+      if (known.deleted) throw new Error('作成済みタスクは削除済みです')
+      thread = this.threads.get(known.threadId)
+      if (!thread) throw new Error('作成済みタスクは削除済みです')
+    } else {
+      const created = await this.create({ ...options, createReceipt: { createId, payloadHash } })
+      thread = this.threads.get(created.id)
+    }
+    return this.#sendFirstMessage(thread, createId, message)
+  }
+
+  async #sendFirstMessage(thread, createId, message) {
+    try {
+      const receipt = await this.send(thread.id, { ...message, messageId: createId })
+      if (receipt?.status !== 'accepted') throw new Error('初回メッセージの受領結果を確認できません')
+      return { thread: this.summary(this.threads.get(thread.id)), receipt }
+    } catch (error) {
+      let receipt
+      try {
+        receipt = await this.messageStatus(thread.id, createId)
+      } catch {
+        // Never discard the reservation or retry under a new key when its
+        // durable delivery state cannot be read.
+        throw error
+      }
+      if (receipt.status === 'accepted') return { thread: this.summary(this.threads.get(thread.id)), receipt }
+      if (receipt.status === 'missing') {
+        try {
+          await this.remove(thread.id, { forgetCreateReceipt: true })
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], `${error.message}（作成タスクのcleanupにも失敗しました: ${cleanupError.message}）`)
+        }
+      }
+      throw error
+    }
+  }
+
   /** `team`: the agent team (teams.js) this task works for as a child, as { id, childId }. */
-  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'native', team = null, ab = null }) {
+  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'native', team = null, ab = null, createReceipt = null }) {
     if (this.stopping) throw new Error('アプリを終了しています')
     await assertDirectory(workspace)
     if (this.stopping) throw new Error('アプリを終了しています')
     if (!PERMISSION_MODES.includes(permissionMode)) throw new Error('不明な権限モードです')
     assertToolMode(toolMode)
+    if (createReceipt) {
+      const { createId, payloadHash } = createReceipt
+      if (!validateMessageId(createId) || typeof payloadHash !== 'string' || !/^[a-f0-9]{64}$/.test(payloadHash)) {
+        throw new Error('初回作成の受領キーが不正です')
+      }
+      if (this.createReceipts.has(createId)) throw new Error('初回作成の受領キーはすでに使われています')
+    }
     const now = Date.now()
     const thread = {
       id: randomUUID(),
@@ -298,7 +382,26 @@ export class ThreadManager extends EventEmitter {
     this.threads.set(thread.id, thread)
     this.turns.set(thread.id, [])
     this.receipts.set(thread.id, new Map())
+    if (createReceipt) this.createReceipts.set(createReceipt.createId, { ...createReceipt, threadId: thread.id, deleted: false })
     this.#saveIndex()
+    if (createReceipt) {
+      try {
+        // The durable key-to-thread mapping must exist before the first send.
+        await this.indexWriter.flush()
+      } catch (error) {
+        this.threads.delete(thread.id)
+        this.turns.delete(thread.id)
+        this.receipts.delete(thread.id)
+        this.createReceipts.delete(createReceipt.createId)
+        this.#saveIndex()
+        try {
+          await this.indexWriter.flush()
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], `${error.message}（初回作成記録の復元にも失敗しました: ${rollbackError.message}）`)
+        }
+        throw error
+      }
+    }
     this.#emitThread(thread)
     return this.summary(thread)
   }
@@ -418,17 +521,17 @@ export class ThreadManager extends EventEmitter {
     this.#learnOptions(thread, options)
   }
 
-  remove(threadId) {
+  remove(threadId, { forgetCreateReceipt = false } = {}) {
     if (this.removing.has(threadId)) return this.removing.get(threadId)
     const thread = this.#require(threadId)
     // Install the fence synchronously, before any admission can resume.
-    const removal = Promise.resolve().then(() => this.#remove(thread))
+    const removal = Promise.resolve().then(() => this.#remove(thread, { forgetCreateReceipt }))
     this.removing.set(threadId, removal)
     void removal.finally(() => this.removing.delete(threadId)).catch(() => {})
     return removal
   }
 
-  async #remove(thread) {
+  async #remove(thread, { forgetCreateReceipt = false } = {}) {
     const threadId = thread.id
     const active = this.active.get(threadId)
     await this.cancel(threadId)
@@ -443,12 +546,18 @@ export class ThreadManager extends EventEmitter {
     await this.turnWriters.get(threadId)?.flush().catch(() => {})
     // Stage the durable index without hiding the task from list()/hello yet.
     // A failed commit must never look like a deletion followed by resurrection.
+    const createReceipts = [...this.createReceipts.values()].filter((entry) => entry.threadId === threadId)
+    for (const entry of createReceipts) {
+      if (forgetCreateReceipt) this.createReceipts.delete(entry.createId)
+      else this.createReceipts.set(entry.createId, { ...entry, deleted: true })
+    }
     this.indexRemovals.add(threadId)
     try {
       this.#saveIndex()
       await this.indexWriter.flush()
     } catch (error) {
       this.indexRemovals.delete(threadId)
+      for (const entry of createReceipts) this.createReceipts.set(entry.createId, entry)
       this.#saveIndex()
       try {
         await this.indexWriter.flush()

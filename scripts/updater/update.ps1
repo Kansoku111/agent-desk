@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $Build = '__BUILD__'
 # The app's own folders, replaced as a whole; top-level files are overwritten.
 # Anything else in the install folder (node_modules, the user's own files) stays.
-$ManagedDirs = @('assets', 'scripts', 'server', 'web', 'docs')
+$ManagedDirs = @('assets', 'scripts', 'server', 'web', 'shared', 'docs')
 $ManagedFiles = @('AgentDesk.cmd', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.en.md', 'CHANGELOG.md', 'package.json', 'package-lock.json')
 $DshPackages = @('@deepseek-ai/dsh', '@deepseek-ai/dsh-atomic-write')
 

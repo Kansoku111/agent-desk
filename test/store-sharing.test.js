@@ -6,26 +6,39 @@ import { Outbox, readQueues } from '../web/src/outbox.ts'
 import { RpcClient } from '../web/src/rpc-client.ts'
 import { notificationRoute, notificationText } from '../web/src/notification.ts'
 import * as turnUpdates from '../web/src/turn-updates.ts'
+import * as createIntent from '../web/src/create-intent.ts'
 
 async function fixture() {
   const source = await fs.readFile(new URL('../web/src/store.ts', import.meta.url), 'utf8')
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
   const exports = {}
+  const values = new Map()
+  const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) }
+  const sent = []
+  let onSend
+  let socket
   const require = (name) => {
     if (name === 'react') return {}
     if (name === './outbox') return { Outbox, readQueues }
     if (name === './rpc-client') return { RpcClient }
     if (name === './turn-updates') return turnUpdates
     if (name === './notification') return { notificationRoute, notificationText }
+    if (name === './create-intent') return {
+      beginCreateIntent: (fingerprint) => createIntent.beginCreateIntent(fingerprint, storage),
+      completeCreateIntent: (id) => createIntent.completeCreateIntent(id, storage),
+      createIntentFingerprint: createIntent.createIntentFingerprint,
+    }
     throw new Error(`unexpected import: ${name}`)
   }
-  const storage = { getItem: () => null, setItem() {}, removeItem() {} }
-  let socket
   class WebSocket {
     static CLOSING = 2
     readyState = 1
     constructor() { socket = this }
-    send() {}
+    send(data) {
+      const request = JSON.parse(data)
+      sent.push(request)
+      onSend?.(request)
+    }
   }
   const notifications = []
   class Notification {
@@ -39,9 +52,11 @@ async function fixture() {
     storage, storage, { replaceState() {} }, window, document, WebSocket, Notification,
   )
   exports.connect()
+  socket.onopen()
   const frame = (value) => socket.onmessage({ data: JSON.stringify(value) })
-  frame({ event: 'hello', state: { app: { uiBuild: 'test' }, settings: {}, threads: [], terminals: [], teams: [] } })
-  return { store: exports, frame, document, notifications }
+  const hello = () => frame({ event: 'hello', state: { app: { uiBuild: 'test' }, settings: {}, threads: [], terminals: [], teams: [] } })
+  hello()
+  return { store: exports, frame, hello, document, notifications, sent, storage, getSocket: () => socket, setOnSend: (callback) => { onSend = callback } }
 }
 
 test('AB browser notifications open AB, and the visible AB view suppresses duplicate alerts', async () => {
@@ -134,3 +149,54 @@ for (const event of ['turn', 'agentTurn']) {
     assert.equal(current().items.length, 1)
   })
 }
+
+test('startThread retries a lost response with the same createId, then uses a fresh key for a new intent', async () => {
+  const { store, frame, hello, sent, storage, getSocket, setOnSend } = await fixture()
+  const draft = { workspace: 'C:/workspace', model: '[\"test\",\"model\"]', effort: '', permissionMode: 'workspace-write', toolMode: 'native' }
+  store.setState({ draft })
+  const accepted = new Map()
+  let createCalls = 0
+  setOnSend((request) => {
+    if (request.type === 'thread.get') {
+      frame({ id: request.id, ok: true, result: { thread: { id: request.threadId, workspace: draft.workspace }, turns: [] } })
+      return
+    }
+    if (request.type !== 'thread.create') return
+    let result = accepted.get(request.createId)
+    if (!result) {
+      result = { thread: { id: `created-${accepted.size + 1}`, workspace: draft.workspace, status: 'running', updatedAt: createCalls } }
+      accepted.set(request.createId, result)
+    }
+    createCalls++
+    if (createCalls > 1) frame({ id: request.id, ok: true, result })
+  })
+
+  const firstAttempt = store.startThread('same prompt', [])
+  const firstRequest = sent.find((request) => request.type === 'thread.create')
+  assert.ok(firstRequest?.createId)
+  const firstSocket = getSocket()
+  firstSocket.readyState = 3
+  await firstSocket.onclose()
+  assert.equal(await firstAttempt, false)
+
+  store.connect()
+  getSocket().onopen()
+  hello()
+  store.setState({ draft })
+  const retryAttempt = store.startThread('same prompt', [])
+  const createRequests = () => sent.filter((request) => request.type === 'thread.create')
+  assert.equal(createRequests().length, 2)
+  const retryRequest = createRequests()[1]
+  assert.equal(retryRequest.createId, firstRequest.createId)
+  assert.equal(await retryAttempt, true)
+  assert.equal(store.getState().route.id, accepted.get(firstRequest.createId).thread.id)
+  assert.equal(storage.getItem('agent-desk-pending-create-intents'), null)
+
+  store.setState({ route: { view: 'home' }, draft })
+  const newIntent = store.startThread('same prompt', [])
+  assert.equal(createRequests().length, 3)
+  const newRequest = createRequests()[2]
+  assert.notEqual(newRequest.createId, firstRequest.createId)
+  assert.equal(await newIntent, true)
+  assert.equal(createRequests().length, 3)
+})

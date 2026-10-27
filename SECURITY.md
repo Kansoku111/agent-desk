@@ -18,8 +18,8 @@ Please do not report security vulnerabilities in public issues or pull requests.
 
 ## 対象のバージョン / Supported versions
 
-最新の版だけを対象にします（現在は 0.1.0）。
-Only the latest release (currently 0.1.0) is supported.
+最新のリリース版だけを対象にします。
+Only the latest release is supported.
 
 ## セキュリティに関わる設計 / Security-relevant design
 
