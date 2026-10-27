@@ -5112,6 +5112,9 @@ button.team-node:disabled {
 .team-free-model-row { display: flex; align-items: end; gap: 6px; margin-top: 10px; }
 .team-free-model-row .ab-field { flex: 1; }
 .team-free-model-row .icon-button { flex: 0 0 auto; height: 34px; }
+.team-free-model-row .team-model-duplicate { width: 24px; height: 24px; margin-left: 4px; vertical-align: middle; }
+.team-free-model-row .team-model-duplicate:disabled { opacity: 0.4; cursor: default; }
+.team-free-model-row .team-model-duplicate:disabled:hover { background: transparent; color: var(--text-muted); }
 .team-free-models .team-warning { margin-top: 10px; }
 
 .claude-auth-consent > summary {

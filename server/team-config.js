@@ -129,10 +129,11 @@ export function mergeTeamConfig(current, patch) {
       if (!isRecord(entry) || !TEAM_PROVIDERS.includes(entry.provider)) throw new Error('子のモデルのプロバイダーが不正です')
       const model = choice(entry.model, entry.provider === 'claude' ? CLAUDE_MODEL : entry.provider === 'local' ? LOCAL_MODEL : DSH_MODEL, '子のモデル')
       if (!model) throw new Error('子のモデルを選んでください')
-      const key = JSON.stringify([entry.provider, model])
-      if (seen.has(key)) throw new Error('同じモデルは複数選べません')
+      const effort = choice(entry.effort ?? null, EFFORT, '子の推論レベル')
+      const key = JSON.stringify([entry.provider, model, effort])
+      if (seen.has(key)) throw new Error('同じモデルと推論レベルは複数選べません')
       seen.add(key)
-      return { provider: entry.provider, model, effort: choice(entry.effort ?? null, EFFORT, '子の推論レベル') }
+      return { provider: entry.provider, model, effort }
     })
   }
   if (Object.hasOwn(patch, 'toolMode')) {

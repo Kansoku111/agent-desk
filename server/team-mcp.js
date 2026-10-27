@@ -34,7 +34,7 @@ const TOOLS = [
   {
     name: 'spawn',
     description: 'Start a child agent on one part of the work. It runs as its own session in the same folder and reports back to this conversation by itself when it is done (you do not need to check on it). '
-      + 'Omit model, tier and provider to use the selected models evenly. Specify them only when the user, policy or playbook asks. Start all the parallel parts at once, then end your turn.',
+      + 'Omit model, tier, provider and effort to use the selected choices evenly. Specify them only when the user, policy or playbook asks. Start all the parallel parts at once, then end your turn.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -42,6 +42,7 @@ const TOOLS = [
         task: { type: 'string', description: 'The full task, readable on its own: goal, exact scope (which files or items), what done means, where results go, what to report. Put long material in a file and give its path.' },
         tier: { type: 'string', enum: ['low', 'mid'], description: 'Optional tier in low/mid mode. Omit for even distribution unless the user, policy or playbook specifies one.' },
         model: { type: 'string', description: 'Optional model ID from status. Omit for even distribution unless the user, policy or playbook specifies one. Specify provider too if the ID is ambiguous.' },
+        effort: { type: ['string', 'null'], description: 'Optional reasoning level from status. Specify it when requested; null selects a choice using its default level. Omit for even distribution among matching choices.' },
         provider: { type: 'string', enum: ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'local'], description:'gpt: GPT on the ChatGPT subscription. claude: Claude Code using its own user-confirmed subscription/API/cloud authentication. claudeApi: Claude through dsh on the user\'s Anthropic API key (metered billing; credits depend on their plan). deepseek: DeepSeek on the user\'s DeepSeek API key (billed per token). opencodeGo: open models on the user\'s OpenCode Go subscription (usage limits per 5 hours, week and month). local: a model on the user\'s own model server. Use only the ones `status` lists as available; omit for even distribution unless explicitly requested.' },
         name: { type: 'string', description: 'Optional short unique name for the child (e.g. "A" or "効果音"). Default: 子1, 子2, ...' },
         tools: { type: 'boolean', description: 'Only when your instructions say children start without the browser, desktop-control and image-generation tools: true gives this child those tools (a Claude child its MCP servers).' },
@@ -125,6 +126,7 @@ if (process.env.AGENT_DESK_EXECUTION === '1') {
   spawn.inputSchema.required.push('tier')
   spawn.inputSchema.properties.provider.description = 'Use an available low-tier provider from status; specify it when more than one is enabled.'
   delete spawn.inputSchema.properties.model
+  delete spawn.inputSchema.properties.effort
   Object.assign(spawn.inputSchema.properties, {
     mode: { type: 'string', enum: ['write', 'research'], description: 'write (default): one writer through judgment; research: read-only investigation that may run in parallel, with checks:[] and no command execution for Claude Code.' },
     criteria: { type: 'string', description: 'Explicit acceptance criteria, including scope, constraints and what you will inspect yourself before acceptance. Define them before delegating; tests alone do not prove the request is satisfied.' },

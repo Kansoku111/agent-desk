@@ -48,7 +48,7 @@ Object.assign(window, { WebSocket: Socket })
 sessionStorage.setItem('agent-desk-token', 'fixture')
 const store = await import('../../web/src/store')
 const { AbStartDialog, AbView } = await import('../../web/src/components/Ab')
-const { TeamStartDialog } = await import('../../web/src/components/TeamSettings')
+const { TeamStartDialog, TeamConfigDialog } = await import('../../web/src/components/TeamSettings')
 const { TeamPanel } = await import('../../web/src/components/TeamPanel')
 const { ExecutionStartDialog } = await import('../../web/src/components/ExecutionSettings')
 const server: any = { app: { remote: false, myPc: workspace }, openTargets: {}, settings: { agentTeams: teamConfig, modelVisibility: {}, projectNames: {} },
@@ -68,6 +68,7 @@ let generation = 0
 const render = async (kind: string) => {
   const key = ++generation
   root.render(kind === 'ab-start' ? <AbStartDialog key={key} workspace={workspace} /> : kind === 'tm-start' ? <TeamStartDialog key={key} workspace={workspace} />
+    : kind === 'tm-config' ? <TeamConfigDialog key={key} team={team} onClose={() => {}} />
     : kind === 'eco-start' ? <ExecutionStartDialog key={key} workspace={workspace} /> : kind === 'ab' ? <AbView key={key} id="run" /> : <TeamFixture key={key} eco={kind === 'eco'} />)
   await tick()
 }
@@ -75,6 +76,50 @@ const toggle = () => document.querySelector<HTMLButtonElement>('button[aria-labe
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.trim() === label)!
 const api = {
   requests, render,
+  async setupTeamFree() {
+    Object.assign(teamConfig, { defaultModelMode: 'free', modelMode: 'free', freeModels: [{ provider: 'gpt', model: 'fixture', effort: 'medium' }] })
+    team.config = { ...teamConfig }
+    server.catalog.effortsByModel[model] = ['low', 'medium', 'high', 'max'].map((value) => ({ value, name: value }))
+    await render('tm-start')
+  },
+  async runTeamFree() {
+    await this.setupTeamFree()
+    const duplicate = (index: number) => document.querySelector<HTMLButtonElement>(`button[aria-label="モデル ${index}を別の推論レベルで追加"]`)!
+    const effort = (index: number) => document.querySelector<HTMLButtonElement>(`button[aria-label^="モデル ${index}の推論レベル:"]`)!
+    check(duplicate(1)?.parentElement?.textContent?.trim().startsWith('モデル 1'), 'plus follows the model label')
+    duplicate(1).click(); await tick()
+    duplicate(2).click(); await tick()
+    check(effort(1).textContent?.includes('中') && effort(2).textContent?.includes('高') && effort(3).textContent?.includes('最大'), 'separate medium/high/max choices')
+    effort(1).click(); await tick()
+    const options = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    check(!options.some((item) => ['高', '最大'].includes(item.textContent?.trim() ?? '')), 'other selected efforts are not offered')
+    options.find((item) => item.textContent?.trim() === '低')!.click(); await tick()
+    check(document.activeElement === effort(1), 'focus returns to the effort selector')
+    button('始める').click(); await tick(); await tick()
+    const created = requests.filter((item) => item.type === 'team.create').at(-1)?.choices.freeModels
+    check(JSON.stringify(created?.map((entry: any) => entry.effort)) === JSON.stringify(['low', 'high', 'max']), 'start sends each level')
+    team.config = { ...teamConfig, freeModels: created }
+    await render('tm-config')
+    check(effort(2).textContent?.includes('高') && effort(3).textContent?.includes('最大'), 'running team retains the levels')
+    duplicate(1).click(); await tick()
+    check(effort(2).textContent?.includes('中') && duplicate(1).disabled, 'remaining level is added and plus is disabled')
+    button('保存').click(); await tick(); await tick()
+    const saved = requests.filter((item) => item.type === 'team.update').at(-1)?.patch.freeModels
+    check(JSON.stringify(saved?.map((entry: any) => entry.effort)) === JSON.stringify(['low', 'medium', 'high', 'max']), 'update sends each level')
+    await render('tm-config')
+    check(document.querySelectorAll('.team-free-model-row').length === 4, 'saved variants reopen')
+    effort(1).click(); await tick()
+    const defaultChoice = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.trim() === '既定')!
+    defaultChoice.click(); await tick()
+    duplicate(1).click(); await tick()
+    check(effort(1).textContent?.includes('既定') && effort(2).textContent?.includes('低'), 'default remains visible when all explicit levels are used')
+    const rect = duplicate(1).getBoundingClientRect()
+    check(rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth, 'plus fits viewport')
+    button('モデルを選択').click(); await tick()
+    document.querySelector<HTMLButtonElement>('[role="menuitemcheckbox"][aria-checked="true"]')!.click(); await tick()
+    check(document.querySelectorAll('.team-free-model-row').length === 0, 'unchecking removes all variants')
+    return ['label / distinct efforts / focus', 'start and update payload / reopen', 'viewport / uncheck all variants']
+  },
   async run() {
     const passed: string[] = []
     for (const kind of ['ab-start', 'tm-start', 'eco-start']) {

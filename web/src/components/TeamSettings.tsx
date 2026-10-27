@@ -218,7 +218,8 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
   const models = config.freeModels ?? []
   const groups = teamModelGroups(server)
   // Keep previously selected, now unavailable models visible and removable.
-  const missing = models.filter((entry) => !groups.some((group) => group.models.some((model) => model.value === modelValue(entry))))
+  const missing = Array.from(new Map(models.filter((entry) => !groups.some((group) => group.models.some((model) => model.value === modelValue(entry))))
+    .map((entry) => [modelValue(entry), entry])).values())
   if (missing.length) groups.unshift({ id: 'current', heading: '選択済み', note: '', models: missing.map((entry) => ({
     value: modelValue(entry), name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === modelValue(entry))?.name ?? entry.model,
   })) })
@@ -248,20 +249,33 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
     </div>
     {models.map((entry, index) => {
       const value = modelValue(entry)
-      const used = new Set(models.filter((_, i) => i !== index).map(modelValue))
+      const used = new Set(models.filter((other, i) => i !== index && modelValue(other) !== value).map(modelValue))
       const choices = groups.map((group) => ({ ...group, models: group.models.filter((model) => !used.has(model.value)) })).filter((group) => group.models.length)
       if (!choices.some((group) => group.models.some((model) => model.value === value))) {
         choices.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === value)?.name ?? entry.model }] })
       }
       const levels = entry.provider === 'claude' ? claudeEfforts(server, entry.model) : dshEfforts(server, entry.model, entry.provider)
-      return <div className="team-free-model-row" key={value}>
-        <ModelField label={`モデル ${index + 1}`} value={value} groups={choices} disabled={false} effort={entry.effort ?? ''} efforts={levels} allowDefaultEffort
+      const otherEfforts = new Set(models.filter((other, i) => i !== index && modelValue(other) === value).map((other) => other.effort ?? null))
+      const currentLevel = levels.indexOf(entry.effort ?? '')
+      const nextEffort = [...levels.slice(currentLevel + 1), ...levels.slice(0, currentLevel + 1)]
+        .find((level) => level !== entry.effort && !otherEfforts.has(level))
+      const duplicate = <button type="button" className="icon-button team-model-duplicate"
+        title={models.length >= MAX_CHILDREN ? 'モデルは12個まで' : nextEffort ? '別の推論レベルで追加' : '追加できる推論レベルがありません'}
+        aria-label={`モデル ${index + 1}を別の推論レベルで追加`} disabled={models.length >= MAX_CHILDREN || !nextEffort}
+        onClick={() => {
+          if (nextEffort && models.length < MAX_CHILDREN) onChange({ freeModels: [...models.slice(0, index + 1), { ...entry, effort: nextEffort }, ...models.slice(index + 1)] })
+        }}><Plus size={14} /></button>
+      return <div className="team-free-model-row" key={`${value}:${index}`}>
+        <ModelField label={`モデル ${index + 1}`} labelAction={duplicate} value={value} groups={choices} disabled={false} effort={entry.effort ?? ''}
+          efforts={levels} unavailableEfforts={Array.from(otherEfforts, (level) => level ?? '')} allowDefaultEffort
           onChange={(next) => {
             if (next === value) return
             const chosen = pickerChoice(next)
             if (chosen && !used.has(next)) onChange({ freeModels: models.map((model, i) => i === index ? chosen : model) })
           }}
-          onEffort={(effort) => onChange({ freeModels: models.map((model, i) => i === index ? { ...model, effort: effort || null } : model) })} />
+          onEffort={(effort) => {
+            if (!otherEfforts.has(effort || null)) onChange({ freeModels: models.map((model, i) => i === index ? { ...model, effort: effort || null } : model) })
+          }} />
         <button type="button" className="icon-button" title="削除" aria-label={`モデル ${index + 1}を削除`}
           onClick={() => onChange({ freeModels: models.filter((_, i) => i !== index) })}><Trash2 size={15} /></button>
       </div>

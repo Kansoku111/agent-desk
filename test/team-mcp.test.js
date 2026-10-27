@@ -75,6 +75,8 @@ test('the team MCP server lists its tools and forwards calls with the team secre
     const spawn = listed.result.tools.find((tool) => tool.name === 'spawn')
     assert.deepEqual(spawn.inputSchema.required, ['title', 'task'])
     assert.equal(spawn.inputSchema.properties.model.type, 'string')
+    assert.deepEqual(spawn.inputSchema.properties.effort.type, ['string', 'null'])
+    assert.match(spawn.inputSchema.properties.effort.description, /null.*default/)
     assert.match(spawn.description, /evenly/)
 
     const status = await mcp.request('tools/call', { name: 'status', arguments: {} })
@@ -88,6 +90,24 @@ test('the team MCP server lists its tools and forwards calls with the team secre
     const unknown = await mcp.request('tools/call', { name: 'rm_rf', arguments: {} })
     assert.equal(unknown.error.code, -32602)
     assert.equal(desk.calls.length, 2)
+  } finally {
+    await mcp.close()
+    desk.close()
+  }
+})
+
+test('spawn forwards the requested reasoning level, including explicit default', async () => {
+  const desk = await fakeDesk(() => [200, { ok: true, text: 'started' }])
+  const mcp = startMcp(desk.url)
+  try {
+    for (const effort of ['high', null]) {
+      const args = { title: 'job', task: 'work', provider: 'gpt', model: 'gpt-6-luna', effort }
+      assert.equal((await mcp.request('tools/call', { name: 'spawn', arguments: args })).result.content[0].text, 'started')
+      assert.deepEqual(desk.calls.at(-1).args, args)
+    }
+    const args = { title: 'job', task: 'work' }
+    await mcp.request('tools/call', { name: 'spawn', arguments: args })
+    assert.deepEqual(desk.calls.at(-1).args, args)
   } finally {
     await mcp.close()
     desk.close()
@@ -125,6 +145,7 @@ test('EX MCP exposes required acceptance criteria, low tier and explicit abandon
     assert.deepEqual(spawn.inputSchema.properties.tier.enum, ['low'])
     assert.ok(spawn.inputSchema.required.includes('tier'))
     assert.equal(spawn.inputSchema.properties.model, undefined)
+    assert.equal(spawn.inputSchema.properties.effort, undefined)
     assert.deepEqual(spawn.inputSchema.properties.mode.enum, ['write', 'research'])
     const implement = result.tools.find((tool) => tool.name === 'implement')
     assert.deepEqual(implement.inputSchema.required, ['child', 'title', 'task', 'criteria', 'checks'])

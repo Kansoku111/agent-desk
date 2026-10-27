@@ -38,7 +38,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       : []),
     ...(execution
       ? ['Children use only tier "low".']
-      : ['By default omit model, tier and provider when calling spawn: Agent Desk uses the selected models evenly. If the user, the team policy or an applicable playbook specifies a model, tier or provider, pass the requested choice to spawn instead. Only the models listed below are available; use status for the current list.']),
+      : ['By default omit model, tier, provider and effort when calling spawn: Agent Desk uses the selected choices evenly. If the user, the team policy or an applicable playbook specifies a model, tier, provider or reasoning level, pass the requested choice to spawn instead. Only the models listed below are available; use status for the current list.']),
     ...tiers,
     `At most ${maxChildren} children can be open at once; \`status\` shows the team.`,
     '',
@@ -64,7 +64,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       ? [
         '',
         '## The user\'s policy for this team',
-        'The user wrote this for how you lead. Follow it: model, tier or provider choices here take precedence over the default even distribution, but do not make unavailable models available.',
+        'The user wrote this for how you lead. Follow it: model, tier, provider or reasoning level choices here take precedence over the default even distribution, but do not make unavailable choices available.',
         `<team_policy>\n${policy}\n</team_policy>`,
       ]
       : []),
@@ -148,8 +148,8 @@ export function modelName(child, models) {
 /** The providers and tiers the leader may use, for its instructions and `status`. */
 export function tierLines(config, models) {
   if (config.modelMode === 'free') {
-    return ['Free mode: choose only from these models; omit model and provider for even distribution.', ...config.freeModels.map(({ provider, model, effort }) =>
-      `- provider "${provider}", model "${model}": ${modelName({ provider, model }, models)}${effort ? `, effort ${effort}` : ""}.`)]
+    return ['Free mode: choose only from these choices; omit model, provider and effort for even distribution. Specify effort to select a reasoning level, or null for the default level.', ...config.freeModels.map(({ provider, model, effort }) =>
+      `- provider "${provider}", model "${model}": ${modelName({ provider, model }, models)}, effort ${JSON.stringify(effort ?? null)}.`)]
   }
   const lines = []
   for (const provider of TEAM_PROVIDERS) {

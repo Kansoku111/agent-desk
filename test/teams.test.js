@@ -2414,6 +2414,10 @@ test('free model settings validate the limit, uniqueness and provider-specific I
   assert.equal(config.freeModels.length, 12)
   assert.throws(() => mergeTeamConfig({}, { freeModels: [...twelve, { provider: 'gpt', model: 'extra' }] }), /12 個/)
   assert.throws(() => mergeTeamConfig({}, { freeModels: [twelve[0], twelve[0]] }), /同じモデル/)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'gpt', model: 'x' }, { provider: 'gpt', model: 'x', effort: null }] }), /同じモデル/)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'gpt', model: 'x', effort: 'low' }, { provider: 'gpt', model: 'x', effort: 'low' }] }), /同じモデル/)
+  const variants = [{ provider: 'gpt', model: 'x', effort: null }, { provider: 'gpt', model: 'x', effort: 'low' }, { provider: 'gpt', model: 'x', effort: 'high' }, { provider: 'local', model: 'x', effort: 'low' }]
+  assert.deepEqual(mergeTeamConfig({}, { freeModels: variants }).freeModels, variants)
   assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'gpt', model: 'bad model' }] }), /モデル/)
   assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'unknown', model: 'x' }] }), /プロバイダー/)
   assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'gpt', model: 'x', effort: '???' }] }), /推論/)
@@ -2443,6 +2447,106 @@ test('free mode balances concurrent spawns and honors explicit model choices', a
   await assert.rejects(tool('spawn', { title: 'bad', task: 'work', model: 'not-selected' }), /使えません/)
   await assert.rejects(tool('spawn', { title: 'bad', task: 'work', tier: 'low' }), /自由モード/)
   assert.equal(team.children.length, 7)
+})
+
+test('free mode balances every reasoning choice independently, including simultaneous spawns', async (t) => {
+  const freeModels = [
+    { provider: 'gpt', model: 'gpt-6-luna', effort: 'low' },
+    { provider: 'gpt', model: 'gpt-6-luna', effort: 'high' },
+    { provider: 'claude', model: 'sonnet', effort: null },
+  ]
+  const { team, tool, threads, agents, manager } = await setup(t, { defaultModelMode: 'free', freeModels, maxChildren: 12 })
+  await Promise.all(Array.from({ length: 6 }, (_, i) => tool('spawn', { title: `work ${i}`, task: 'work' })))
+  assert.deepEqual(team.children.map(({ provider, model, effort }) => ({ provider, model, effort })), [...freeModels, ...freeModels])
+  for (const child of team.children) {
+    if (child.kind === 'thread') assert.equal(threads.threads.get(child.taskId).effort, child.effort)
+    else assert.equal(agents.sessions.get(child.taskId).effort, child.effort)
+  }
+  const status = await tool('status')
+  assert.match(status, /model "gpt-6-luna": GPT-6 Luna, effort "low"/)
+  assert.match(status, /model "gpt-6-luna": GPT-6 Luna, effort "high"/)
+  assert.match(status, /model "sonnet": Claude Sonnet（最新）, effort null/)
+  assert.match(status, /GPT-6 Luna・gpt・effort low/)
+  assert.deepEqual(manager.summary(team).children.map((child) => child.effort), ['low', 'high', null, 'low', 'high', null])
+
+  // Closed children still count as uses of their exact choices.
+  await tool('close', { child: team.children[0].name })
+  await tool('spawn', { title: 'next', task: 'work' })
+  assert.equal(team.children.at(-1).effort, 'low')
+  await tool('spawn', { title: 'next again', task: 'work' })
+  assert.equal(team.children.at(-1).effort, 'high')
+})
+
+test('spawn selects an explicitly requested reasoning level without changing provider or model', async (t) => {
+  const freeModels = [
+    { provider: 'gpt', model: 'shared', effort: 'low' },
+    { provider: 'gpt', model: 'shared', effort: 'high' },
+    { provider: 'gpt', model: 'shared', effort: null },
+    { provider: 'local', model: 'shared', effort: 'high' },
+    { provider: 'claude', model: 'sonnet', effort: 'low' },
+    { provider: 'claude', model: 'sonnet', effort: 'high' },
+  ]
+  const { team, tool, threads, agents } = await setup(t, { defaultModelMode: 'free', freeModels, maxChildren: 12 })
+  const spawn = (args) => tool('spawn', { title: 'job', task: 'work', ...args })
+  await spawn({ provider: 'gpt', model: 'shared', effort: 'high' })
+  await spawn({ provider: 'gpt', model: 'shared', effort: null })
+  await spawn({ provider: 'gpt', model: 'shared' }) // Effort omitted: least-used choice is low.
+  await spawn({ model: 'shared', effort: 'low' }) // Only GPT has this level.
+  await spawn({ provider: 'claude', model: 'sonnet', effort: 'high' })
+  assert.deepEqual(team.children.map(({ provider, effort }) => [provider, effort]), [['gpt', 'high'], ['gpt', null], ['gpt', 'low'], ['gpt', 'low'], ['claude', 'high']])
+  assert.deepEqual(team.children.slice(0, 4).map((child) => threads.threads.get(child.taskId).effort), ['high', '', 'low', 'low'])
+  assert.equal(agents.sessions.get(team.children[4].taskId).effort, 'high')
+  assert.match(await tool('status'), /sonnet.*effort "low"[\s\S]*sonnet.*effort "high"/)
+  await assert.rejects(spawn({ model: 'shared' }), /provider も指定/)
+  await assert.rejects(spawn({ model: 'shared', effort: 'high' }), /provider も指定/)
+  await assert.rejects(spawn({ provider: 'gpt', model: 'shared', effort: 'medium' }), /使えません/)
+  await assert.rejects(spawn({ provider: 'local', model: 'shared', effort: null }), /使えません/)
+  await assert.rejects(spawn({ effort: 0 }), /effort/)
+  await assert.rejects(spawn({ effort: '' }), /effort/)
+  assert.equal(team.children.length, 5)
+
+  // A fresh conversation stays on the originally selected level.
+  const original = team.children[0]
+  threads.threads.get(original.taskId).status = 'idle'
+  await tool('send', { child: original.name, message: 'start over', fresh: true })
+  assert.equal(threads.threads.get(original.taskId).model, '["openai-codex","shared"]')
+  assert.equal(threads.threads.get(original.taskId).effort, 'high')
+})
+
+test('tier mode also respects a requested effort without overriding a configured slot', async (t) => {
+  const f = await setup(t, { claude: { enabled: false }, gpt: { enabled: true, low: { model: 'gpt-6-luna', effort: 'low' }, mid: { model: 'gpt-6-luna', effort: 'high' } } })
+  await assert.rejects(f.tool('spawn', { title: 'job', task: 'work', provider: 'gpt', tier: 'low', effort: 'high' }), /推論レベル/)
+  await f.tool('spawn', { title: 'job', task: 'work', provider: 'gpt', model: 'gpt-6-luna', effort: 'high' })
+  assert.equal(f.team.children[0].tier, 'mid')
+  assert.equal(f.threads.threads.get(f.team.children[0].taskId).effort, 'high')
+})
+
+test('free mode instructions and configuration notices show changed reasoning levels', async (t) => {
+  const freeModels = [
+    { provider: 'gpt', model: 'gpt-6-luna', effort: null },
+    { provider: 'gpt', model: 'gpt-6-luna', effort: 'high' },
+  ]
+  const { team, manager, terminals, leader, tool } = await setup(t, { defaultModelMode: 'free', freeModels })
+  const args = terminals.records.get(leader).launch.args
+  const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
+  assert.match(prompt, /omit model, tier, provider and effort/)
+  assert.match(prompt, /reasoning level.*pass the requested choice to spawn/)
+  assert.match(prompt, /effort null/)
+  assert.match(prompt, /effort "high"/)
+
+  await tool('spawn', { title: 'existing', task: 'work', model: 'gpt-6-luna', provider: 'gpt', effort: 'high' })
+  terminals.set(leader, { activity: 'running' }) // Keep notices in the queue for inspection.
+  manager.updateConfig(team.id, { freeModels: [freeModels[0], { ...freeModels[1], effort: 'medium' }] })
+  const notice = team.queue.find((item) => item.kind === 'notice')?.text
+  assert.match(notice, /effort null/)
+  assert.match(notice, /effort "medium"/)
+  assert.match(notice, /effort: null/)
+  assert.equal(team.children[0].effort, 'high')
+  assert.match(await tool('status'), /gpt・effort high/)
+  assert.doesNotMatch((await tool('status')).split('子はまだいません。')[0], /model "gpt-6-luna".*effort "high"/)
+  const notices = team.queue.filter((item) => item.kind === 'notice').length
+  manager.updateConfig(team.id, { freeModels: [freeModels[0], { ...freeModels[1], effort: 'medium' }] })
+  assert.equal(team.queue.filter((item) => item.kind === 'notice').length, notices)
 })
 
 test('both modes balance available models and a running team switches without changing existing children', async (t) => {
@@ -2498,6 +2602,47 @@ test('free mode and usage balance survive a restart', async (t) => {
   assert.deepEqual(restored.config.freeModels, freeModels)
   await again.call(restored.id, restored.secret, 'spawn', { title: 'next', task: 'work' })
   assert.equal(restored.children.at(-1).model, 'claude-haiku-5-5')
+})
+
+test('free choice counts survive restart and treat legacy missing effort as default', async (t) => {
+  const freeModels = [
+    { provider: 'gpt', model: 'gpt-6-luna' }, // Older saved settings may omit effort.
+    { provider: 'gpt', model: 'gpt-6-luna', effort: 'high' },
+  ]
+  const { team, tool, threads, terminals, agents, manager, dir } = await setup(t, { defaultModelMode: 'free', freeModels })
+  await tool('spawn', { title: 'first', task: 'work' })
+  assert.equal(team.children[0].effort, null)
+  delete team.children[0].effort // A child saved by an older version.
+  manager.updateConfig(team.id, {})
+  await manager.stop()
+  const again = await new TeamManager({
+    file: path.join(dir, 'teams.json'), dir: path.join(dir, 'teams'), threads, terminals, agents, catalog: CATALOG,
+    getSettings: () => ({}), apiUrl: () => '',
+  }).load()
+  t.after(() => again.stop())
+  const restored = again.teams.get(team.id)
+  assert.deepEqual(restored.config.freeModels, freeModels)
+  await again.call(restored.id, restored.secret, 'spawn', { title: 'next', task: 'work' })
+  assert.equal(restored.children.at(-1).effort, 'high')
+  assert.equal(threads.threads.get(restored.children.at(-1).taskId).effort, 'high')
+  await again.call(restored.id, restored.secret, 'spawn', { title: 'next again', task: 'work', effort: null })
+  assert.equal(restored.children.at(-1).effort, null)
+})
+
+test('free balancing counts matching historical tier children by their actual effort', async (t) => {
+  const freeModels = [
+    { provider: 'gpt', model: 'gpt-6-luna', effort: 'low' },
+    { provider: 'gpt', model: 'gpt-6-luna', effort: 'high' },
+  ]
+  const f = await setup(t, {
+    freeModels, claude: { enabled: false },
+    gpt: { enabled: true, low: { model: 'gpt-6-luna', effort: 'low' }, mid: { model: 'gpt-6-luna', effort: 'high' } },
+  })
+  for (let i = 0; i < 2; i++) await f.tool('spawn', { title: 'old', task: 'work', provider: 'gpt', tier: 'low' })
+  f.manager.updateConfig(f.team.id, { modelMode: 'free' })
+  await f.tool('spawn', { title: 'new', task: 'work' })
+  assert.equal(f.team.children.at(-1).effort, 'high')
+  assert.equal(f.team.children.at(-1).tier, null)
 })
 
 test('a free-mode default leaves eco on low tiers', async (t) => {

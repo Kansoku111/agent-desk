@@ -1,4 +1,5 @@
 import { ChevronDown } from 'lucide-react'
+import type { ReactNode } from 'react'
 import type { AppState } from '../types'
 import { isModelVisible, providerReady, visibleModels } from '../model-selection'
 import { effortLabel, parseModel } from '../util'
@@ -35,12 +36,13 @@ function selectedName(groups: ModelGroup[], value: string | null) {
   return model.name
 }
 
-export function ModelField({ label, value, groups, disabled, onChange, effort, efforts, onEffort, allowClearUnavailableEffort = false, allowDefaultEffort = false }: {
-  label: string; value: string; groups: ModelGroup[]; disabled: boolean; onChange: (value: string) => void
-  effort: string; efforts: string[]; onEffort: (value: string) => void; allowClearUnavailableEffort?: boolean; allowDefaultEffort?: boolean
+export function ModelField({ label, labelAction, value, groups, disabled, onChange, effort, efforts, onEffort, allowClearUnavailableEffort = false, allowDefaultEffort = false, unavailableEfforts = [] }: {
+  label: string; labelAction?: ReactNode; value: string; groups: ModelGroup[]; disabled: boolean; onChange: (value: string) => void
+  effort: string; efforts: string[]; onEffort: (value: string) => void; allowClearUnavailableEffort?: boolean; allowDefaultEffort?: boolean; unavailableEfforts?: string[]
 }) {
   const clearUnavailableEffort = allowClearUnavailableEffort && !efforts.length && Boolean(effort)
-  const effortChoices = clearUnavailableEffort ? [''] : allowDefaultEffort && efforts.length ? ['', ...efforts] : efforts
+  const effortChoices = (clearUnavailableEffort ? [''] : allowDefaultEffort && efforts.length ? ['', ...efforts] : efforts)
+    .filter((level) => !unavailableEfforts.includes(level))
   const effortName = clearUnavailableEffort ? `${effortLabel(effort)}（非対応）` : !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : allowDefaultEffort ? '既定' : '中'
   const name = selectedName(groups, value)
   const modelWheel = useWheelSelect<HTMLButtonElement>(disabled ? [] : groups.flatMap((group) => group.models.map((model) => model.value)), value, onChange)
@@ -48,7 +50,7 @@ export function ModelField({ label, value, groups, disabled, onChange, effort, e
   const wheelName = selectedName(groups, modelWheel.shown ?? value)
   const shownEffort = effortWheel.pending && effortWheel.shown ? effortLabel(effortWheel.shown) : effortName
   return <div className="ab-field">
-    <span>{label}</span>
+    <span>{labelAction ? <>{label}{labelAction}</> : label}</span>
     <div className="ab-model-controls"><Dropdown
       placement="bottom"
       portal
@@ -80,8 +82,8 @@ export function ModelField({ label, value, groups, disabled, onChange, effort, e
       </button>
     )}>
       {(close) => <>
-        {(clearUnavailableEffort || (allowDefaultEffort && efforts.length > 0)) && <MenuItem key="none" label={allowDefaultEffort ? '既定' : '指定なし'} selected={!effort} onSelect={() => { onEffort(''); close() }} />}
-        {efforts.map((value) => <MenuItem key={value} label={effortLabel(value)} selected={effort === value} onSelect={() => { onEffort(value); close() }} />)}
+        {(clearUnavailableEffort || (allowDefaultEffort && efforts.length > 0)) && !unavailableEfforts.includes('') && <MenuItem key="none" label={allowDefaultEffort ? '既定' : '指定なし'} selected={!effort} onSelect={() => { onEffort(''); close() }} />}
+        {efforts.filter((value) => !unavailableEfforts.includes(value)).map((value) => <MenuItem key={value} label={effortLabel(value)} selected={effort === value} onSelect={() => { onEffort(value); close() }} />)}
       </>}
     </Dropdown></div>
   </div>

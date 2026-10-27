@@ -134,11 +134,13 @@ for (const toolMode of ['native', 'ptc']) {
     // Route the GPT leader through the deterministic local model, not a provider API.
     const model = '["local-llm","ptc-fixture"]'
     const catalog = { learn: () => false, data: { models: [{ provider: 'openai-codex', id: 'ptc-fixture', value: model, name: 'Fixture' }] } }
+    let teams
     const threads = new ThreadManager({ paths: f.paths, pool, catalog,
-      getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null })
+      getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null,
+      getMcpServers: (thread) => { const server = teams.mcpServerFor(thread); return server ? [server] : [] } })
     const terminals = Object.assign(new EventEmitter(), { status: () => null })
     const agents = Object.assign(new EventEmitter(), { get: () => null, running: () => false })
-    const teams = new TeamManager({ file: path.join(f.home, 'teams.json'), dir: path.join(f.home, 'teams'),
+    teams = new TeamManager({ file: path.join(f.home, 'teams.json'), dir: path.join(f.home, 'teams'),
       threads, terminals, agents, catalog, getSettings: () => ({ leaderProvider: 'gpt', toolMode,
         gptLeader: { model: 'ptc-fixture', effort: null }, gpt: { enabled: true } }),
       apiUrl: () => '', gatherMs: 0 })
@@ -149,6 +151,11 @@ for (const toolMode of ['native', 'ptc']) {
     const team = teams.teams.get(view.id)
     await threads.send(leader.id, { text: 'leader-context-before-delegation' })
     await threads.active.get(leader.id).done
+    if (toolMode === 'native') {
+      const spawn = f.requests[0].tools.find((tool) => tool.function?.name.endsWith('spawn'))
+      assert.ok(spawn, 'the actual team MCP spawn tool is available')
+      assert.deepEqual(spawn.function.parameters.properties.effort.type, ['string', 'null'])
+    }
     const sessionId = threads.threads.get(leader.id).sessionId
     const childThread = await threads.create({ workspace: f.workspace, model, permissionMode: 'danger-full-access',
       team: { id: team.id, childId: 'fixture-child' } })

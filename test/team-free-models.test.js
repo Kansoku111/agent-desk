@@ -12,7 +12,7 @@ const ModelField = () => {}, Dropdown = () => {}, MenuItem = () => {}
 const choices = Array.from({ length: 15 }, (_, i) => ({ value: JSON.stringify(['openai-codex', 'model-' + i]), name: 'Model ' + i }))
 const claude = [{ value: 'claude:haiku', name: 'Haiku' }]
 const api = [{ value: JSON.stringify(['anthropic', 'haiku']), name: 'Haiku' }]
-const server = { catalog: { models: choices, effortsByModel: {}, fallbackEfforts: [{ value: 'low' }] } }
+const server = { catalog: { models: choices, effortsByModel: {}, fallbackEfforts: ['low', 'medium', 'high', 'max'].map((value) => ({ value })) } }
 const nodes = (node, match) => !node || typeof node !== 'object' ? []
   : [...(match(node) ? [node] : []), ...[node.props?.children].flat(Infinity).flatMap((child) => nodes(child, match))]
 
@@ -24,7 +24,7 @@ function harness(initial = []) {
     '../util': { parseModel: (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }, pickableEfforts: (items) => items },
     './WorkflowModelField': { ModelField, modelGroups: () => [{ id: 'openai-codex', heading: 'GPT', note: '', models: choices }, { id: 'claude-code', heading: 'Claude Code', note: '', models: claude }, { id: 'anthropic', heading: 'Claude（API）', note: '', models: api }] },
     './Popover': { Dropdown, MenuItem },
-    './TerminalPickers': { claudeEfforts: () => [], claudeModelName: (_, id) => id },
+    './TerminalPickers': { claudeEfforts: () => ['low', 'medium', 'high'], claudeModelName: (_, id) => id },
   }
   const component = {}
   new Function('require', 'exports', outputText)((name) => modules[name] ?? {}, component)
@@ -35,6 +35,8 @@ function harness(initial = []) {
     fields: () => nodes(render(), (node) => node.type === ModelField).map((node) => node.props),
     items: () => nodes(menu(), (node) => node.type === MenuItem).map((node) => node.props),
     select: (label) => nodes(menu(), (node) => node.type === MenuItem && node.props.label === label)[0].props.onSelect(),
+    duplicateButton: (index) => nodes(render(), (node) => node.type === ModelField)[index].props.labelAction.props,
+    duplicate: (index) => nodes(render(), (node) => node.type === ModelField)[index].props.labelAction.props.onClick(),
     remove: (index) => nodes(render(), (node) => node.type === 'button' && node.props?.['aria-label'] === 'モデル ' + (index + 1) + 'を削除')[0].props.onClick(),
   }
 }
@@ -80,10 +82,69 @@ test('keeps saved unavailable choices, supports per-row changes and avoids dupli
   assert.equal(h.config.freeModels[0].model, 'model-1')
 })
 
+test('duplicates a model beside its row with the next unused effort', () => {
+  const h = harness([{ provider: 'gpt', model: 'model-0', effort: 'medium' }, { provider: 'gpt', model: 'model-1', effort: 'low' }])
+  assert.equal(h.duplicateButton(0)['aria-label'], 'モデル 1を別の推論レベルで追加')
+  assert.equal(h.duplicateButton(0).disabled, false)
+  h.duplicate(0)
+  assert.deepEqual(h.config.freeModels.map(({ model, effort }) => [model, effort]), [['model-0', 'medium'], ['model-0', 'high'], ['model-1', 'low']])
+  h.duplicate(1)
+  assert.deepEqual(h.config.freeModels.map(({ model, effort }) => [model, effort]), [['model-0', 'medium'], ['model-0', 'high'], ['model-0', 'max'], ['model-1', 'low']])
+  h.fields()[0].onEffort('low')
+  assert.equal(h.config.freeModels[0].effort, 'low')
+  assert.deepEqual(h.fields()[0].unavailableEfforts, ['high', 'max'])
+  h.fields()[0].onEffort('high')
+  assert.equal(h.config.freeModels[0].effort, 'low', 'an already used effort cannot be selected')
+  h.remove(1)
+  assert.deepEqual(h.config.freeModels.map(({ model, effort }) => [model, effort]), [['model-0', 'low'], ['model-0', 'max'], ['model-1', 'low']])
+  h.select('Model 0')
+  assert.deepEqual(h.config.freeModels.map(({ model }) => model), ['model-1'], 'unchecking removes every level of that model')
+})
+
+test('disables duplication when levels or the twelve-model limit are exhausted', () => {
+  server.catalog.effortsByModel[choices[0].value] = []
+  const noLevels = harness([{ provider: 'gpt', model: 'model-0', effort: null }])
+  assert.equal(noLevels.duplicateButton(0).disabled, true)
+  noLevels.duplicate(0)
+  assert.equal(noLevels.config.freeModels.length, 1)
+  delete server.catalog.effortsByModel[choices[0].value]
+  const h = harness(['low', 'medium', 'high', 'max'].map((effort) => ({ provider: 'gpt', model: 'model-0', effort })))
+  assert.equal(h.duplicateButton(0).disabled, true)
+  h.duplicate(0)
+  assert.equal(h.config.freeModels.length, 4)
+  h.remove(1)
+  assert.equal(h.duplicateButton(0).disabled, false)
+  h.duplicate(0)
+  assert.equal(h.config.freeModels[1].effort, 'medium')
+  for (let i = 1; i <= 8; i++) h.select('Model ' + i)
+  assert.equal(h.config.freeModels.length, 12)
+  assert.equal(h.duplicateButton(4).disabled, true)
+  h.duplicate(4)
+  assert.equal(h.config.freeModels.length, 12)
+})
+
+test('keeps default and missing models distinct without duplicated menu entries', () => {
+  const h = harness([{ provider: 'gpt', model: 'unavailable', effort: null }])
+  h.duplicate(0)
+  assert.deepEqual(h.config.freeModels.map(({ effort }) => effort), [null, 'low'])
+  assert.deepEqual(h.fields()[1].unavailableEfforts, [''])
+  h.fields()[1].onEffort('')
+  assert.equal(h.config.freeModels[1].effort, 'low')
+  assert.equal(h.items().filter((item) => item.label === 'unavailable').length, 1)
+  h.remove(0)
+  assert.deepEqual(h.fields()[0].unavailableEfforts, [])
+  h.fields()[0].onEffort('')
+  assert.equal(h.config.freeModels[0].effort, null)
+})
+
 test('Claude Code and Claude API remain separate selections', () => {
   const h = harness()
   const items = h.items().filter((item) => item.label === 'Haiku')
   items[0].onSelect()
   h.items().filter((item) => item.label === 'Haiku')[1].onSelect()
   assert.deepEqual(h.config.freeModels.map((entry) => entry.provider), ['claude', 'claudeApi'])
+  h.duplicate(0)
+  assert.deepEqual(h.config.freeModels.map(({ provider, effort }) => [provider, effort]), [['claude', null], ['claude', 'low'], ['claudeApi', null]])
+  h.duplicate(2)
+  assert.deepEqual(h.config.freeModels.map(({ provider, effort }) => [provider, effort]), [['claude', null], ['claude', 'low'], ['claudeApi', null], ['claudeApi', 'low']])
 })

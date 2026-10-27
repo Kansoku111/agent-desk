@@ -371,7 +371,8 @@ export class TeamManager extends EventEmitter {
   }
 
   #label(child) {
-    return child.tier ? `${this.#modelName(child)}・${TIER_LABEL[child.tier]}` : this.#modelName(child)
+    return child.tier ? `${this.#modelName(child)}・${TIER_LABEL[child.tier]}`
+      : `${this.#modelName(child)}・${child.provider}・effort ${child.effort ?? 'default'}`
   }
 
   #emit(team) {
@@ -920,6 +921,9 @@ export class TeamManager extends EventEmitter {
     const execution = team.execution ? this.#exTask(team, args) : null
     const tier = team.execution ? 'low' : args.tier
     if (tier != null && !TEAM_TIERS.includes(tier)) throw new Error('tier は "low" か "mid" で指定してください')
+    // Omitting effort balances choices; explicit null selects a configured default.
+    const hasEffort = Object.hasOwn(args, 'effort')
+    if (hasEffort && args.effort !== null && (typeof args.effort !== 'string' || !args.effort)) throw new Error('effort の値が不正です')
     const enabled = TEAM_PROVIDERS.filter((provider) => config[provider].enabled)
     let provider = args.provider && args.provider !== 'auto' ? args.provider : null
     if (provider && !TEAM_PROVIDERS.includes(provider)) throw new Error(`provider は ${providerList(TEAM_PROVIDERS)} のどれかで指定してください`)
@@ -934,6 +938,7 @@ export class TeamManager extends EventEmitter {
       if (!choice.enabled) throw new Error(`${PROVIDER_NAMES[provider]}の${TIER_LABEL[tier]}枠はユーザーがオフにしています。使える枠は status で確かめてください。`)
       if (!choice.model) throw new Error(`${PROVIDER_NAMES[provider]}の${TIER_LABEL[tier]}枠のモデルが設定されていません。別の枠を使うか、ask_user でユーザーにチームパネルの「このチームの設定」で選んでもらってください。`)
       if (args.model && args.model !== choice.model) throw new Error('指定したモデルはこの枠にありません')
+      if (hasEffort && args.effort !== (choice.effort ?? null)) throw new Error('指定した推論レベルはこの枠にありません。status で確認してください。')
       selected = { provider, tier, model: choice.model, effort: choice.effort }
     } else {
       if (config.modelMode === 'free' && tier) throw new Error('自由モードでは tier を指定せず、model を選んでください')
@@ -942,12 +947,15 @@ export class TeamManager extends EventEmitter {
       const choices = config.modelMode === 'free' ? config.freeModels.map((entry) => ({ ...entry, tier: null }))
         : enabled.flatMap((name) => TEAM_TIERS.filter((slot) => config[name][slot].enabled && config[name][slot].model)
           .map((slot) => ({ provider: name, tier: slot, model: config[name][slot].model, effort: config[name][slot].effort })))
-      const candidates = choices.filter((entry) => (!provider || entry.provider === provider) && (!tier || entry.tier === tier) && (!args.model || entry.model === args.model))
-      if (!candidates.length) throw new Error('指定されたモデルはチームで使えません。status で利用可能なモデルを確認してください。')
+      const candidates = choices.filter((entry) => (!provider || entry.provider === provider) && (!tier || entry.tier === tier) && (!args.model || entry.model === args.model)
+        && (!hasEffort || (entry.effort ?? null) === args.effort))
+      if (!candidates.length) throw new Error('指定されたモデルや推論レベルはチームで使えません。status で利用可能なモデルを確認してください。')
       if (args.model && !provider && new Set(candidates.map((entry) => entry.provider)).size > 1) throw new Error('同じモデル名が複数のプロバイダーにあります。provider も指定してください')
       // Children are reserved before the first await, so concurrent spawns see one another; closed children still count.
-      const count = (entry) => team.children.filter((child) => child.provider === entry.provider && child.model === entry.model).length
-      const tierCount = (entry) => team.children.filter((child) => child.provider === entry.provider && child.model === entry.model && child.tier === entry.tier).length
+      const count = (entry) => team.children.filter((child) => child.provider === entry.provider && child.model === entry.model
+        && (config.modelMode !== 'free' || (child.effort ?? null) === (entry.effort ?? null))).length
+      const tierCount = (entry) => team.children.filter((child) => child.provider === entry.provider && child.model === entry.model && child.tier === entry.tier
+        && (config.modelMode !== 'free' || (child.effort ?? null) === (entry.effort ?? null))).length
       selected = candidates.reduce((best, entry) => count(entry) < count(best) || (count(entry) === count(best) && tierCount(entry) < tierCount(best)) ? entry : best)
     }
     const { model, effort } = selected
@@ -1579,7 +1587,7 @@ export class TeamManager extends EventEmitter {
         text: [`ユーザーがこのチームの設定を変えました。いまから使えるモデル（同時に開ける子は ${config.maxChildren} 人まで）:`, ...this.#tierLines(config),
           team.execution
             ? 'すでに動いている子はそのままのモデルで続けます。次の spawn から低枠の設定を使ってください。返事は要りません。'
-            : 'すでに動いている子はそのままのモデルで続けます。次の spawn は指定がなければ均等に選びます。自由モードでは tier を使わず、指定する場合は model と provider を使ってください。返事は要りません。'].join('\n'),
+            : 'すでに動いている子はそのままのモデルと推論レベルで続けます。次の spawn は指定がなければ均等に選びます。自由モードでは tier を使わず、指定する場合は model、provider、effort を使ってください。既定の推論レベルを選ぶには effort: null を指定します。返事は要りません。'].join('\n'),
       })
     }
     void this.#save()
