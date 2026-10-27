@@ -3931,6 +3931,26 @@ select:focus {
   border-color: var(--border-strong);
 }
 
+.team-child-row {
+  position: relative;
+}
+
+.team-child-row > .team-card {
+  width: 100%;
+  padding-right: 48px;
+}
+
+.team-child-row .subagent-card-chev {
+  display: none;
+}
+
+.team-child-remove {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .subagent-card-head {
   display: flex;
   align-items: center;

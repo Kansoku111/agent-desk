@@ -130,3 +130,16 @@ for (const mode of ['TM', 'eco']) {
     assert.equal(h.panel.TeamToggle({ team: undefined }), null)
   })
 }
+
+for (const mode of ['TM', 'eco']) {
+  test(mode + ': each child has a separate accessible delete action', async () => {
+    const h = await harness(mode === 'eco' ? {} : undefined)
+    h.team.children[0].name = '子A'
+    h.team.children[1].name = '子B'
+    const view = h.panel.TeamPanel({ team: h.team })
+    const buttons = nodes(view, (node) => node.type === 'button' && node.props?.['aria-label']?.endsWith('を削除'))
+    assert.deepEqual(buttons.map((button) => button.props['aria-label']), ['子Aを削除', '子Bを削除'])
+    buttons[0].props.onClick()
+    assert.deepEqual(h.state.route, { view: 'thread', id: 'leader' }, 'delete must not open the child')
+  })
+}

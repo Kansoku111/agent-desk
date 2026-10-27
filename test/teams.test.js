@@ -2866,6 +2866,75 @@ test('fresh is refused while the child waits for an approval, and still works wh
   assert.equal(team.children[0].awaiting, true)
 })
 
+for (const mode of ['TM', 'eco']) {
+  for (const provider of ['gpt', 'claude']) {
+    test(`${mode}: user can delete a running ${provider} child without deleting files`, async (t) => {
+      const f = mode === 'eco' ? await setupExecution(t) : await setup(t)
+      const args = mode === 'eco' ? { ...exTask, provider, mode: 'research' } : { title: 'job', task: 'work', tier: 'low', provider }
+      await f.tool('spawn', args)
+      const child = f.team.children[0]
+      const file = path.join(f.workspace, 'kept.txt')
+      await fs.writeFile(file, 'keep')
+      f.team.queue.push({ id: 'report', childId: child.id, kind: 'report', text: 'old', at: Date.now() })
+      assert.deepEqual(await f.manager.removeChild(f.team.id, child.id), { removed: true })
+      assert.equal(f.team.children.length, 0)
+      assert.equal(f.team.queue.some((item) => item.childId === child.id), false)
+      const calls = provider === 'gpt' ? f.threads.calls : f.agents.calls
+      assert.ok(calls.some((call) => call[0] === 'remove' && call[1] === child.taskId))
+      assert.equal(await fs.readFile(file, 'utf8'), 'keep')
+      await tick()
+      const notice = [...f.team.queue.map((item) => item.text), ...f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).map((call) => call[2]), ...f.typed()].join('\n')
+      assert.match(notice, /ユーザーが子.*削除/)
+      await assert.rejects(f.manager.removeChild(f.team.id, child.id), /見つかりません/)
+    })
+  }
+}
+
+test('eco deletion keeps the write guard until verification stops', async (t) => {
+  const f = await setupExecution(t)
+  await f.tool('spawn', exTask)
+  const child = f.team.children[0]
+  let finish
+  const done = new Promise((resolve) => { finish = resolve })
+  f.manager.execution.active.set(child.id, { done, stop: () => {} })
+  const removal = f.manager.removeChild(f.team.id, child.id)
+  assert.throws(() => f.manager.guardExecution({ workspace: f.workspace, id: 'other' }), /eco/)
+  await assert.rejects(f.tool('send', { child: child.id, message: 'again' }), /削除中/)
+  f.manager.execution.active.delete(child.id)
+  finish()
+  await removal
+  assert.doesNotThrow(() => f.manager.guardExecution({ workspace: f.workspace, id: 'other' }))
+})
+
+test('failed task deletion keeps the child and allows retry', async (t) => {
+  const f = await setup(t)
+  await f.tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'gpt' })
+  const child = f.team.children[0]
+  const remove = f.threads.remove
+  f.threads.remove = async () => { throw new Error('disk failure') }
+  await assert.rejects(f.manager.removeChild(f.team.id, child.id), /disk failure/)
+  assert.equal(f.team.children[0], child)
+  assert.equal(child.closed, false)
+  f.threads.remove = remove
+  await f.manager.removeChild(f.team.id, child.id)
+  assert.equal(f.team.children.length, 0)
+})
+
+test('deleting a child during fresh start removes both old and new tasks', async (t) => {
+  const { threads, tool, team, manager } = await setup(t)
+  await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
+  threads.finish('thread-1', 'done')
+  const child = team.children[0]
+  const create = threads.create
+  threads.create = async (options) => {
+    await manager.removeChild(team.id, child.id)
+    return create(options)
+  }
+  await assert.rejects(tool('send', { child: 'A', message: 'b', fresh: true }), /終了されました/)
+  assert.deepEqual([...threads.threads.keys()].filter((id) => id !== team.leaderId), [])
+  assert.equal(team.children.length, 0)
+})
+
 test('a team removed while a fresh start runs leaves neither task behind', async (t) => {
   const { threads, tool, team, manager } = await setup(t)
   await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })

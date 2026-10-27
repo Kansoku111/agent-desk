@@ -161,6 +161,7 @@ export class TeamManager extends EventEmitter {
     this.execution = new ExecutionVerifier({ dir: path.join(dir, 'execution'), now })
     this.executionReview = new ExecutionReview({ dir: path.join(dir, 'execution', 'reviews') })
     this.exPending = new Set()
+    this.removingChildren = new Set()
     this.workingLeaders = new Set()
     // Read the owning team's current choice at send time, including resumed children.
     threads.teamToolMode = (thread) => {
@@ -666,7 +667,7 @@ export class TeamManager extends EventEmitter {
       // Staleness checks cannot detect edits made before verification's baseline snapshot.
       if (!team.execution || !workspaceWithin(team.workspace, record.workspace)) continue
       if (own?.team === team) continue
-      const child = team.children.find((child) => !child.closed && child.execution?.mode !== 'research')
+      const child = team.children.find((child) => (!child.closed || this.removingChildren.has(child.id)) && child.execution?.mode !== 'research')
       if (child) throw this.#exChildConflict('このフォルダはecoが実行・検証・判定中です', record.workspace, team, child)
     }
   }
@@ -694,7 +695,7 @@ export class TeamManager extends EventEmitter {
     }
     for (const other of this.teams.values()) {
       if (!workspacesOverlap(other.workspace, team.workspace)) continue
-      const child = other.children.find((child) => child !== except && !child.closed && child.execution?.mode !== 'research' && (other.execution ? child.execution?.phase !== 'accepted' : this.#childBusy(child)))
+      const child = other.children.find((child) => child !== except && (!child.closed || this.removingChildren.has(child.id)) && child.execution?.mode !== 'research' && (this.removingChildren.has(child.id) || (other.execution ? child.execution?.phase !== 'accepted' : this.#childBusy(child))))
       if (child) {
         throw this.#exChildConflict('同じフォルダの作業・検証・判定が終わっていません。close で合格にするか、send で手直ししてください。', team.workspace, other, child)
       }
@@ -788,6 +789,7 @@ export class TeamManager extends EventEmitter {
       child.execution.review = { record: review.record, patch: review.patch, warning: review.warning }
       this.#report(team, child, 'report', review.text, { verified: true, review: true })
     } catch (error) {
+      if (!this.teams.has(team.id) || !team.children.includes(child) || child.closed) return
       child.execution.phase = 'review'
       this.#report(team, child, 'error', `ecoの検証に失敗しました: ${error.message}`, { verified: true })
     } finally { await this.#save(); this.#emit(team) }
@@ -871,6 +873,7 @@ export class TeamManager extends EventEmitter {
       const names = team.children.map((entry) => `「${entry.name}」`).join('、')
       throw new Error(`子「${ref}」はいません。${names ? `いる子: ${names}` : 'まだ子はいません。'}`)
     }
+    if (this.removingChildren.has(child.id)) throw new Error(`子「${child.name}」は削除中です`)
     return child
   }
 
@@ -1016,7 +1019,7 @@ export class TeamManager extends EventEmitter {
       child.taskId = previous
       if (taskId) await this.#removeTask(child.kind, taskId).catch(() => {})
       // The team went meanwhile, and removeTeam did not see the old task while it had none.
-      if (previous && !this.teams.has(team.id)) await this.#removeTask(child.kind, previous).catch(() => {})
+      if (previous && (!this.teams.has(team.id) || !team.children.includes(child))) await this.#removeTask(child.kind, previous).catch(() => {})
       throw error
     }
     // The conversation it replaces goes: the child is no longer found by it, so its removal leaves the child be.
@@ -1453,6 +1456,45 @@ export class TeamManager extends EventEmitter {
     const child = team?.children.find((entry) => entry.id === childId)
     if (!child || child.kind !== 'agent') throw new Error('この子は見つかりません')
     return { team, child }
+  }
+
+  /** The user deletes a child and its task, not the files it changed. */
+  async removeChild(teamId, childId) {
+    const team = this.teams.get(teamId)
+    const child = team?.children.find((entry) => entry.id === childId)
+    if (!child) throw new Error('この子は見つかりません')
+    if (this.removingChildren.has(child.id)) throw new Error('この子は削除中です')
+    this.removingChildren.add(child.id)
+    this.#captureScores(team)
+    const wasClosed = child.closed
+    child.closed = true // Prevent an in-flight start or verification from resuming it.
+    const verification = this.execution.active.get(child.id)?.done
+    this.execution.cancel(child.id)
+    try {
+      await verification?.catch(() => {})
+      if (child.kind === 'agent' && child.taskId) {
+        const exited = this.agents.live?.get(child.taskId)?.exited
+        this.agents.stop(child.taskId)
+        await exited
+      }
+      this.#captureScores(team)
+      if (child.taskId) await this.#removeTask(child.kind, child.taskId)
+    } catch (error) {
+      child.closed = wasClosed
+      await this.#save()
+      this.#emit(team)
+      throw error
+    } finally {
+      this.removingChildren.delete(child.id)
+    }
+    if (team.children.includes(child)) this.#removeChildRecord(team, child)
+    team.queue.push({ id: randomUUID(), childId: null, kind: 'notice', at: this.now(),
+      text: `ユーザーが子「${child.name}」を削除しました。子の会話は削除されましたが、作業ファイルは残っています。` })
+    await this.#save()
+    this.#emit(team)
+    await this.#syncGoalWaiting(team)
+    this.#pump(team)
+    return { removed: true }
   }
 
   /** The user stopped a Claude child's turn in its view (the leader hears it was stopped). */
@@ -1926,7 +1968,7 @@ export class TeamManager extends EventEmitter {
     const apiStopped = this.apiStopped.delete(child.id)
     const byUser = this.userStopped.delete(child.id)
     // A task being removed reports nothing: its removal takes the child away.
-    if (this.threads.removing.has(threadId)) return
+    if (this.threads.removing.has(threadId) || this.removingChildren.has(child.id)) return
     // Cut off by the app's shutdown: the child stays awaiting, so the restart (start) reports it as cut off.
     if (status === 'cancelled' && this.threads.stopping) return
     if (this.#reportsTurn(child)) {
@@ -2002,7 +2044,7 @@ export class TeamManager extends EventEmitter {
     }
     const byUser = this.userStopped.delete(child.id)
     // A session being removed reports nothing: its record is dropped before its turn ends (claude-runner remove).
-    if (!this.agents.get(id)) return
+    if (!this.agents.get(id) || this.removingChildren.has(child.id)) return
     if (this.#reportsTurn(child)) {
       if (status === 'error' && this.#resumeLater(team, child, error)) return this.#emit(team)
       const extra = child.awaiting ? {} : { unasked: true }
@@ -2077,6 +2119,16 @@ export class TeamManager extends EventEmitter {
       void this.removeTeam(team.id)
       return
     }
+    this.#removeChildRecord(team, child)
+    void this.#save()
+    this.#emit(team)
+    if (!this.removingChildren.has(child.id)) {
+      void this.#syncGoalWaiting(team).catch((error) => this.log(`team ${team.id}: goal wait update failed:`, error.message))
+      this.#pump(team)
+    }
+  }
+
+  #removeChildRecord(team, child) {
     for (const approval of [...this.approvals.values()]) {
       if (approval.childId === child.id) this.#dropApproval(approval)
     }
@@ -2084,7 +2136,5 @@ export class TeamManager extends EventEmitter {
     this.execution.cancel(child.id)
     team.children = team.children.filter((entry) => entry !== child)
     team.queue = team.queue.filter((item) => item.childId !== child.id)
-    void this.#save()
-    this.#emit(team)
   }
 }

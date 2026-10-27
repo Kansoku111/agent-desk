@@ -59,6 +59,20 @@ async function fixture(settings = {}) {
   return { store: exports, frame, hello, document, notifications, sent, storage, getSocket: () => socket, setOnSend: (callback) => { onSend = callback } }
 }
 
+for (const kind of ['thread', 'agent']) {
+  test(`deleting the selected ${kind} child returns to its leader`, async () => {
+    const { store, frame } = await fixture()
+    const child = { id: 'child', kind, taskId: 'task' }
+    const team = { id: 'team', leaderId: 'leader', leaderKind: 'thread', children: [child] }
+    frame({ event: 'team', team })
+    store.setState({ route: { view: kind, id: 'task' } })
+    frame({ event: 'team', team: { ...team, children: [] } })
+    assert.deepEqual(store.getState().route, { view: 'thread', id: 'leader' })
+    if (kind === 'thread') frame({ event: 'removed', threadId: 'task' })
+    assert.deepEqual(store.getState().route, { view: 'thread', id: 'leader' })
+  })
+}
+
 test('AB browser notifications open AB, and the visible AB view suppresses duplicate alerts', async () => {
   const { store, frame, document, notifications } = await fixture()
   store.getState().server.settings.notifications = true

@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import {
-  CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, PanelRight, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Users, X, XCircle,
+  CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, PanelRight, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Trash2, Users, X, XCircle,
 } from 'lucide-react'
 import { act, navigate, openTeamChild, setTeamPanel, useStore } from '../store'
 import type { AppState, TeamChild, TeamChildState, TeamSummary, TerminalSummary, ThreadSummary } from '../types'
@@ -278,6 +278,8 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
   const [editing, setEditing] = useState(false)
   const [usage, setUsage] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [removing, setRemoving] = useState<TeamChild | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
   const running = team.children.filter(isActive).length
   const stoppable = team.children.filter(isStoppable).length
   const children = [...team.children].sort((a, b) => a.createdAt - b.createdAt)
@@ -330,12 +332,27 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
             <div className="subagent-card-activity">{leaderModel(server, leader)}</div>
             <ChevronRight size={14} className="subagent-card-chev" />
           </button>
-          {children.map((child) => <ChildCard key={child.id} child={child} selected={route.view === child.kind && route.id === child.taskId} />)}
+          {children.map((child) => (
+            <div className="team-child-row" key={child.id}>
+              <ChildCard child={child} selected={route.view === child.kind && route.id === child.taskId} />
+              <button type="button" className="icon-button small team-child-remove"
+                aria-label={`${child.name}を削除`} title={`${child.name}を削除`} disabled={removingId !== null}
+                onClick={() => setRemoving(child)}><Trash2 size={14} /></button>
+            </div>
+          ))}
         </div>
       </aside>
       {diagram && <TeamDiagram team={team} onClose={() => setDiagram(false)} />}
       {editing && (team.execution ? <ExecutionChecksDialog workspace={team.workspace} onClose={() => setEditing(false)} /> : <TeamConfigDialog team={team} onClose={() => setEditing(false)} />)}
       {usage && <UsageDialog onClose={() => setUsage(false)} />}
+      {removing && (
+        <ConfirmDialog title={`「${removing.name}」を削除しますか？`} confirmLabel="削除" danger
+          body="作業中なら停止し、会話を削除します。変更したファイルは残ります。配送中の報告は届く場合があります。"
+          onClose={() => setRemoving(null)} onConfirm={() => {
+            setRemovingId(removing.id)
+            void act('team.removeChild', { teamId: team.id, childId: removing.id }).finally(() => setRemovingId(null))
+          }} />
+      )}
       {stopping && (
         <ConfirmDialog title="作業中の子をすべて止めますか？" confirmLabel={`${running} 人を止める`} danger
           body={`作業中の子 ${running} 人の作業を止めます。会話は残り、リーダーには止められたことが伝わります。あとから send で続きを頼めます。`}

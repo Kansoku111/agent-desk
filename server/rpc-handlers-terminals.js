@@ -80,6 +80,7 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
     'team.message': ({ teamId, childId, text }) => teams.messageChild(teamId, childId, text),
     'team.steerFollowup': ({ teamId, childId, followupId }) => teams.steerFollowup(teamId, childId, followupId),
     'team.dropFollowup': ({ teamId, childId, followupId }) => teams.dropFollowup(teamId, childId, followupId),
+    'team.removeChild': ({ teamId, childId }) => teams.removeChild(teamId, childId),
     'team.stopChild': ({ teamId, childId }) => teams.stopChild(teamId, childId),
     'team.stopAll': ({ teamId }) => teams.stopAll(teamId),
   }
