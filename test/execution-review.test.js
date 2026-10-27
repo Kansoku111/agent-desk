@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -127,6 +128,24 @@ test('eco review preserves infrastructure errors when verification has no ending
   assert.match(review.text, /eco 検証: error/)
   assert.match(review.text, /verification could not read source/)
 })
+
+for (const status of ['passed', 'unverified']) {
+  test('eco review cannot accept ' + status + ' if the source cannot be rechecked', async (t) => {
+    const { folder, reviews, execution, verifier } = await fixture(t)
+    const run = await verifier.verify({ id: 'child', folder, checks: [] })
+    run.status = status
+    const original = fsSync.createReadStream
+    t.mock.method(fsSync, 'createReadStream', (file, options) => {
+      if (file === path.join(folder, 'source.txt')) throw new Error('source read failed')
+      return original(file, options)
+    })
+    const review = await reviews.report({ folder, execution, run, childReport: 'done' })
+    assert.ok(review.patch, 'the captured diff remains available')
+    assert.equal(run.status, 'error')
+    assert.match(review.text, /検証後のソース確認に失敗.*source read failed/)
+    assert.match(review.text, /eco 検証: error/)
+  })
+}
 
 test('eco changes while recording the review invalidate the command evidence', async (t) => {
   const { folder, reviews, report } = await fixture(t)

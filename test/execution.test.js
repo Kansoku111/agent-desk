@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
+import { Readable } from 'node:stream'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -138,6 +140,27 @@ test('EX snapshots include untracked content and ignore generated files', async 
   await fs.mkdir(path.join(folder, 'output'))
   await fs.writeFile(path.join(folder, 'output', 'generated.txt'), 'generated')
   assert.equal((await sourceSnapshot(folder)).hash, first.hash)
+})
+
+test('EX source fingerprint reports a timeout instead of waiting indefinitely on a file', async (t) => {
+  const { folder } = await fixture(t)
+  const original = fsSync.createReadStream
+  let blocked
+  t.mock.method(fsSync, 'createReadStream', (file, options) => {
+    if (file !== path.join(folder, 'source.txt')) return original(file, options)
+    blocked = new Readable({ signal: options?.signal, read() {} })
+    return blocked
+  })
+  const pending = sourceSnapshot(folder, { timeoutMs: 1500 }).then(
+    () => ({ success: true }), (error) => ({ error }),
+  )
+  let timer
+  const outcome = await Promise.race([pending, new Promise((resolve) => { timer = setTimeout(() => resolve(null), 5000) })])
+  clearTimeout(timer)
+  if (!outcome) { blocked?.destroy(); await pending }
+  assert.ok(blocked, 'the source file was reached')
+  assert.ok(outcome, 'the source read must finish at its deadline')
+  assert.match(outcome.error?.message ?? '', /ソース.*時間/)
 })
 
 test('EX persists checks per project and records actual command results', async (t) => {

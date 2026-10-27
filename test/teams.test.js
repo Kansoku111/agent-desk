@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
+import { Readable } from 'node:stream'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -1416,6 +1418,74 @@ test('eco stopAll before verification starts does not launch a command or auto-r
   assert.equal(child.execution.repairs, 0)
   assert.equal(child.execution.phase, 'review')
   assert.equal(child.reports.at(-1).kind, 'cancelled')
+})
+
+test('eco reports a source fingerprint timeout to the leader without accepting it', async (t) => {
+  const { tool, team, manager, threads, workspace, leader } = await setupExecution(t)
+  await manager.configureExecution(workspace, [{ id: 'check', command: 'node -e "process.exit(9)"', autoRepair: true }])
+  await tool('spawn', { ...exTask, checks: ['check'] })
+  const child = team.children[0]
+  const original = fsSync.createReadStream
+  let ready
+  const started = new Promise((resolve) => { ready = resolve })
+  let blocked
+  t.mock.method(fsSync, 'createReadStream', (file, options) => {
+    if (file !== path.join(workspace, 'source.txt')) return original(file, options)
+    blocked = new Readable({ signal: options?.signal, read() {} })
+    ready()
+    return blocked
+  })
+  const deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal)
+  threads.finish(child.taskId, 'completed work')
+  await started
+  deadline.abort()
+  const pending = Promise.all([...manager.exPending])
+  let timer
+  const completed = await Promise.race([pending.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), 5000) })])
+  clearTimeout(timer)
+  if (!completed) blocked.destroy()
+  await pending
+  assert.ok(completed, 'a timed-out source read must release verification')
+  assert.equal(child.execution.phase, 'review')
+  assert.equal(child.execution.verification.status, 'error')
+  assert.deepEqual(child.execution.verification.checks, [])
+  assert.equal(child.execution.repairs, 0)
+  const delivered = threads.calls.findLast((call) => call[0] === 'send' && call[1] === leader)[2]
+  assert.match(delivered, /ソースの確認が制限時間を超えました/)
+  assert.match(delivered, /completed work/)
+  await assert.rejects(tool('close', { child: child.id, reason: 'not verified' }), /成功していません/)
+})
+
+test('eco stopping a blocked source fingerprint reports cancellation to the leader', async (t) => {
+  const { tool, team, manager, threads, workspace, leader } = await setupExecution(t)
+  await tool('spawn', exTask)
+  const child = team.children[0]
+  const original = fsSync.createReadStream
+  let ready
+  const started = new Promise((resolve) => { ready = resolve })
+  let blocked
+  t.mock.method(fsSync, 'createReadStream', (file, options) => {
+    if (file !== path.join(workspace, 'source.txt')) return original(file, options)
+    blocked = new Readable({ signal: options?.signal, read() {} })
+    ready()
+    return blocked
+  })
+  threads.finish(child.taskId, 'completed work')
+  await started
+  assert.equal(child.execution.phase, 'verifying')
+  await manager.stopAll(team.id)
+  const pending = Promise.all([...manager.exPending])
+  let timer
+  const completed = await Promise.race([pending.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), 3000) })])
+  clearTimeout(timer)
+  if (!completed) blocked.destroy()
+  await pending
+  assert.ok(completed, 'stop must interrupt the source read')
+  assert.equal(child.execution.phase, 'review')
+  assert.equal(child.reports.at(-1).kind, 'cancelled')
+  assert.match(threads.calls.findLast((call) => call[0] === 'send' && call[1] === leader)[2], /cancelled|停止/)
+  assert.equal(child.execution.verification, undefined)
 })
 
 test('eco failed send preserves the reviewed evidence and restart interrupts verification', async (t) => {
@@ -2896,8 +2966,10 @@ test('eco deletion keeps the write guard until verification stops', async (t) =>
   const child = f.team.children[0]
   let finish
   const done = new Promise((resolve) => { finish = resolve })
-  f.manager.execution.active.set(child.id, { done, stop: () => {} })
+  const controller = new AbortController()
+  f.manager.execution.active.set(child.id, { done, controller, stop: () => {} })
   const removal = f.manager.removeChild(f.team.id, child.id)
+  assert.equal(controller.signal.aborted, true)
   assert.throws(() => f.manager.guardExecution({ workspace: f.workspace, id: 'other' }), /eco/)
   await assert.rejects(f.tool('send', { child: child.id, message: 'again' }), /削除中/)
   f.manager.execution.active.delete(child.id)

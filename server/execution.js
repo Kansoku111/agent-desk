@@ -56,56 +56,70 @@ export function normalizeChecks(value) {
 
 /** Includes tracked and non-ignored untracked files, including deleted paths.
  * Git status/diff alone does not identify untracked file contents. */
-export async function sourceSnapshot(folder) {
-  let names
-  let git = true
+export async function sourceSnapshot(folder, { signal, timeoutMs = 120_000 } = {}) {
+  // Fingerprinting runs outside command timeouts and needs its own deadline.
+  const deadline = AbortSignal.timeout(timeoutMs)
+  const reading = signal ? AbortSignal.any([signal, deadline]) : deadline
   try {
-    const { stdout } = await exec('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
-      cwd: folder, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: 30_000,
-    })
-    names = stdout.split('\0').filter(Boolean)
-  } catch (error) {
-    if (error.code !== 'ENOENT' && !/not a git repository/i.test(error.stderr ?? '')) throw error
-    // Plain projects, including My PC: exclude generated/dependency directories.
-    git = false
-    names = []
-    async function walk(relative) {
-      for (const entry of await fs.promises.readdir(path.join(folder, relative), { withFileTypes: true })) {
-        const name = path.join(relative, entry.name)
-        if (entry.isDirectory()) { if (!PLAIN_IGNORED_DIRS.has(entry.name)) await walk(name) }
-        else names.push(name)
-        if (names.length > 100_000) throw new Error('検証対象が多すぎます。プロジェクト範囲を絞ってください')
-      }
-    }
-    await walk('')
-  }
-  const files = [...new Set(names)].sort()
-  const digest = createHash('sha256')
-  for (const name of files) {
-    const file = path.resolve(folder, name)
-    const relative = path.relative(path.resolve(folder), file)
-    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('検証対象がプロジェクト外です')
-    digest.update(name + '\0')
+    reading.throwIfAborted()
+    let names
+    let git = true
     try {
-      const stat = await fs.promises.lstat(file)
-      if (stat.isSymbolicLink()) digest.update('link:' + await fs.promises.readlink(file))
-      else if (stat.isFile()) {
-        digest.update(String(stat.mode & 0o111) + ':')
-        for await (const chunk of fs.createReadStream(file)) digest.update(chunk)
-      } else throw new Error(`ディレクトリ ${name} の内容を追跡できません。サブモジュールはそのフォルダをプロジェクトとして開いてください`)
+      const { stdout } = await exec('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+        cwd: folder, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: 30_000, signal: reading,
+      })
+      names = stdout.split('\0').filter(Boolean)
     } catch (error) {
-      if (error.code !== 'ENOENT') throw error
-      digest.update('deleted')
+      if (error.code !== 'ENOENT' && !/not a git repository/i.test(error.stderr ?? '')) throw error
+      // Plain projects, including My PC: exclude generated/dependency directories.
+      git = false
+      names = []
+      async function walk(relative) {
+        reading.throwIfAborted()
+        for (const entry of await fs.promises.readdir(path.join(folder, relative), { withFileTypes: true })) {
+          reading.throwIfAborted()
+          const name = path.join(relative, entry.name)
+          if (entry.isDirectory()) { if (!PLAIN_IGNORED_DIRS.has(entry.name)) await walk(name) }
+          else names.push(name)
+          if (names.length > 100_000) throw new Error('検証対象が多すぎます。プロジェクト範囲を絞ってください')
+        }
+      }
+      await walk('')
     }
-    digest.update('\0')
+    const files = [...new Set(names)].sort()
+    const digest = createHash('sha256')
+    for (const name of files) {
+      reading.throwIfAborted()
+      const file = path.resolve(folder, name)
+      const relative = path.relative(path.resolve(folder), file)
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('検証対象がプロジェクト外です')
+      digest.update(name + '\0')
+      try {
+        const stat = await fs.promises.lstat(file)
+        reading.throwIfAborted()
+        if (stat.isSymbolicLink()) digest.update('link:' + await fs.promises.readlink(file))
+        else if (stat.isFile()) {
+          digest.update(String(stat.mode & 0o111) + ':')
+          for await (const chunk of fs.createReadStream(file, { signal: reading })) digest.update(chunk)
+        } else throw new Error(`ディレクトリ ${name} の内容を追跡できません。サブモジュールはそのフォルダをプロジェクトとして開いてください`)
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error
+        digest.update('deleted')
+      }
+      digest.update('\0')
+    }
+    reading.throwIfAborted()
+    return { hash: digest.digest('hex'), files, git }
+  } catch (error) {
+    if (deadline.aborted && !signal?.aborted) throw new Error('ソースの確認が制限時間を超えました。プロジェクト範囲や読み取りに時間のかかるファイルを確認してください。')
+    throw error
   }
-  return { hash: digest.digest('hex'), files, git }
 }
 
 /** Check all new watcher paths together, including paths already deleted. */
-async function ignoredByGit(folder, files) {
+async function ignoredByGit(folder, files, signal) {
   const pending = exec('git', ['check-ignore', '-z', '--stdin'], {
-    cwd: folder, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: 30_000,
+    cwd: folder, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: 30_000, signal,
   })
   // Git may exit before reading all input; its exit status still determines the result.
   pending.child.stdin.on('error', () => {})
@@ -185,7 +199,7 @@ export class ExecutionVerifier {
   }
   cancel(id) {
     const entry = this.active.get(id)
-    if (entry) { entry.cancelled = true; entry.stop?.() }
+    if (entry) { entry.cancelled = true; entry.controller.abort(); entry.stop?.() }
   }
   async stop() {
     for (const id of this.active.keys()) this.cancel(id)
@@ -195,7 +209,7 @@ export class ExecutionVerifier {
   async verify({ id, folder, checks, previousRun = null }) {
     if (this.active.has(id)) throw new Error('検証はすでに実行中です')
     const normalized = normalizeChecks(checks)
-    const entry = { ownerId: id, cancelled: false, previousRun: previousRun ? { id: previousRun.id, record: previousRun.record, status: previousRun.status, sourceHash: previousRun.sourceHash, endHash: previousRun.endHash } : null }
+    const entry = { ownerId: id, cancelled: false, controller: new AbortController(), previousRun: previousRun ? { id: previousRun.id, record: previousRun.record, status: previousRun.status, sourceHash: previousRun.sourceHash, endHash: previousRun.endHash } : null }
     this.active.set(id, entry)
     entry.done = this.#verify(entry, folder, normalized).finally(() => this.active.delete(id))
     return entry.done
@@ -207,7 +221,7 @@ export class ExecutionVerifier {
     await fs.promises.mkdir(runDir, { recursive: true })
     let watcher
     try {
-      const before = await sourceSnapshot(folder)
+      const before = await sourceSnapshot(folder, { signal: entry.controller.signal })
       run.sourceHash = before.hash
       // A new path may disappear before the next snapshot. Collect its watcher
       // events and classify them in batches rather than running Git per event.
@@ -235,7 +249,7 @@ export class ExecutionVerifier {
           const dirs = parentDirectories(names)
           const files = names.filter((file) => !dirs.has(file) && !knownDirs.has(file))
           if (!files.length) continue
-          const ignored = before.git ? await ignoredByGit(folder, files) : null
+          const ignored = before.git ? await ignoredByGit(folder, files, entry.controller.signal) : null
           const relevant = ignored
             ? files.some((file) => !ignored.has(file))
             : files.some((file) => !file.split('/').slice(0, -1).some((part) => PLAIN_IGNORED_DIRS.has(part)))
@@ -254,7 +268,7 @@ export class ExecutionVerifier {
         if (changes !== observed) unapprovedChange = true
         const startChanges = changes
         const result = await this.#command(entry, folder, check, runDir)
-        const afterCheck = await sourceSnapshot(folder)
+        const afterCheck = await sourceSnapshot(folder, { signal: entry.controller.signal })
         await collectUnknown()
         result.sourceChanged = changes !== startChanges || baseline.hash !== afterCheck.hash
         if (result.sourceChanged && !check.allowSourceChanges) unapprovedChange = true
@@ -265,7 +279,7 @@ export class ExecutionVerifier {
         for (const dir of parentDirectories(known)) knownDirs.add(dir)
         if (result.status !== 'passed') break
       }
-      const after = await sourceSnapshot(folder)
+      const after = await sourceSnapshot(folder, { signal: entry.controller.signal })
       await collectUnknown()
       if (changes !== observed || baseline.hash !== after.hash) unapprovedChange = true
       const changed = uncertain || changes > 0 || before.hash !== after.hash

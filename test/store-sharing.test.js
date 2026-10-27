@@ -59,6 +59,22 @@ async function fixture(settings = {}) {
   return { store: exports, frame, hello, document, notifications, sent, storage, getSocket: () => socket, setOnSend: (callback) => { onSend = callback } }
 }
 
+test('a team verification snapshot is refreshed after reconnect', async () => {
+  const { store, frame, getSocket } = await fixture()
+  const team = { id: 'team', leaderId: 'leader', leaderKind: 'thread', children: [{ id: 'child', execution: { phase: 'verifying' } }] }
+  frame({ event: 'team', team })
+  const oldSocket = getSocket()
+  oldSocket.readyState = 3
+  await oldSocket.onclose()
+  store.connect()
+  assert.equal(store.getState().connection, 'connecting')
+  assert.equal(store.getState().server.teams[0].children[0].execution.phase, 'verifying')
+  getSocket().onopen()
+  frame({ event: 'hello', state: { app: { uiBuild: 'test' }, settings: {}, threads: [], terminals: [], teams: [{ ...team, children: [{ id: 'child', execution: { phase: 'review' } }] }] } })
+  assert.equal(store.getState().connection, 'open')
+  assert.equal(store.getState().server.teams[0].children[0].execution.phase, 'review')
+})
+
 for (const kind of ['thread', 'agent']) {
   test(`deleting the selected ${kind} child returns to its leader`, async () => {
     const { store, frame } = await fixture()

@@ -41,9 +41,17 @@ export class ExecutionReview {
       await fs.writeFile(patchFile, patch, 'utf8')
       captured = true
       // The diff is captured after commands finish; do not pair it with older results.
-      if (run.endHash && (await sourceSnapshot(folder)).hash !== run.endHash) {
-        run.status = 'stale'
-        warnings.push('検証後、差分の取得中にソースが変更されました。verify で再検証してください。')
+      if (run.endHash) {
+        try {
+          if ((await sourceSnapshot(folder)).hash !== run.endHash) {
+            run.status = 'stale'
+            warnings.push('検証後、差分の取得中にソースが変更されました。verify で再検証してください。')
+          }
+        } catch (error) {
+          const message = `検証後のソース確認に失敗しました: ${error.message}`
+          if (['passed', 'unverified'].includes(run.status)) { run.status = 'error'; run.error = message }
+          else warnings.push(message)
+        }
       }
     } catch (error) {
       warnings.push(`差分取得失敗: ${error.message}`)

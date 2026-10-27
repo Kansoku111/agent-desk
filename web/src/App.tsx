@@ -139,7 +139,7 @@ export function App() {
       <main className="main">
         {updating
           ? <div className="banner"><Loader2 size={14} className="spin" /> Agent Desk を更新しています…</div>
-          : connection === 'closed' && (
+          : (connection === 'closed' || connection === 'connecting') && (
             <div className="banner">
               <WifiOff size={14} /> {remoteHost ? 'PC との接続が切れました。再接続しています…' : 'サーバーとの接続が切れました。再接続しています…'}
             </div>
