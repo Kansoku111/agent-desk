@@ -21,7 +21,7 @@ const modules = {
   react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' }, 'lucide-react': {},
   '../store': {}, '../model-selection': { isModelVisible: () => true },
   '../util': { parseModel: (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }, pickableEfforts: (efforts) => efforts },
-  './Modal': {}, './Pickers': { byNewest: () => 0 },
+  './Modal': {}, './Popover': {}, './Pickers': { byNewest: () => 0 },
   './TerminalPickers': { claudeModels: () => [], claudeModelName: (_server, model) => model, claudeEfforts: () => ['low', 'high'] },
   './ClaudeAuthConsent': {}, './TeamGuides': {}, './PtcToggle': {}, '../team-auth-consent': {},
   './WorkflowModelField': { ModelField: field, modelGroups: (server) => server.groups.map((group) => ({ ...group, models: [...group.models] })) },

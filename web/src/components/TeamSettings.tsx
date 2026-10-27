@@ -11,6 +11,7 @@ import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { TeamGuides } from './TeamGuides'
 import { PtcToggle } from './PtcToggle'
 import { ModelField, modelGroups } from './WorkflowModelField'
+import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 
 const MAX_CHILDREN = 12
@@ -212,43 +213,58 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
   )
 }
 
-/** The same grouped picker as eco and AB, with one field per selected model. */
+/** Select several models in one menu; keep each selected model's own effort. */
 function FreeModels({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
-  const [pending, setPending] = useState<number[]>([])
   const models = config.freeModels ?? []
   const groups = teamModelGroups(server)
-  const row = (entry: TeamModelChoice | null, index: number, position: number) => {
-    const value = entry ? modelValue(entry) : ''
-    const used = new Set(models.filter((_, i) => !entry || i !== index).map(modelValue))
-    const choices = groups.map((group) => ({ ...group, models: group.models.filter((model) => !used.has(model.value)) })).filter((group) => group.models.length)
-    if (entry && !choices.some((group) => group.models.some((model) => model.value === value))) {
-      choices.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === value)?.name ?? entry.model }] })
+  // Keep previously selected, now unavailable models visible and removable.
+  const missing = models.filter((entry) => !groups.some((group) => group.models.some((model) => model.value === modelValue(entry))))
+  if (missing.length) groups.unshift({ id: 'current', heading: '選択済み', note: '', models: missing.map((entry) => ({
+    value: modelValue(entry), name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === modelValue(entry))?.name ?? entry.model,
+  })) })
+  const selected = new Set(models.map(modelValue))
+  const toggle = (value: string) => {
+    if (selected.has(value)) {
+      onChange({ freeModels: models.filter((entry) => modelValue(entry) !== value) })
+      return
     }
-    const levels = entry ? entry.provider === 'claude' ? claudeEfforts(server, entry.model) : dshEfforts(server, entry.model, entry.provider) : []
-    return <div className="team-free-model-row" key={position}>
-      <ModelField label={`モデル ${position + 1}`} value={value} groups={choices} disabled={false} effort={entry?.effort ?? ''} efforts={levels} allowDefaultEffort
-        onChange={(next) => {
-          if (next === value) return
-          const chosen = pickerChoice(next)
-          if (!chosen) return
-          onChange({ freeModels: entry ? models.map((model, i) => i === index ? chosen : model) : [...models.slice(0, index), chosen, ...models.slice(index)] })
-          if (!entry) setPending((positions) => positions.filter((item) => item !== position))
-        }}
-        onEffort={(effort) => onChange({ freeModels: models.map((model, i) => i === index ? { ...model, effort: effort || null } : model) })} />
-      <button type="button" className="icon-button" title="削除" aria-label={`モデル ${position + 1}を削除`}
-        onClick={() => {
-          if (entry) onChange({ freeModels: models.filter((_, i) => i !== index) })
-          setPending((positions) => positions.filter((item) => item !== position).map((item) => item > position ? item - 1 : item))
-        }}><Trash2 size={15} /></button>
-    </div>
+    const chosen = pickerChoice(value)
+    if (chosen && models.length < MAX_CHILDREN) onChange({ freeModels: [...models, chosen] })
   }
   return <section className="account-card team-free-models">
     <div className="account-head"><h3>子のモデル <span className="muted">{models.length} / {MAX_CHILDREN}</span></h3>
-      <button type="button" className="button ghost" disabled={models.length + pending.length >= MAX_CHILDREN} onClick={() => setPending((positions) => positions.length + models.length >= MAX_CHILDREN ? positions : [...positions, models.length + positions.length])}><Plus size={14} /> モデルを追加</button>
+      <Dropdown placement="bottom" portal width={300} trigger={({ toggle, open }) => (
+        <button type="button" className="button ghost" aria-haspopup="menu" aria-expanded={open} onClick={toggle}><Plus size={14} /> モデルを選択</button>
+      )}>
+        {() => <div className="menu-scroll">
+          {groups.map((group, index) => <div key={group.id}>
+            {index > 0 && <MenuDivider />}
+            <MenuHeading>{group.heading}<span className="menu-heading-note">{group.note}</span></MenuHeading>
+            {group.models.map((model) => <MenuItem key={model.value} label={model.name} checkable selected={selected.has(model.value)}
+              disabled={!selected.has(model.value) && models.length >= MAX_CHILDREN} onSelect={() => toggle(model.value)} />)}
+          </div>)}
+        </div>}
+      </Dropdown>
     </div>
-    {Array.from({ length: models.length + pending.length }, (_, position) => {
-      const index = position - pending.filter((item) => item < position).length
-      return row(pending.includes(position) ? null : models[index], index, position)
+    {models.map((entry, index) => {
+      const value = modelValue(entry)
+      const used = new Set(models.filter((_, i) => i !== index).map(modelValue))
+      const choices = groups.map((group) => ({ ...group, models: group.models.filter((model) => !used.has(model.value)) })).filter((group) => group.models.length)
+      if (!choices.some((group) => group.models.some((model) => model.value === value))) {
+        choices.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === value)?.name ?? entry.model }] })
+      }
+      const levels = entry.provider === 'claude' ? claudeEfforts(server, entry.model) : dshEfforts(server, entry.model, entry.provider)
+      return <div className="team-free-model-row" key={value}>
+        <ModelField label={`モデル ${index + 1}`} value={value} groups={choices} disabled={false} effort={entry.effort ?? ''} efforts={levels} allowDefaultEffort
+          onChange={(next) => {
+            if (next === value) return
+            const chosen = pickerChoice(next)
+            if (chosen && !used.has(next)) onChange({ freeModels: models.map((model, i) => i === index ? chosen : model) })
+          }}
+          onEffort={(effort) => onChange({ freeModels: models.map((model, i) => i === index ? { ...model, effort: effort || null } : model) })} />
+        <button type="button" className="icon-button" title="削除" aria-label={`モデル ${index + 1}を削除`}
+          onClick={() => onChange({ freeModels: models.filter((_, i) => i !== index) })}><Trash2 size={15} /></button>
+      </div>
     })}
     {models.some((model) => model.provider === 'claudeApi') && <p className="team-warning">Claude（API）は従量課金です。並列数や長い会話で費用が増えます。</p>}
   </section>

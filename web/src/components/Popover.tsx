@@ -101,7 +101,7 @@ export function Dropdown({ trigger, children, placement = 'top', align = 'left',
   useEffect(() => {
     // A portal starts hidden until it is measured; hidden items cannot receive focus.
     if (!open || (portal && !fit)) return
-    const first = menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled]), input')
+    const first = menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled]), input')
     first?.focus()
   }, [open, portal, Boolean(fit)])
 
@@ -134,7 +134,7 @@ export function Dropdown({ trigger, children, placement = 'top', align = 'left',
             }
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
             event.preventDefault()
-            const items = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])]
+            const items = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled])') ?? [])]
             const index = items.indexOf(document.activeElement as HTMLElement)
             const next = event.key === 'ArrowDown' ? index + 1 : index - 1
             items[(next + items.length) % items.length]?.focus()
@@ -155,6 +155,7 @@ interface MenuItemProps {
   description?: ReactNode
   hint?: ReactNode
   selected?: boolean
+  checkable?: boolean
   disabled?: boolean
   danger?: boolean
   /** Keys (`KeyboardEvent.key`) that choose the item while its menu is open. */
@@ -162,11 +163,12 @@ interface MenuItemProps {
   onSelect: () => void
 }
 
-export function MenuItem({ icon, label, description, hint, selected, disabled, danger, keys, onSelect }: MenuItemProps) {
+export function MenuItem({ icon, label, description, hint, selected, checkable, disabled, danger, keys, onSelect }: MenuItemProps) {
   return (
     <button
       type="button"
-      role="menuitem"
+      role={checkable ? 'menuitemcheckbox' : 'menuitem'}
+      aria-checked={checkable ? Boolean(selected) : undefined}
       className={`menu-item ${danger ? 'danger' : ''} ${selected ? 'selected' : ''}`}
       disabled={disabled}
       data-keys={keys?.join(' ')}

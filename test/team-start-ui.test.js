@@ -5,8 +5,9 @@ import { test } from 'node:test'
 test('TM startup and running-team dialogs expose both model modes and the saved default', async () => {
   const code = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
   assert.match(code, /defaultModelMode.*free.*tiers/)
-  assert.match(code, /モデルを追加/)
-  assert.ok(code.includes('models.length + pending.length >= MAX_CHILDREN'))
+  assert.match(code, /モデルを選択/)
+  assert.ok(code.includes('models.length >= MAX_CHILDREN'))
+  assert.match(code, /checkable selected=/)
   assert.ok(code.includes('Array.isArray(value)'))
   assert.match(code, /<ModelField label=/)
   assert.match(code, /const groups = teamModelGroups\(server\)/)
