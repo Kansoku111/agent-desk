@@ -220,6 +220,7 @@ export function homePatch({
     ...(acpModel ? [{ id: 'acp', config: { provider: 'openai-codex', model: acpModel } }] : []),
     // Its tool and prompt section go together; delegation is configured below.
     { id: 'tool-workflow', disabled: true },
+    { insert: [{ id: 'agent-desk-plan-session-policy', name: new URL('./plan-policy-plugin.js', import.meta.url).href, config: { plan: false } }] },
   ]
   if (settingsFile) rows.push({ insert: [{
     id: 'agent-desk-subagent-policy',
@@ -336,6 +337,7 @@ export function abPatch({ subagents = [], persona = null, writable = false, lean
     ...(!writable && lean ? ['tool-web'] : [])]
   return YAML.stringify([
     ...disabled.map((id) => ({ id, disabled: true })),
+    ...(plan ? [{ id: 'agent-desk-plan-session-policy', config: { plan: true } }] : []),
     // Remove the home layer's fixed-model delegation advice with its tools,
     // preserving the shipped persona just as teamChildPatch does.
     ...(subagents.some(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))

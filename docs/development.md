@@ -15,6 +15,8 @@ npm run build      # 画面のビルド（npm start 時は必要なら自動で�
 
 PTCの回帰検証は `node --test test/ptc.test.js test/ptc-runtime.test.js test/dsh-compatibility.test.js test/subagents.test.js test/ab.test.js test/ab-runtime.test.js test/teams.test.js test/execution.test.js` で実行できます。`ptc-runtime.test.js` は一時ホームとローカルの模擬Chat Completions応答で実際のdsh/ACP/PTCを起動します。通常→PTC→通常のツール定義と会話履歴、同一プロセス内の別セッション、再開、内部ツール結果、タイムアウト・キャンセル後の実行プロセス終了と再実行、読み取り専用／ワークスペースの直接Node書き込みと登録ツール書き込みを検査します。AB・チームの実際の実行プロファイルでもPTCを動かし、読み取り専用担当の直接Node書き込み拒否、実装担当の登録ツール書き込み、委任ツールの非公開と通常方式への復帰を確認します。ecoの調査→実装についても通常方式とPTCで同じセッションの調査指示・ツール結果の保持、切り替え後と再起動後の書き込み、別の調査セッションの読み取り専用維持を検査します。マネージャーのテストではAB全段階への継承、TM・eco親子の切り替え・再開・保存、ecoの差し戻しを検査します。`thread-research-transition.test.js` は要約や新規セッションへの退避がないことと、移行・保存・削除時の失敗処理を確認します。外部モデルAPIや権限昇格の承認は使いません。この検証は実モデルによる会話継続やOS全体の完全隔離を保証するものではありません。
 
+Planの回帰検証は `node --test test/plan.test.js` と `node --test --test-name-pattern="Plan round-trip|real Plan profile" test/ptc-runtime.test.js` で実行できます。模擬応答と実dshを使い、全3権限×通常方式／PTCで同一ID・元の発言とツール結果・Plan中の編集拒否・OFF後の権限とPTC復帰・ランタイム再起動を確認します。単体テストは再開失敗・旧セッションの終了失敗・権限確認の欠落や不一致・権限ログ保存失敗で送信を止め、新規セッションを作らないことも検査します。
+
 `scripts/probe-acp.mjs` は、dsh の ACP 応答を直接確かめるための診断用スクリプトです。`scripts/check-dsh.mjs` は、dsh を更新したあとの動作確認スクリプトです（`node scripts/check-dsh.mjs`、[更新](updating.md) を参照）。
 
 累計API換算額の画面検証は `node test/fixtures/serve-ab-ui.mjs` を起動し、表示URLの `ab-ui.html` を `usage-score-ui.html` に替えて開きます。DevToolsで `await usageScoreTest.run('USD')` と `await usageScoreTest.run('JPY')` を実行すると、通常・TM・Eco・Claude親・AB、小額・既知のゼロ・未算定・旧履歴を検証し、実際に開いた詳細の課金額・手動レート・フォーカス復帰も確認します。`await usageScoreTest.renderSettings()` で一般設定、`usageScoreTest.failSave()` で次の保存失敗を再現できます。375px幅でも実行でき、実モデルや本番データは使いません。

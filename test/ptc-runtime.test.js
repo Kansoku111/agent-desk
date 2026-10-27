@@ -14,6 +14,7 @@ import { appPaths } from '../server/paths.js'
 import { abPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
 import { localRoute } from '../server/local-llm.js'
 import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
+import { assertPlanPolicy } from '../server/plan-policy-plugin.js'
 
 async function setup(t, mode, profile) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ptc-'))
@@ -388,6 +389,67 @@ test('real PTC timeout and cancellation settle, then the same ACP session can ex
   const next = await f.run('return 42;')
   assert.ok(next.some((update) => update.status === 'completed' && JSON.stringify(update).includes('42')), JSON.stringify(next))
 })
+
+for (const permissionMode of ['workspace-write', 'danger-full-access', 'read-only']) {
+  for (const toolMode of ['native', 'ptc']) {
+    test(`Plan round-trip preserves real history and restores policy (${permissionMode}, ${toolMode})`, { timeout: 120_000 }, async (t) => {
+      const f = await setup(t, permissionMode)
+      await fs.writeFile(f.paths.planPatch, abPatch({ plan: true, lean: false }))
+      const pool = new RuntimePool({ paths: f.paths, onUpdate() {}, onPermission: async () => { assert.fail('Plan must not ask for escalation') } })
+      const planRuntime = pool.runtimes.get('plan')
+      f.runtimes.push(planRuntime)
+      const threads = new ThreadManager({ paths: f.paths, pool: Object.assign(new EventEmitter(), {
+        get: async (key) => (key === 'plan' ? planRuntime : f.runtime).start(),
+        holderOf: (id) => [f.runtime, planRuntime].find((runtime) => runtime.liveSessions.has(id)), status: () => ({}),
+      }), catalog: { learn: () => false }, getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null })
+      f.cleanups.push(() => threads.shutdown())
+      const collect = f.runtime.onUpdate
+      for (const runtime of [f.runtime, planRuntime]) runtime.onUpdate = (id, update) => { collect(id, update); threads.onUpdate(id, update) }
+      const thread = await threads.create({ workspace: f.workspace, model: '["local-llm","ptc-fixture"]', permissionMode, toolMode })
+      const send = async (text, plan) => {
+        await threads.send(thread.id, { text, plan })
+        await threads.active.get(thread.id).done
+        const view = await threads.get(thread.id)
+        assert.equal(view.turns.at(-1).status, 'done', JSON.stringify(view.turns.at(-1)))
+        return view.thread.sessionId
+      }
+      f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'read', args: toolMode === 'ptc'
+        ? { description: 'Read original evidence', code: 'return await tools.read({ file_path: "input.txt" });' } : { file_path: 'input.txt' } })
+      const id = await send('original-context-before-plan', false)
+      const from = f.requests.length
+      f.queue.push({ name: 'write', args: { file_path: 'input.txt', content: 'forbidden' } })
+      f.queue.push({ name: 'read', args: { file_path: 'input.txt' } })
+      assert.equal(await send('consult-without-editing', true), id)
+      assertPlanPolicy(threads.liveOptions.get(id), true, 'read-only')
+      assert.equal(await fs.readFile(path.join(f.workspace, 'input.txt'), 'utf8'), 'PTC fixture content')
+      const planInput = JSON.stringify(f.requests[from].messages)
+      assert.match(planInput, /original-context-before-plan/)
+      assert.match(planInput, /PTC fixture content/, 'original tool results survive intact')
+      assert.match(planInput, /Current DSH file policy: read-only/)
+      const schemas = f.requests[from].tools.map((tool) => tool.function.name)
+      for (const name of ['write', 'edit', 'pwsh', 'bash', 'run_code', 'subagent', 'create_goal']) assert.ok(!schemas.includes(name), name)
+      await planRuntime.stop()
+      assert.equal(await send('consult-after-runtime-restart', true), id)
+      assertPlanPolicy(threads.liveOptions.get(id), true, 'read-only')
+      await f.runtime.stop()
+      const back = f.requests.length
+      f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'write', args: toolMode === 'ptc'
+        ? { description: 'Implement after Plan', code: 'return await tools.write({ file_path: "after-plan.txt", content: "implemented" });' }
+        : { file_path: 'after-plan.txt', content: 'implemented' } })
+      assert.equal(await send('implement-after-plan', false), id)
+      assertPlanPolicy(threads.liveOptions.get(id), false, permissionMode)
+      const resumedInput = JSON.stringify(f.requests[back].messages)
+      assert.match(resumedInput, /original-context-before-plan/)
+      assert.match(resumedInput, /consult-after-runtime-restart/)
+      const system = f.requests[back].messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
+      assert.doesNotMatch(system, /This request is in Plan mode/)
+      assert.equal(toolModeOption(threads.liveOptions.get(id)).currentValue, toolMode)
+      if (permissionMode === 'read-only') await assert.rejects(fs.stat(path.join(f.workspace, 'after-plan.txt')), { code: 'ENOENT' })
+      else assert.equal(await fs.readFile(path.join(f.workspace, 'after-plan.txt'), 'utf8'), 'implemented')
+      assert.equal(threads.threads.get(thread.id).carryover, undefined)
+    })
+  }
+}
 
 test('real Plan profile exposes reads but not writing or delegation', { timeout: 120_000 }, async (t) => {
   const f = await setup(t, 'read-only', 'plan')

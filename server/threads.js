@@ -20,6 +20,7 @@ import { turnUsage } from './usage.js'
 import { OUTPUT_SPEED_META } from './output-speed.js'
 import { TOOL_MODE_CONFIG, assertToolMode, assertToolModeApplied, toolModeOption } from './ptc.js'
 import { emptyScore, scoresUpTo } from '../shared/usage-score.js'
+import { assertPlanPolicy } from './plan-policy-plugin.js'
 export { carryoverText, describeError, isUndoable, restoreNoteText } from './thread-utils.js'
 
 const TURN_EMIT_MS = 60
@@ -1008,25 +1009,23 @@ export class ThreadManager extends EventEmitter {
     const plan = turn.user.plan === true
     const runtime = await this.pool.get(plan ? 'plan' : runtimeKey(thread))
     this.#checkRun(thread, active)
-    // Sessions persist their sandbox and tools. Never resume one across Plan boundaries,
-    // even after a restart when no runtime currently holds the old session.
-    if (thread.sessionId && Boolean(thread.sessionPlan) !== plan) {
-      const oldId = thread.sessionId
-      const oldHolder = this.pool.holderOf(oldId)
-      if (oldHolder) await oldHolder.closeSession(oldId).catch(() => {})
-      this.#checkRun(thread, active)
-      this.liveOptions.delete(oldId)
-      this.sessionIndex.delete(oldId)
-      thread.sessionId = null
-      delete thread.sessionPlan
-      thread.carryover = 'plan'
+    // The same log moves between processes. Never summarize/fork a Plan session:
+    // both directions must acknowledge the destination policy before prompting.
+    const planManaged = plan || thread.sessionPlan !== undefined
+    if (plan && thread.sessionPlan === undefined) {
+      // Persist the no-fallback requirement even if the first migration fails.
+      thread.sessionPlan = false
       this.#saveIndex()
+      await this.indexWriter.flush()
+      this.#checkRun(thread, active)
     }
+    const switchingPlan = thread.sessionId && Boolean(thread.sessionPlan) !== plan
     active.runtime = runtime
     const holder = thread.sessionId ? this.pool.holderOf(thread.sessionId) : null
-    if (holder && holder !== runtime) {
+    if (holder && (holder !== runtime || switchingPlan)) {
       this.liveOptions.delete(thread.sessionId)
-      await holder.closeSession(thread.sessionId).catch(() => {})
+      if (planManaged) await holder.closeSession(thread.sessionId)
+      else await holder.closeSession(thread.sessionId).catch(() => {})
       this.#checkRun(thread, active)
     }
     let options = null
@@ -1039,6 +1038,7 @@ export class ThreadManager extends EventEmitter {
         options = resumed?.configOptions ?? null
       } catch (error) {
         this.#checkRun(thread, active)
+        if (planManaged) throw error
         turn.items.push({
           type: 'notice',
           id: `notice-${Date.now()}`,
@@ -1059,21 +1059,34 @@ export class ThreadManager extends EventEmitter {
         throw error
       }
       thread.sessionId = created.sessionId
-      if (plan) thread.sessionPlan = true
-      else delete thread.sessionPlan
       options = created.configOptions ?? null
-      if (thread.carryover === 'permission' || thread.carryover === 'plan') {
+      if (thread.carryover === 'permission') {
         turn.items.push({
           type: 'notice',
           id: `notice-${Date.now()}`,
           level: 'info',
-          text: `${thread.carryover === 'plan' ? 'Planの切り替え' : '権限モードの変更'}により、新しいセッションで続けます。これまでのやり取りは要約して引き継ぎます。`,
+          text: '権限モードの変更により、新しいセッションで続けます。これまでのやり取りは要約して引き継ぎます。',
         })
       }
       this.#saveIndex()
     }
     this.sessionIndex.set(thread.sessionId, thread.id)
     if (options) this.#learnOptions(thread, options)
+    if (planManaged) {
+      try {
+        assertPlanPolicy(this.liveOptions.get(thread.sessionId), plan, plan ? 'read-only' : thread.permissionMode)
+      } catch (error) {
+        this.liveOptions.delete(thread.sessionId)
+        await runtime.closeSession(thread.sessionId).catch(() => {})
+        throw error
+      }
+      if (thread.sessionPlan !== plan) {
+        thread.sessionPlan = plan
+        this.#saveIndex()
+        await this.indexWriter.flush()
+        this.#checkRun(thread, active)
+      }
+    }
 
     const waiting = this.teamGoalWaiting?.(thread)
     if (waiting !== undefined) {

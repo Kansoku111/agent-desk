@@ -1,7 +1,7 @@
 // One `dsh --profile acp` process per deployment permission mode. Ordinary
-// permission changes start a new session with carryover; eco's explicit research
-// transition resumes the same session in the writer process. The child plugin
-// applies that process's policy to the resumed session before it can act.
+// permission-picker changes start a new session with carryover; Plan and eco's
+// explicit research transition resume the same session in the selected process.
+// The session-policy plugin applies that process's policy before it can act.
 // Agent teams' children have processes of their own, with an extra layer that
 // takes their subagent tools away (dsh-config.js teamChildPatch).
 import { spawn } from 'node:child_process'
