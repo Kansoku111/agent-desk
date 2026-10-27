@@ -5120,6 +5120,13 @@ button.team-node:disabled {
 }
 
 /* 設定 → エージェントチーム: the policies and playbooks. */
+.team-guide-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
 .team-guide {
   display: flex;
   flex-direction: column;

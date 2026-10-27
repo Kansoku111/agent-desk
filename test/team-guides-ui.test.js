@@ -35,6 +35,7 @@ async function editor(setting, initial, hooks = {}) {
     } },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     'lucide-react': {},
+    '../util': { copyText: async (text) => hooks.copy?.(text) },
     '../store': {
       request: async (method, { patch }) => {
         calls.push({ method, patch: structuredClone(patch) })
@@ -134,6 +135,31 @@ for (const [setting, body] of [['teamPolicies', { text: 'original' }], ['teamPla
     assert.equal(h.notices.length, 0)
   })
 }
+
+test('policy prompt copy includes benchmark research without changing settings', async () => {
+  let copied
+  const h = await editor('teamPolicies', [], { copy: (text) => { copied = text } })
+  const button = h.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー'))
+  assert.ok(button)
+  button.props.onClick()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.match(copied, /モデルピッカーに表示されるモデル/)
+  assert.match(copied, /ベンチマーク/)
+  assert.match(copied, /2,000文字以内/)
+  assert.match(copied, /設定やモデルの選択は勝手に変更しない/)
+  assert.deepEqual(h.calls, [])
+  assert.deepEqual(h.notices, [['方針作成指示文をコピーしました', 'success']])
+  const playbooks = await editor('teamPlaybooks', [])
+  assert.equal(playbooks.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー')), undefined)
+})
+
+test('policy prompt copy reports clipboard errors', async () => {
+  const h = await editor('teamPolicies', [], { copy: () => { throw new Error('clipboard denied') } })
+  h.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー')).props.onClick()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(h.notices, [['コピーできませんでした', 'error']])
+  assert.deepEqual(h.calls, [])
+})
 
 test('guide editor keeps the original base while dirty and sends it with saves', async () => {
   const code = await source()
