@@ -75,7 +75,7 @@ const TOOLS = [
   },
   {
     name: 'read_report',
-    description: 'Read a child\'s latest report in full (the message that told you about it may be shortened), with its earlier reports that had not reached you yet; those are then not sent to you again.',
+    description: 'Read the retained text of a child\'s latest report and its earlier reports that had not reached you yet; those are then not sent again. Storage truncation, preview-only reports outside retention, and unknown completeness in legacy data are marked. Omitted text cannot be recovered by this tool.',
     inputSchema: { type: 'object', properties: { child }, required: ['child'] },
   },
   {
@@ -120,7 +120,7 @@ const TOOLS = [
 
 if (process.env.AGENT_DESK_EXECUTION === '1') {
   const spawn = TOOLS.find((tool) => tool.name === 'spawn')
-  spawn.description = 'Delegate one bounded eco work unit to the inexpensive child. The app verifies and performs limited repairs before reporting. Close the previous unit before starting another; end your turn instead of polling.'
+  spawn.description = 'Delegate bounded eco work to an inexpensive child. Implementation is serial through app verification, limited repairs and parent judgment: close the previous implementation before starting another. Read-only research may run in parallel and has no app command verification. End your turn instead of polling.'
   spawn.inputSchema.properties.tier.enum = ['low']
   spawn.inputSchema.properties.tier.description = 'Only low is available for eco.'
   spawn.inputSchema.required.push('tier')

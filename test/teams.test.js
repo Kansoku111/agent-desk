@@ -1134,6 +1134,12 @@ for (const provider of ['gpt', 'claude']) {
       : agents.calls.findLast((call) => call[0] === 'run' && call[1] === taskId)[2]
     assert.match(researchPayload, /根拠が十分なら実装方針・検証案も添え/)
     assert.match(researchPayload, /読み取り専用の調査/)
+    assert.match(researchPayload, /報告用ファイルは作成せず、詳細は報告本文と既存ファイルへの参照/)
+    const { childPrompt } = await import('../server/teams-prompts.js')
+    const standing = provider === 'gpt' ? childPrompt()
+      : await fs.readFile(agents.sessions.get(taskId).args[agents.sessions.get(taskId).args.indexOf('--append-system-prompt-file') + 1], 'utf8')
+    assert.match(standing, /Only if this session permits file writes, put long details/)
+    assert.match(standing, /otherwise return details in the report with references to existing files/)
     assert.doesNotMatch(researchPayload, /eco アプリの最終検証/)
     if (provider === 'gpt') threads.finish(taskId, 'investigation evidence')
     else agents.finish(taskId, 'investigation evidence')
@@ -1154,6 +1160,7 @@ for (const provider of ['gpt', 'claude']) {
       ? threads.calls.findLast((call) => call[0] === 'send' && call[1] === taskId)[2]
       : agents.calls.findLast((call) => call[0] === 'run' && call[1] === taskId)[2]
     assert.match(payload, /eco アプリの最終検証/)
+    assert.doesNotMatch(payload, /報告用ファイルは作成せず/)
     assert.ok(payload.includes(JSON.stringify({ id: 'test', cwd: '.', command: child.execution.checks[0].command })))
     assert.equal(payload.split('[eco 完了条件]').length, 2)
     await assert.rejects(tool('spawn', { ...exTask, provider }), /作業中|終わっていません/)
@@ -1805,6 +1812,88 @@ test('a long report is shortened for the message and kept whole for read_report'
   assert.ok((await tool('read_report', { child: 'a' })).endsWith('END'))
 })
 
+for (const mode of ['TM', 'eco']) {
+  for (const length of [39_999, 40_000, 40_001]) {
+    test(`${mode} marks report storage truncation at ${length} characters`, async (t) => {
+      const f = mode === 'eco' ? await setupExecution(t) : await setup(t)
+      await f.tool('spawn', { ...exTask, mode: 'research', name: 'R' })
+      const child = f.team.children[0]
+      if (mode === 'eco') f.threads.threads.get(f.leader).status = 'running'
+      else f.terminals.set(f.leader, { activity: 'running' })
+      const body = 'x'.repeat(length - 3) + 'END'
+      f.threads.finish(child.taskId, body)
+      assert.equal(child.reports[0].truncated, length > 40_000)
+      assert.equal(child.reports[0].text.length, Math.min(length, 40_000) + (length > 40_000 ? 1 : 0))
+      assert.equal(f.team.queue[0].preview, true)
+      assert.ok(f.team.queue[0].text.length <= REPORT_PREVIEW + 1)
+      const text = await f.tool('read_report', { child: child.id })
+      if (length > 40_000) {
+        assert.match(text, /保存上限の40,000文字で省略/)
+        assert.match(text, /上限より先は取得できません/)
+        assert.ok(!text.endsWith('END'))
+      } else {
+        assert.ok(text.endsWith('END'))
+        assert.doesNotMatch(text, /省略されています|省略状態は不明|短縮版のみ/)
+      }
+      assert.equal(f.team.queue.length, 0)
+    })
+  }
+
+  for (const count of [6, 7]) {
+    test(`${mode} retains six reports per child and marks evicted queued previews (count=${count})`, async (t) => {
+      let clock = 1_000_000
+      const options = { now: () => ++clock }
+      const f = mode === 'eco' ? await setupExecution(t, options) : await setup(t, {}, options)
+      await f.tool('spawn', { ...exTask, mode: 'research', name: 'R' })
+      const child = f.team.children[0]
+      if (mode === 'eco') f.threads.threads.get(f.leader).status = 'running'
+      else f.terminals.set(f.leader, { activity: 'running' })
+      for (let i = 1; i <= count; i++) {
+        if (i > 1) await f.tool('send', { child: child.id, message: 'next report' })
+        f.threads.finish(child.taskId, `report-${i} ${'x'.repeat(REPORT_PREVIEW)} tail-${i}`)
+      }
+      assert.equal(child.reports.length, 6)
+      assert.equal(f.team.queue.length, count)
+      // The additive metadata and queued previews must survive restart without migration.
+      await f.manager.stop()
+      // A restarted process has new event emitters, not the old manager's listeners.
+      const threads = fakeThreads(), terminals = fakeTerminals({})
+      threads.threads = f.threads.threads
+      threads.turns = f.threads.turns
+      terminals.records = f.terminals.records
+      terminals.states = f.terminals.states
+      const again = await new TeamManager({
+        file: f.manager.file, dir: path.join(f.dir, 'teams'), threads, terminals,
+        agents: fakeAgents(), catalog: CATALOG, getSettings: () => ({}), apiUrl: () => '',
+      }).load()
+      t.after(() => again.stop())
+      const team = again.teams.get(f.team.id)
+      assert.equal(team.children[0].reports[0].truncated, false)
+      assert.equal(team.queue[0].preview, true)
+      const text = await again.call(team.id, team.secret, 'read_report', { child: child.id })
+      assert.match(text, new RegExp('まだ届いていなかった報告 ' + count + ' 件'))
+      assert.ok(text.indexOf('report-1') < text.indexOf('report-2'))
+      if (count === 7) {
+        assert.match(text, /保持対象外のため短縮版のみ/)
+        assert.match(text, /省略部分は復元できません/)
+        assert.doesNotMatch(text, /tail-1/)
+      } else {
+        assert.doesNotMatch(text, /短縮版のみ/)
+        assert.match(text, /tail-1/)
+      }
+      assert.match(text, new RegExp('tail-' + count))
+      assert.equal(team.queue.length, 0)
+      again.start()
+      if (mode === 'eco') {
+        const parent = threads.threads.get(f.leader)
+        parent.status = 'idle'
+        threads.emit('thread', { ...parent })
+      } else terminals.set(f.leader, { activity: 'idle' })
+      assert.equal(terminals.calls.filter((call) => call[0] === 'type').length + threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).length, 0, 'read reports are not delivered again')
+    })
+  }
+}
+
 test('a leader that is not running is started on the report', async (t) => {
   const { threads, terminals, tool, leader } = await setup(t)
   await tool('spawn', { title: 'job', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
@@ -2253,6 +2342,36 @@ test('work cut off by an app restart is reported once the app is back', async (t
   manager.start()
   assert.match(typed()[0], /子「A」.*がエラーで止まりました[\s\S]*再起動/)
 })
+
+for (const legacy of [false, true]) {
+  test('report storage limits survive restart without guessing legacy completeness (legacy=' + legacy + ')', async (t) => {
+    const f = await setup(t)
+    await f.tool('spawn', { ...exTask, name: 'R' })
+    f.terminals.set(f.leader, { activity: 'running' })
+    const child = f.team.children[0]
+    f.threads.finish(child.taskId, 'x'.repeat(40_001))
+    await f.manager.stop()
+    if (legacy) {
+      const saved = JSON.parse(await fs.readFile(f.manager.file, 'utf8'))
+      delete saved.teams[0].children[0].reports[0].truncated
+      delete saved.teams[0].queue[0].truncated
+      delete saved.teams[0].queue[0].preview
+      saved.teams[0].queue[0].text += '\n（続きは read_report で読めます）'
+      await fs.writeFile(f.manager.file, JSON.stringify(saved))
+    }
+    const again = await new TeamManager({
+      file: f.manager.file, dir: path.join(f.dir, 'teams'), threads: f.threads, terminals: f.terminals,
+      agents: f.agents, catalog: CATALOG, getSettings: () => ({}), apiUrl: () => '',
+    }).load()
+    t.after(() => again.stop())
+    const team = again.teams.get(f.team.id)
+    assert.equal(team.children[0].reports[0].truncated, legacy ? undefined : true)
+    const text = await again.call(team.id, team.secret, 'read_report', { child: child.id })
+    assert.match(text, legacy ? /省略状態は不明/ : /保存上限の40,000文字で省略/)
+    if (legacy) assert.doesNotMatch(text, /省略されています/)
+    assert.equal(team.queue.length, 0)
+  })
+}
 
 test('teams and their reports survive a restart of the app', async (t) => {
   const { threads, terminals, agents, tool, leader, manager, dir } = await setup(t)

@@ -99,7 +99,7 @@ export function childPrompt(name, { background = false } = {}) {
       ? '- A long command may run in the background (Bash with run_in_background, or Monitor): you may end your turn while it runs, and you are woken when it ends. Only the reply you give once nothing of yours runs in the background reaches the leader, so stop servers and watchers you no longer need before your final reply.'
       : '- Wait for every command to finish before you end your turn: your session may stop between turns, and a command left running in the background can be cut off.',
     '- Before you report, check your work the way the task allows (run the tests, the build or the program, or look at the result).',
-    '- When the task is done (or you cannot go further), your final reply is your report to the leader. Keep it short, in this order: 1) result (done / partly done / failed), 2) what you did, 3) how you checked it and what came out (or "not checked" and why), 4) paths of what you made or changed, 5) open problems or decisions for the leader. Put long details in a file and give its path.',
+    '- When the task is done (or you cannot go further), your final reply is your report to the leader. Keep it short, in this order: 1) result (done / partly done / failed), 2) what you did, 3) how you checked it and what came out (or "not checked" and why), 4) paths of what you made or changed, 5) open problems or decisions for the leader. Only if this session permits file writes, put long details in a file and give its path; otherwise return details in the report with references to existing files.',
     '- Write in the language of your task.',
     '- The leader may send you more instructions later. Handle them the same way and report again.',
   ].join('\n')
@@ -116,7 +116,7 @@ export function executionTask(task, execution) {
   const guidance = execution.mode === 'research'
     ? [
       '読み取り専用の調査です。確認した事実と根拠、残る不明点を短く報告してください。根拠が十分なら実装方針・検証案も添え、不十分なら推測で埋めないでください。実装は行いません。',
-      'この調査でアプリのコマンド検証は行いません。',
+      'この調査でアプリのコマンド検証は行いません。報告用ファイルは作成せず、詳細は報告本文と既存ファイルへの参照で返してください。',
     ]
     : [
       '範囲外の変更はせず、結果・変更箇所・確認結果・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。',

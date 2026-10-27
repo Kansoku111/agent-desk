@@ -6,6 +6,18 @@ import { PREFIX } from './teams-prompts.js'
 /** What a message to the leader is marked with after PREFIX; claude-hook.js reports the marks a prompt carries. */
 export const markOf = (item) => item.id.slice(0, 8)
 
+/** Missing metadata in older saves cannot establish that the original report was complete. */
+export function reportText(entry, previewOnly = false) {
+  const notes = []
+  if (previewOnly && entry.preview === true) notes.push('（保持対象外のため短縮版のみです。read_report でも省略部分は復元できません。）')
+  else if (previewOnly && entry.preview === undefined) notes.push('（保持対象外のため、キューに残る本文のみです。read_report でも追加の本文は取得できません。）')
+  if (entry.truncated === true) notes.push('（本文は保存上限の40,000文字で省略されています。read_report でも上限より先は取得できません。）')
+  else if (entry.truncated !== false) notes.push('（旧保存データのため、本文の省略状態は不明です。）')
+  // Old queued previews promised access even after the retained body was lost.
+  const text = entry.childId && entry.preview === undefined ? entry.text.replace(/\n（続きは read_report で読めます）$/, '') : entry.text
+  return [...notes, text].join('\n')
+}
+
 /** One item's lines, and the next steps that follow them (null: none). */
 function parts(team, item, labelOf, rest) {
   const child = team.children.find((entry) => entry.id === item.childId)
@@ -14,12 +26,17 @@ function parts(team, item, labelOf, rest) {
   // A turn the leader did not send: the child went on by itself, or the user asked it directly.
   const unasked = item.unasked ? '（あなたが送った指示とは別に、子が自分で続けた作業か、ユーザーが子に直接頼んだ作業の結果です）' : ''
   const head = `${PREFIX} #${markOf(item)}`
+  const retained = child?.reports?.find((entry) => entry.at === item.at)
+  const text = child && item.kind !== 'approval'
+    ? reportText(item, !retained) + (retained && retained.text.length > item.text.length
+      ? '\n（保存済みの続きは read_report で読めます。保存上限があります。）' : '')
+    : item.text
   const [lines, next] = {
-    report: [[`${head} ${who}から${unasked ? '追加の' : ''}報告が届きました${rest}${unasked}`, task, '---', item.text, '---'],
+    report: [[`${head} ${who}から${unasked ? '追加の' : ''}報告が届きました${rest}${unasked}`, task, '---', text, '---'],
       team.execution
         ? '依頼・完了条件と変更内容（調査は報告の根拠）を確認し、合格なら確認箇所・結果を reason に書いて close。テスト成功だけでは合格にしないでください。修正は send。'
         : '合格なら close、直してほしい点や追加の作業は send で同じ子に送ってください。'],
-    error: [[`${head} ${who}がエラーで止まりました${rest}${unasked}`, task, '---', item.text, '---'],
+    error: [[`${head} ${who}がエラーで止まりました${rest}${unasked}`, task, '---', text, '---'],
       item.noTask ? '同じ作業を続けるなら spawn で任せ直してください。' : '止まった子を続けるなら send で指示を送ってください（例: 「続けて」）。'],
     cancelled: item.byUser
       ? [[`${head} ${who}の作業を、ユーザーが全停止で止めました${rest}`, task],

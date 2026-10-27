@@ -144,13 +144,64 @@ test('AB approval is revision-bound and duplicate approval never launches twice'
   await finish('instructions', 'bounded implementation instructions')
   assert.equal(runner.calls.at(-1).model, 'I')
   assert.equal(runner.calls.at(-1).writable, true)
-  assert.equal(runner.calls.at(-1).text, 'bounded implementation instructions')
+  assert.deepEqual(JSON.parse(runner.calls.at(-1).text), { originalRequest: ' 生の相談\nそのまま ', originalImages: [], approvedPlan: 'leader report', implementationInstructions: 'bounded implementation instructions' })
+  assert.match(runner.calls.at(-1).instructions, /明示的に更新した条件は古い条件より優先/)
+  assert.match(runner.calls.at(-1).instructions, /更新されていない元の依頼の制約は維持/)
+  assert.match(runner.calls.at(-1).instructions, /実装指示だけを根拠に範囲を広げず、解消できない矛盾は報告/)
   await finish('implementer')
   assert.equal(runner.calls.at(-1).model, 'L')
   assert.equal(runner.calls.at(-1).writable, false)
   await finish('reviewer')
   assert.equal(manager.require(id).phase, 'reviewed')
 })
+
+test('AB delegated input uses the latest approved plan without consultation history', async (t) => {
+  const { runner, manager, id, finish } = await setup(t)
+  await finish('a', 'private consultation A'); await finish('b', 'private consultation B')
+  await finish('leader', 'old plan')
+  await manager.revise({ id, text: 'allow source changes now; keep unrelated files unchanged' })
+  await finish('leader', 'latest plan: source changes allowed; unrelated files unchanged')
+  await assert.rejects(manager.approve({ id, revision: 1, delegate: true, review: false }))
+  await manager.approve({ id, revision: 2, delegate: true, review: false })
+  await finish('instructions', 'leader implementation instructions')
+  assert.deepEqual(JSON.parse(runner.calls.at(-1).text), {
+    originalRequest: ' 生の相談\nそのまま ', originalImages: [],
+    approvedPlan: 'latest plan: source changes allowed; unrelated files unchanged',
+    implementationInstructions: 'leader implementation instructions',
+  })
+  assert.doesNotMatch(runner.calls.at(-1).text, /private consultation|old plan|allow source changes now/)
+})
+
+for (const legacy of [false, true]) {
+  test('AB retries saved delegated jobs with original request, plan and instructions (legacy=' + legacy + ')', async (t) => {
+    const { dir, runner, manager, id, finish } = await setup(t)
+    await finish('a'); await finish('b'); await finish('leader', 'approved plan')
+    await manager.approve({ id, revision: 1, delegate: true, review: false })
+    await finish('instructions', 'leader instructions')
+    const original = manager.require(id).jobs.at(-1)
+    if (legacy) {
+      original.text = 'leader instructions' // Older saved implementation jobs held only this text.
+      original.instructions = '承認済みの計画を実装してください。'
+    }
+    await finish('implementer', 'partial work', 'error')
+    const count = runner.calls.length
+    const restored = await new AbManager({ dir, runner }).load()
+    assert.equal(runner.calls.length, count, 'loading must not run any job')
+    assert.equal(restored.require(id).jobs.at(-1).text, original.text, 'do not rewrite saved jobs')
+    await restored.retry({ id, jobId: original.id })
+    const input = runner.calls.at(-1)
+    const context = JSON.parse(input.text)
+    assert.equal(context.originalRequest, ' 生の相談\nそのまま ')
+    assert.equal(context.approvedPlan, 'approved plan')
+    assert.equal(context.implementationInstructions, 'leader instructions')
+    assert.equal(context.task, original.text)
+    assert.equal(context.previousReport, 'partial work')
+    assert.match(input.instructions, /明示的に更新した条件は古い条件より優先/)
+    assert.match(input.instructions, /更新されていない元の依頼の制約は維持/)
+    assert.match(input.instructions, /重複して実行しない/)
+    assert.equal(runner.calls.length, count + 1)
+  })
+}
 
 test('AB review OFF never wakes leader after implementation', async (t) => {
   const { runner, manager, id, finish } = await setup(t)

@@ -24,7 +24,7 @@ import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PRO
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
 import { CATALOG_PROVIDER, childTask, clip, describeTool, executionTask, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { leaderGuides, readPlaybook } from './team-playbooks.js'
-import { markOf, reportsMessage } from './teams-report.js'
+import { markOf, reportsMessage, reportText } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
 import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspaceKey, workspaceWithin, workspacesOverlap } from './execution.js'
@@ -37,7 +37,7 @@ export { MCP_SERVER } from './teams-launch.js'
 export { childPrompt, describeTool, leaderPrompt, PREFIX } from './teams-prompts.js'
 
 /**
- * How much of a report the leader is shown; read_report gives all of it. Kept
+ * How much of a report the leader is shown; read_report gives retained text. Kept
  * short: Claude Code can take a minute or more to take in a long paste.
  */
 export const REPORT_PREVIEW = 1000
@@ -1289,7 +1289,7 @@ export class TeamManager extends EventEmitter {
   }
 
   /**
-   * A child's latest report in full, with the earlier ones of it that were
+   * A child's latest retained report, with the earlier ones of it that were
    * still waiting for the leader: those read here are not handed to it again.
    */
   #readReport(team, args) {
@@ -1297,7 +1297,7 @@ export class TeamManager extends EventEmitter {
     const report = child.reports.at(-1)
     if (!report) return `子「${child.name}」からの報告はまだありません。`
     const waiting = team.queue.filter((item) => item.childId === child.id && item.kind !== 'approval')
-    // Each in full while it is kept (the oldest may have only its shortened text left).
+    // An evicted report has only its queued preview left; do not promise recovery.
     const shown = []
     for (const item of waiting) shown.push(child.reports.find((entry) => entry.at === item.at && !shown.includes(entry)) ?? item)
     if (!shown.includes(report)) shown.push(report)
@@ -1308,10 +1308,11 @@ export class TeamManager extends EventEmitter {
       this.#emit(team)
     }
     const when = (entry) => new Date(entry.at).toLocaleString('ja-JP')
-    if (shown.length === 1) return `子「${child.name}」の最新の報告（${when(report)}・全 ${child.reports.length} 件）\n---\n${report.text}`
+    const text = (entry) => reportText(entry, !child.reports.includes(entry))
+    if (shown.length === 1) return `子「${child.name}」の最新の報告（${when(report)}・全 ${child.reports.length} 件）\n---\n${text(report)}`
     return [
       `子「${child.name}」の、まだ届いていなかった報告 ${shown.length} 件（古い順・全 ${child.reports.length} 件）。ここで読んだものは、あとから届きません。`,
-      ...shown.map((entry, index) => `--- ${index + 1}/${shown.length}（${when(entry)}）\n${entry.text}`),
+      ...shown.map((entry, index) => `--- ${index + 1}/${shown.length}（${when(entry)}）\n${text(entry)}`),
     ].join('\n')
   }
 
@@ -1617,11 +1618,12 @@ export class TeamManager extends EventEmitter {
     if (team.execution && child.execution && kind !== 'approval') child.execution.phase = 'review'
     const body = String(text ?? '').trim() || '（返答の本文はありませんでした）'
     const at = this.now()
-    if (kind !== 'approval') child.reports = [...child.reports, { at, kind, text: clip(body, REPORT_KEEP) }].slice(-REPORTS_KEPT)
+    const truncated = body.length > REPORT_KEEP
+    if (kind !== 'approval') child.reports = [...child.reports, { at, kind, text: clip(body, REPORT_KEEP), truncated }].slice(-REPORTS_KEPT)
     child.updatedAt = at
     const preview = extra.review ? REPORT_KEEP : REPORT_PREVIEW
-    const shown = body.length > preview ? `${body.slice(0, preview)}…\n（続きは read_report で読めます）` : body
-    team.queue.push({ id: randomUUID(), childId: child.id, kind, text: shown, at, ...extra })
+    const shown = clip(body, preview)
+    team.queue.push({ id: randomUUID(), childId: child.id, kind, text: shown, at, truncated, preview: body.length > preview, ...extra })
     void this.#syncGoalWaiting(team).catch((error) => this.log(`team ${team.id}: goal wait update failed:`, error.message))
     team.updatedAt = at
     void this.#save()
