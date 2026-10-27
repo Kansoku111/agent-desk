@@ -39,6 +39,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(0)
   const [sending, setSending] = useState(false)
+  const [plan, setPlan] = useState(false)
   const [changingToolMode, setChangingToolMode] = useState(false)
   const [dragging, setDragging] = useState(false)
   const input = useRef<HTMLTextAreaElement>(null)
@@ -86,8 +87,8 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
     const sentAttachments = attachments
     setSending(true)
     const ok = thread
-      ? await sendMessage(thread.id, text.trim(), attachments)
-      : await startThread(text.trim(), attachments)
+      ? await sendMessage(thread.id, text.trim(), attachments, plan)
+      : await startThread(text.trim(), attachments, plan)
     setSending(false)
     if (ok) {
       // What was typed or attached while the message was on its way is the next one.
@@ -156,6 +157,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
           {queued.map((message, index) => (
             <div key={message.id} className="queued-item">
               <Clock3 size={13} />
+              {message.plan && <span className="badge">Plan</span>}
               <span className="queued-text">{message.text || `添付 ${message.images.length} 件`}</span>
               <span className="queued-note" title={message.error}>
                 {message.phase === 'sending' ? '受領確認待ち' : message.phase === 'uncertain' ? '送信結果不明・自動再送しません' : message.phase === 'failed' ? '送信を保留中' : thread?.status === 'error' ? '次の送信後に送ります' : '作業が終わったら送信'}
@@ -165,7 +167,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
                   {message.phase === 'failed' ? '再試行' : '受領を確認'}
                 </button>
               )}
-              {thread?.status === 'running' && message.phase === 'queued' && (
+              {thread?.status === 'running' && message.phase === 'queued' && !message.plan && (
                 <button
                   type="button"
                   className="steer-button"
@@ -232,6 +234,14 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
           <EffortPicker model={model} value={effort} onChange={setEffort} />
           <FastModeChip model={model} />
           <PermissionPicker value={permissionMode} onChange={setMode} existing={Boolean(thread?.sessionId)} disabled={running} />
+          {!thread?.ab && (
+            <button type="button" className={`chip ptc-chip ${plan ? 'on' : ''}`}
+              aria-label="Plan" aria-pressed={plan} disabled={sending}
+              title="Plan: この設定で送信するメッセージはファイル編集を禁止します"
+              onClick={() => setPlan((value) => !value)}>
+              Plan {plan ? 'ON' : 'OFF'}
+            </button>
+          )}
           {ptcAvailable && (
             <button
               type="button"

@@ -9,10 +9,10 @@ function validateMessageId(messageId) {
   return messageId.toLowerCase()
 }
 
-function normalizeMessage({ text = '', images = [], messageId } = {}) {
-  if (typeof text !== 'string' || !Array.isArray(images)) throw new Error('メッセージの形式が不正です')
+function normalizeMessage({ text = '', images = [], messageId, plan = false } = {}) {
+  if (typeof text !== 'string' || !Array.isArray(images) || typeof plan !== 'boolean') throw new Error('メッセージの形式が不正です')
   if (!text.trim() && images.length === 0) throw new Error('メッセージが空です')
-  return { text, images: structuredClone(images), messageId: validateMessageId(messageId) }
+  return { text, images: structuredClone(images), messageId: validateMessageId(messageId), ...(plan ? { plan: true } : {}) }
 }
 
 function receiptStatus(receipt) {

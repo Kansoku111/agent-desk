@@ -52,7 +52,7 @@ async function setup(t, mode, profile) {
   const patches = []
   if (profile) {
     const file = path.join(home, 'role.patch.yml')
-    await fs.writeFile(file, profile.startsWith('team') ? teamChildPatch({ subagents, persona }) : abPatch({ subagents, persona, writable: profile === 'ab-write', lean: profile !== 'ab-research' }))
+    await fs.writeFile(file, profile.startsWith('team') ? teamChildPatch({ subagents, persona }) : abPatch({ subagents, persona, writable: profile === 'ab-write', lean: profile !== 'ab-research' && profile !== 'plan', plan: profile === 'plan' }))
     patches.push(file)
   }
   const permissions = []
@@ -387,6 +387,18 @@ test('real PTC timeout and cancellation settle, then the same ACP session can ex
   assert.throws(() => process.kill(cancelledPid, 0), { code: 'ESRCH' })
   const next = await f.run('return 42;')
   assert.ok(next.some((update) => update.status === 'completed' && JSON.stringify(update).includes('42')), JSON.stringify(next))
+})
+
+test('real Plan profile exposes reads but not writing or delegation', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'read-only', 'plan')
+  f.queue.push({ name: 'read', args: { file_path: 'input.txt' } })
+  await f.prompt()
+  assert.ok(f.updates.some((update) => update.toolCallId === 'call-1' && update.status === 'completed' && JSON.stringify(update).includes('PTC fixture content')), JSON.stringify(f.updates))
+  const schemas = f.requests.at(-1).tools.map((tool) => tool.function.name)
+  for (const name of ['write', 'edit', 'pwsh', 'bash', 'run_code', 'subagent', 'create_goal']) assert.ok(!schemas.includes(name), name)
+  const system = f.requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
+  assert.match(system, /Plan mode/)
+  assert.equal(f.permissions.length, 0)
 })
 
 for (const profile of ['ab-read', 'ab-research', 'ab-write', 'team', 'team-read']) {

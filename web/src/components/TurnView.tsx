@@ -197,12 +197,13 @@ function Plan({ item }: { item: PlanItem }) {
   )
 }
 
-function UserBubble({ text, images, note }: { text: string; images: ImageRef[]; note?: string }) {
+function UserBubble({ text, images, note, plan }: { text: string; images: ImageRef[]; note?: string; plan?: boolean }) {
   const pictures = (images ?? []).filter(isImageAttachment)
   const files = (images ?? []).filter((entry) => !isImageAttachment(entry))
   return (
     <div className="user-row">
       <div className="user-bubble">
+        {plan && <div className="user-note">Plan</div>}
         {pictures.length > 0 && (
           <div className="user-images">
             {pictures.map((image) => (
@@ -381,7 +382,7 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
 
   return (
     <section className="turn">
-      {!hideUser && <UserBubble text={turn.user.text} images={turn.user.images} />}
+      {!hideUser && <UserBubble text={turn.user.text} images={turn.user.images} plan={turn.user.plan} />}
 
       {notices.map((item) => <Notice key={item.id} item={item as NoticeItem} />)}
       {/* Folded steps still show what the user added during the turn. */}

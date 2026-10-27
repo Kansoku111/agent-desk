@@ -329,7 +329,7 @@ export async function writeHomePatch(file, options) {
   return writePatch(file, homePatch(options))
 }
 
-export function abPatch({ subagents = [], persona = null, writable = false, lean = true } = {}) {
+export function abPatch({ subagents = [], persona = null, writable = false, lean = true, plan = false } = {}) {
   const disabled = [...BASE_SUBAGENT_TOOLS, 'tool-workflow', 'tool-goal', 'tool-plugin-manager', 'tool-ask-user',
     ...subagents.filter(({ provider }) => SUBAGENT_TOOLS[provider]).map(({ provider }) => `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`),
     ...(!writable ? ['tool-bash', 'tool-pwsh', 'tool-jobs', 'tool-skill'] : []),
@@ -341,13 +341,14 @@ export function abPatch({ subagents = [], persona = null, writable = false, lean
     ...(subagents.some(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
       ? [{ id: 'system-prompt', config: { personaPrefix: persona?.personaPrefix ?? '', personaSuffix: persona?.personaSuffix ?? '' } }] : []),
     ...(!writable ? [{ id: 'tool-fs', config: { write: false, edit: false } }] : []),
-    { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable } }] },
+    { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable, ...(plan ? { plan: true } : {}) } }] },
   ])
 }
 export async function writeAbPatches(paths, options) {
   const results = await Promise.all([
     writePatch(paths.abLeanPatch, abPatch({ ...options, lean: true })),
     writePatch(paths.abResearchPatch, abPatch({ ...options, lean: false })),
+    writePatch(paths.planPatch, abPatch({ ...options, lean: false, plan: true })),
     writePatch(paths.abWritePatch, abPatch({ ...options, writable: true })),
   ])
   return results.some(Boolean)

@@ -26,11 +26,11 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
       return { subagents: await subagents.list(thread.id, thread.sessionId) }
     },
 
-    'thread.create': async ({ workspace, model, effort, permissionMode, toolMode, text, images, createId }) => {
+    'thread.create': async ({ workspace, model, effort, permissionMode, toolMode, text, images, createId, plan }) => {
       const options = { workspace, model, effort, permissionMode, toolMode }
       let thread
       if (createId !== undefined) {
-        const message = { text: text ?? '', images: await saveImages(images) }
+        const message = { text: text ?? '', images: await saveImages(images), ...(plan !== undefined ? { plan } : {}) }
         const fingerprint = createHash('sha256').update(JSON.stringify({
           workspace: path.resolve(workspace),
           model: model ?? null,
@@ -44,7 +44,7 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
       } else {
         thread = await threads.create(options)
         try {
-          await threads.send(thread.id, { text: text ?? '', images: await saveImages(images) })
+          await threads.send(thread.id, { text: text ?? '', images: await saveImages(images), ...(plan !== undefined ? { plan } : {}) })
         } catch (error) {
           await threads.remove(thread.id)
           throw error
@@ -74,12 +74,12 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
 
     'thread.messageStatus': ({ threadId, messageId }) => threads.messageStatus(threadId, messageId),
 
-    'thread.send': async ({ threadId, text, images, messageId }) => {
-      return threads.send(threadId, { text: text ?? '', images: await saveImages(images), messageId }, { userInitiated: true })
+    'thread.send': async ({ threadId, text, images, messageId, plan }) => {
+      return threads.send(threadId, { text: text ?? '', images: await saveImages(images), messageId, plan }, { userInitiated: true })
     },
 
-    'thread.steer': async ({ threadId, text, images, messageId }) => {
-      return threads.steer(threadId, { text: text ?? '', images: await saveImages(images), messageId }, { userInitiated: true })
+    'thread.steer': async ({ threadId, text, images, messageId, plan }) => {
+      return threads.steer(threadId, { text: text ?? '', images: await saveImages(images), messageId, plan }, { userInitiated: true })
     },
 
     'thread.cancel': ({ threadId }) => threads.cancel(threadId),

@@ -237,11 +237,11 @@ export class ThreadManager extends EventEmitter {
     return thread
   }
 
-  #receipt(threadId, { messageId, text, images }) {
+  #receipt(threadId, { messageId, text, images, plan }) {
     if (!messageId) return null
     const receipt = this.receipts.get(threadId)?.get(messageId)
     if (!receipt) return null
-    if (!isDeepStrictEqual(receipt.payload, { text, images })) throw new Error('同じ messageId に異なるメッセージは送信できません')
+    if (!isDeepStrictEqual(receipt.payload, { text, images, ...(plan ? { plan: true } : {}) })) throw new Error('同じ messageId に異なるメッセージは送信できません')
     return receiptStatus(receipt)
   }
 
@@ -674,8 +674,9 @@ export class ThreadManager extends EventEmitter {
   }
 
   async #send(threadId, message, userInitiated, guard) {
-    const { text, images, messageId } = message
+    const { text, images, messageId, plan } = message
     const thread = this.#available(threadId)
+    if (plan && thread.ab) throw new Error('ABではPlanを使えません')
     const turns = await this.#loadTurns(threadId)
     this.#available(threadId, thread)
     const known = this.#receipt(threadId, message)
@@ -692,6 +693,7 @@ export class ThreadManager extends EventEmitter {
 
     const turn = newTurn({ id: randomUUID(), text, images })
     if (messageId) turn.user.messageId = messageId
+    if (plan) turn.user.plan = true
     const previous = { title: thread.title, updatedAt: thread.updatedAt, status: thread.status }
     turns.push(turn)
     if (turns.length === 1) thread.title = titleFrom(text || (images.every((image) => isImageFile(image.file)) ? '画像' : images[0].name || '添付ファイル'))
@@ -704,7 +706,7 @@ export class ThreadManager extends EventEmitter {
     }
     this.active.set(threadId, active)
     if (messageId) this.receipts.get(threadId).set(messageId, {
-      messageId, payload: { text, images }, status: 'accepted', kind: 'send', turnId: turn.id,
+      messageId, payload: { text, images, ...(plan ? { plan: true } : {}) }, status: 'accepted', kind: 'send', turnId: turn.id,
     })
     try {
       // The index must name the thread before a receipt can be acknowledged.
@@ -1003,8 +1005,23 @@ export class ThreadManager extends EventEmitter {
 
   async #ensureSession(thread, active) {
     const { turn } = active
-    const runtime = await this.pool.get(runtimeKey(thread))
+    const plan = turn.user.plan === true
+    const runtime = await this.pool.get(plan ? 'plan' : runtimeKey(thread))
     this.#checkRun(thread, active)
+    // Sessions persist their sandbox and tools. Never resume one across Plan boundaries,
+    // even after a restart when no runtime currently holds the old session.
+    if (thread.sessionId && Boolean(thread.sessionPlan) !== plan) {
+      const oldId = thread.sessionId
+      const oldHolder = this.pool.holderOf(oldId)
+      if (oldHolder) await oldHolder.closeSession(oldId).catch(() => {})
+      this.#checkRun(thread, active)
+      this.liveOptions.delete(oldId)
+      this.sessionIndex.delete(oldId)
+      thread.sessionId = null
+      delete thread.sessionPlan
+      thread.carryover = 'plan'
+      this.#saveIndex()
+    }
     active.runtime = runtime
     const holder = thread.sessionId ? this.pool.holderOf(thread.sessionId) : null
     if (holder && holder !== runtime) {
@@ -1017,7 +1034,7 @@ export class ThreadManager extends EventEmitter {
       options = this.liveOptions.get(thread.sessionId) ?? null
     } else if (thread.sessionId) {
       try {
-        const resumed = await runtime.resumeSession(thread.sessionId, thread.workspace, this.getMcpServers(thread))
+        const resumed = await runtime.resumeSession(thread.sessionId, thread.workspace, plan ? [] : this.getMcpServers(thread))
         this.#checkRun(thread, active)
         options = resumed?.configOptions ?? null
       } catch (error) {
@@ -1034,7 +1051,7 @@ export class ThreadManager extends EventEmitter {
       }
     }
     if (!thread.sessionId) {
-      const created = await runtime.newSession(thread.workspace, this.getMcpServers(thread))
+      const created = await runtime.newSession(thread.workspace, plan ? [] : this.getMcpServers(thread))
       try {
         this.#checkRun(thread, active)
       } catch (error) {
@@ -1042,13 +1059,15 @@ export class ThreadManager extends EventEmitter {
         throw error
       }
       thread.sessionId = created.sessionId
+      if (plan) thread.sessionPlan = true
+      else delete thread.sessionPlan
       options = created.configOptions ?? null
-      if (thread.carryover === 'permission') {
+      if (thread.carryover === 'permission' || thread.carryover === 'plan') {
         turn.items.push({
           type: 'notice',
           id: `notice-${Date.now()}`,
           level: 'info',
-          text: '権限モードを変更したため、新しいセッションで続けます。これまでのやり取りは要約して引き継ぎます。',
+          text: `${thread.carryover === 'plan' ? 'Planの切り替え' : '権限モードの変更'}により、新しいセッションで続けます。これまでのやり取りは要約して引き継ぎます。`,
         })
       }
       this.#saveIndex()
@@ -1061,7 +1080,8 @@ export class ThreadManager extends EventEmitter {
       await runtime.setGoalWaiting(thread.sessionId, waiting)
       this.#checkRun(thread, active)
     }
-    const toolMode = this.summary(thread).toolMode
+    // Plan exposes only individually guarded read tools, not arbitrary PTC code.
+    const toolMode = plan ? 'native' : this.summary(thread).toolMode
     assertToolMode(toolMode)
     const modeOption = toolModeOption(this.liveOptions.get(thread.sessionId))
     // Older/unpatched runtimes remain usable in native mode only. Never send
@@ -1124,7 +1144,8 @@ export class ThreadManager extends EventEmitter {
       const known = this.#receipt(threadId, message)
       if (known) return known.status === 'accepted' ? { ...known, steered: true } : known
       const active = this.active.get(threadId)
-      if (!this.#canSteer(thread, active)) return { steered: false }
+      // Plan requests must start their own restricted turn, never enter a writable one.
+      if (message.plan || !this.#canSteer(thread, active)) return { steered: false }
       const delivery = this.#deliverSteer(thread, active, message, userInitiated, guard)
       active.steers.add(delivery)
       try {
@@ -1281,7 +1302,7 @@ export class ThreadManager extends EventEmitter {
     const threadId = this.sessionIndex.get(params.sessionId)
     const thread = threadId && this.threads.get(threadId)
     const active = threadId && this.active.get(threadId)
-    if (!thread || !active || active.cancelled) {
+    if (!thread || !active || active.cancelled || active.turn.user.plan) {
       return Promise.resolve({ outcome: { outcome: 'cancelled' } })
     }
     if (active.turn.outputSpeed?.state === 'streaming') {
@@ -1358,7 +1379,7 @@ export class ThreadManager extends EventEmitter {
     for (const sessionId of [...this.liveOptions.keys()]) {
       const threadId = this.sessionIndex.get(sessionId)
       const thread = threadId && this.threads.get(threadId)
-      if (!thread || runtimeKey(thread) === key) this.liveOptions.delete(sessionId)
+      if (!thread || (thread.sessionPlan ? 'plan' : runtimeKey(thread)) === key) this.liveOptions.delete(sessionId)
     }
     this.emit('runtime', this.pool.status())
   }

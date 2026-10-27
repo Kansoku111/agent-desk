@@ -660,7 +660,7 @@ function wire(images: Attachment[]) {
   return images.map(({ file, mimeType, name }) => ({ file, mimeType, name }))
 }
 
-export async function startThread(text: string, images: Attachment[]) {
+export async function startThread(text: string, images: Attachment[], plan = false) {
   const { draft } = state
   if (!draft.workspace) {
     toast('ワークスペースを選択してください', 'error')
@@ -674,6 +674,7 @@ export async function startThread(text: string, images: Attachment[]) {
     toolMode: draft.toolMode,
     text,
     images: wire(images),
+    ...(plan ? { plan: true } : {}),
   }
   let intent: ReturnType<typeof beginCreateIntent>
   try {
@@ -715,13 +716,13 @@ const outbox = new Outbox({
   report: (message) => toast(message, 'error'),
 })
 
-export async function sendMessage(threadId: string, text: string, images: Attachment[]) {
+export async function sendMessage(threadId: string, text: string, images: Attachment[], plan = false) {
   const thread = state.server?.threads.find((entry) => entry.id === threadId)
   if (!thread) return false
   try {
     // Keep the composer text unless the durable outbox accepted it. A manual
     // message after a failed turn starts recovery before its old follow-ups.
-    outbox.enqueue(threadId, text, images, thread.status === 'error')
+    outbox.enqueue(threadId, text, images, thread.status === 'error', plan)
     void outbox.flush(threadId, thread.status === 'error')
     return true
   } catch (error) {

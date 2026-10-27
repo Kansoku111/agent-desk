@@ -265,7 +265,7 @@ export class RuntimePool extends EventEmitter {
         this.runtimes.set(key, runtime)
       }
     }
-    for (const [key, mode, patch] of [['ab:lean', 'read-only', paths.abLeanPatch], ['ab:research', 'read-only', paths.abResearchPatch], ['ab:write', 'danger-full-access', paths.abWritePatch]]) {
+    for (const [key, mode, patch] of [['ab:lean', 'read-only', paths.abLeanPatch], ['ab:research', 'read-only', paths.abResearchPatch], ['ab:write', 'danger-full-access', paths.abWritePatch], ['plan', 'read-only', paths.planPatch]]) {
       if (!patch) continue
       const runtime = new AcpRuntime({ mode, paths, patches: [patch], onUpdate, onPermission })
       runtime.on('exit', (info) => this.emit('exit', { mode, key, ...info }))

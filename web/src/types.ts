@@ -309,7 +309,7 @@ export interface Turn {
   status: 'running' | 'done' | 'cancelled' | 'error'
   stopReason: string | null
   error: { message: string; detail?: string } | null
-  user: { text: string; images: ImageRef[] }
+  user: { text: string; images: ImageRef[]; plan?: boolean }
   items: TurnItem[]
   usage?: TurnUsage
   totalScore?: UsageScore

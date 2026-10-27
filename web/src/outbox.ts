@@ -7,6 +7,7 @@ export interface QueuedMessage {
   id: string
   text: string
   images: Attachment[]
+  plan?: boolean
   phase: 'queued' | 'sending' | 'uncertain' | 'failed'
   operation?: 'send' | 'steer'
   error?: string
@@ -44,11 +45,13 @@ export function readQueues(raw: string | null, newId = messageId): Queues {
     if (!Array.isArray(list) || ['__proto__', 'constructor', 'prototype'].includes(threadId)) continue
     const messages: QueuedMessage[] = []
     for (const value of list) {
-      if (!value || typeof value !== 'object' || typeof value.text !== 'string' || !Array.isArray(value.images)) continue
+      if (!value || typeof value !== 'object' || typeof value.text !== 'string' || !Array.isArray(value.images)
+        || (value.plan !== undefined && typeof value.plan !== 'boolean')) continue
       if (!value.images.every((image: Attachment) => image && typeof image.file === 'string' && typeof image.mimeType === 'string' && typeof image.name === 'string')) continue
       const hasId = typeof value.id === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.id)
       messages.push({
         id: hasId ? value.id : newId(), text: value.text, images: value.images,
+        ...(value.plan === true ? { plan: true } : {}),
         phase: hasId && ['queued', 'sending', 'uncertain', 'failed'].includes(value.phase) ? value.phase : 'queued',
         ...(value.operation === 'send' || value.operation === 'steer' ? { operation: value.operation } : {}),
         ...(typeof value.error === 'string' ? { error: value.error } : {}),
@@ -71,8 +74,8 @@ export class Outbox {
 
   snapshot() { return this.queues }
 
-  enqueue(threadId: string, text: string, images: Attachment[], first = false) {
-    const message: QueuedMessage = { id: (this.options.newId ?? messageId)(), text, images, phase: 'queued' }
+  enqueue(threadId: string, text: string, images: Attachment[], first = false, plan = false) {
+    const message: QueuedMessage = { id: (this.options.newId ?? messageId)(), text, images, phase: 'queued', ...(plan ? { plan: true } : {}) }
     this.change(threadId, (queue) => first ? [message, ...queue] : [...queue, message])
     return message.id
   }
@@ -109,7 +112,7 @@ export class Outbox {
   steer(threadId: string, id: string): Promise<void> {
     return this.exclusive(threadId, async () => {
       const message = this.find(threadId, id)
-      if (!message || message.phase !== 'queued' || !this.canConnect() || this.options.thread(threadId)?.status !== 'running') return
+      if (!message || message.plan || message.phase !== 'queued' || !this.canConnect() || this.options.thread(threadId)?.status !== 'running') return
       this.update(threadId, id, { phase: 'sending', operation: 'steer', error: undefined })
       try {
         const result = await this.options.request('thread.steer', this.params(threadId, message)) as { status?: string; steered?: boolean }
@@ -186,7 +189,7 @@ export class Outbox {
   }
 
   private params(threadId: string, message: QueuedMessage) {
-    return { threadId, messageId: message.id, text: message.text, images: message.images.map(({ file, mimeType, name }) => ({ file, mimeType, name })) }
+    return { threadId, messageId: message.id, text: message.text, images: message.images.map(({ file, mimeType, name }) => ({ file, mimeType, name })), ...(message.plan ? { plan: true } : {}) }
   }
 
   private canConnect() { return this.options.ready() }
