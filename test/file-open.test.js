@@ -12,7 +12,7 @@ import { createWorkspaceHandlers } from '../server/rpc-handlers-workspaces.js'
 const run = promisify(execFile)
 const script = fileURLToPath(new URL('../server/open-front.ps1', import.meta.url))
 async function fixture(t) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-file-open-'))
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-file-open-')))
   t.after(() => fs.rm(dir, { recursive: true, force: true }))
   const folder = path.join(dir, "日本語 space & [folder] 'quoted'")
   await fs.mkdir(folder)
