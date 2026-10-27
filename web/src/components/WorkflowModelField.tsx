@@ -1,8 +1,8 @@
 import { ChevronDown } from 'lucide-react'
 import type { AppState } from '../types'
 import { providerReady, visibleModels } from '../model-selection'
-import { effortLabel } from '../util'
-import { byNewest, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
+import { effortLabel, parseModel } from '../util'
+import { byNewest, providerHeading, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { useWheelSelect } from './useWheelSelect'
 
@@ -21,10 +21,18 @@ export function modelGroups(server: AppState): ModelGroup[] {
   return [
     { id: 'claude-code', heading: 'Claude Code', note: '', models: CLAUDE_CODE },
     ...order.map((provider) => ({
-      id: provider, heading: server.catalog.providers[provider] ?? provider, note: PROVIDER_NOTE[provider] ?? '',
+      id: provider, heading: providerHeading(server, provider), note: PROVIDER_NOTE[provider] ?? '',
       models: byProvider.get(provider)!.sort(byNewest),
     })),
   ]
+}
+
+function selectedName(groups: ModelGroup[], value: string | null) {
+  const model = groups.flatMap((group) => group.models).find((entry) => entry.value === value)
+  if (!model) return 'モデルを選択'
+  if (value?.startsWith('claude:')) return model.name === 'Claude Code の既定' ? model.name : `Claude Code / ${model.name}`
+  if (parseModel(value)?.provider === 'anthropic') return `Claude（API） / ${model.name}`
+  return model.name
 }
 
 export function ModelField({ label, value, groups, disabled, onChange, effort, efforts, onEffort, allowClearUnavailableEffort = false, allowDefaultEffort = false }: {
@@ -34,10 +42,10 @@ export function ModelField({ label, value, groups, disabled, onChange, effort, e
   const clearUnavailableEffort = allowClearUnavailableEffort && !efforts.length && Boolean(effort)
   const effortChoices = clearUnavailableEffort ? [''] : allowDefaultEffort && efforts.length ? ['', ...efforts] : efforts
   const effortName = clearUnavailableEffort ? `${effortLabel(effort)}（非対応）` : !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : allowDefaultEffort ? '既定' : '中'
-  const name = groups.flatMap((group) => group.models).find((model) => model.value === value)?.name ?? 'モデルを選択'
+  const name = selectedName(groups, value)
   const modelWheel = useWheelSelect<HTMLButtonElement>(disabled ? [] : groups.flatMap((group) => group.models.map((model) => model.value)), value, onChange)
   const effortWheel = useWheelSelect<HTMLButtonElement>(disabled || !value ? [] : effortChoices, effortChoices.includes(effort) ? effort : null, onEffort)
-  const wheelName = groups.flatMap((group) => group.models).find((model) => model.value === modelWheel.shown)?.name ?? name
+  const wheelName = selectedName(groups, modelWheel.shown ?? value)
   const shownEffort = effortWheel.pending && effortWheel.shown ? effortLabel(effortWheel.shown) : effortName
   return <div className="ab-field">
     <span>{label}</span>

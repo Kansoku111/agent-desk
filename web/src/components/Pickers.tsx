@@ -12,6 +12,7 @@ import { openProjectDialog } from './ProjectDialog'
 import { useWheelSelect } from './useWheelSelect'
 
 export const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'local-llm']
+export const providerHeading = (server: AppState, provider: string) => provider === 'anthropic' ? 'Claude（API）' : server.catalog.providers[provider] ?? provider
 export const PROVIDER_NOTE: Record<string, string> = {
   'openai-codex': 'ChatGPT サブスクリプション',
   anthropic: 'Anthropic API キー',
@@ -85,7 +86,7 @@ export function ModelPicker({ value, onChange }: { value: string | null; onChang
               <div key={provider}>
                 {index > 0 && <MenuDivider />}
                 <MenuHeading>
-                  {server.catalog.providers[provider] ?? provider}
+                  {providerHeading(server, provider)}
                   <span className="menu-heading-note">{PROVIDER_NOTE[provider] ?? ''}</span>
                 </MenuHeading>
                 {ready

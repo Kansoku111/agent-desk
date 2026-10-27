@@ -173,7 +173,7 @@ test('policy prompt receives the real picker candidates, including all OpenCode 
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
   const modules = {
     'react/jsx-runtime': {}, 'lucide-react': {}, '../model-selection': { providerReady, visibleModels },
-    '../util': {}, './Pickers': { byNewest: (a, b) => a.id.localeCompare(b.id), PROVIDER_NOTE: {}, PROVIDER_ORDER: ['opencode-go', 'anthropic'] },
+    '../util': {}, './Pickers': { byNewest: (a, b) => a.id.localeCompare(b.id), providerHeading: (server, provider) => provider === 'anthropic' ? 'Claude（API）' : server.catalog.providers[provider] ?? provider, PROVIDER_NOTE: {}, PROVIDER_ORDER: ['opencode-go', 'anthropic'] },
     './Popover': {}, './useWheelSelect': {},
   }
   const exports = {}
@@ -193,6 +193,12 @@ test('policy prompt receives the real picker candidates, including all OpenCode 
   assert.match(copied, /OpenCode Go.*model-a/)
   assert.match(copied, /OpenCode Go.*model-b/)
   assert.doesNotMatch(copied, /ID: \"(?:hidden|retired|disconnected)\"/)
+  server.accounts.claude.configured = true
+  const connected = await editor('teamPolicies', [], { groups: exports.modelGroups(server), copy: (text) => { copied = text } })
+  connected.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー')).props.onClick()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.match(copied, /Claude Code.*haiku/)
+  assert.match(copied, /Claude（API）.*disconnected/)
 })
 
 test('policy prompt warns when the catalog is empty', async () => {
