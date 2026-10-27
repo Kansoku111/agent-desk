@@ -340,10 +340,14 @@ function UsageLine({ usage, taskCost, speed, score }: { usage: TurnUsage; taskCo
   )
 }
 
-export const TurnView = memo(function TurnView({ turn, workspace, taskCost = null, taskScore, threadId, threadBusy, undoable, hideUser = false }: {
+const CLAUDE_LOGIN_MESSAGE = 'Claude Code のログインが切れました。ターミナルで /login を実行してください。'
+
+export const TurnView = memo(function TurnView({ turn, workspace, taskCost = null, taskScore, threadId, threadBusy, undoable, hideUser = false, onClaudeLogin }: {
   turn: Turn
   /** Leave out the request bubble, when the request is shown elsewhere. */
   hideUser?: boolean
+  /** Open this live Claude Code task's terminal for /login. */
+  onClaudeLogin?: () => void
   workspace: string
   taskCost?: number | null
   taskScore?: UsageScore | null
@@ -410,10 +414,15 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
 
       {finalAnswer && (
         <div className="answer">
-          {answer.map((item) => (
+          {answer.map((item) => item.claudeLoginRequired ? (
+            <div key={item.id} className="turn-error claude-login-error" role="alert">
+              <div className="turn-error-head"><AlertTriangle size={15} /><span>{CLAUDE_LOGIN_MESSAGE}</span></div>
+              {onClaudeLogin && answer.at(-1) === item && <button type="button" className="button" onClick={onClaudeLogin}><SquareTerminal size={13} /> ターミナルを開く</button>}
+            </div>
+          ) : (
             <div key={item.id} className="agent-text"><Markdown text={item.text} workspace={workspace} /></div>
           ))}
-          <div className="answer-actions"><CopyButton text={answer.map((item) => item.text).join('\n\n')} label="回答をコピー" /></div>
+          <div className="answer-actions"><CopyButton text={answer.map((item) => item.claudeLoginRequired ? CLAUDE_LOGIN_MESSAGE : item.text).join('\n\n')} label="回答をコピー" /></div>
         </div>
       )}
 

@@ -218,6 +218,7 @@ export function TerminalChat({ terminal, turns, omitted, loaded, error, onShowSc
           {loaded && shown.length === 0 && <div className="loading-turns">まだ会話がありません。下の欄からメッセージを送ってください。</div>}
           {shown.map((turn, index) => (
             <TurnView key={turn.id} turn={turn} workspace={terminal.workspace} threadId={terminal.id} threadBusy={false} undoable={false}
+              onClaudeLogin={index === shown.length - 1 && terminal.state === 'running' ? onShowScreen : undefined}
               taskScore={index === shown.length - 1 ? team?.score ?? terminal.score ?? turn.totalScore : turn.totalScore} />
           ))}
         </div>

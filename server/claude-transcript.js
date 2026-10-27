@@ -25,6 +25,7 @@ const WANTED = [Buffer.from('{"parentUuid"'), Buffer.from('{"type":"system"')]
 const NOISE = /^<(local-command-|task-notification|bash-(stdout|stderr)>|system-reminder>\s*$)/
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 const INTERRUPT = /^\[Request interrupted by user/
+const LOGIN_EXPIRED = /^Login expired\s*[·•-]\s*Please run \/login[.!]?$/i
 
 const time = (entry) => {
   const value = Date.parse(entry?.timestamp)
@@ -233,7 +234,9 @@ export class ClaudeConversation {
       }
       content.forEach((block, index) => {
         if (block?.type === 'text' && block.text?.trim()) {
-          turn.items.push({ type: 'agent', id: `${entry.uuid}:${index}`, text: block.text })
+          // Only Claude's own authentication error is a login prompt, not a model quoting it.
+          const claudeLoginRequired = entry.isApiErrorMessage === true && entry.error === 'authentication_failed' && LOGIN_EXPIRED.test(block.text.trim())
+          turn.items.push({ type: 'agent', id: `${entry.uuid}:${index}`, text: block.text, ...(claudeLoginRequired ? { claudeLoginRequired: true } : {}) })
         } else if (block?.type === 'thinking' && block.thinking?.trim()) {
           turn.items.push({ type: 'thought', id: `${entry.uuid}:${index}`, text: block.thinking })
         } else if (block?.type === 'tool_use' && block.id) {

@@ -1746,6 +1746,11 @@ select:focus {
   color: inherit;
 }
 
+.claude-login-error .button {
+  margin-top: 8px;
+  color: var(--text);
+}
+
 .turn-error-detail {
   max-height: 260px;
   margin: 8px 0 0;

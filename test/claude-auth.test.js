@@ -43,7 +43,7 @@ test('claudeAuthStatus runs `claude auth status` in the workspace with the given
   assert.equal(status.authMethod, 'api_key')
   assert.deepEqual(calls[0].args, ['auth', 'status'])
   assert.equal(calls[0].options.cwd, '/work')
-  assert.equal(calls[0].options.env, env)
+  assert.deepEqual(calls[0].options.env, env)
   assert.equal(await checkClaudeAuth({ claude: '/usr/bin/claude', cwd: '/work', env }, { spawn }), AUTH_REQUIRED)
 })
 
@@ -59,6 +59,227 @@ test('a check that fails, prints nothing readable or hangs gives no answer', asy
     clearInterval(keepAlive)
   }
   assert.equal(hung.calls.length, 1)
+})
+
+function deferredAuthSpawn() {
+  const calls = []
+  const spawn = (file, args, options) => {
+    const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), kill() {} })
+    calls.push({ file, args, options, proc })
+    return proc
+  }
+  const finish = (index, status, code = 0) => {
+    const proc = calls[index].proc
+    proc.stdout.write(JSON.stringify(status))
+    proc.emit('close', code)
+  }
+  return { spawn, calls, finish }
+}
+
+test('only same-context auth checks queued before process start share a process', async () => {
+  const { spawn, calls, finish } = deferredAuthSpawn()
+  const env = { PATH: 'fixture', ANTHROPIC_API_KEY: 'test-key' }
+  const base = { claude: 'claude', cwd: '/work', env, spawn }
+  const first = claudeAuthStatus(base)
+  const shared = claudeAuthStatus({ ...base, env: { ANTHROPIC_API_KEY: 'test-key', PATH: 'fixture' } })
+  const otherSpawn = deferredAuthSpawn()
+  const different = [
+    claudeAuthStatus({ ...base, cwd: '/other' }),
+    claudeAuthStatus({ ...base, claude: 'other-claude' }),
+    claudeAuthStatus({ ...base, env: { ...env, ANTHROPIC_API_KEY: 'other-test-key' } }),
+    claudeAuthStatus({ ...base, timeoutMs: 1000 }),
+    claudeAuthStatus({ ...base, spawn: otherSpawn.spawn }),
+  ]
+  await Promise.resolve()
+  assert.equal(calls.length, 5)
+  assert.equal(otherSpawn.calls.length, 1)
+  // A later request checks again even while the earlier process is running.
+  const whileRunning = claudeAuthStatus(base)
+  await Promise.resolve()
+  assert.equal(calls.length, 6)
+  const subscription = { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' }
+  for (let index = 0; index < 5; index++) finish(index, subscription)
+  otherSpawn.finish(0, subscription)
+  finish(5, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' })
+  const later = claudeAuthStatus(base)
+  await Promise.resolve()
+  assert.equal(calls.length, 7)
+  finish(6, { loggedIn: false }, 1)
+  assert.equal((await first).authMethod, 'claude.ai')
+  assert.equal((await shared).authMethod, 'claude.ai')
+  assert.equal((await whileRunning).authMethod, 'api_key')
+  assert.equal((await later).loggedIn, false)
+  await Promise.all(different)
+})
+
+test('auth checks compare mutable environments at process start', async () => {
+  const { spawn, calls, finish } = deferredAuthSpawn()
+  const env = { PATH: 'before' }
+  const base = { claude: 'claude', cwd: '/work', env, spawn }
+  const first = claudeAuthStatus(base)
+  env.PATH = 'after'
+  const second = claudeAuthStatus(base)
+  await Promise.resolve()
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].options.env.PATH, 'before')
+  assert.equal(calls[1].options.env.PATH, 'after')
+  finish(0, { loggedIn: false }, 1)
+  finish(1, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' })
+  assert.equal((await first).loggedIn, false)
+  assert.equal((await second).authMethod, 'api_key')
+})
+
+test('inherited environment changes do not share an in-flight check', async () => {
+  const { spawn, calls, finish } = deferredAuthSpawn()
+  const before = process.env.AGENT_DESK_TEST_AUTH_CONTEXT
+  try {
+    process.env.AGENT_DESK_TEST_AUTH_CONTEXT = 'first'
+    const context = { claude: 'claude', cwd: '/work', spawn }
+    const first = claudeAuthStatus(context)
+    process.env.AGENT_DESK_TEST_AUTH_CONTEXT = 'second'
+    const second = claudeAuthStatus(context)
+    await Promise.resolve()
+    assert.equal(calls.length, 2)
+    assert.equal(calls[0].options.env.AGENT_DESK_TEST_AUTH_CONTEXT, 'first')
+    assert.equal(calls[1].options.env.AGENT_DESK_TEST_AUTH_CONTEXT, 'second')
+    finish(0, { loggedIn: false }, 1)
+    finish(1, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' })
+    assert.equal((await first).loggedIn, false)
+    assert.equal((await second).authMethod, 'api_key')
+  } finally {
+    if (before === undefined) delete process.env.AGENT_DESK_TEST_AUTH_CONTEXT
+    else process.env.AGENT_DESK_TEST_AUTH_CONTEXT = before
+  }
+})
+
+test('failed checks are not retained or reused after completion', async () => {
+  let calls = 0
+  const spawn = () => { calls++; throw new Error('ENOENT') }
+  const context = { claude: 'missing', cwd: '/work', env: {}, spawn }
+  assert.equal(await claudeAuthStatus(context), null)
+  assert.equal(await claudeAuthStatus(context), null)
+  assert.equal(calls, 2)
+})
+
+test('a batched timeout fails every caller and a later request runs a fresh check', async () => {
+  const hung = fakeAuthSpawn('', { hang: true })
+  const context = { claude: 'claude', cwd: '/work', env: {}, spawn: hung.spawn, timeoutMs: 20 }
+  const keepAlive = setInterval(() => {}, 1000)
+  try {
+    const first = claudeAuthStatus(context)
+    const second = claudeAuthStatus(context)
+    assert.deepEqual(await Promise.all([first, second]), [null, null])
+    assert.equal(hung.calls.length, 1)
+    assert.equal(hung.calls[0].options.cwd, '/work')
+    assert.equal(await claudeAuthStatus(context), null)
+    assert.equal(hung.calls.length, 2)
+  } finally {
+    clearInterval(keepAlive)
+  }
+})
+
+test('display-only inspections share a running check but keep challenges and later checks separate', async () => {
+  const { spawn, calls, finish } = deferredAuthSpawn()
+  const auth = new TeamClaudeAuth({ detect: (context) => claudeAuthStatus({ ...context, spawn }), find: () => 'claude' })
+  const firstTeam = { id: 'first', workspace: '/work' }
+  const secondTeam = { id: 'second', workspace: '/work' }
+  const first = auth.inspect('/work', firstTeam)
+  await Promise.resolve()
+  const second = auth.inspect('/work', secondTeam)
+  const elsewhere = auth.inspect('/other')
+  await Promise.resolve()
+  assert.equal(calls.length, 2)
+  const subscription = { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' }
+  finish(0, subscription)
+  finish(1, subscription)
+  const [a, b] = await Promise.all([first, second, elsewhere])
+  assert.notEqual(a.challenge, b.challenge)
+  await assert.rejects(auth.confirm(firstTeam, { challenge: b.challenge }), { message: AUTH_REQUIRED })
+  const later = auth.inspect('/work', firstTeam)
+  await Promise.resolve()
+  assert.equal(calls.length, 3)
+  finish(2, subscription)
+  await later
+  const confirmation = auth.confirm(firstTeam, { challenge: a.challenge })
+  await Promise.resolve()
+  assert.equal(calls.length, 4)
+  finish(3, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' })
+  await assert.rejects(confirmation, { message: AUTH_REQUIRED })
+  assert.equal(firstTeam.claudeAuthConsent, undefined)
+})
+
+test('a changed environment does not share a running display-only inspection', async () => {
+  const { spawn, calls, finish } = deferredAuthSpawn()
+  const auth = new TeamClaudeAuth({ detect: (context) => claudeAuthStatus({ ...context, spawn }), find: () => 'claude' })
+  const before = process.env.AGENT_DESK_TEST_AUTH_CONTEXT
+  try {
+    process.env.AGENT_DESK_TEST_AUTH_CONTEXT = 'first'
+    const first = auth.inspect('/work')
+    await Promise.resolve()
+    process.env.AGENT_DESK_TEST_AUTH_CONTEXT = 'second'
+    const second = auth.inspect('/work')
+    await Promise.resolve()
+    assert.equal(calls.length, 2)
+    finish(0, { loggedIn: false }, 1)
+    finish(1, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' })
+    assert.equal((await first).descriptor.mode, 'logged-out')
+    assert.equal((await second).descriptor.mode, 'api')
+  } finally {
+    if (before === undefined) delete process.env.AGENT_DESK_TEST_AUTH_CONTEXT
+    else process.env.AGENT_DESK_TEST_AUTH_CONTEXT = before
+  }
+})
+
+test('a shared check still applies each team’s own consent', async () => {
+  const { spawn, calls, finish } = deferredAuthSpawn()
+  const status = { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' }
+  const auth = new TeamClaudeAuth({ detect: (context) => claudeAuthStatus({ ...context, spawn }) })
+  const allowed = { id: 'allowed', workspace: '/work', claudeAuthConsent: { teamId: 'allowed', workspace: path.resolve('/work'), descriptor: authDescriptor(status) } }
+  const denied = { id: 'denied', workspace: '/work' }
+  const context = { claude: 'claude', cwd: '/work', env: {} }
+  const first = auth.guard(allowed, context)
+  const second = auth.guard(denied, context)
+  await Promise.resolve()
+  assert.equal(calls.length, 1)
+  finish(0, status)
+  assert.equal(await first, null)
+  assert.equal(await second, AUTH_REQUIRED)
+})
+
+test('confirmation rechecks the actual auth mode after a completed inspection', async () => {
+  const { spawn, calls, finish } = deferredAuthSpawn()
+  const auth = new TeamClaudeAuth({ detect: (context) => claudeAuthStatus({ ...context, spawn }), find: () => 'claude' })
+  const team = { id: 'team', workspace: '/work' }
+  const inspection = auth.inspect('/work', team)
+  await Promise.resolve()
+  finish(0, { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' })
+  const { challenge } = await inspection
+  const confirmation = auth.confirm(team, { challenge })
+  await Promise.resolve()
+  assert.equal(calls.length, 2)
+  finish(1, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' })
+  await assert.rejects(confirmation, { message: AUTH_REQUIRED })
+  assert.equal(team.claudeAuthConsent, undefined)
+})
+
+test('a consent confirmation does not share a check that has already started', async () => {
+  const { spawn, calls, finish } = deferredAuthSpawn()
+  const auth = new TeamClaudeAuth({ detect: (context) => claudeAuthStatus({ ...context, spawn }), find: () => 'claude' })
+  const team = { id: 'team', workspace: '/work' }
+  const inspection = auth.inspect('/work', team)
+  await Promise.resolve()
+  finish(0, { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' })
+  const { challenge } = await inspection
+  const guard = auth.guard(team, auth.context('/work'))
+  await Promise.resolve()
+  const confirmation = auth.confirm(team, { challenge })
+  await Promise.resolve()
+  assert.equal(calls.length, 3)
+  finish(1, { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' })
+  finish(2, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' })
+  assert.equal(await guard, AUTH_REQUIRED)
+  await assert.rejects(confirmation, { message: AUTH_REQUIRED })
+  assert.equal(team.claudeAuthConsent, undefined)
 })
 
 // ------------------------------------------------------------ the runner

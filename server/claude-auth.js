@@ -37,22 +37,41 @@ function parseStatus(out, code) {
     return code === 0 || value?.loggedIn === false ? value : null
   } catch { return null }
 }
+// Batch only checks queued before a CLI process starts. A later consent or
+// launch must inspect again, even while that process is still running.
+const pendingChecks = []
+function sameEnv(left, right) {
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length && keys.every((name) => Object.hasOwn(right, name) && left[name] === right[name])
+}
 export function claudeAuthStatus({ claude, cwd, env, spawn = spawnProcess, timeoutMs = TIMEOUT_MS }) {
-  return new Promise((resolve) => {
-    if (!claude) return resolve(null)
-    const command = launchCommand(claude, ['auth', 'status'])
-    let proc
-    try { proc = spawn(command.file, command.args, { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }) }
-    catch { return resolve(null) }
-    let out = '', settled = false
-    const done = (value) => { if (settled) return; settled = true; clearTimeout(timer); resolve(value) }
-    const timer = setTimeout(() => { try { proc.kill() } catch {}; done(null) }, timeoutMs)
-    timer.unref?.()
-    proc.stdout?.setEncoding('utf8')
-    proc.stdout?.on('data', (chunk) => { out += chunk; if (out.length > 65536) { try { proc.kill() } catch {}; done(null) } })
-    proc.on('error', () => done(null))
-    proc.on('close', (code) => done(parseStatus(out, code)))
+  if (!claude) return Promise.resolve(null)
+  const context = { claude, cwd, env: { ...(env ?? process.env) }, spawn, timeoutMs }
+  const pending = pendingChecks.find((entry) => entry.claude === claude && entry.cwd === cwd
+    && entry.spawn === spawn && entry.timeoutMs === timeoutMs && sameEnv(entry.env, context.env))
+  if (pending) return pending.promise
+  const entry = { ...context, promise: null }
+  const promise = Promise.resolve().then(() => {
+    const index = pendingChecks.indexOf(entry)
+    if (index !== -1) pendingChecks.splice(index, 1)
+    return new Promise((resolve) => {
+      const command = launchCommand(claude, ['auth', 'status'])
+      let proc
+      try { proc = spawn(command.file, command.args, { cwd, env: context.env, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }) }
+      catch { return resolve(null) }
+      let out = '', settled = false
+      const done = (value) => { if (settled) return; settled = true; clearTimeout(timer); resolve(value) }
+      const timer = setTimeout(() => { try { proc.kill() } catch {}; done(null) }, timeoutMs)
+      timer.unref?.()
+      proc.stdout?.setEncoding('utf8')
+      proc.stdout?.on('data', (chunk) => { out += chunk; if (out.length > 65536) { try { proc.kill() } catch {}; done(null) } })
+      proc.on('error', () => done(null))
+      proc.on('close', (code) => done(parseStatus(out, code)))
+    })
   })
+  entry.promise = promise
+  pendingChecks.push(entry)
+  return promise
 }
 export async function checkClaudeAuth(context, options = {}) {
   const status = await claudeAuthStatus({ ...context, ...options })
@@ -63,6 +82,7 @@ export class TeamClaudeAuth {
   constructor({ detect = claudeAuthStatus, find = findClaude, now = Date.now } = {}) {
     Object.assign(this, { detect, find, now })
     this.challenges = new Map()
+    this.inspections = []
     /** Auth modes the user confirmed once for every team: [{ descriptor, acknowledgeUnknown, confirmedAt }]. */
     this.accepted = []
   }
@@ -80,7 +100,19 @@ export class TeamClaudeAuth {
       || (Boolean(team) && consent?.teamId === team.id && consent?.workspace === path.resolve(team.workspace) && same(consent))
   }
   async inspect(workspace, team = null) {
-    const descriptor = await this.descriptor(this.context(workspace))
+    const context = this.context(workspace)
+    // Display-only inspections can share a running check. Confirmation and
+    // launch guards must still inspect independently before authorizing work.
+    let inspection = this.inspections.find((entry) => entry.context.claude === context.claude
+      && entry.context.cwd === context.cwd && sameEnv(entry.context.env, context.env))
+    if (!inspection) {
+      inspection = { context, promise: this.descriptor(context) }
+      this.inspections.push(inspection)
+      const entry = inspection
+      const clear = () => { const index = this.inspections.indexOf(entry); if (index !== -1) this.inspections.splice(index, 1) }
+      void entry.promise.then(clear, clear)
+    }
+    const descriptor = await inspection.promise
     for (const [id, entry] of this.challenges) if (entry.expires < this.now()) this.challenges.delete(id)
     const challenge = descriptor.mode === 'logged-out' ? null : randomUUID()
     if (challenge) this.challenges.set(challenge, { workspace: path.resolve(workspace), teamId: team?.id ?? null, descriptor, expires: this.now() + 300000 })

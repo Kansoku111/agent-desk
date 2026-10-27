@@ -35,6 +35,26 @@ test('a prompt, a tool call with its result, and the answer make one turn', () =
   assert.deepEqual(turn.items[1].input, { file_path: 'a.md' })
 })
 
+test('only Claude Code login-expiry errors are marked for the terminal login action', () => {
+  const flags = { isApiErrorMessage: true, error: 'authentication_failed' }
+  for (const text of ['Login expired · Please run /login', 'Login expired - Please run /login.']) {
+    const conversation = conversationOf([user('u', 'hello', 1), assistant('a', [{ type: 'text', text }], 2, flags)])
+    assert.deepEqual(conversation.turns[0].items[0], { type: 'agent', id: 'a:0', text, claudeLoginRequired: true })
+  }
+  for (const [text, extra] of [
+    ['Login expired · Please run /login', {}],
+    ['Login expired · Please run /login', { error: 'authentication_failed' }],
+    ['Login expired · Please run /login', { ...flags, error: 'rate_limit' }],
+    ['Login expired · Please run /login', { ...flags, isApiErrorMessage: false }],
+    ['Not logged in · Please run /login', flags],
+    ['Invalid API key · Please run /login', flags],
+    ['The error says: Login expired · Please run /login', flags],
+  ]) {
+    const conversation = conversationOf([user('u', 'hello', 1), assistant('a', [{ type: 'text', text }], 2, extra)])
+    assert.deepEqual(conversation.turns[0].items[0], { type: 'agent', id: 'a:0', text })
+  }
+})
+
 test('a turn is running until it finishes, and a failed tool is marked failed', () => {
   const conversation = conversationOf([
     user('u1', 'やって', 1),

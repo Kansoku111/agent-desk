@@ -266,6 +266,8 @@ export interface TextItem {
   type: 'agent' | 'thought'
   id: string
   text: string
+  /** Claude Code's own login-expired error, not an assistant quoting it. */
+  claudeLoginRequired?: true
 }
 
 export interface NoticeItem {

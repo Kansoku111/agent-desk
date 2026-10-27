@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Concurrent display-only Claude Code auth inspections with the same launch context share a running check, while consent and launch checks stay independent. Checks queued before a process starts are batched without reusing started or completed results, preserving billing consent. Interactive Claude login-expired errors now show a Japanese recovery message and a link to the terminal; CLI-side token refresh interruptions remain possible.
 - Eco re-verification invalidates earlier evidence immediately; failed, cancelled or incomplete verification/review records cannot be accepted using an older success. Verification detects temporary new source files while retaining generated-file exclusions, and accepts legitimate dot-prefixed working directories without allowing project escapes.
 - Eco and AB start dialogs block known unsupported reasoning choices and let users explicitly clear stale levels on models without reasoning controls, without silently changing saved preferences.
 - Team report delivery preserves reports when a Claude leader submits an unrelated prompt. Stop-all clears idle/interrupted children's queued instructions too; closing a child during startup prevents later execution. Concurrent approval requests reconcile individually, and restart reports identify children lost before task creation and explain how to reassign them.
