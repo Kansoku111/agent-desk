@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-27
+
 ### Added
+
+- Standard tasks, AB, Eco and teams support task- or workflow-scoped PTC configuration.
+- Teams support flexible model selection, including a model picker for the leader and a copyable policy-creation prompt. Model pickers distinguish Claude Code from the Claude API.
 
 - Sidebar task menus support persistent pin/unpin for regular conversations, Claude Code tasks, teams/Eco and AB. Pins appear first within their project with a small marker, remain outside the recent-row quota, and keep their state across restarts and archiving.
 - Eco leaders can continue related implementation with the same child after reviewing and accepting its research. The explicit `implement` tool retains the model and conversation, applies writer permissions through the app, captures a new baseline, and preserves serialized writes, verification and parent judgment. Ordinary research follow-ups remain read-only; failed session migration never silently starts a replacement conversation.

@@ -22,8 +22,8 @@ const fieldSource = await moduleSource('../web/src/components/WorkflowModelField
 const fieldComponents = compile(fieldSource, {
   react: {}, 'react/jsx-runtime': jsxRuntime, 'lucide-react': { ChevronDown: 'ChevronDown' },
   '../model-selection': { providerReady: () => true, visibleModels: (server) => server.catalog.models },
-  '../util': { effortLabel: (value) => value || '指定なし' },
-  './Pickers': { byNewest: () => 0, PROVIDER_NOTE: {}, PROVIDER_ORDER: ['openai-codex'] },
+  '../util': { effortLabel: (value) => value || '指定なし', parseModel: (value) => { const [provider, model] = JSON.parse(value); return { provider, model } } },
+  './Pickers': { byNewest: () => 0, providerHeading: (server, provider) => server.catalog.providers[provider] ?? provider, PROVIDER_NOTE: {}, PROVIDER_ORDER: ['openai-codex'] },
   './Popover': {
     Dropdown: ({ trigger, children }) => jsx('div', { children: [trigger({ toggle() {}, open: false }), typeof children === 'function' ? children(() => {}) : children] }),
     MenuDivider: () => jsx('hr', {}), MenuHeading: (props) => jsx('div', props),
