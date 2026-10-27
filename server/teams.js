@@ -1,10 +1,10 @@
 // Agent teams ("TM"): the user talks to a "leader" (Claude Code in a terminal,
-// or GPT as a dsh task), which hands work to "child" agents with the agent-team MCP tools (team-mcp.js) and
+// or another model as a dsh task), which hands work to "child" agents with the agent-team MCP tools (team-mcp.js) and
 // audits what they report. A GPT child is an ordinary dsh task on the ChatGPT
 // subscription; a Claude child is Claude Code run headless (claude-runner.js)
 // with the user's explicitly confirmed Claude Code auth mode. Reports reach the
 // leader in the order the children finish, when it is idle (typed into a Claude
-// leader's terminal, sent to a GPT leader as a message); those that waited
+// leader's terminal, sent to a dsh leader as a message); those that waited
 // meanwhile go together, in one turn (batchReports), and while other children
 // still work a report waits a little for theirs. Between reports the leader
 // sleeps and spends nothing.
@@ -397,7 +397,7 @@ export class TeamManager extends EventEmitter {
     return this.#byTask(taskId)?.child === null ? this.#byTask(taskId).team.id : null
   }
 
-  /** Whether a dsh task is a child or a GPT leader: a child's subagents, and a leader's Claude (API-billed) ones, are stopped. */
+  /** A child's subagents, and a dsh leader's Claude (API-billed) subagents, are stopped. */
   inTeam(threadId) {
     return Boolean(this.#byTask(threadId))
   }
@@ -467,7 +467,7 @@ export class TeamManager extends EventEmitter {
   }
 
   /**
-   * The MCP server a GPT leader's dsh session mounts (index.js mcpServersFor):
+   * The MCP server a leader's dsh session mounts (index.js mcpServersFor):
    * the team's tools, with its instructions as the server's own. Written each
    * time a session starts: the server's port may have changed.
    */
@@ -514,7 +514,7 @@ export class TeamManager extends EventEmitter {
 
   /**
    * Starts a team in the folder. Its leader, with the team's tools, is a Claude
-   * Code task or a GPT dsh task. `choices` are what the user picked when
+   * Code task or a dsh task. `choices` are what the user picked when
    * starting it (a patch over the saved settings, as settings.update takes);
    * the result's `config` is what the team runs with, to remember for the next one.
    */
@@ -524,9 +524,11 @@ export class TeamManager extends EventEmitter {
     assertChildrenOn(config)
     const now = this.now()
     const gpt = config.leaderProvider === 'gpt'
+    const dshLeader = config.leaderProvider !== 'claude'
+    if (execution && !['claude', 'gpt'].includes(config.leaderProvider)) throw new Error('ecoの親モデルを選んでください')
     const team = {
       id: randomUUID(), secret: randomBytes(24).toString('hex'), workspace: String(workspace ?? ''), leaderId: '',
-      leaderKind: gpt ? 'thread' : 'terminal', config, createdAt: now, updatedAt: now, seq: 0, children: [], queue: [], asks: [],
+      leaderKind: dshLeader ? 'thread' : 'terminal', config, createdAt: now, updatedAt: now, seq: 0, children: [], queue: [], asks: [],
     }
     if (execution) {
       if (!path.isAbsolute(team.workspace)) throw new Error('作業フォルダを指定してください')
@@ -549,7 +551,7 @@ export class TeamManager extends EventEmitter {
       team.execution.strictEffort = true
     }
     if (authConfirmation) await this.#confirmAuth(team, authConfirmation, false)
-    if (gpt || team.execution?.leaderModel) return this.#createGptLed(team, config)
+    if (dshLeader || team.execution?.leaderModel) return this.#createDshLed(team, config)
     this.teams.set(team.id, team)
     let terminal
     try {
@@ -568,17 +570,20 @@ export class TeamManager extends EventEmitter {
     return { team: this.summary(team), terminal }
   }
 
-  async #createGptLed(team, config) {
-    const id = config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels.find((model) => model.provider === 'gpt')?.model : null)
-    if (!id && !team.execution?.leaderModel) throw new Error('GPT のリーダーのモデルが決まっていません。チームを始める画面で選んでください')
-    const model = team.execution?.leaderModel ?? (this.catalog.data.models.find((entry) => entry.provider === 'openai-codex' && entry.id === id)?.value
-      ?? JSON.stringify(['openai-codex', id]))
+  async #createDshLed(team, config) {
+    const extra = !team.execution && config.leaderProvider !== 'gpt'
+    const provider = extra ? CATALOG_PROVIDER[config.leaderProvider] : 'openai-codex'
+    const id = extra ? config.dshLeader?.model
+      : config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels.find((model) => model.provider === 'gpt')?.model : null)
+    if (!id && !team.execution?.leaderModel) throw new Error(`${extra ? "リーダー" : "GPT のリーダー"}のモデルが決まっていません。チームを始める画面で選んでください`)
+    const model = team.execution?.leaderModel ?? (this.catalog.data.models.find((entry) => entry.provider === provider && entry.id === id)?.value
+      ?? JSON.stringify([provider, id]))
     this.teams.set(team.id, team)
     let thread
     try {
       // Marked as the leader from the start: its session mounts the team's tools (mcpServerFor).
       thread = await this.threads.create({
-        workspace: team.workspace, model, effort: config.gptLeader.effort ?? '', toolMode: config.toolMode,
+        workspace: team.workspace, model, effort: (extra ? config.dshLeader.effort : config.gptLeader.effort) ?? '', toolMode: config.toolMode,
         permissionMode: config.leaderBypass ? 'danger-full-access' : 'workspace-write', team: { id: team.id, role: 'leader', ...(team.execution?.strictEffort ? { strictEffort: true } : {}) },
       })
     } catch (error) {
@@ -1651,7 +1656,7 @@ export class TeamManager extends EventEmitter {
   }
 
   /**
-   * A GPT leader takes the next report as a message once its turn has ended.
+   * A dsh leader takes the next report as a message once its turn has ended.
    * dsh says when a turn ends, and a message is handed over whole, so nothing
    * needs checking afterwards.
    */
@@ -1678,7 +1683,7 @@ export class TeamManager extends EventEmitter {
     this.#emit(team)
   }
 
-  /** The user wrote to a leader (a GPT leader's thread.send, or a Claude leader's own prompt, #onLeaderHook): the questions it asked are being answered. */
+  /** A user message to a dsh thread or Claude Code leader answers its questions. */
   userWrote(threadId) {
     const found = this.#byTask(threadId)
     if (!found || found.child) return
@@ -1832,7 +1837,7 @@ export class TeamManager extends EventEmitter {
     if (!found) return
     if (this.#captureScores(found.team)) void this.#save()
     if (!found.child) {
-      // A GPT leader: its state shows in the panel, and an idle one takes the next report.
+      // A dsh leader: its state shows in the panel, and an idle one takes the next report.
       if (thread.status !== 'running') this.#pump(found.team)
       return this.#emit(found.team)
     }
@@ -1883,7 +1888,7 @@ export class TeamManager extends EventEmitter {
 
   /**
    * A GPT or DeepSeek child started a subagent (its dsh has none, so this is
-   * the backstop), or a GPT leader started one on Claude, which bills the
+   * the backstop), or a dsh leader started one on Claude, which bills the
    * user's Anthropic API key: the turn stops at once and the leader hears why.
    */
   async stopApiUse(threadId) {
@@ -1945,7 +1950,7 @@ export class TeamManager extends EventEmitter {
     this.#emit(team)
   }
 
-  /** A GPT leader's turn ended: why, if Agent Desk stopped it; then the next report. */
+  /** A dsh leader's turn ended: why, if Agent Desk stopped it; then the next report. */
   #onLeaderFinished(team) {
     this.workingLeaders.delete(team.id)
     if (team.execution) { team.execution.metrics.parentTurns = (team.execution.metrics.parentTurns ?? 0) + 1; void this.#save() }

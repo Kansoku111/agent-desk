@@ -147,6 +147,18 @@ test('team defaults do not share nested references with the created resource', a
   assert.deepEqual(h.events, ['save', 'notice'])
 })
 
+test('the selected leader model and route are saved as the next team defaults', async () => {
+  const h = setup()
+  const selection = { provider: 'claudeApi', model: 'claude-haiku-5-5', effort: 'low' }
+  const config = { ...structuredClone(h.live.agentTeams), leaderProvider: 'claudeApi', dshLeader: selection }
+  const handlers = createTerminalHandlers({ ...h.deps, teams: { create: async () => ({ team: { workspace: 'folder', config } }) } })
+  await handlers['team.create']({})
+  assert.equal(h.live.agentTeams.leaderProvider, 'claudeApi')
+  assert.deepEqual(h.live.agentTeams.dshLeader, selection)
+  config.dshLeader.model = 'changed'
+  assert.equal(h.live.agentTeams.dshLeader.model, 'claude-haiku-5-5')
+})
+
 test('a temporary team mode does not overwrite the user default', async () => {
   const h = setup()
   h.live.agentTeams.defaultModelMode = 'free'

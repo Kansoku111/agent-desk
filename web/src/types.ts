@@ -82,8 +82,8 @@ export interface TerminalSummary {
 
 /** Who a team's children run on (Claude (API), DeepSeek, OpenCode Go and local: as a dsh task on the user's API key or own server). */
 export type TeamProvider = 'gpt' | 'claude' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'local'
-/** Who can lead a team. */
-export type TeamLeaderProvider = 'gpt' | 'claude'
+/** A Claude Code or dsh model can lead a team. */
+export type TeamLeaderProvider = TeamProvider
 export type TeamTier = 'low' | 'mid'
 export type TeamModelMode = 'tiers' | 'free'
 export type TeamModelChoice = { provider: TeamProvider; model: string; effort: string | null }
@@ -152,13 +152,13 @@ export interface ExecutionWork {
   verification?: { status: string; sourceHash?: string; record: string; checks: { id: string; status: string; log: string; exitCode: number | null }[] }
 }
 
-/** An agent team ("TM"): a Claude Code or GPT leader and its children. */
+/** An agent team ("TM"): a Claude Code or dsh leader and its children. */
 export interface TeamSummary {
   id: string
   workspace: string
   leaderId: string
   score?: UsageScore
-  /** `terminal`: Claude Code leads; `thread`: GPT leads, as a dsh task. */
+  /** `terminal`: Claude Code leads; `thread`: a dsh task leads. */
   leaderKind: 'terminal' | 'thread'
   /** The team's own settings: chosen when it started, changed in its panel since. */
   config?: TeamSettings
@@ -193,6 +193,8 @@ export interface TeamSettings {
   leader: { model: string | null; effort: string | null }
   /** A GPT leader's model (null: GPT's mid, low, then a selected free-mode model). */
   gptLeader: { model: string | null; effort: string | null }
+  /** Other dsh routes; older settings lack this field. */
+  dshLeader?: { provider: Exclude<TeamProvider, 'claude' | 'gpt'>; model: string; effort: string | null } | null
   toolMode?: ToolMode
   defaultModelMode?: TeamModelMode
   modelMode?: TeamModelMode

@@ -78,7 +78,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
 }
 
 /**
- * The MCP server a GPT leader's dsh session mounts (index.js mcpServersFor):
+ * The MCP server a leader's dsh session mounts (index.js mcpServersFor):
  * the team's tools, with its instructions as the server's own. Written each
  * time a session starts: the server's port may have changed.
  */

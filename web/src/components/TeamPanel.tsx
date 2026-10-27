@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import { act, navigate, openTeamChild, setTeamPanel, useStore } from '../store'
 import type { AppState, TeamChild, TeamChildState, TeamSummary, TerminalSummary, ThreadSummary } from '../types'
-import { effortLabel, relativeTime, resetLabel } from '../util'
+import { effortLabel, parseModel, relativeTime, resetLabel } from '../util'
 import { ChatGptLimits } from './ChatGptUsage'
 import { ConfirmDialog, Modal } from './Modal'
 import { TeamConfigDialog } from './TeamSettings'
@@ -64,7 +64,7 @@ function leaderState(leader: TerminalSummary | ThreadSummary | undefined): TeamC
   return leader.status === 'error' ? 'error' : 'idle'
 }
 
-/** A team's leader task: a Claude Code task, or a GPT (dsh) task. */
+/** A team's leader task: Claude Code or a dsh task. */
 function useLeader(team: TeamSummary | undefined) {
   return useStore((state) => (!team ? undefined
     : team.leaderKind === 'thread'
@@ -76,7 +76,7 @@ function useLeader(team: TeamSummary | undefined) {
 function leaderModel(server: AppState | null, leader: TerminalSummary | ThreadSummary | undefined) {
   if (!leader) return ''
   if ('activity' in leader) return claudeModelName(server, leader.model ?? leader.modelInUse) ?? 'Claude Code の既定'
-  return server?.catalog.models.find((model) => model.value === leader.model)?.name ?? 'GPT'
+  return server?.catalog.models.find((model) => model.value === leader.model)?.name ?? parseModel(leader.model)?.id ?? 'モデル未設定'
 }
 
 /** The view a team's leader opens in. */
@@ -384,6 +384,8 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
   const { width, height, cx, boxes, rows, busY } = layout(children.length)
   const lead = leaderState(leader)
   const model = leaderModel(server, leader)
+  const provider = leader && !('activity' in leader) ? parseModel(leader.model)?.provider : null
+  const providerName = provider ? server?.catalog.providers[provider] ?? provider : team.leaderKind === 'thread' ? 'dsh' : 'Claude Code'
   const trunkEnd = children.length ? busY(rows - 1) : PAD + LEADER_H
   // Lines to working children are drawn last, over the quiet ones they share a bus with.
   const order = children.map((child, index) => ({ child, box: boxes[index] }))
@@ -409,7 +411,7 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
               <span className="team-node-model">リーダー · {model}</span>
             </div>
             <div className="team-node-title">{leader?.title}</div>
-            <div className="team-node-foot"><span>{team.leaderKind === 'thread' ? 'GPT' : 'Claude Code'}</span><span>{lead === 'stopped' ? '終了' : STATE_LABEL[lead]}</span></div>
+            <div className="team-node-foot"><span>{providerName}</span><span>{lead === 'stopped' ? '終了' : STATE_LABEL[lead]}</span></div>
           </div>
           {children.map((child, index) => {
             const box = boxes[index]

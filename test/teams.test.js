@@ -2323,12 +2323,12 @@ test('team settings: defaults fill in, patches are checked', () => {
   assert.equal(mergeTeamConfig(undefined, { claude: { mid: { enabled: false } } }).claude.mid.enabled, false)
   assert.throws(() => mergeTeamConfig(undefined, { claude: { enabled: true, low: { enabled: false }, mid: { enabled: false } } }), /Claude の低枠と中枠の少なくとも一方/)
   assert.equal(mergeTeamConfig(undefined, { deepseek: { low: { enabled: false }, mid: { enabled: false } } }).deepseek.enabled, false)
-  // DeepSeek is off until turned on, and only works as a child.
+  // DeepSeek is off until turned on; a leader also needs an explicit matching model.
   assert.equal(teamConfig({}).deepseek.enabled, false)
   assert.equal(mergeTeamConfig(undefined, { deepseek: { enabled: true, low: { model: 'deepseek-v4-flash' } } }).deepseek.low.model, 'deepseek-v4-flash')
   assert.throws(() => mergeTeamConfig(undefined, { leaderProvider: 'deepseek' }), /リーダー/)
-  assert.equal(teamConfig({ leaderProvider: 'deepseek' }).leaderProvider, 'claude')
-  // So is OpenCode Go.
+  assert.equal(teamConfig({ leaderProvider: 'deepseek' }).leaderProvider, 'deepseek')
+  // OpenCode Go likewise needs its leader model.
   assert.equal(mergeTeamConfig(undefined, { opencodeGo: { enabled: true, mid: { model: 'kimi-k3' } } }).opencodeGo.mid.model, 'kimi-k3')
   assert.throws(() => mergeTeamConfig(undefined, { opencodeGo: { enabled: true, low: { enabled: false }, mid: { enabled: false } } }), /OpenCode Go の低枠と中枠/)
   assert.throws(() => mergeTeamConfig(undefined, { leaderProvider: 'opencodeGo' }), /リーダー/)
@@ -2549,6 +2549,60 @@ test('a GPT leader is a dsh task whose session mounts the team tools with the le
   // Other tasks get nothing.
   assert.equal(manager.mcpServerFor({ id: 'x', team: undefined }), null)
   assert.equal(manager.summary(team).leaderKind, 'thread')
+})
+
+for (const [provider, catalogProvider, model, effort] of [
+  ['claudeApi', 'anthropic', 'claude-haiku-5-5', 'low'],
+  ['deepseek', 'deepseek-official', 'deepseek-v4-flash', 'medium'],
+  ['opencodeGo', 'opencode-go', 'glm-5.3', null],
+  ['local', 'local-llm', 'org/qwen:8b', 'low'],
+]) {
+  test(`a ${provider} leader keeps its model, effort, billing route and team tools`, async (t) => {
+    const f = await setup(t)
+    const chosen = { provider, model, effort }
+    const result = await f.manager.create({ workspace: f.workspace, choices: { leaderProvider: provider, dshLeader: chosen, leaderBypass: false, toolMode: 'ptc' } })
+    const team = f.manager.teams.get(result.team.id)
+    assert.equal(team.leaderKind, 'thread')
+    assert.deepEqual(team.config.dshLeader, chosen)
+    const thread = f.threads.threads.get(team.leaderId)
+    assert.equal(thread.model, JSON.stringify([catalogProvider, model]))
+    assert.equal(thread.effort, effort ?? '')
+    assert.equal(thread.permissionMode, 'workspace-write')
+    assert.equal(thread.toolMode, 'ptc')
+    assert.deepEqual(thread.team, { id: team.id, role: 'leader' })
+    assert.equal(f.manager.mcpServerFor(thread).name, MCP_SERVER)
+    assert.equal(f.manager.teamLedBy(thread.id), team.id)
+    await f.manager.call(team.id, team.secret, 'spawn', { title: 'child', task: 'work', provider: 'gpt', tier: 'low' })
+    assert.equal(team.children[0].model, 'gpt-6-luna')
+  })
+}
+
+test('extra leader routes require their own valid model and never fall back to another provider', async (t) => {
+  const f = await setup(t)
+  const choices = { leaderProvider: 'deepseek', dshLeader: { provider: 'claudeApi', model: 'claude-haiku-5-5', effort: null } }
+  await assert.rejects(f.manager.create({ workspace: f.workspace, choices }), /一致/)
+  assert.throws(() => mergeTeamConfig({}, { leaderProvider: 'local', dshLeader: { provider: 'local', model: '../bad', effort: null } }), /モデル/)
+  assert.throws(() => mergeTeamConfig({}, { leaderProvider: 'claudeApi', dshLeader: { provider: 'claudeApi', model: 'haiku', effort: 'bad!' } }), /推論/)
+  assert.throws(() => mergeTeamConfig({}, { leaderProvider: 'claudeApi' }), /一致/)
+  assert.throws(() => mergeTeamConfig({}, { dshLeader: { provider: 'gpt', model: 'gpt-6-luna' } }), /プロバイダー/)
+})
+
+test('a non-GPT leader selection survives restart and does not affect eco choices', async (t) => {
+  const chosen = { provider: 'deepseek', model: 'deepseek-v4-flash', effort: 'low' }
+  const f = await setup(t, { leaderProvider: 'deepseek', dshLeader: chosen })
+  await f.manager.stop()
+  const again = await new TeamManager({
+    file: path.join(f.dir, 'teams.json'), dir: path.join(f.dir, 'teams'), threads: f.threads, terminals: f.terminals, agents: f.agents, catalog: CATALOG,
+    getSettings: () => ({}), apiUrl: () => '',
+  }).load()
+  t.after(() => again.stop())
+  const restored = again.teams.get(f.team.id)
+  assert.equal(restored.config.leaderProvider, 'deepseek')
+  assert.deepEqual(restored.config.dshLeader, chosen)
+  assert.equal(f.threads.threads.get(restored.leaderId).model, '["deepseek-official","deepseek-v4-flash"]')
+  const eco = await again.create({ workspace: f.workspace, execution: {}, choices: { ...restored.config, leaderProvider: 'gpt' } })
+  assert.equal(eco.team.config.leaderProvider, 'gpt')
+  assert.equal(f.threads.threads.get(eco.team.leaderId).model, '["openai-codex","gpt-6.1-sol"]')
 })
 
 test('with batchReports off, a GPT leader gets each report as a message once its turn has ended', async (t) => {

@@ -19,6 +19,14 @@ const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claud
 type DshProvider = 'gpt' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'local'
 /** Each dsh provider's models in the model list. */
 const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' } as const
+const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'local-llm': 'local' }
+const modelValue = (entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? `claude:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
+function pickerChoice(value: string): TeamModelChoice | null {
+  if (value.startsWith('claude:')) return { provider: 'claude', model: value.slice(7), effort: null }
+  const parsed = parseModel(value)
+  const provider = parsed && CATALOG_TO_TEAM[parsed.provider]
+  return parsed && provider ? { provider, model: parsed.id, effort: null } : null
+}
 const OFF_PROVIDER = { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } }
 const TIERS: { tier: TeamTier; label: string; note: string }[] = [
   { tier: 'low', label: '低枠', note: '単純な作業、繰り返しの多い作業、量の多い作業' },
@@ -207,18 +215,10 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
 function FreeModels({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
   const [adding, setAdding] = useState(false)
   const models = config.freeModels ?? []
-  const catalogToTeam: Record<string, TeamProvider> = { 'openai-codex': 'gpt', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'local-llm': 'local' }
-  const valueOf = (entry: TeamModelChoice) => entry.provider === 'claude' ? `claude:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
-  const fromValue = (value: string): TeamModelChoice | null => {
-    if (value.startsWith('claude:')) return { provider: 'claude', model: value.slice(7), effort: null }
-    const parsed = parseModel(value)
-    const provider = parsed && catalogToTeam[parsed.provider]
-    return parsed && provider ? { provider, model: parsed.id, effort: null } : null
-  }
-  const groups = modelGroups(server).filter((group) => group.id === 'claude-code' || catalogToTeam[group.id])
+  const groups = modelGroups(server).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
   const row = (entry: TeamModelChoice | null, index: number) => {
-    const value = entry ? valueOf(entry) : ''
-    const used = new Set(models.filter((_, i) => i !== index).map(valueOf))
+    const value = entry ? modelValue(entry) : ''
+    const used = new Set(models.filter((_, i) => i !== index).map(modelValue))
     const choices = groups.map((group) => ({ ...group, models: group.models.filter((model) => !used.has(model.value)) })).filter((group) => group.models.length)
     if (entry && !choices.some((group) => group.models.some((model) => model.value === value))) {
       choices.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === value)?.name ?? entry.model }] })
@@ -228,7 +228,7 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
       <ModelField label={`モデル ${index + 1}`} value={value} groups={choices} disabled={false} effort={entry?.effort ?? ''} efforts={levels} allowDefaultEffort
         onChange={(next) => {
           if (next === value) return
-          const chosen = fromValue(next)
+          const chosen = pickerChoice(next)
           if (!chosen) return
           onChange({ freeModels: entry ? models.map((model, i) => i === index ? chosen : model) : [...models, chosen] })
           setAdding(false)
@@ -261,55 +261,37 @@ function ChildModels({ server, config, onChange }: { server: AppState; config: C
   </>
 }
 
-/** Who leads, on which model, and with which of the user's policies. */
+/** A leader's existing choice is kept even when it is hidden or not connected. */
 function LeaderSection({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
   const policies: TeamPolicy[] = server.settings.teamPolicies ?? []
-  const gptLeads = config.leaderProvider === 'gpt'
+  const provider = config.leaderProvider
+  const model = provider === 'claude' ? config.leader.model : provider === 'gpt'
+    ? config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels?.find((entry) => entry.provider === 'gpt')?.model : null)
+    : config.dshLeader?.model ?? null
+  const effort = provider === 'claude' ? config.leader.effort : provider === 'gpt' ? config.gptLeader.effort : config.dshLeader?.effort ?? null
+  const value = provider === 'claude' ? modelValue({ provider, model: model ?? '' }) : model ? modelValue({ provider, model }) : ''
+  const groups = modelGroups(server).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
+  if (value && !groups.some((group) => group.models.some((entry) => entry.value === value))) {
+    const name = provider === 'claude' ? claudeModelName(server, model ?? null) ?? 'Claude Code の既定'
+      : server.catalog.models.find((entry) => entry.value === value)?.name ?? model ?? ''
+    groups.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name }] })
+  }
+  const levels = provider === 'claude' ? claudeEfforts(server, model ?? null) : dshEfforts(server, model ?? null, provider)
   return (
     <section className="account-card">
-      <div className="setting compact">
-        <div>
-          <h3>リーダー</h3>
-          <p className="muted">
-            {gptLeads ? PROVIDER_NOTE.gpt : PROVIDER_NOTE.claude}
-            {gptLeads && !server.accounts.chatgpt.signedIn && ' · 要サインイン'}
-          </p>
-        </div>
-        <select value={config.leaderProvider} onChange={(event) => onChange({ leaderProvider: event.target.value })} aria-label="リーダー">
-          <option value="claude">Claude Code</option>
-          <option value="gpt">GPT</option>
-        </select>
-      </div>
-      <div className="setting compact team-tier-row">
-        <div>
-          <h3>リーダーのモデル</h3>
-          {gptLeads && <p className="muted">{config.modelMode === 'free' ? '未設定なら GPT の中枠、低枠、選択したモデルの順' : '未設定なら GPT の中枠、低枠の順'}</p>}
-        </div>
-        {gptLeads
-          ? (
-            <ModelPickers
-              models={dshModels(server).map((model) => ({ id: model.id, name: model.name }))}
-              levels={dshEfforts(server, config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels?.find((model) => model.provider === 'gpt')?.model : null) ?? null)}
-              model={config.gptLeader.model}
-              effort={config.gptLeader.effort}
-              unset="未設定（GPT の子と同じ）"
-              unsetEffort="モデルの既定"
-              label="GPT のリーダー"
-              onChange={(patch) => onChange({ gptLeader: patch })}
-            />
-          )
-          : (
-            <ModelPickers
-              models={claudeModels(server).map((model) => ({ id: model.id, name: claudeModelName(server, model.id) ?? model.id }))}
-              levels={claudeEfforts(server, config.leader.model)}
-              model={config.leader.model}
-              effort={config.leader.effort}
-              unset="Claude Code の既定"
-              unsetEffort="Claude Code の既定"
-              label="リーダー"
-              onChange={(patch) => onChange({ leader: patch })}
-            />
-          )}
+      <div className="team-leader-picker">
+        <ModelField label="リーダー" value={value} groups={groups} disabled={false} effort={effort ?? ''} efforts={levels} allowDefaultEffort allowClearUnavailableEffort
+          onChange={(next) => {
+            if (next === value) return
+            const chosen = pickerChoice(next)
+            if (!chosen) return
+            if (chosen.provider === 'claude') onChange({ leaderProvider: 'claude', leader: { model: chosen.model, effort: null } })
+            else if (chosen.provider === 'gpt') onChange({ leaderProvider: 'gpt', gptLeader: { model: chosen.model, effort: null } })
+            else onChange({ leaderProvider: chosen.provider, dshLeader: chosen })
+          }}
+          onEffort={(next) => onChange(provider === 'claude' ? { leader: { effort: next || null } }
+            : provider === 'gpt' ? { gptLeader: { effort: next || null } } : { dshLeader: { effort: next || null } })} />
+        <p className="muted">{PROVIDER_NOTE[provider]}{provider === 'gpt' && !server.accounts.chatgpt.signedIn && ' · 要サインイン'}</p>
       </div>
       {policies.length > 0 && (
         <div className="setting compact">
@@ -463,7 +445,8 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
   }
-  const leader = draft.leaderProvider === 'gpt' ? 'GPT' : 'Claude Code'
+  const leaderModel = team.leaderKind === 'thread' ? parseModel(server.threads.find((entry) => entry.id === team.leaderId)?.model) : null
+  const leader = team.leaderKind === 'terminal' ? 'Claude Code' : leaderModel ? server.catalog.providers[leaderModel.provider] ?? leaderModel.provider : PROVIDER_NAME[draft.leaderProvider]
   return (
     <Modal title="このチームの設定" onClose={onClose} width={620} className="team-start-modal">
       <div className="team-start-body">

@@ -9,11 +9,13 @@ const { outputText } = ts.transpileModule(source + '\nexport { ChildCard, TeamDi
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 })
 const jsx = (type, props) => ({ type, props })
+const appState = { teamPanel: true, route: { view: 'thread', id: 'task' }, server: { threads: [], catalog: { models: [], providers: {} } } }
 const modules = {
   react: { memo: (fn) => fn, useState: (value) => [value, () => {}] },
   'react/jsx-runtime': { jsx, jsxs: jsx },
   'lucide-react': { Loader2: 'spinner', CircleDot: 'idle', CheckCircle2: 'closed', ShieldAlert: 'approval', RefreshCw: 'resuming' },
-  '../store': { useStore: (select) => select({ teamPanel: true, route: { view: 'thread', id: 'task' }, server: { threads: [] } }) },
+  '../store': { useStore: (select) => select(appState) },
+  '../util': { parseModel: (value) => { if (!value) return null; const [provider, id] = JSON.parse(value); return { provider, id } } },
 }
 const panel = {}
 new Function('require', 'exports', outputText)((name) => modules[name] ?? {}, panel)
@@ -75,6 +77,18 @@ for (const [state, phase, active, label, icon] of [
     assert.equal(current.state, state, 'display must not change the agent state')
   })
 }
+
+test('the diagram names the leader model and its real provider', (t) => {
+  const value = JSON.stringify(['deepseek-official', 'deepseek-v4-flash'])
+  appState.server.threads = [{ id: 'leader', title: 'Leader', model: value, status: 'idle' }]
+  appState.server.catalog = { models: [{ value, name: 'DeepSeek V4 Flash' }], providers: { 'deepseek-official': 'DeepSeek' } }
+  t.after(() => { appState.server.threads = []; appState.server.catalog = { models: [], providers: {} } })
+  const diagram = panel.TeamDiagram({ team, onClose() {} })
+  const leader = withClass(diagram, 'team-node').find((node) => node.type === 'div')
+  assert.match(text(leader), /DeepSeek V4 Flash/)
+  assert.match(text(leader), /DeepSeek/)
+  assert.doesNotMatch(text(leader), /GPT/)
+})
 
 test('verification stays visible among finished children and its diagram line is drawn last', () => {
   const verifying = { ...child, execution: { phase: 'verifying' } }

@@ -526,8 +526,8 @@ threads.on('removed', ({ threadId }) => {
 subagents.on('change', ({ threadId, subagent }) => {
   broadcast('subagent', { threadId, subagent })
   // A team's children have no subagents (their dsh has none: this is the
-  // backstop), and a team never bills the Anthropic API: a child that starts a
-  // subagent, or a GPT leader that starts a Claude one, is stopped.
+  // backstop). A child that starts a subagent, or a dsh leader that starts a
+  // Claude subagent outside the selected team routes, is stopped.
   const starting = subagent.status === 'starting' || subagent.status === 'running'
   if (starting && teams.inTeam(threadId) && (subagent.provider === 'anthropic' || teams.isChild(threadId) || teams.isExecution(threadId))) {
     void teams.stopApiUse(threadId).catch((error) => log('team:', error.message))

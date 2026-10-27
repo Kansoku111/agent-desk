@@ -1,5 +1,5 @@
 // Settings of the agent teams (設定 → エージェントチーム): who leads (Claude
-// Code or a GPT dsh task, on which model), and which model each provider's
+// Code or a dsh task, on which model), and which model each provider's
 // "low" and "mid" tier means, or a list of directly selected child models.
 import { ENTRY_ID } from './team-playbooks.js'
 import { assertToolMode } from './ptc.js'
@@ -11,8 +11,9 @@ import { assertToolMode } from './ptc.js'
  * as a Claude Code task.
  */
 export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'local']
-/** Who can lead: DeepSeek, OpenCode Go and local models only work as children. */
-export const LEADER_PROVIDERS = ['claude', 'gpt']
+/** Claude Code leads in a terminal; the other providers lead as dsh tasks. */
+export const LEADER_PROVIDERS = TEAM_PROVIDERS
+const EXTRA_DSH_LEADERS = ['claudeApi', 'deepseek', 'opencodeGo', 'local']
 export const TEAM_TIERS = ['low', 'mid']
 export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', local: 'ローカル LLM' }
 export const MAX_CHILDREN_LIMIT = 12
@@ -29,7 +30,7 @@ const LOCAL_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/
 const EFFORT = /^[a-z]{1,16}$/
 
 export const TEAM_DEFAULTS = {
-  /** Who leads a new team: Claude Code (`leader`) or GPT as a dsh task (`gptLeader`). */
+  /** Claude Code and GPT retain their old fields; other dsh leaders use dshLeader. */
   leaderProvider: 'claude',
   toolMode: 'native',
   // The default applies to new teams; modelMode is the mode of this team.
@@ -40,6 +41,7 @@ export const TEAM_DEFAULTS = {
   leader: { model: 'opus', effort: null },
   // null model: GPT's mid, low, then the first selected GPT model in free mode.
   gptLeader: { model: null, effort: 'high' },
+  dshLeader: null,
   // The leader runs with --permission-mode bypassPermissions (children always do).
   leaderBypass: true,
   // Every provider is off until the user turns it on (a team starts with at least one on), so
@@ -86,6 +88,7 @@ export function teamConfig(saved) {
     freeModels: Array.isArray(value.freeModels) ? value.freeModels.map((model) => ({ ...model })) : [],
     leader: { ...TEAM_DEFAULTS.leader, ...value.leader },
     gptLeader: { ...TEAM_DEFAULTS.gptLeader, ...value.gptLeader },
+    dshLeader: value.dshLeader && typeof value.dshLeader === 'object' ? { ...value.dshLeader } : null,
     ...Object.fromEntries(SWITCHES.map((name) => [name, typeof value[name] === 'boolean' ? value[name] : TEAM_DEFAULTS[name]])),
     gpt: provider('gpt'),
     claude: provider('claude'),
@@ -142,13 +145,26 @@ export function mergeTeamConfig(current, patch) {
     if (Object.hasOwn(patch.leader, 'effort')) next.leader.effort = choice(patch.leader.effort, EFFORT, 'リーダーの推論レベル')
   }
   if (Object.hasOwn(patch, 'leaderProvider')) {
-    if (!LEADER_PROVIDERS.includes(patch.leaderProvider)) throw new Error('リーダーは "claude" か "gpt" で指定してください')
+    if (!LEADER_PROVIDERS.includes(patch.leaderProvider)) throw new Error('リーダーのプロバイダーが不正です')
     next.leaderProvider = patch.leaderProvider
   }
   if (Object.hasOwn(patch, 'gptLeader')) {
     if (!isRecord(patch.gptLeader)) throw new Error('agentTeams.gptLeader はオブジェクトで指定してください')
     if (Object.hasOwn(patch.gptLeader, 'model')) next.gptLeader.model = choice(patch.gptLeader.model, DSH_MODEL, 'GPT のリーダーのモデル')
     if (Object.hasOwn(patch.gptLeader, 'effort')) next.gptLeader.effort = choice(patch.gptLeader.effort, EFFORT, 'GPT のリーダーの推論レベル')
+  }
+  if (Object.hasOwn(patch, 'dshLeader')) {
+    if (patch.dshLeader === null) next.dshLeader = null
+    else {
+      const entry = patch.dshLeader
+      if (!isRecord(entry) || !EXTRA_DSH_LEADERS.includes(entry.provider)) throw new Error('リーダーのプロバイダーが不正です')
+      const model = choice(entry.model, entry.provider === 'local' ? LOCAL_MODEL : DSH_MODEL, 'リーダーのモデル')
+      if (!model) throw new Error('リーダーのモデルを選んでください')
+      next.dshLeader = { provider: entry.provider, model, effort: choice(entry.effort ?? null, EFFORT, 'リーダーの推論レベル') }
+    }
+  }
+  if (EXTRA_DSH_LEADERS.includes(next.leaderProvider) && next.dshLeader?.provider !== next.leaderProvider) {
+    throw new Error('リーダーのプロバイダーとモデルが一致しません')
   }
   for (const name of SWITCHES) {
     if (!Object.hasOwn(patch, name)) continue

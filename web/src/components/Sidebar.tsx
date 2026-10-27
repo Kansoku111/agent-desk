@@ -200,7 +200,7 @@ function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; activ
           <button type="button" className="thread-button" disabled={selection.busy}
             onClick={(event) => selection.enabled || event.ctrlKey || event.metaKey || event.shiftKey
               ? selection.toggle(thread.id, event.shiftKey)
-              : navigate({ view: 'thread', id: thread.id })} title={leads ? `エージェントチーム（GPT）: ${thread.title}` : thread.title}>
+              : navigate({ view: 'thread', id: thread.id })} title={leads ? `エージェントチーム: ${thread.title}` : thread.title}>
             {leads && <span className="cl-mark tm-mark small" aria-label={execution ? "エコモード" : "エージェントチーム"}>{execution ? "eco" : "TM"}</span>}
             {thread.pinned && <Pin size={12} className="thread-pin" aria-label="ピン留め済み" />}
             <span className="thread-title">{thread.title}</span>

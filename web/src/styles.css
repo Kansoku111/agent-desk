@@ -5082,6 +5082,8 @@ button.team-node:disabled {
   margin: 0;
 }
 
+.team-leader-picker .ab-field > span { font-size: 13px; font-weight: 600; }
+.team-leader-picker .muted { margin: 6px 0 0; font-size: 12px; }
 .team-free-model-row { display: flex; align-items: end; gap: 6px; margin-top: 10px; }
 .team-free-model-row .ab-field { flex: 1; }
 .team-free-model-row .icon-button { flex: 0 0 auto; height: 34px; }

@@ -24,7 +24,7 @@ export const oneLine = (text) => text.replace(/\s+/g, ' ').trim()
 
 /**
  * The leader's standing instructions (a Claude leader's --append-system-prompt-file,
- * a GPT leader's MCP server instructions).
+ * a dsh leader's MCP server instructions).
  */
 export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean = false, execution = false, policy = '', playbooks = [] }) {
   return [

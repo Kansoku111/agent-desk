@@ -26,7 +26,7 @@ async function harness(execution) {
     } }
   const modules = { react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '../store': store,
     '../drafts': { useDraft: () => ['', () => {}], useImeField: () => ({}) },
-    '../util': { workspaceLabel: () => 'Workspace' },
+    '../util': { workspaceLabel: () => 'Workspace', parseModel: () => null },
     './TerminalPickers': { claudeModelName: () => 'Claude' } }
   async function load(name, extra = '') {
     const source = await fs.readFile(new URL('../web/src/components/' + name + '.tsx', import.meta.url), 'utf8')
