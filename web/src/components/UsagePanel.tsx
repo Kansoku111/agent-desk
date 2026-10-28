@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Coins, ExternalLink, KeyRound, Loader2, RefreshCw } from 'lucide-react'
-import { act, openExternal, request, setState, toast, useStore } from '../store'
+import { CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw } from 'lucide-react'
+import { act, openExternal, request, toast, useStore } from '../store'
 import type { ClaudeCostState, LocalUsage, UsageState, UsageTotals } from '../types'
 import { formatTokens, formatTokensExact, formatUsd } from '../util'
 
@@ -282,27 +282,5 @@ export function UsagePanel() {
       <ClaudeCostCard claude={usage.claude} loading={loading} onRefresh={() => void refresh(0)} />
       {usage.local ? <LocalUsageCard local={usage.local} /> : <p className="fine-print"><Loader2 size={12} className="spin" /> 集計しています…</p>}
     </div>
-  )
-}
-
-/** This month's Claude spending in the sidebar; opens the usage tab. */
-export function UsageSummaryButton() {
-  const usage = useStore((state) => state.server?.usage)
-  const claudeConfigured = useStore((state) => Boolean(state.server?.accounts.claude.configured || state.server?.accounts.claudeAdmin?.configured))
-  if (!usage) return null
-  const billed = usage.claude.status === 'ok' && usage.claude.summary ? usage.claude.summary.month : null
-  const anthropic = usage.local?.providers.anthropic?.month
-  const estimated = anthropic?.cost ?? null
-  if (billed === null && !estimated && !claudeConfigured) return null
-  const value = billed !== null ? money(billed) : estimate(estimated, anthropic?.unpriced ?? 0)
-  const title = billed !== null
-    ? `Claude の今月の請求額（Anthropic の集計）${estimated ? `\nAgent Desk での概算: ${money(estimated)}` : ''}`
-    : 'Agent Desk で使った Claude の今月の概算料金'
-  return (
-    <button type="button" className="nav-button usage-summary" title={`${title}\nクリックで詳細`} onClick={() => setState({ settingsOpen: 'usage' })}>
-      <Coins size={15} />
-      <span>Claude 今月</span>
-      <span className="usage-summary-value">{value}</span>
-    </button>
   )
 }

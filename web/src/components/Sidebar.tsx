@@ -16,7 +16,6 @@ import { PROJECT_HUES, projectColor } from '../projectColors'
 import { Dropdown, MenuItem } from './Popover'
 import { openProjectDialog } from './ProjectDialog'
 import { teamNeedsUser, useLedTeam } from './TeamPanel'
-import { UsageSummaryButton } from './UsagePanel'
 
 const COLLAPSED_KEY = 'agentdesk.sidebar.collapsed'
 
@@ -819,7 +818,6 @@ export function Sidebar() {
       </nav>
 
       <div className="sidebar-bottom">
-        <UsageSummaryButton />
         <button
           type="button"
           className="nav-button"

@@ -3576,12 +3576,6 @@ select:focus {
 
 /* ---------------------------------------------------------------- usage */
 
-.usage-summary .usage-summary-value {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
 .usage-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
