@@ -155,6 +155,21 @@ test('AB timeline and copied history interleave old and new messages with report
   for (const text of entries) { const index = markdown.indexOf(text, previous + 1); assert.ok(index > previous, text); previous = index }
 })
 
+test('AB copied history labels the current unfinished status without changing content or order', () => {
+  const image = { file: 'fixture.png', name: '画像.png' }
+  const job = { id: 'job', role: 'direct', model: 'model', effort: 'low', status: 'completed', report: '途中の報告', error: '実行エラー', stopError: '停止確認エラー' }
+  const run = { title: 'title', text: 'original', images: [image], jobs: [job], messages: [{ text: 'follow-up', images: [image], afterJobId: 'job' }] }
+  const completed = '# title\n\n## ユーザー\n\noriginal\n\n![画像.png](/attachments/fixture.png)\n\n## direct — model (low)\n\n途中の報告\n\n実行エラー\n\n停止確認エラー\n\n## ユーザー\n\nfollow-up\n\n![画像.png](/attachments/fixture.png)'
+  assert.equal(abMarkdown(run), completed)
+  for (const [status, label] of Object.entries({ running: '実行中', stopping: '停止確認中', error: 'エラー', stopped: '停止', interrupted: '中断' })) {
+    job.status = status
+    assert.equal(abMarkdown(run), completed.replace('## direct — model (low)', `## direct — model (low)［${label}］`))
+  }
+  job.status = 'completed'
+  job.effort = ''
+  assert.equal(abMarkdown(run), completed.replace('model (low)', 'model'))
+})
+
 test('AB runner forwards explicit and unspecified effort to both backends', async () => {
   for (const model of ['claude:opus', '["test","model"]']) for (const effort of ['', 'high']) {
     let created

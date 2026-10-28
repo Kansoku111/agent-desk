@@ -90,6 +90,31 @@ const choose = async (label: string) => {
 }
 const api = {
   requests, render,
+  async stopErrors() {
+    const jobs = ['a', 'b'].map((role) => ({ id: role, role, model, status: 'stopping', report: '', stopError: 'fixture: cannot confirm exit' }))
+    const update = async () => {
+      store.setState({ server: { ...server, ab: [{ ...run, phase: 'stopped', jobs }] } })
+      await tick()
+    }
+    await update(); await render('view')
+    const warning = () => document.querySelector<HTMLElement>('.ab-stop-errors')
+    check(warning()?.textContent?.includes('相談 A（Fixture GPT）：停止を確認できません'), 'stop failure identifies A outside details')
+    check(warning()?.textContent?.includes('相談 B（Fixture GPT）：停止を確認できません'), 'stop failure identifies B outside details')
+    check(!warning()?.closest('details') && document.querySelectorAll('details[open]').length === 0, 'stop warnings visible with reports closed')
+    check(warning()!.getBoundingClientRect().width <= window.innerWidth && document.documentElement.scrollWidth <= window.innerWidth, 'stop warnings fit viewport')
+    check(document.querySelector<HTMLButtonElement>('[aria-label="ABを停止"]')?.disabled === false, 'stop remains available')
+    check(!document.body.textContent?.includes('この段階を再試行'), 'retry not offered while stopping')
+    document.querySelector<HTMLDetailsElement>('details')!.open = true; await tick()
+    check(document.querySelector('details[open]')?.textContent?.includes('fixture: cannot confirm exit'), 'stop details retained')
+    jobs[0].status = 'stopped'; jobs[0].stopError = ''; await update()
+    check(!warning()?.textContent?.includes('相談 A') && warning()?.textContent?.includes('相談 B'), 'only confirmed peer warning clears')
+    jobs[1].status = 'stopped'; jobs[1].stopError = ''; await update()
+    check(!warning(), 'all warnings clear after confirmation')
+    check(!document.querySelector('[aria-label="ABを停止"]'), 'stop button clears when idle')
+    store.setState({ server }); await render('view')
+    check(!warning(), 'normal history has no stop warning')
+    return ['stop errors: closed reports / multiple peers / independent recovery / viewport fit']
+  },
   async openMenus() {
     const restartsBefore = count('app.restart')
     const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
@@ -370,6 +395,7 @@ const api = {
     const restoredEcoEfforts = [...document.querySelectorAll<HTMLButtonElement>('.ab-effort')]
     check(restoredEcoEfforts.length === 2 && restoredEcoEfforts[0].textContent?.includes('高') && restoredEcoEfforts[1].textContent?.includes('低'), 'eco restored efforts')
     passed.push('eco independent effort persistence / execution payload / ordered pending saves / duplicate start')
+    passed.push(...await api.stopErrors())
     passed.push(...await api.openMenus())
     passed.push(...await api.remoteRestart())
     return passed

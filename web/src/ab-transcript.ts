@@ -29,8 +29,10 @@ export function abTimeline(run: Pick<AbRun, 'jobs' | 'messages'>): Entry[] {
 
 const imageMarkdown = (images: ImageRef[] = []) => images.map((image) => `![${image.name || '添付画像'}](/attachments/${encodeURIComponent(image.file)})`).join('\n')
 
+const JOB_STATUS: Record<string, string> = { running: '実行中', stopping: '停止確認中', error: 'エラー', stopped: '停止', interrupted: '中断' }
+
 export function abMarkdown(run: AbRun): string {
   return [`# ${run.title}`, `## ユーザー\n\n${run.text}\n\n${imageMarkdown(run.images)}`, ...abTimeline(run).map((entry) => entry.kind === 'message'
     ? `## ユーザー\n\n${entry.text}\n\n${imageMarkdown(entry.images)}`
-    : `## ${entry.job.role} — ${entry.job.model}${entry.job.effort ? ` (${entry.job.effort})` : ''}\n\n${[entry.job.report, entry.job.error, entry.job.stopError].filter(Boolean).join('\n\n') || '報告なし'}`)].join('\n\n')
+    : `## ${entry.job.role} — ${entry.job.model}${entry.job.effort ? ` (${entry.job.effort})` : ''}${entry.job.status === 'completed' ? '' : `［${JOB_STATUS[entry.job.status] ?? entry.job.status}］`}\n\n${[entry.job.report, entry.job.error, entry.job.stopError].filter(Boolean).join('\n\n') || '報告なし'}`)].join('\n\n')
 }

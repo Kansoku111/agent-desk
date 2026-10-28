@@ -164,6 +164,9 @@ export function AbView({ id }: { id: string }) {
       {(ACTIVE.includes(run.phase) || running) && <button className="icon-button" aria-label="ABを停止" disabled={busy} onClick={() => void action('ab.stop')}><Square size={16} /></button>}
       <button className="icon-button" aria-label="ABを削除" disabled={busy} onClick={() => setRemoving(true)}><Trash2 size={16} /></button>
     </header>
+    {run.jobs.some((job) => job.status === 'stopping' && job.stopError) && <div role="alert" className="ab-stop-errors error-text">
+      {run.jobs.filter((job) => job.status === 'stopping' && job.stopError).map((job) => <p key={job.id}>{ROLE[job.role] ?? job.role}（{modelName(job.model)}）：停止を確認できません</p>)}
+    </div>}
     <div ref={content} className="ab-content">
       <section className="ab-question"><CopyButton text={run.text} /><Markdown text={run.text} workspace={run.workspace} /><AbImages images={run.images} /></section>
       <div className="ab-consultations">{run.jobs.filter((job) => ['a', 'b'].includes(job.role)).map((job) => <Report key={job.id} job={job} workspace={run.workspace} modelName={modelName(job.model)} />)}</div>

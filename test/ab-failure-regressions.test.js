@@ -158,6 +158,22 @@ test('AB stop failure keeps busy/stop visible and forbids retry or deletion unti
   await assert.rejects(f.manager.remove({ id: f.run.id }), /停止/)
   await f.finish('direct', { status: 'cancelled', text: '' })
   assert.equal(job.status, 'stopped')
+  assert.equal(job.stopError, undefined)
+  assert.equal(f.manager.busy, false)
+})
+
+test('AB stop errors clear independently when multiple peers stop successfully', async (t) => {
+  const f = await setup(t)
+  f.runner.stop = async () => { throw new Error('cannot confirm exit') }
+  await f.manager.stop({ id: f.run.id })
+  assert.ok(f.run.jobs.every((job) => job.status === 'stopping' && job.stopError))
+  await f.finish('a', { status: 'cancelled', text: '' })
+  assert.equal(f.run.jobs[0].stopError, undefined)
+  assert.equal(f.run.jobs[1].status, 'stopping')
+  assert.ok(f.run.jobs[1].stopError)
+  f.runner.stop = async () => {}
+  await f.manager.stop({ id: f.run.id })
+  assert.ok(f.run.jobs.every((job) => job.status === 'stopped' && job.stopError === undefined))
   assert.equal(f.manager.busy, false)
 })
 
