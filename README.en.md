@@ -20,7 +20,7 @@ Agent Desk is a Codex-style desktop agent app built on DeepSeek Harness (`dsh`).
 - **Restore changes:** Return the workspace to its state before a request.
 - **Usage display:** Cumulative API-price-equivalent USD/JPY in regular/CL tasks and Eco/TM/AB workflows, alongside per-turn tokens. General settings selects the display currency and a manual USD/JPY rate; recorded USD values stay unchanged. Click or tap the amount for metered-cost details; ChatGPT usage limits stay separate. API-equivalent amounts are not bills or subscription-quota estimates. [Scope and unpriced usage (Japanese)](docs/usage.md). The team panel also shows the Claude five-hour and weekly limits, read from what the team's Claude prints (no extra requests).
 - **Phone access:** View and control tasks from a phone browser over Tailscale.
-- **Plan:** Turn it on to append a consultation-only, no-file-changes instruction to each message. This is a request to the model, not an enforced write restriction; PTC and permissions stay unchanged. [Scope and limitations (Japanese)](docs/features.md).
+- **Consultation only:** Turn off the pencil button to append a consultation-only, no-file-changes instruction to each message. This is a request to the model, not an enforced write restriction; PTC and permissions stay unchanged. [Scope and limitations (Japanese)](docs/features.md).
 - **Permission modes:** Read-only, workspace, or full access, chosen per task.
 - **Browser and desktop control:** Available when turned on in Settings. Windows desktop control is off by default.
 - **More:** Image generation, web search, subagents on other models, fast mode, and custom instructions.

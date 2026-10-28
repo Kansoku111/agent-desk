@@ -2389,6 +2389,18 @@ select:focus {
   gap: 8px;
 }
 
+.edit-toggle {
+  position: relative;
+}
+
+.edit-toggle-off {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+}
+
 .send-button {
   display: grid;
   place-items: center;

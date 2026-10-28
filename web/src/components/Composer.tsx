@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
-import { ArrowUp, Clock3, CornerDownRight, FileText, Loader2, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, CircleX, Clock3, CornerDownRight, FileText, Loader2, Paperclip, Pencil, Square, X } from 'lucide-react'
 import { act, isImageAttachment, isTouch, removeQueued, retryQueued, sendMessage, setState, startThread, steerQueued, uploadAttachment, useStore } from '../store'
 import type { Attachment, PermissionMode, ThreadSummary } from '../types'
 import { formatTokens } from '../util'
@@ -235,11 +235,12 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
           <FastModeChip model={model} />
           <PermissionPicker value={permissionMode} onChange={setMode} existing={Boolean(thread?.sessionId)} disabled={running} />
           {!thread?.ab && (
-            <button type="button" className={`chip ptc-chip ${plan ? 'on' : ''}`}
-              aria-label="Plan" aria-pressed={plan} disabled={sending}
-              title="Plan: メッセージ末尾に「相談のみ・ファイル変更しない」の依頼を付けます（権限は変わりません）"
+            <button type="button" className="icon-button edit-toggle"
+              aria-label="編集の依頼" aria-pressed={!plan} disabled={sending}
+              title={`編集の依頼: ${plan ? 'オフ（相談のみ・権限は変わりません）' : 'オン'}`}
               onClick={() => setPlan((value) => !value)}>
-              Plan {plan ? 'ON' : 'OFF'}
+              <Pencil size={16} aria-hidden="true" />
+              {plan && <CircleX size={12} className="edit-toggle-off" aria-hidden="true" />}
             </button>
           )}
           {ptcAvailable && (
