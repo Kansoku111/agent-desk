@@ -49,7 +49,7 @@ test('EX legacy saved models restore default efforts and invalid effort types ar
   const models = { leader: 'claude:sonnet', provider: 'claude', model: 'haiku' }
   await fs.writeFile(path.join(dir, 'models.json'), JSON.stringify({ models }))
   const restored = await new ExecutionVerifier({ dir }).load()
-  assert.deepEqual(await restored.modelSelection(), { ...models, leaderEffort: '', childEffort: '', toolMode: 'native' })
+  assert.deepEqual(await restored.modelSelection(), { ...models, leaderEffort: '', childEffort: '', toolMode: 'native', planImplement: false })
   for (const patch of [{ leaderEffort: 1 }, { childEffort: [] }, { childEffort: 'x'.repeat(101) }]) await assert.rejects(restored.configureModels({ ...models, ...patch }), /推論レベル/)
 })
 
@@ -63,7 +63,7 @@ test('EX remembers model selection before a task starts, across restart and read
   await pending
   assert.equal((await reread).model, 'claude-haiku-5-5')
   const restored = await new ExecutionVerifier({ dir: path.join(root, 'records') }).load()
-  assert.deepEqual(await restored.modelSelection(), { leader: 'claude:sonnet', provider: 'claudeApi', model: 'claude-haiku-5-5', leaderEffort: '', childEffort: '', toolMode: 'ptc' })
+  assert.deepEqual(await restored.modelSelection(), { leader: 'claude:sonnet', provider: 'claudeApi', model: 'claude-haiku-5-5', leaderEffort: '', childEffort: '', toolMode: 'ptc', planImplement: false })
   const copy = await restored.modelSelection()
   copy.leader = 'changed'
   assert.equal((await restored.modelSelection()).leader, 'claude:sonnet')
@@ -72,13 +72,14 @@ test('EX remembers model selection before a task starts, across restart and read
 test('EX model saves are ordered and legacy browser migration never overwrites another device', async (t) => {
   const { verifier } = await fixture(t)
   const first = { leader: 'claude:sonnet', provider: 'claudeApi', model: '', leaderEffort: 'high', childEffort: 'low', toolMode: 'native' }
-  const last = { ...first, model: 'claude-haiku-5-5', leaderEffort: 'medium', childEffort: 'high' }
+  const last = { ...first, model: 'claude-haiku-5-5', leaderEffort: 'medium', childEffort: 'high', planImplement: true }
   const one = verifier.configureModels(first)
   const two = verifier.configureModels(last)
   const migration = verifier.configureModels({ leader: 'claude:opus', provider: 'claude', model: 'haiku' }, true)
   await Promise.all([one, two, migration])
   assert.deepEqual(await verifier.modelSelection(), last)
   await assert.rejects(verifier.configureModels({ ...last, toolMode: 'invalid' }), /不明/)
+  await assert.rejects(verifier.configureModels({ ...last, planImplement: 'true' }), /計画→実装/)
   await assert.rejects(verifier.configureModels({ leader: null, provider: 'claude', model: 'haiku' }), /不正/)
   await assert.rejects(verifier.configureModels({ leader: '', provider: 'unknown', model: '' }), /不正/)
   assert.deepEqual(await verifier.modelSelection(), last)

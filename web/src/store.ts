@@ -576,7 +576,7 @@ function upsertTeam(team: TeamSummary) {
 
 /** Starts an agent team in a project (or My PC): its Claude Code leader opens to talk to. */
 /** Starts a team in the folder with the choices of the start dialog; its leader (Claude Code or GPT) opens. */
-export async function startTeam(workspace: string, choices: TeamSettings, authConfirmation?: ClaudeAuthConfirmation, execution?: { leaderModel?: string }) {
+export async function startTeam(workspace: string, choices: TeamSettings, authConfirmation?: ClaudeAuthConfirmation, execution?: { leaderModel?: string; planImplement: boolean }) {
   const result = await act<{ team: TeamSummary; terminal?: TerminalSummary; thread?: ThreadSummary }>('team.create', { workspace, choices, authConfirmation, execution })
   if (!result) return false
   upsertTeam(result.team)

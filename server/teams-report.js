@@ -33,16 +33,22 @@ function parts(team, item, labelOf, rest) {
     : item.text
   const [lines, next] = {
     report: [[`${head} ${who}から${unasked ? '追加の' : ''}報告が届きました${rest}${unasked}`, task, '---', text, '---'],
-      team.execution
-        ? '依頼・完了条件と変更内容（調査は報告の根拠）を確認し、合格なら確認箇所・結果を reason に書いて close。テスト成功だけでは合格にしないでください。修正は send。'
-        : '合格なら close、直してほしい点や追加の作業は send で同じ子に送ってください。'],
+      item.finalRepair
+        ? '最終修正は親レビュー未実施です。再レビューせず子の報告・検証結果と未確認事項を伝え、失敗・未完了なら accept:false で close。'
+        : team.execution
+          ? '依頼・完了条件と変更内容（調査は報告の根拠）を確認し、合格なら確認箇所・結果を reason に書いて close。テスト成功だけでは合格にしないでください。修正は send。'
+          : '合格なら close、直してほしい点や追加の作業は send で同じ子に送ってください。'],
     error: [[`${head} ${who}がエラーで止まりました${rest}${unasked}`, task, '---', text, '---'],
-      item.noTask ? '同じ作業を続けるなら spawn で任せ直してください。' : '止まった子を続けるなら send で指示を送ってください（例: 「続けて」）。'],
+      item.noTask ? '同じ作業を続けるなら spawn で任せ直してください。' : team.execution?.planImplement
+        ? '中断は成功扱いにせず報告してください。同じ試行を再開する場合は send に resume:true を指定します。最終修正が完了できなければ accept:false で close できます。'
+        : '止まった子を続けるなら send で指示を送ってください（例: 「続けて」）。'],
     cancelled: item.byUser
       ? [[`${head} ${who}の作業を、ユーザーが全停止で止めました${rest}`, task],
         'ユーザーが止めた子には、ユーザーから指示があるまで続きの指示を送らないでください。']
       : [[`${head} ${who}の作業が途中で止められました（ユーザーが停止した可能性があります）${rest}`, task],
-        '止められた子を続けるなら send で指示を送ってください。'],
+        team.execution?.planImplement && child?.execution?.mode === 'write'
+          ? '中断を報告し、ユーザーから再開指示がある場合だけ send に resume:true を指定してください。'
+          : '止められた子を続けるなら send で指示を送ってください。'],
     approval: [[`${head} ${who}が承認待ちで止まっています${rest}`, task, `操作: ${item.text}`],
       '承認は、許可するなら approve（allow: true）、拒否するなら allow: false と理由を送ってください。あなたにも判断できないときは ask_user でユーザーに確認してください。'],
   }[item.kind] ?? [[`${head} ${item.text}`], null]

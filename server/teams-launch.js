@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { instructionsSection } from './instructions-plugin.js'
 import { childPrompt, leaderPrompt, tierLines } from './teams-prompts.js'
-import { EXECUTION_PROMPT } from './execution.js'
+import { executionPrompt, PLAN_IMPLEMENT_PROMPT } from './execution.js'
 
 /** The leader's MCP server; its tools are mcp__agent-team__spawn and so on. */
 export const MCP_SERVER = 'agent-team'
@@ -57,6 +57,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
         env: {
           AGENT_DESK_TEAM_URL: apiUrl, AGENT_DESK_TEAM_ID: team.id, AGENT_DESK_TEAM_SECRET: team.secret,
           ...(team.execution ? { AGENT_DESK_EXECUTION: '1' } : {}),
+          ...(team.execution?.planImplement ? { AGENT_DESK_PLAN_IMPLEMENT: '1' } : {}),
           ...(guides.playbooks.length ? { AGENT_DESK_TEAM_PLAYBOOKS: '1' } : {}),
         },
       },
@@ -64,7 +65,7 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
   }, null, 2))
   const prompt = writeFile(dir, 'leader.md', withInstructions(leaderPrompt({
     workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: !team.execution && config.leanChildren, execution: Boolean(team.execution), ...guides,
-  }) + (team.execution ? EXECUTION_PROMPT : ''), instructions))
+  }) + (team.execution ? executionPrompt(team.execution.planImplement) : '') + (team.execution?.planImplement ? PLAN_IMPLEMENT_PROMPT : ''), instructions))
   return {
     args: [
       ...(config.leaderBypass ? ['--permission-mode', 'bypassPermissions'] : []),
@@ -86,7 +87,7 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
   if (team.execution) guides = NO_GUIDES
   const prompt = writeFile(dir, 'leader.md', leaderPrompt({
     workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: !team.execution && config.leanChildren, execution: Boolean(team.execution), ...guides,
-  }) + (team.execution ? EXECUTION_PROMPT : ''))
+  }) + (team.execution ? executionPrompt(team.execution.planImplement) : '') + (team.execution?.planImplement ? PLAN_IMPLEMENT_PROMPT : ''))
   return {
     name: MCP_SERVER,
     command: node,
@@ -97,6 +98,7 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
       { name: 'AGENT_DESK_TEAM_SECRET', value: team.secret },
       { name: 'AGENT_DESK_TEAM_INSTRUCTIONS', value: prompt },
       ...(team.execution ? [{ name: 'AGENT_DESK_EXECUTION', value: '1' }] : []),
+      ...(team.execution?.planImplement ? [{ name: 'AGENT_DESK_PLAN_IMPLEMENT', value: '1' }] : []),
       ...(guides.playbooks.length ? [{ name: 'AGENT_DESK_TEAM_PLAYBOOKS', value: '1' }] : []),
     ],
   }

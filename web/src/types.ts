@@ -148,7 +148,8 @@ export interface ExecutionWork {
   phase: 'working' | 'verifying' | 'review' | 'accepted'
   criteria: string
   repairs: number
-  outcome?: 'accepted' | 'abandoned'
+  outcome?: 'accepted' | 'completed_unreviewed' | 'abandoned'
+  parentReview?: { instruction?: string }
   verification?: { status: string; sourceHash?: string; record: string; checks: { id: string; status: string; log: string; exitCode: number | null }[] }
 }
 
@@ -163,7 +164,7 @@ export interface TeamSummary {
   /** The team's own settings: chosen when it started, changed in its panel since. */
   config?: TeamSettings
   toolModeBusy?: boolean
-  execution?: { leaderModel?: string; stopped: boolean; metrics: { childTurns: number; parentTurns?: number; parentReports: number; verifications: number; repairs: number } }
+  execution?: { leaderModel?: string; planImplement?: boolean; stopped: boolean; metrics: { childTurns: number; parentTurns?: number; parentReports: number; verifications: number; repairs: number } }
   createdAt: number
   updatedAt: number
   children: TeamChild[]

@@ -6,15 +6,15 @@ import * as workflowEffort from '../shared/workflow-effort.js'
 
 const jsx = (type, props, key) => ({ type, props: { ...props, ...(key === undefined ? {} : { key }) } })
 const jsxRuntime = { jsx, jsxs: jsx, Fragment: Symbol.for('react.fragment') }
-const compile = (source, modules) => {
+const compile = (source, modules, localStorage) => {
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
   })
   const exports = {}
-  new Function('require', 'exports', outputText)((name) => {
+  new Function('require', 'exports', 'localStorage', outputText)((name) => {
     assert.ok(name in modules, 'unexpected dependency: ' + name)
     return modules[name]
-  }, exports)
+  }, exports, localStorage)
   return exports
 }
 const moduleSource = async (file) => fs.readFile(new URL(file, import.meta.url), 'utf8')
@@ -32,14 +32,23 @@ const fieldComponents = compile(fieldSource, {
   './useWheelSelect': { useWheelSelect: () => ({ ref: null, pending: false, shown: null }) },
 })
 const executionSource = await moduleSource('../web/src/components/ExecutionSettings.tsx')
+const ptcSource = await moduleSource('../web/src/components/PtcToggle.tsx')
 const CHILD_VALUE = JSON.stringify(['openai-codex', 'eco-child'])
 const LEADER_VALUE = JSON.stringify(['openai-codex', 'eco-leader'])
 const UNKNOWN = Symbol('unknown capabilities')
 
-function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', leaderEffort = '' } = {}) {
+function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', leaderEffort = '', leader = LEADER_VALUE,
+  planImplement = false, legacy = false, modelsStore, browserChoice = null, onSave } = {}) {
   const models = {
-    leader: LEADER_VALUE, provider: 'gpt', model: 'eco-child',
-    leaderEffort, childEffort, toolMode: 'native',
+    leader, provider: 'gpt', model: 'eco-child',
+    leaderEffort, childEffort, toolMode: 'native', planImplement,
+  }
+  if (legacy) delete models.planImplement
+  modelsStore ??= { models }
+  let browserValue = browserChoice === null ? null : JSON.stringify(browserChoice)
+  const localStorage = {
+    getItem: () => browserValue,
+    setItem: (_key, value) => { browserValue = value },
   }
   const server = {
     settings: { agentTeams: {} },
@@ -86,15 +95,19 @@ function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', le
   const teamStarts = []
   const selection = (_server, _provider, leader, child) => ({
     leaderModels: [{ value: LEADER_VALUE }], childModels: [{ id: 'eco-child', value: CHILD_VALUE }],
-    leader: leader === LEADER_VALUE ? LEADER_VALUE : '', model: child === 'eco-child' ? child : '',
+    leader: [LEADER_VALUE, 'claude:opus'].includes(leader) ? leader : '', model: child === 'eco-child' ? child : '',
   })
   const dependencies = {
     react, 'react/jsx-runtime': jsxRuntime, 'lucide-react': { Plus: 'Plus', Trash2: 'Trash2' },
     '../store': {
       act: async (type, params = {}) => {
         rpcCalls.push({ type, params })
-        if (type === 'execution.models') return { models }
-        if (type === 'execution.setModels') return { models: params.models }
+        if (type === 'execution.models') return { models: structuredClone(modelsStore.models) }
+        if (type === 'execution.setModels') {
+          if (onSave && await onSave(params) === false) return null
+          if (!params.onlyIfUnset || modelsStore.models === null) modelsStore.models = structuredClone(params.models)
+          return { models: structuredClone(modelsStore.models) }
+        }
         if (type === 'execution.checks') return { checks: [] }
         if (type === 'execution.configure') return { configured: true }
         return { ok: true }
@@ -110,10 +123,10 @@ function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', le
     './WorkflowModelField': fieldComponents,
     '../../../shared/workflow-effort.js': workflowEffort,
     './Modal': { Modal: ({ children }) => jsx('div', { children }) },
-    './PtcToggle': { PtcToggle: () => null },
-    './ClaudeAuthConsent': { ClaudeAuthConsent: () => null },
+    './PtcToggle': compile(ptcSource, { react, 'react/jsx-runtime': jsxRuntime }),
+    './ClaudeAuthConsent': { ClaudeAuthConsent: ({ onChange }) => jsx('button', { 'aria-label': 'Claude同意', onClick: () => onChange({ ready: true, confirmation: { challenge: 'test' } }) }) },
   }
-  const component = compile(executionSource, dependencies).ExecutionStartDialog
+  const component = compile(executionSource, dependencies, localStorage).ExecutionStartDialog
   function resolve(node) {
     if (Array.isArray(node)) return node.map(resolve)
     if (!node || typeof node !== 'object') return node
@@ -144,13 +157,138 @@ function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', le
     return found
   }
   render()
-  return { async ready() { await settle(); return tree }, render, walk: (predicate) => walk(tree, predicate), teamStarts, rpcCalls }
+  return { async ready() { await settle(); return tree }, render, walk: (predicate) => walk(tree, predicate), teamStarts, rpcCalls, modelsStore }
 }
 
 async function click(node) {
   node.props.onClick()
   await new Promise((resolve) => setImmediate(resolve))
 }
+
+const planToggle = (ui) => ui.walk((node) => node.type === 'button' && node.props['aria-label'] === '計画 → 実装')[0]
+const startButton = (ui) => ui.walk((node) => node.type === 'button' && node.props.children === '始める')[0]
+const savedChoices = (ui) => ui.rpcCalls.filter(({ type }) => type === 'execution.setModels')
+
+test('eco restores older saved choices with plan → implement off and sends false', async () => {
+  const ui = mountExecutionDialog({ childEffort: '', legacy: true })
+  assert.equal(planToggle(ui).props.disabled, true)
+  await ui.ready()
+  const toggle = planToggle(ui)
+  assert.equal(toggle.props.disabled, false)
+  assert.equal(toggle.props['aria-pressed'], false)
+  assert.equal(toggle.props.children.join(''), '計画 → 実装 OFF')
+  await click(startButton(ui))
+  assert.equal(savedChoices(ui).at(-1).params.models.planImplement, false)
+  assert.deepEqual(ui.teamStarts[0][3], { leaderModel: LEADER_VALUE, planImplement: false })
+})
+
+test('eco saves plan → implement before starting and restores it on reopening', async () => {
+  const ui = mountExecutionDialog({ childEffort: '' })
+  await ui.ready()
+  await click(planToggle(ui))
+  ui.render()
+  assert.equal(planToggle(ui).props['aria-pressed'], true)
+  assert.equal(planToggle(ui).props.children.join(''), '計画 → 実装 ON')
+  assert.equal(ui.modelsStore.models.planImplement, true)
+
+  const reopened = mountExecutionDialog({ modelsStore: ui.modelsStore })
+  await reopened.ready()
+  assert.equal(planToggle(reopened).props['aria-pressed'], true)
+  assert.equal(savedChoices(reopened).length, 0)
+  await click(startButton(reopened))
+  assert.deepEqual(reopened.teamStarts[0][3], { leaderModel: LEADER_VALUE, planImplement: true })
+})
+
+test('eco preserves PTC independently when plan → implement is toggled', async () => {
+  const ui = mountExecutionDialog({ childEffort: '' })
+  await ui.ready()
+  const ptc = () => ui.walk((node) => node.type === 'button' && node.props['aria-label'] === 'PTC')[0]
+  await click(ptc())
+  ui.render()
+  assert.equal(ptc().props['aria-pressed'], true)
+  await click(planToggle(ui))
+  ui.render()
+  assert.equal(ptc().props['aria-pressed'], true)
+  assert.equal(planToggle(ui).props['aria-pressed'], true)
+  assert.equal(ui.modelsStore.models.toolMode, 'ptc')
+  assert.equal(ui.modelsStore.models.planImplement, true)
+  await click(startButton(ui))
+  assert.equal(ui.teamStarts[0][1].toolMode, 'ptc')
+  assert.equal(ui.teamStarts[0][3].planImplement, true)
+})
+
+test('eco saves rapid on/off selections in order and starts in the final state', async () => {
+  const ui = mountExecutionDialog({ childEffort: '' })
+  await ui.ready()
+  const toggle = planToggle(ui)
+  toggle.props.onClick()
+  toggle.props.onClick()
+  ui.render()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(planToggle(ui).props['aria-pressed'], false)
+  assert.deepEqual(savedChoices(ui).map(({ params }) => params.models.planImplement), [true, false])
+  assert.equal(ui.modelsStore.models.planImplement, false)
+  await click(startButton(ui))
+  assert.deepEqual(ui.teamStarts[0][3], { leaderModel: LEADER_VALUE, planImplement: false })
+})
+
+test('eco migrates old browser-only choices and leaves newer server choices intact', async () => {
+  const browserChoice = { leader: LEADER_VALUE, provider: 'gpt', model: 'eco-child', leaderEffort: '', childEffort: '', toolMode: 'native' }
+  const modelsStore = { models: null }
+  const ui = mountExecutionDialog({ modelsStore, browserChoice })
+  await ui.ready()
+  assert.equal(planToggle(ui).props['aria-pressed'], false)
+  assert.equal(savedChoices(ui)[0].params.onlyIfUnset, true)
+  assert.equal(savedChoices(ui)[0].params.models.planImplement, false)
+  assert.equal(modelsStore.models.planImplement, false)
+
+  const newerServerChoice = mountExecutionDialog({ modelsStore, browserChoice: { ...browserChoice, planImplement: true } })
+  await newerServerChoice.ready()
+  assert.equal(planToggle(newerServerChoice).props['aria-pressed'], false)
+  assert.equal(savedChoices(newerServerChoice).length, 0)
+
+  const malformed = mountExecutionDialog({ modelsStore: { models: null }, browserChoice: { ...browserChoice, planImplement: 'true' } })
+  await malformed.ready()
+  assert.equal(planToggle(malformed).props['aria-pressed'], false)
+  assert.equal(savedChoices(malformed)[0].params.models.planImplement, false)
+})
+
+test('eco waits for plan → implement save and refuses to start if it fails', async () => {
+  let release
+  const pending = new Promise((resolve) => { release = resolve })
+  const ui = mountExecutionDialog({ childEffort: '', onSave: () => pending })
+  await ui.ready()
+  planToggle(ui).props.onClick()
+  ui.render()
+  await click(startButton(ui))
+  ui.render()
+  assert.equal(planToggle(ui).props.disabled, true)
+  assert.equal(ui.teamStarts.length, 0)
+  assert.equal(ui.rpcCalls.some(({ type }) => type === 'execution.configure'), false)
+  release(true)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(ui.teamStarts[0][3], { leaderModel: LEADER_VALUE, planImplement: true })
+
+  const failing = mountExecutionDialog({ childEffort: '', onSave: () => false })
+  await failing.ready()
+  await click(planToggle(failing))
+  failing.render()
+  await click(startButton(failing))
+  assert.equal(failing.teamStarts.length, 0)
+  assert.equal(failing.rpcCalls.some(({ type }) => type === 'execution.configure'), false)
+})
+
+test('eco sends plan → implement for a Claude Code parent after consent', async () => {
+  const ui = mountExecutionDialog({ childEffort: '', leader: 'claude:opus', planImplement: true })
+  await ui.ready()
+  assert.equal(startButton(ui).props.disabled, true)
+  await click(ui.walk((node) => node.props?.['aria-label'] === 'Claude同意')[0])
+  ui.render()
+  assert.equal(startButton(ui).props.disabled, false)
+  await click(startButton(ui))
+  assert.deepEqual(ui.teamStarts[0][2], { challenge: 'test' })
+  assert.deepEqual(ui.teamStarts[0][3], { planImplement: true })
+})
 
 test('eco blocks unsupported saved child effort without rewriting it on open', async () => {
   const ui = mountExecutionDialog({ childCapabilities: [], childEffort: 'high' })

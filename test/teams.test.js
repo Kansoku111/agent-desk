@@ -257,11 +257,11 @@ async function setup(t, settings = {}, options = {}) {
   }
 }
 
-async function setupExecution(t, options = {}, settings = {}) {
+async function setupExecution(t, options = {}, settings = {}, execution = {}) {
   const base = await setup(t, { leaderProvider: 'gpt', ...settings }, options)
   execFileSync('git', ['init', '-q', base.workspace])
   await fs.writeFile(path.join(base.workspace, 'source.txt'), 'original')
-  const { team: view } = await base.manager.create({ workspace: base.workspace, execution: {} })
+  const { team: view } = await base.manager.create({ workspace: base.workspace, execution })
   const team = base.manager.teams.get(view.id)
   return { ...base, team, leader: team.leaderId, tool: (name, args = {}) => base.manager.call(team.id, team.secret, name, args) }
 }
@@ -478,6 +478,147 @@ test('team PTC validates selections and stays off for legacy teams even when new
 })
 
 const exTask = { title: 'implement', task: 'do the bounded work', criteria: 'the test passes without unrelated changes', checks: [], tier: 'low', provider: 'gpt' }
+const implementationPlan = '目的: 設定を保持。範囲: 保存処理。対象外: 画面改修。方針: 既存処理を使う。完了条件: 再起動後も保持。検証: 回帰テスト。未確認: なし。'
+
+for (const provider of ['gpt', 'claude']) {
+  test(`planned eco ${provider} stores a plan and permits only one review-fix`, async (t) => {
+    const f = await setupExecution(t, {}, {
+      gpt: { enabled: provider === 'gpt', low: { model: 'gpt-6-luna' } },
+      claude: { enabled: provider === 'claude', low: { model: 'haiku' } },
+    }, { planImplement: true })
+    await f.manager.configureExecution(f.workspace, [{ id: 'test', command: 'node -e "console.log(1)"', autoRepair: true }])
+    const task = { ...exTask, provider, checks: ['test'], plan: implementationPlan }
+    await assert.rejects(f.tool('spawn', { ...task, plan: '' }), /実装計画/)
+    await f.tool('spawn', task)
+    const child = f.team.children[0]
+    const initial = provider === 'gpt' ? f.threads.calls.findLast((call) => call[0] === 'send' && call[1] === child.taskId)[2]
+      : f.agents.calls.findLast((call) => call[0] === 'run' && call[1] === child.taskId)[2]
+    assert.match(initial, /親の実装計画/)
+    assert.ok(initial.includes(implementationPlan))
+    assert.equal(child.execution.maxRepairs, 0)
+    await fs.writeFile(path.join(f.workspace, 'source.txt'), 'first implementation')
+    if (provider === 'gpt') f.threads.finish(child.taskId, 'first result')
+    else f.agents.finish(child.taskId, 'first result')
+    await Promise.all([...f.manager.exPending])
+    const firstReview = { ...child.execution.review }
+    assert.match(await fs.readFile(firstReview.record, 'utf8'), /親の実装計画/)
+    await assert.rejects(f.tool('send', { child: child.id, message: 'fix', executionRetry: true }), /reviewReason/)
+    await assert.rejects(f.tool('send', { child: child.id, message: 'fix', fresh: true, reviewReason: '確認した' }), /同じ子/)
+    await f.tool('send', { child: child.id, message: '欠陥AとBを修正', reviewReason: 'source.txtを確認し欠陥AとBを発見' })
+    const saved = JSON.parse(await fs.readFile(f.manager.file, 'utf8')).teams.find((entry) => entry.id === f.team.id)
+    assert.equal(saved.children[0].execution.parentReview.instruction, '欠陥AとBを修正')
+    assert.equal(saved.children[0].execution.parentReview.evidence.record, firstReview.record)
+    await fs.writeFile(path.join(f.workspace, 'source.txt'), 'final implementation')
+    if (provider === 'gpt') f.threads.finish(child.taskId, 'fixed A and B')
+    else f.agents.finish(child.taskId, 'fixed A and B')
+    await Promise.all([...f.manager.exPending])
+    assert.equal(child.execution.verification.status, 'passed')
+    const report = child.reports.at(-1).text
+    assert.match(report, /最終修正は親レビュー未実施/)
+    assert.doesNotMatch(report, /差分抜粋/)
+    const record = await fs.readFile(child.execution.review.record, 'utf8')
+    assert.match(record, /親のレビュー/)
+    assert.match(record, /source.txtを確認し欠陥AとBを発見/)
+    assert.match(await fs.readFile(child.execution.review.patch, 'utf8'), /final implementation/)
+    await assert.rejects(f.tool('send', { child: child.id, message: '再修正', reviewReason: '再確認', executionRetry: true }), /1回まで/)
+    await f.tool('close', { child: child.id, reason: '子の修正報告と検証結果、親の未レビューを報告' })
+    assert.equal(child.execution.outcome, 'completed_unreviewed')
+    assert.equal(f.manager.summary(f.team).execution.planImplement, true)
+    await assert.rejects(f.tool('send', { child: child.id, message: '新しい作業' }), /完了条件|検証ID|実装計画/)
+    await f.tool('send', { child: child.id, message: 'ユーザーから新しい依頼', plan: '新しい計画', criteria: '新しい完了条件', checks: [] })
+    assert.equal(child.execution.plan, '新しい計画')
+    assert.equal(child.execution.criteria, '新しい完了条件')
+    assert.equal(child.execution.parentReview, undefined)
+    assert.equal(child.executionHistory.at(-1).outcome, 'completed_unreviewed')
+  })
+}
+
+test('planned eco saves the review before sending and preserves interrupted attempts', async (t) => {
+  const f = await setupExecution(t, {}, {}, { planImplement: true })
+  await f.tool('spawn', { ...exTask, plan: implementationPlan })
+  const child = f.team.children[0]
+  f.threads.finish(child.taskId, 'first result')
+  await Promise.all([...f.manager.exPending])
+  const originalFile = f.manager.file
+  await f.manager.writes
+  const before = structuredClone(child.execution)
+  const sends = f.threads.calls.filter((call) => call[0] === 'send' && call[1] === child.taskId).length
+  f.manager.file = f.workspace // a directory cannot be replaced by the teams file
+  await assert.rejects(f.tool('send', { child: child.id, message: 'fix', reviewReason: '確認した欠陥' }))
+  f.manager.file = originalFile
+  assert.deepEqual(child.execution, before)
+  assert.equal(f.threads.calls.filter((call) => call[0] === 'send' && call[1] === child.taskId).length, sends)
+
+  const send = f.threads.send
+  f.threads.send = async (id, body, options) => {
+    if (id === child.taskId) throw new Error('送信結果不明')
+    return send(id, body, options)
+  }
+  await assert.rejects(f.tool('send', { child: child.id, message: 'fix', reviewReason: '確認した欠陥' }), /送信結果不明/)
+  assert.equal(child.execution.parentReview.instruction, 'fix')
+  assert.equal(child.reports.at(-1).kind, 'error')
+  await assert.rejects(f.tool('send', { child: child.id, message: 'second fix', reviewReason: '再レビュー' }), /1回まで/)
+  const stored = JSON.parse(await fs.readFile(originalFile, 'utf8')).teams.find((entry) => entry.id === f.team.id)
+  assert.equal(stored.children[0].execution.parentReview.instruction, 'fix')
+  f.threads.send = send
+  await f.tool('send', { child: child.id, message: '同じ中断作業を続ける', resume: true })
+  assert.equal(child.execution.parentReview.instruction, 'fix')
+  f.threads.finish(child.taskId, 'final result')
+  await Promise.all([...f.manager.exPending])
+  assert.equal(child.execution.verification.status, 'unverified')
+  await f.tool('close', { child: child.id, reason: '最終修正は親未レビュー、検証未実施' })
+  assert.equal(child.execution.outcome, 'completed_unreviewed')
+})
+
+test('planned eco restores an interrupted final repair without reopening review', async (t) => {
+  const f = await setupExecution(t, {}, {}, { planImplement: true })
+  await f.tool('spawn', { ...exTask, plan: implementationPlan })
+  const child = f.team.children[0]
+  f.threads.finish(child.taskId, 'first result')
+  await Promise.all([...f.manager.exPending])
+  await f.tool('send', { child: child.id, message: '修正A', reviewReason: '初回の変更を確認' })
+  await f.manager.stop()
+  f.threads.threads.get(child.taskId).status = 'idle'
+  const restored = await new TeamManager({ file: f.manager.file, dir: path.join(f.dir, 'teams'), threads: f.threads,
+    terminals: f.terminals, agents: f.agents, catalog: CATALOG, getSettings: f.manager.getSettings, apiUrl: () => '' }).load()
+  t.after(() => restored.stop())
+  restored.start()
+  const team = restored.teams.get(f.team.id), resumed = team.children[0]
+  assert.equal(team.execution.planImplement, true)
+  assert.equal(resumed.execution.plan, implementationPlan)
+  assert.equal(resumed.execution.parentReview.instruction, '修正A')
+  assert.match(resumed.reports.at(-1).text, /resume:true/)
+  const call = (args) => restored.call(team.id, team.secret, 'send', args)
+  await assert.rejects(call({ child: resumed.id, message: '新たな修正', reviewReason: '再レビュー' }), /1回まで/)
+  await call({ child: resumed.id, message: '中断した修正を続ける', resume: true })
+  assert.equal(resumed.execution.parentReview.instruction, '修正A')
+})
+
+test('planned eco accepts the first reviewed version without marking it unreviewed', async (t) => {
+  const f = await setupExecution(t, {}, {}, { planImplement: true })
+  await f.tool('spawn', { ...exTask, plan: implementationPlan })
+  const child = f.team.children[0]
+  f.threads.finish(child.taskId, 'done')
+  await Promise.all([...f.manager.exPending])
+  await f.tool('close', { child: child.id, reason: '依頼と変更内容を確認、検証未実施' })
+  assert.equal(child.execution.outcome, 'accepted')
+  assert.equal(child.execution.parentReview.reason, '依頼と変更内容を確認、検証未実施')
+  assert.equal(child.execution.parentReview.instruction, undefined)
+})
+
+test('planned eco does not automatically retry a failed check before parent review', async (t) => {
+  const f = await setupExecution(t, {}, {}, { planImplement: true })
+  await f.manager.configureExecution(f.workspace, [{ id: 'bad', command: 'node -e "process.exit(1)"', autoRepair: true }])
+  await f.tool('spawn', { ...exTask, checks: ['bad'], plan: implementationPlan, maxRepairs: 2 })
+  const child = f.team.children[0]
+  f.threads.finish(child.taskId, 'initial result')
+  await Promise.all([...f.manager.exPending])
+  assert.equal(child.execution.verification.status, 'failed')
+  assert.equal(child.execution.repairs, 0)
+  assert.equal(f.threads.calls.filter((call) => call[0] === 'send' && call[1] === child.taskId).length, 1)
+  await f.tool('close', { child: child.id, accept: false, reason: '検証が失敗したため中止' })
+  assert.equal(child.execution.outcome, 'abandoned')
+})
 
 for (const mode of ['TM', 'eco']) {
   test(`${mode} propagates PTC to parent and children, rejects busy switches and persists idle changes`, async (t) => {

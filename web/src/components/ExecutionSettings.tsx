@@ -18,11 +18,11 @@ const providers: { id: TeamProvider; name: string; catalog?: string }[] = [
 ]
 
 const CHOICE_KEY = 'agent-desk.execution-models'
-const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '', toolMode: 'native' as 'native' | 'ptc' }
+const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '', toolMode: 'native' as 'native' | 'ptc', planImplement: false }
 function readChoice() {
   try {
     const value = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? 'null')
-    if (typeof value?.leader === 'string' && providers.some((entry) => entry.id === value.provider) && typeof value.model === 'string') return { ...DEFAULT_CHOICE, ...value, leaderEffort: typeof value.leaderEffort === 'string' ? value.leaderEffort : '', childEffort: typeof value.childEffort === 'string' ? value.childEffort : '' } as typeof DEFAULT_CHOICE
+    if (typeof value?.leader === 'string' && providers.some((entry) => entry.id === value.provider) && typeof value.model === 'string') return { ...DEFAULT_CHOICE, ...value, leaderEffort: typeof value.leaderEffort === 'string' ? value.leaderEffort : '', childEffort: typeof value.childEffort === 'string' ? value.childEffort : '', planImplement: value.planImplement === true } as typeof DEFAULT_CHOICE
   } catch { /* use the defaults */ }
   return DEFAULT_CHOICE
 }
@@ -85,7 +85,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       // selection saved from another device. This never starts a model.
       const restored = result.models ? result : await act<{ models: typeof DEFAULT_CHOICE }>('execution.setModels', { models: readChoice(), onlyIfUnset: true })
       if (!alive || !restored?.models) return
-      const next = { ...DEFAULT_CHOICE, ...restored.models }
+      const next = { ...DEFAULT_CHOICE, ...restored.models, planImplement: restored.models.planImplement === true }
       const levels = effortOptions(next)
       next.leaderEffort = workflowEffort(next.leaderEffort, levels.leader)
       next.childEffort = workflowEffort(next.childEffort, levels.child)
@@ -154,7 +154,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       choices.batchReports = true
       choices.maxChildren = 6
       choices.policy = null
-      if (await startTeam(workspace, choices, usesClaude ? auth.confirmation : undefined, leader.startsWith('claude:') ? {} : { leaderModel: leader })) {
+      if (await startTeam(workspace, choices, usesClaude ? auth.confirmation : undefined, { ...(leader.startsWith('claude:') ? {} : { leaderModel: leader }), planImplement: current.planImplement })) {
         close()
       }
     } finally { startingRef.current = false; setStarting(false) }
@@ -170,7 +170,12 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
           effort={childEffort} efforts={workflowOptions(childEffort, levels.child)} onEffort={(childEffort) => changeModels({ childEffort })}
           allowClearUnavailableEffort onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
       </section>
-      <PtcToggle mode={choice.toolMode} disabled={!modelsReady || starting} onChange={(toolMode) => changeModels({ toolMode })} />
+      <div className="ex-options">
+        <PtcToggle mode={choice.toolMode} disabled={!modelsReady || starting} onChange={(toolMode) => changeModels({ toolMode })} />
+        <button type="button" className={`chip plan-implement-chip ${choice.planImplement ? 'on' : ''}`} aria-label="計画 → 実装" aria-pressed={choice.planImplement}
+          title="親が計画、子が実装。親が最大1回レビューし、必要なら同じ子が最終修正" disabled={!modelsReady || starting}
+          onClick={() => changeModels({ planImplement: !latest.current.planImplement })}>計画 → 実装 {choice.planImplement ? 'ON' : 'OFF'}</button>
+      </div>
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
     </div>

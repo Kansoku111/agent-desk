@@ -170,6 +170,22 @@ test('EX MCP exposes required acceptance criteria, low tier and explicit abandon
   } finally { await mcp.close() }
 })
 
+test('planned eco MCP exposes the plan and one-review handoff without changing ordinary eco', async () => {
+  const mcp = startMcp('http://127.0.0.1:9/api/team', { AGENT_DESK_EXECUTION: '1', AGENT_DESK_PLAN_IMPLEMENT: '1' })
+  try {
+    const { result } = await mcp.request('tools/list', {})
+    const spawn = result.tools.find((tool) => tool.name === 'spawn')
+    const implement = result.tools.find((tool) => tool.name === 'implement')
+    const send = result.tools.find((tool) => tool.name === 'send')
+    const close = result.tools.find((tool) => tool.name === 'close')
+    assert.equal(spawn.inputSchema.properties.plan.type, 'string')
+    assert.ok(implement.inputSchema.required.includes('plan'))
+    for (const field of ['reviewReason', 'resume', 'plan', 'criteria', 'checks']) assert.ok(send.inputSchema.properties[field])
+    assert.match(send.description, /one consolidated review-fix/)
+    assert.match(close.inputSchema.properties.accept.description, /without claiming.*parent-reviewed/)
+  } finally { await mcp.close() }
+})
+
 test('invalid MCP JSON values do not crash and requests with ids get Invalid Request', async () => {
   const mcp = startMcp('http://127.0.0.1:9/api/team')
   try {

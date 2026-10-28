@@ -139,14 +139,31 @@ if (process.env.AGENT_DESK_EXECUTION === '1') {
     maxRepairs: { type: 'integer', minimum: 0, maximum: 2 },
   })
   spawn.inputSchema.required.push('criteria', 'checks')
-  const implementationFields = ['title', 'task', 'criteria', 'checks', 'extraChecks', 'maxRepairs']
+  if (process.env.AGENT_DESK_PLAN_IMPLEMENT === '1') {
+    spawn.description = 'Delegate one planned implementation unit to a child. The app verifies it; you review once and can send one consolidated fix to the same child. Read-only research may run in parallel.'
+    spawn.inputSchema.properties.maxRepairs.description = 'Ignored in this mode: automatic child repair is disabled.'
+    spawn.inputSchema.properties.extraChecks.items.properties.autoRepair.description = 'Ignored in this mode: automatic child repair is disabled.'
+    spawn.inputSchema.properties.extraChecks.items.properties.allowSourceChanges.description = 'Default false. Explicitly permit source changes during this check and one automatic rerun. Changes after the child fix are not parent-reviewed.'
+    spawn.inputSchema.properties.plan = { type: 'string', description: 'Required for write: the parent’s concise implementation contract (goal, scope, confirmed facts, approach, criteria, verification, uncertainties).' }
+    const send = TOOLS.find((tool) => tool.name === 'send')
+    Object.assign(send.inputSchema.properties, {
+      reviewReason: { type: 'string', description: 'For the one review-fix request: what you inspected, defects and evidence. Include all fixes in message.' },
+      resume: { type: 'boolean', description: 'Continue the same interrupted attempt after an error or cancellation, not a new review or fix.' },
+      plan: spawn.inputSchema.properties.plan,
+      criteria: spawn.inputSchema.properties.criteria,
+      checks: spawn.inputSchema.properties.checks,
+      extraChecks: spawn.inputSchema.properties.extraChecks,
+    })
+    send.description = 'For an open implementation, send at most one consolidated review-fix with reviewReason. A closed child may receive a new work unit only on a new user request, with plan, criteria and checks. resume:true continues an interrupted attempt.'
+  }
+  const implementationFields = ['title', 'task', 'criteria', 'checks', 'extraChecks', 'maxRepairs', ...(process.env.AGENT_DESK_PLAN_IMPLEMENT === '1' ? ['plan'] : [])]
   TOOLS.push({
     name: 'implement',
     description: 'Start implementation with the same child after accepting and closing its research. Keeps the investigation conversation and model; the app switches permissions, captures a new baseline and verifies the implementation. Prefer this over spawning a new child for related implementation. Requires a new bounded task, acceptance criteria and checks; no fresh or mode change through send.',
     inputSchema: {
       type: 'object',
       properties: { child, ...Object.fromEntries(implementationFields.map((key) => [key, spawn.inputSchema.properties[key]])) },
-      required: ['child', 'title', 'task', 'criteria', 'checks'],
+      required: ['child', 'title', 'task', 'criteria', 'checks', ...(process.env.AGENT_DESK_PLAN_IMPLEMENT === '1' ? ['plan'] : [])],
     },
   })
   TOOLS.push({
@@ -159,6 +176,11 @@ if (process.env.AGENT_DESK_EXECUTION === '1') {
     reason: { type: 'string', description: 'Required. For acceptance: what you inspected, how it meets the request and criteria, and any limits. Test success alone is not a review. For research: what report evidence you checked. For abandonment: why.' },
   })
   TOOLS.find((tool) => tool.name === 'close').inputSchema.required.push('reason')
+  if (process.env.AGENT_DESK_PLAN_IMPLEMENT === '1') {
+    const close = TOOLS.find((tool) => tool.name === 'close')
+    close.inputSchema.properties.accept.description = 'false: stop incomplete or failed work. After one review-fix, true ends the work without claiming that the final changes were parent-reviewed.'
+    close.inputSchema.properties.reason.description = 'Required. Initial acceptance: review evidence. After a review-fix: final report, verification result and unreviewed or incomplete points; do not perform a second review.'
+  }
 }
 
 async function call(tool, args) {

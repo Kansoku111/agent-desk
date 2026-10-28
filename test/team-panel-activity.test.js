@@ -78,6 +78,76 @@ for (const [state, phase, active, label, icon] of [
   })
 }
 
+function renderedChildCard(current, planImplement) {
+  const sidebar = panel.TeamPanel({ team: { ...team, execution: { planImplement }, children: [current] } })
+  const card = nodes(sidebar, (node) => node.type === panel.ChildCard)[0]
+  assert.equal(card.props.planImplement, planImplement === true)
+  return panel.ChildCard(card.props)
+}
+
+for (const [status, label] of [['passed', '成功'], ['unverified', '未実行'], ['failed', '失敗']]) {
+  test(`completed final repair shows parent review separately from ${status} verification`, () => {
+    const current = { ...child, state: 'closed', execution: { phase: 'accepted', outcome: 'completed_unreviewed', repairs: 0, verification: { status } } }
+    const card = renderedChildCard(current, true)
+    const activity = withClass(card, 'subagent-card-activity').map(text)
+    assert.equal(text(withClass(card, 'subagent-time')[0]), '完了')
+    assert.deepEqual(activity, ['GPT', `検証: ${label} · 差し戻し 0回`, '最終修正は親レビュー未実施'])
+  })
+}
+
+test('final repair awaiting a decision shows the unreviewed status separately from verification', () => {
+  const current = { ...child, lastReport: { kind: 'report' }, execution: {
+    phase: 'review', repairs: 0, parentReview: { instruction: '最終修正' }, verification: { status: 'passed' },
+  } }
+  const card = renderedChildCard(current, true)
+  assert.equal(text(withClass(card, 'subagent-time')[0]), '判定待ち')
+  assert.deepEqual(withClass(card, 'subagent-card-activity').map(text), ['GPT', '検証: 成功 · 差し戻し 0回', '最終修正は親レビュー未実施'])
+})
+
+test('unreviewed outcome is still visible when verification or saved team mode is missing', () => {
+  const current = { ...child, state: 'closed', execution: { phase: 'accepted', outcome: 'completed_unreviewed' } }
+  const card = renderedChildCard(current, undefined)
+  assert.deepEqual(withClass(card, 'subagent-card-activity').map(text), ['GPT', '最終修正は親レビュー未実施'])
+})
+
+test('ordinary, accepted, abandoned, unfinished and failed work are not marked as completed final repairs', () => {
+  const instruction = { instruction: '最終修正' }
+  const cases = [
+    { name: 'normal eco without plan mode', plan: false, lastReport: { kind: 'report' }, execution: { phase: 'review', parentReview: instruction } },
+    { name: 'older eco without plan mode', plan: undefined, lastReport: { kind: 'report' }, execution: { phase: 'review', parentReview: instruction } },
+    { name: 'first review', plan: true, lastReport: { kind: 'report' }, execution: { phase: 'review' } },
+    { name: 'parent accepted without final repair', plan: true, state: 'closed', execution: { phase: 'accepted', outcome: 'accepted', parentReview: {} } },
+    { name: 'abandoned final repair', plan: true, state: 'closed', execution: { phase: 'accepted', outcome: 'abandoned', parentReview: instruction } },
+    { name: 'legacy closed work', plan: undefined, state: 'closed', execution: { phase: 'accepted' } },
+    { name: 'final repair still working', plan: true, state: 'running', execution: { phase: 'working', parentReview: instruction } },
+    { name: 'final repair still verifying', plan: true, execution: { phase: 'verifying', parentReview: instruction } },
+    { name: 'final repair failed', plan: true, lastReport: { kind: 'error' }, execution: { phase: 'review', parentReview: instruction } },
+    { name: 'final repair cancelled', plan: true, lastReport: { kind: 'cancelled' }, execution: { phase: 'review', parentReview: instruction } },
+  ]
+  for (const item of cases) {
+    const current = { ...child, state: item.state ?? 'idle', lastReport: item.lastReport ?? null, execution: item.execution }
+    const card = renderedChildCard(current, item.plan)
+    assert.doesNotMatch(text(card), /最終修正は親レビュー未実施/, item.name)
+    if (item.execution.outcome === 'abandoned') assert.equal(text(withClass(card, 'subagent-time')[0]), '中止')
+  }
+})
+
+test('diagram distinguishes unreviewed final repair without changing normal outcomes', () => {
+  const instruction = { instruction: '最終修正' }
+  for (const [current, planImplement, label, unreviewed] of [
+    [{ ...child, state: 'closed', execution: { phase: 'accepted', outcome: 'completed_unreviewed' } }, true, '完了・未レビュー', true],
+    [{ ...child, lastReport: { kind: 'report' }, execution: { phase: 'review', parentReview: instruction } }, true, '判定待ち・未レビュー', true],
+    [{ ...child, state: 'closed', execution: { phase: 'accepted', outcome: 'accepted' } }, true, '完了', false],
+    [{ ...child, state: 'closed', execution: { phase: 'accepted', outcome: 'abandoned', parentReview: instruction } }, true, '中止', false],
+    [{ ...child, lastReport: { kind: 'report' }, execution: { phase: 'review', parentReview: instruction } }, false, '判定待ち', false],
+  ]) {
+    const diagram = panel.TeamDiagram({ team: { ...team, execution: { planImplement }, children: [current] }, onClose() {} })
+    const node = withClass(diagram, 'team-node').find((entry) => entry.type === 'button')
+    assert.equal(text(withClass(node, 'team-node-foot')[0]), `子3${label}`)
+    assert.equal(node.props.title.includes('最終修正は親レビュー未実施'), unreviewed)
+  }
+})
+
 test('the diagram names the leader model and its real provider', (t) => {
   const value = JSON.stringify(['deepseek-official', 'deepseek-v4-flash'])
   appState.server.threads = [{ id: 'leader', title: 'Leader', model: value, status: 'idle' }]

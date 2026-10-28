@@ -56,6 +56,30 @@ test('eco leader guidance keeps strategy flexible without TM parallel-write or m
   assert.doesNotMatch(tm, /rather than following a fixed sequence or review count/)
 })
 
+test('both planned eco leaders receive one-review instructions without conflicting eco guidance', () => {
+  const options = {
+    team: { id: 'eco', secret: 's', workspace: 'C:/work', execution: { planImplement: true } },
+    config: teamConfig({}), models: [], dir: dir(), node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
+  }
+  const launch = leaderLaunch(options)
+  const claudeEnv = JSON.parse(fs.readFileSync(launch.args[launch.args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers['agent-team'].env
+  const server = leaderMcpServer(options)
+  const env = Object.fromEntries(server.env.map(({ name, value }) => [name, value]))
+  assert.equal(claudeEnv.AGENT_DESK_PLAN_IMPLEMENT, '1')
+  assert.equal(env.AGENT_DESK_PLAN_IMPLEMENT, '1')
+  for (const prompt of [promptOf(launch.args), fs.readFileSync(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8')]) {
+    assert.match(prompt, /one user implementation request as one work unit/)
+    assert.match(prompt, /ONE parent review/)
+    assert.match(prompt, /Do not perform a second review/)
+    assert.match(prompt, /consultation/)
+    assert.doesNotMatch(prompt, /rather than following a fixed sequence or review count/)
+    assert.doesNotMatch(prompt, /you may make a small scoped correction yourself/)
+    assert.doesNotMatch(prompt, /handles at most two bounded repair attempts/)
+    assert.doesNotMatch(prompt, /Only enable autoRepair/)
+    assert.doesNotMatch(prompt, /Review both runs and the changed diff/)
+  }
+})
+
 test('both leader runtimes receive every free-mode reasoning choice', () => {
   const options = {
     team: { id: 't', secret: 's', workspace: 'C:/work' },

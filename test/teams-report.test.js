@@ -21,6 +21,16 @@ for (const execution of [false, true]) {
   }
 }
 
+test('the queued final repair keeps its stage even after the child starts other work', () => {
+  const item = { id: 'final-1', childId: 'R', at: 1, kind: 'report', text: 'final result', finalRepair: true, resent: true, truncated: false }
+  const team = { execution: { planImplement: true }, children: [{ id: 'R', name: 'R', title: 'new work', reports: [] }], queue: [] }
+  const text = reportMessage(team, item, () => 'model')
+  assert.match(text, /最終修正は親レビュー未実施/)
+  assert.match(text, /再レビューせず/)
+  assert.doesNotMatch(text, /修正は send/)
+  assert.match(text, /すでに受け取っていれば/)
+})
+
 test('legacy queued hints never promise full recovery of an evicted report', () => {
   const item = { id: 'legacy-1', childId: 'R', at: 1, kind: 'report', text: 'preview…\n（続きは read_report で読めます）' }
   const team = { children: [{ id: 'R', name: 'R', title: 'work', reports: [] }], queue: [] }

@@ -186,9 +186,16 @@ function Notices({ team }: { team: TeamSummary }) {
   )
 }
 
-function ChildCard({ child, selected }: { child: TeamChild; selected: boolean }) {
+function finalRepairUnreviewed(child: TeamChild, planImplement?: boolean) {
+  const execution = child.execution
+  return execution?.outcome === 'completed_unreviewed'
+    || (planImplement && execution?.phase === 'review' && !execution.outcome && child.lastReport?.kind === 'report' && Boolean(execution.parentReview?.instruction))
+}
+
+function ChildCard({ child, selected, planImplement }: { child: TeamChild; selected: boolean; planImplement?: boolean }) {
   const quiet = !isActive(child)
   const opens = Boolean(child.taskId) && child.state !== 'removed'
+  const finalUnreviewed = finalRepairUnreviewed(child, planImplement)
   return (
     <button
       type="button"
@@ -210,6 +217,7 @@ function ChildCard({ child, selected }: { child: TeamChild; selected: boolean })
         {child.pending > 0 && ` · 指示 ${child.pending} 件が待機中`}
       </div>
       {child.execution?.verification && <div className="subagent-card-activity">検証: {VERIFICATION_LABEL[child.execution.verification.status] ?? child.execution.verification.status} · 差し戻し {child.execution.repairs}回</div>}
+      {finalUnreviewed && <div className="subagent-card-activity">最終修正は親レビュー未実施</div>}
       {opens && <ChevronRight size={14} className="subagent-card-chev" />}
     </button>
   )
@@ -334,7 +342,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
           </button>
           {children.map((child) => (
             <div className="team-child-row" key={child.id}>
-              <ChildCard child={child} selected={route.view === child.kind && route.id === child.taskId} />
+              <ChildCard child={child} selected={route.view === child.kind && route.id === child.taskId} planImplement={team.execution?.planImplement === true} />
               <button type="button" className="icon-button small team-child-remove"
                 aria-label={`${child.name}を削除`} title={`${child.name}を削除`} disabled={removingId !== null}
                 onClick={() => setRemoving(child)}><Trash2 size={14} /></button>
@@ -433,6 +441,7 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
           {children.map((child, index) => {
             const box = boxes[index]
             const opens = Boolean(child.taskId) && child.state !== 'removed'
+            const finalUnreviewed = finalRepairUnreviewed(child, team.execution?.planImplement === true)
             return (
               <button
                 key={child.id}
@@ -440,7 +449,7 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
                 className={`team-node provider-${child.provider} state-${childDisplayState(child)} ${isActive(child) ? 'live' : 'quiet'}`}
                 style={{ left: box.x, top: box.y, width: BOX_W, height: BOX_H }}
                 disabled={!opens}
-                title={`${child.name}: ${child.title}`}
+                title={`${child.name}: ${child.title}${finalUnreviewed ? ' · 最終修正は親レビュー未実施' : ''}`}
                 onClick={() => {
                   onClose()
                   openTeamChild(child)
@@ -453,7 +462,7 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
                 <div className="team-node-title">{child.title}</div>
                 <div className="team-node-foot">
                   <span>{child.name}</span>
-                  <span>{stateLabel(child)}</span>
+                  <span>{stateLabel(child)}{finalUnreviewed && '・未レビュー'}</span>
                 </div>
               </button>
             )

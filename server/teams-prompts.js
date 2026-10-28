@@ -127,7 +127,7 @@ export function executionTask(task, execution) {
         ? '報告後にアプリが上記を実行します。子は再現・対象を絞った回帰確認を優先し、同じ全体検証の不要な重複を避けてください。ただし必要な検証は省かず、全体テストが必要なら実行してください。'
         : 'アプリが実行する検証コマンドはありません（未実行扱い）。依頼に必要な確認を行い、未確認の点も報告してください。',
     ]
-  return [task, '', '[eco 完了条件]', execution.criteria, ...guidance].join('\n')
+  return [task, ...(execution.plan ? ['', '[親の実装計画]', execution.plan] : []), '', '[eco 完了条件]', execution.criteria, ...guidance].join('\n')
 }
 
 /** A tool call an approval is about, in one line. */

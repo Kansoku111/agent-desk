@@ -20,7 +20,7 @@ export class ExecutionReview {
     }
   }
 
-  async report({ folder, execution, run, childReport }) {
+  async report({ folder, execution, run, childReport, finalRepair = false }) {
     const record = path.join(path.dirname(run.record), 'review.md')
     const patchFile = path.join(path.dirname(run.record), 'changes.patch')
     const warnings = []
@@ -61,23 +61,26 @@ export class ExecutionReview {
     const changes = captured ? files.length ? files.map((file) => `${file.status} ${JSON.stringify(file.path)}`).join('\n') : '変更なし' : '不明（変更なしを意味しません）'
     const warning = warnings.join('\n')
     const scope = '差分は作業開始前からの変更です。作業前の未コミット変更を除き、子・親・検証コマンド・外部編集の変更元は区別しません。Git除外・依存物などチェックポイント対象外のファイルは含みません。バイナリは内容を別途確認してください。'
-    const judgment = '親の判定: 依頼・完了条件と実際の変更を照合してください。バグ修正は原因と修正、UIは画面と操作、テスト変更は検査を弱めていないかを確認。close の reason に、確認した箇所・結果と合格の根拠を短く残してください。テスト成功だけを合格理由にしないでください。'
+    const judgment = finalRepair
+      ? '最終修正は親レビュー未実施です。再レビューや追加の修正依頼はせず、子の報告・検証結果・未確認事項を伝えて close してください。失敗や未完了は accept:false で終了してください。'
+      : '親の判定: 依頼・完了条件と実際の変更を照合してください。バグ修正は原因と修正、UIは画面と操作、テスト変更は検査を弱めていないかを確認。close の reason に、確認した箇所・結果と合格の根拠を短く残してください。テスト成功だけを合格理由にしないでください。'
     const full = [
-      '# eco レビュー資料', `依頼:\n${task}`, `完了条件:\n${execution.criteria}`,
+      '# eco レビュー資料', `依頼:\n${task}`, ...(execution.plan ? [`親の実装計画:\n${execution.plan}`] : []), `完了条件:\n${execution.criteria}`,
+      ...(execution.parentReview?.instruction ? [`親のレビュー:\n${execution.parentReview.reason}\n\n修正依頼:\n${execution.parentReview.instruction}`] : []),
       ...(instructions ? [`追加指示:\n${instructions}`] : []),
       `変更一覧:\n${changes}`, captured ? `差分全文: ${patchFile}` : '差分全文: 取得できませんでした',
       ...(warning ? [`注意:\n${warning}`] : []), scope,
-      verificationReport(run), `子の報告:\n${childReport}`, judgment,
+      verificationReport(run, { finalRepair }), `子の報告:\n${childReport}`, judgment,
     ].join('\n\n')
     await fs.writeFile(record, full, 'utf8')
     const text = [
       '[eco レビュー資料]', `資料全文: ${record}`, captured ? `差分全文: ${patchFile}` : '差分全文: 取得できませんでした',
       ...(warning ? [`注意:\n${clip(warning, 2000)}`] : []),
-      `依頼:\n${clip(task, 4000)}`, `完了条件:\n${clip(execution.criteria, 2000)}`,
+      `依頼:\n${clip(task, 4000)}`, ...(execution.plan ? [`親の実装計画:\n${clip(execution.plan, 4000)}`] : []), `完了条件:\n${clip(execution.criteria, 2000)}`,
       ...(instructions ? [`追加指示:\n${clip(instructions, 2000)}`] : []),
       `変更一覧 (${captured ? files.length : '不明'}件):\n${clip(changes, 4000)}`,
-      scope, clip(verificationReport(run), 6000),
-      ...(patch ? [`差分抜粋（長い場合は差分全文を開いてください）:\n${clip(patch, 8000)}`] : []),
+      scope, clip(verificationReport(run, { finalRepair }), 6000),
+      ...(patch && !finalRepair ? [`差分抜粋（長い場合は差分全文を開いてください）:\n${clip(patch, 8000)}`] : []),
       `子の報告:\n${clip(childReport, 4000)}`, judgment,
     ].join('\n\n')
     return { text, record, patch: captured ? patchFile : null, warning: warning || null }
