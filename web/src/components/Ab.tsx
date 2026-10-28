@@ -113,13 +113,14 @@ function useJobTurns(job: AbJob, wanted: boolean): Turn[] | undefined {
 
 function Report({ job, workspace, modelName, open = false, taskScore }: { job: AbJob; workspace: string; modelName: string; open?: boolean; taskScore?: UsageScore }) {
   const [shown, setShown] = useState(open)
+  useEffect(() => setShown(open), [open])
   const running = job.status === 'running'
   const turns = useJobTurns(job, shown || running)
   const live = Boolean(turns?.length)
   const scores = scoresUpTo(turns ?? [])
   const notes = [job.denials?.length ? `承認が必要なため実行されなかった操作\n${job.denials.map((entry) => `- ${entry}`).join('\n')}` : '',
     job.blockers?.length ? `実行環境の権限エラー\n${job.blockers.map((entry) => `- ${entry}`).join('\n')}` : ''].filter(Boolean).join('\n\n')
-  return <details className="ab-report" open={open || undefined} onToggle={(event) => setShown(event.currentTarget.open)}>
+  return <details className="ab-report" open={shown} onToggle={(event) => setShown(event.currentTarget.open)}>
     <summary><span>{ROLE[job.role] ?? job.role}</span><span className="muted">{modelName}{job.effort ? ` · ${effortLabel(job.effort)}` : ''}</span>{running && <Loader2 size={14} className="spin" />}</summary>
     {job.error && !turns?.some((turn) => turn.error?.message === job.error) && <p className="error-text">{job.error}</p>}
     {job.stopError && <p role="alert" className="error-text">{job.stopError}</p>}
@@ -174,7 +175,7 @@ export function AbView({ id }: { id: string }) {
       {run.warning && <p role="alert" className="error-text">{run.warning}</p>}
       {abTimeline(run).filter((entry) => entry.kind !== 'job' || !['a', 'b'].includes(entry.job.role)).map((entry) => entry.kind === 'message'
         ? <section className="ab-question" key={entry.key}><Markdown text={entry.text} workspace={run.workspace} /><AbImages images={entry.images} /></section>
-        : <Report key={entry.key} job={entry.job} workspace={run.workspace} modelName={modelName(entry.job.model)} open={entry.job.id === latest?.id} taskScore={entry.job.id === latest?.id ? run.score : undefined} />)}
+        : <Report key={entry.key} job={entry.job} workspace={run.workspace} modelName={modelName(entry.job.model)} open={entry.job.role === 'direct' || entry.job.id === latest?.id} taskScore={entry.job.id === latest?.id ? run.score : undefined} />)}
       {run.phase === 'awaiting-approval' && !running && <section className="ab-approval">
         <ImplementationOptions config={options} change={(patch) => setOptions((current) => ({ ...current, ...patch }))} disabled={busy} />
         <button className="button primary" disabled={busy || (options.delegate && !run.config.implementer)} onClick={() => void action('ab.approve', { revision: run.revision, ...options })}>この案に同意して実装</button>

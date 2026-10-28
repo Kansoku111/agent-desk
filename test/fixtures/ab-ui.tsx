@@ -23,6 +23,8 @@ class Socket {
       let result: any = { saved: true }
       if (input.type === 'ab.config') result = { config: savedAbConfig }
       if (input.type === 'ab.create') result = { run }
+      if (input.type === 'team.childTurns' || input.type === 'thread.get') result = { turns: [] }
+      if (input.type === 'subagents.list') result = { subagents: [] }
       if (input.type === 'team.create') result = { team: { id: 'fixture-team' } }
       if (input.type === 'attachment.add') result = image
       if (input.type === 'execution.checks') result = { checks: [] }
@@ -235,6 +237,49 @@ const api = {
       await render('view')
     }
   },
+  async reports() {
+    const job = (id: string, role: string, status = 'completed', report = 'fixture report') => ({ id, role, model, status, report })
+    const oldDirect = { ...job('old-direct', 'direct'), handle: { kind: 'thread', id: 'old-direct-turns' } }
+    const leader = job('leader', 'leader')
+    const direct = { ...job('direct', 'direct', 'running', ''), handle: { kind: 'claude', id: 'direct-turns' } }
+    let jobs = [job('a', 'a'), job('b', 'b'), oldDirect, leader]
+    const update = async () => { store.setState({ server: { ...server, ab: [{ ...run, jobs }] } }); await tick() }
+    const report = (label: string, index = 0) => [...document.querySelectorAll<HTMLDetailsElement>('.ab-report')].filter((entry) => entry.querySelector('summary span')?.textContent === label)[index]
+    const toggle = async (entry: HTMLDetailsElement) => { entry.querySelector('summary')!.click(); await tick() }
+    const loaded = (id: string) => requests.some((request) => (request.type === 'team.childTurns' && request.taskId === id) || (request.type === 'thread.get' && request.threadId === id))
+    try {
+      await update(); await render('view')
+      check(!report('相談 A').open && !report('相談 B').open, 'consultations remain closed by default')
+      check(report('リーダー実装').open && loaded('old-direct-turns'), 'previous direct implementation opens and loads turns even when not latest')
+      check(report('判断・報告').open, 'latest leader report still opens')
+      await toggle(report('判断・報告')); await update()
+      check(!report('判断・報告').open, 'other reports also stay closed after updates')
+      await toggle(report('判断・報告'))
+      check(report('判断・報告').open, 'other reports can also be reopened')
+      jobs = [...jobs, direct]; await update()
+      check(report('リーダー実装', 1).open && loaded('direct-turns'), 'running direct implementation opens before its report exists')
+      await toggle(report('リーダー実装', 1))
+      check(!report('リーダー実装', 1).open, 'direct implementation can be closed')
+      jobs = jobs.map((entry) => entry.id === 'direct' ? { ...direct, status: 'completed', report: 'finished' } : entry); await update()
+      check(!report('リーダー実装', 1).open, 'a completed report does not override a manual close')
+      await toggle(report('リーダー実装', 1))
+      check(report('リーダー実装', 1).open, 'direct implementation can be reopened')
+      await update()
+      check(report('リーダー実装', 1).open, 'reopened direct implementation stays open on updates')
+      await toggle(report('リーダー実装', 1))
+      await render('start'); await render('view')
+      check(report('リーダー実装').open && report('リーダー実装', 1).open, 'direct implementation reports reopen when returning to AB')
+      check(!report('判断・報告').open, 'previous non-direct report is closed when revisiting')
+      const nextLeader = job('next-leader', 'leader', 'running', '')
+      jobs = [...jobs, nextLeader]; await update()
+      check(!report('判断・報告', 1).open, 'new non-direct report remains closed until it is latest')
+      jobs = jobs.map((entry) => entry.id === 'next-leader' ? { ...nextLeader, status: 'completed', report: 'new report' } : entry); await update()
+      check(report('判断・報告', 1).open, 'new latest non-direct report still opens when its report arrives')
+      return 'AB reports: running / history / manual close and reopen / return to AB / latest report / turn loading'
+    } finally {
+      store.setState({ server }); await render('view')
+    }
+  },
   async scroll() {
     const longRun = { ...run, text: Array.from({ length: 80 }, (_, index) => 'Paragraph ' + index).join('\n\n') }
     store.setState({ server: { ...server, ab: [longRun] } })
@@ -261,7 +306,7 @@ const api = {
     return 'AB scroll: open / reopen / delayed data / run switch / preserve reading position'
   },
   async run() {
-    const passed: string[] = [await api.scroll()]
+    const passed: string[] = [await api.scroll(), await api.reports()]
     for (const kind of ['start', 'view']) {
       const method = kind === 'start' ? 'ab.create' : 'ab.revise'
       await render(kind)
