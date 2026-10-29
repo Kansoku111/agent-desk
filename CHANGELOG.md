@@ -7,13 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-29
+
 ### Added
 
+- Plan mode provides per-message read-only consultation while preserving conversation history. Eco can optionally proceed from planning to implementation.
+- Team settings support multiple child model rows, removal of children, and model-specific reasoning levels.
 - `/goal <objective>` (case-insensitive) directly creates and arms a persisted goal before the first model request in ordinary dsh tasks and dsh-led Eco/TM. Initial and queued messages are supported; commands do not interrupt running turns or overwrite unfinished goals. Empty commands, Plan combinations, AB and child commands are rejected. Internal reports stay plain text, and missing runtime support fails closed. Claude Code terminal commands are unchanged.
 
 ### Changed
 
 - Updated the bundled Codex app-server (`@openai/codex`) from 0.164.0 to 0.165.0.
+
+### Fixed
+
+- AB displays stop failures and unfinished history clearly, and opens direct implementation reports correctly.
+- Eco verification avoids stalled source checks and preserves workflow handoff context.
 
 ## [0.1.5] - 2026-10-27
 
