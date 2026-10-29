@@ -128,7 +128,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const groups = modelGroups(server)
   const leaderGroups = groups.map((group) => ({
     ...group,
-    models: group.models.filter((entry) => ['claude:opus', 'claude:sonnet'].includes(entry.value) || selection.leaderModels.some((model) => model.value === entry.value)),
+    models: group.models.filter((entry) => (group.id === 'claude-code' && /^claude:(?:claude-)?(?:opus|sonnet)(?:-|$)/i.test(entry.value)) || selection.leaderModels.some((model) => model.value === entry.value)),
   })).filter((group) => group.models.length)
   const childValue = provider === 'claude' ? (selection.model ? `claude:${selection.model}` : '') : selection.childModels.find((entry) => entry.id === selection.model)?.value ?? ''
   const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude')

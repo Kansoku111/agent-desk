@@ -4,7 +4,7 @@ import { EventEmitter, once } from 'node:events'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { AbManager, abConfig } from '../server/ab.js'
+import { AbManager, abConfig, validateAbModel } from '../server/ab.js'
 import { AbRunner } from '../server/ab-runner.js'
 import { createAbHandlers } from '../server/rpc-handlers-ab.js'
 import { abTimeline, abMarkdown } from '../web/src/ab-transcript.ts'
@@ -38,6 +38,20 @@ test('AB effort defaults are isolated, validated and compatible with old setting
   assert.equal(abConfig().efforts.a, '')
   for (const efforts of [[], null, 'high', { a: 3 }]) assert.throws(() => abConfig({ efforts }))
   assert.throws(() => abConfig({ a: 'claude:opus', efforts: { a: 'unsupported' } }))
+})
+
+test('AB validates named Claude Code models without changing billing route', () => {
+  const id = 'claude-haiku-5-5'
+  const api = JSON.stringify(['anthropic', id])
+  const catalog = { models: [{ provider: 'anthropic', id, value: api }] }
+  assert.doesNotThrow(() => validateAbModel(`claude:${id}`, catalog, { [api]: false }))
+  assert.doesNotThrow(() => validateAbModel('claude:haiku', catalog))
+  assert.throws(() => validateAbModel(`claude:${id}`, catalog, { [`claude:${id}`]: false }))
+  assert.throws(() => validateAbModel('claude:missing', catalog))
+  assert.throws(() => validateAbModel(api, catalog, { [api]: false }))
+  catalog.models[0].retired = true
+  assert.throws(() => validateAbModel(`claude:${id}`, catalog))
+  assert.doesNotThrow(() => validateAbModel(`claude:${id}`, catalog, { [`claude:${id}`]: true }))
 })
 
 for (const delegate of [false, true]) {

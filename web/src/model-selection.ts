@@ -19,11 +19,20 @@ export function visibleModels(server: AppState) {
   return server.catalog.models.filter((model) => isModelVisible(server, model))
 }
 
+/** Claude Code has its own visibility and never requires an Anthropic API key. */
+export function claudeCodeModels(server: AppState) {
+  const aliases = [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:sonnet', name: 'Sonnet' }, { value: 'claude:haiku', name: 'Haiku' }]
+  const listed = server.catalog.models.filter((model) => model.provider === 'anthropic')
+    .map((model) => ({ ...model, value: `claude:${model.id}` }))
+  return [...aliases, ...listed.filter((model) => !aliases.some((alias) => alias.value === model.value))]
+    .filter((model) => isModelVisible(server, model))
+}
+
 const EXECUTION_ROUTES: Partial<Record<TeamProvider, string>> = { claudeApi: 'anthropic', gpt: 'openai-codex', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' }
 
 /** Translate a picker value to EX's persisted provider/model pair, without changing routes. */
 export function executionChildChoice(server: AppState, value: string): { provider: TeamProvider; model: string } | null {
-  if (['claude:opus', 'claude:sonnet', 'claude:haiku'].includes(value)) return isModelVisible(server, { value }) ? { provider: 'claude', model: value.slice(7) } : null
+  if (claudeCodeModels(server).some((entry) => entry.value === value)) return { provider: 'claude', model: value.slice(7) }
   const model = visibleModels(server).find((entry) => entry.value === value && !entry.retired && providerReady(server, entry.provider))
   const provider = model && (Object.keys(EXECUTION_ROUTES) as TeamProvider[]).find((key) => EXECUTION_ROUTES[key] === model.provider)
   return model && provider ? { provider, model: model.id } : null
@@ -35,10 +44,11 @@ export function executionModelSelection(server: AppState, provider: string, lead
   const available = server.catalog.models.filter((entry) => !entry.retired && isModelVisible(server, entry) && providerReady(server, entry.provider))
   const leaderModels = available.filter((entry) => ['anthropic', 'openai-codex'].includes(entry.provider))
   const childModels = available.filter((entry) => entry.provider === routes[provider])
+  const codeModels = claudeCodeModels(server)
   return {
     leaderModels, childModels,
-    leader: (['claude:opus', 'claude:sonnet'].includes(leader) && isModelVisible(server, { value: leader })) || leaderModels.some((entry) => entry.value === leader) ? leader : '',
-    model: (provider === 'claude' ? ['haiku', 'sonnet', 'opus'].includes(child) && isModelVisible(server, { value: `claude:${child}` }) : childModels.some((entry) => entry.id === child)) ? child : '',
+    leader: (codeModels.some((entry) => entry.value === leader) && /^claude:(?:claude-)?(?:opus|sonnet)(?:-|$)/i.test(leader)) || leaderModels.some((entry) => entry.value === leader) ? leader : '',
+    model: (provider === 'claude' ? codeModels.some((entry) => entry.value === `claude:${child}`) : childModels.some((entry) => entry.id === child)) ? child : '',
   }
 }
 

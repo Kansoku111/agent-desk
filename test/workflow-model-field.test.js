@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { isModelVisible, providerReady, visibleModels } from '../web/src/model-selection.ts'
+import { claudeCodeModels, isModelVisible, providerReady, visibleModels } from '../web/src/model-selection.ts'
 
 async function load(path, modules, extra = '') {
   const source = await fs.readFile(new URL(path, import.meta.url), 'utf8')
@@ -18,7 +18,7 @@ async function load(path, modules, extra = '') {
 }
 
 const jsx = (type, props) => ({ type, props })
-const common = { react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {}, '../store': {}, '../model-selection': { isModelVisible, providerReady, visibleModels }, '../util': {}, './Popover': {}, './useWheelSelect': {}, './ProjectDialog': {} }
+const common = { react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {}, '../store': {}, '../model-selection': { claudeCodeModels, isModelVisible, providerReady, visibleModels }, '../util': {}, './Popover': {}, './useWheelSelect': {}, './ProjectDialog': {} }
 const pickers = await load('../web/src/components/Pickers.tsx', common)
 const parseModel = (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }
 const workflow = await load('../web/src/components/WorkflowModelField.tsx', { ...common, '../util': { parseModel }, './Pickers': pickers }, '\nexport { selectedName }')
@@ -38,6 +38,7 @@ test('Claude Code and Claude API remain separate groups and choices', () => {
   assert.equal(anthropic.heading, 'Claude（API）')
   assert.equal(anthropic.note, 'Anthropic API キー')
   assert.ok(code.models.some((entry) => entry.value === 'claude:haiku'))
+  assert.ok(code.models.some((entry) => entry.value === `claude:${api.id}`))
   assert.deepEqual(anthropic.models, [api])
   assert.equal(pickers.providerHeading(server, 'opencode-go'), 'OpenCode Go')
   assert.equal(pickers.providerHeading(server, 'anthropic'), 'Claude（API）')
@@ -53,6 +54,8 @@ test('hiding Claude Code and API choices affects only the chosen route', () => {
   const groups = workflow.modelGroups(state)
   assert.ok(!groups.find((group) => group.id === 'claude-code').models.some((entry) => entry.value === 'claude:haiku'))
   assert.deepEqual(groups.find((group) => group.id === 'anthropic').models, [api])
+  state.settings.modelVisibility = { 'claude:opus': false, 'claude:sonnet': false, 'claude:haiku': false }
+  assert.deepEqual(workflow.modelGroups(state).find((group) => group.id === 'claude-code').models.map((entry) => entry.value), [`claude:${api.id}`])
 })
 
 test('saved but unavailable Claude choices still show their own route', () => {
@@ -62,4 +65,6 @@ test('saved but unavailable Claude choices still show their own route', () => {
   assert.equal(workflow.selectedName(groups, ''), 'モデルを選択')
   const disconnected = { ...server, accounts: { ...server.accounts, claude: { configured: false } } }
   assert.equal(workflow.modelGroups(disconnected).some((group) => group.id === 'anthropic'), false)
+  assert.ok(workflow.modelGroups(disconnected).find((group) => group.id === 'claude-code').models.some((entry) => entry.value === `claude:${api.id}`))
+  assert.equal(workflow.selectedName(workflow.modelGroups(disconnected), `claude:${api.id}`), 'Claude Code / Claude Haiku')
 })

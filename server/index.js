@@ -51,7 +51,7 @@ import { DEFAULT_REMOTE_PORT, RemoteAccess } from './remote.js'
 import { TerminalManager } from './terminals.js'
 import { TeamManager } from './teams.js'
 import { ClaudeRunner } from './claude-runner.js'
-import { AbManager } from './ab.js'
+import { AbManager, validateAbModel } from './ab.js'
 import { AbRunner } from './ab-runner.js'
 import { createAbHandlers } from './rpc-handlers-ab.js'
 import { claimDataFolder } from './single-instance.js'
@@ -456,10 +456,7 @@ const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRun
     if (saved.length) assertAbImageModels(config, catalog.data.models)
     return saved
   },
-  validateModel: (value) => {
-    if (['claude:opus', 'claude:sonnet', 'claude:haiku'].includes(value)) return
-    if (!catalog.data.models.some((model) => model.value === value && !model.retired && settings.modelVisibility?.[value] !== false)) throw new Error('ABのモデルを選び直してください')
-  },
+  validateModel: (value) => validateAbModel(value, catalog.data, settings.modelVisibility),
   authorize: async ({ workspace, config, authConfirmation }) => {
     if ([config.a, config.b, config.leader, config.implementer].some((value) => value.startsWith('claude:'))) {
       await teams.confirmAbAuth(workspace, authConfirmation)

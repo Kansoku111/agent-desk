@@ -77,6 +77,18 @@ test('Claude Code visibility is independent of API visibility in eco choices', (
   assert.deepEqual(executionChildChoice(state, claude.value), { provider: 'claudeApi', model: claude.id })
 })
 
+test('Eco restores named Claude Code models independently of the API route', () => {
+  const state = server({ [claude.value]: false })
+  state.accounts.claude.configured = false
+  const value = `claude:${claude.id}`
+  assert.deepEqual(executionChildChoice(state, value), { provider: 'claude', model: claude.id })
+  assert.deepEqual([executionModelSelection(state, 'claude', value, claude.id).leader, executionModelSelection(state, 'claude', value, claude.id).model], [value, claude.id])
+  state.settings.modelVisibility[value] = false
+  assert.equal(executionChildChoice(state, value), null)
+  assert.equal(executionModelSelection(state, 'claude', value, claude.id).model, '')
+  assert.equal(executionModelSelection(state, 'claude', value, claude.id).leader, '')
+})
+
 test('Eco picker never maps hidden, retired, disconnected or missing choices to another model', () => {
   const state = server({ [sol.value]: false })
   assert.equal(executionChildChoice(state, sol.value), null)

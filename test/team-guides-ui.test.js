@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { createSettingsService, migrateSettings } from '../server/settings.js'
-import { isModelVisible, providerReady, visibleModels } from '../web/src/model-selection.ts'
+import { claudeCodeModels, isModelVisible, providerReady, visibleModels } from '../web/src/model-selection.ts'
 
 // Keep the editor's conflict-handling contract covered independently of a browser.
 const source = () => fs.readFile(new URL('../web/src/components/TeamGuides.tsx', import.meta.url), 'utf8')
@@ -179,7 +179,7 @@ test('policy prompt receives the real picker candidates, including all OpenCode 
   const source = await fs.readFile(new URL('../web/src/components/WorkflowModelField.tsx', import.meta.url), 'utf8')
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
   const modules = {
-    'react/jsx-runtime': {}, 'lucide-react': {}, '../model-selection': { isModelVisible, providerReady, visibleModels },
+    'react/jsx-runtime': {}, 'lucide-react': {}, '../model-selection': { claudeCodeModels, isModelVisible, providerReady, visibleModels },
     '../util': {}, './Pickers': { byNewest: (a, b) => a.id.localeCompare(b.id), providerHeading: (server, provider) => provider === 'anthropic' ? 'Claude（API）' : server.catalog.providers[provider] ?? provider, PROVIDER_NOTE: {}, PROVIDER_ORDER: ['opencode-go', 'anthropic'] },
     './Popover': {}, './useWheelSelect': {},
   }
@@ -199,7 +199,9 @@ test('policy prompt receives the real picker candidates, including all OpenCode 
   await new Promise((resolve) => setImmediate(resolve))
   assert.match(copied, /OpenCode Go.*model-a/)
   assert.match(copied, /OpenCode Go.*model-b/)
-  assert.doesNotMatch(copied, /ID: \"(?:hidden|retired|disconnected)\"/)
+  assert.doesNotMatch(copied, /ID: \"(?:hidden|retired)\"/)
+  assert.match(copied, /Claude Code.*disconnected/)
+  assert.doesNotMatch(copied, /Claude（API）.*disconnected/)
   server.accounts.claude.configured = true
   const connected = await editor('teamPolicies', [], { groups: exports.modelGroups(server), copy: (text) => { copied = text } })
   connected.find((node) => node.type === 'button' && node.props.children?.includes(' 方針作成指示文をコピー')).props.onClick()

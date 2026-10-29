@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import test from 'node:test'
 import ts from 'typescript'
 import * as workflowEffort from '../shared/workflow-effort.js'
+import { claudeCodeModels } from '../web/src/model-selection.ts'
 
 // Renders the real dialog components with a minimal hooks host, as in execution-settings-ui.test.js.
 const jsx = (type, props, key) => ({ type, props: { ...props, ...(key === undefined ? {} : { key }) } })
@@ -22,7 +23,7 @@ const moduleSource = async (file) => fs.readFile(new URL(file, import.meta.url),
 const fieldSource = await moduleSource('../web/src/components/WorkflowModelField.tsx')
 const fieldComponents = compile(fieldSource, {
   react: {}, 'react/jsx-runtime': jsxRuntime, 'lucide-react': { ChevronDown: 'ChevronDown' },
-  '../model-selection': { isModelVisible: () => true, providerReady: () => true, visibleModels: (server) => server.catalog.models },
+  '../model-selection': { claudeCodeModels, providerReady: () => true, visibleModels: (server) => server.catalog.models },
   '../util': { effortLabel: (value) => value || '指定なし', parseModel: (value) => { const [provider, model] = JSON.parse(value); return { provider, model } } },
   './Pickers': { byNewest: () => 0, providerHeading: (server, provider) => server.catalog.providers[provider] ?? provider, PROVIDER_NOTE: {}, PROVIDER_ORDER: ['openai-codex'] },
   './Popover': {
@@ -43,6 +44,7 @@ function mountAbStartDialog({ config, effortsByModel = { [NO_LEVELS]: [], [LOW_O
     efforts: { a: 'high', b: 'high', leader: 'high', implementer: 'high' },
     lean: true, delegate: false, review: false, toolMode: 'native', ...config }
   const server = {
+    settings: { modelVisibility: {} },
     catalog: {
       providers: { 'openai-codex': 'GPT' },
       models: [

@@ -16,6 +16,16 @@ const ROLES = ['a', 'b', 'leader', 'implementer']
 export const AB_DEFAULTS = { a: '', b: '', leader: '', implementer: '', efforts: { a: '', b: '', leader: '', implementer: '' }, lean: true, delegate: true, review: true, toolMode: 'native' }
 // Implementation always runs unsandboxed; every other stage is read-only.
 export const abJobPermission = (writable) => writable ? 'danger-full-access' : 'read-only'
+export function validateAbModel(value, catalog, visibility = {}) {
+  if (value.startsWith('claude:')) {
+    const id = value.slice(7)
+    // Keep legacy alias runs usable even if the picker visibility changes later.
+    if (['opus', 'sonnet', 'haiku'].includes(id)) return
+    const model = catalog.models.find((entry) => entry.provider === 'anthropic' && entry.id === id)
+    if (model && (visibility[value] ?? !model.retired)) return
+  } else if (catalog.models.some((model) => model.value === value && !model.retired && visibility[value] !== false)) return
+  throw new Error('ABのモデルを選び直してください')
+}
 export function abConfig(input = {}) {
   const result = { ...AB_DEFAULTS, efforts: { ...AB_DEFAULTS.efforts } }
   if (input.efforts !== undefined && (!input.efforts || typeof input.efforts !== 'object' || Array.isArray(input.efforts))) throw new Error('ABの推論レベルが不正です')
