@@ -32,7 +32,7 @@ const EFFORT = /^[a-z]{1,16}$/
 export const TEAM_DEFAULTS = {
   /** Claude Code and GPT retain their old fields; other dsh leaders use dshLeader. */
   leaderProvider: 'claude',
-  toolMode: 'native',
+  toolMode: 'ptc',
   // The default applies to new teams; modelMode is the mode of this team.
   defaultModelMode: 'tiers',
   modelMode: 'tiers',
@@ -82,7 +82,7 @@ export function teamConfig(saved) {
   })
   return {
     leaderProvider: LEADER_PROVIDERS.includes(value.leaderProvider) ? value.leaderProvider : TEAM_DEFAULTS.leaderProvider,
-    toolMode: value.toolMode ?? 'native',
+    toolMode: value.toolMode ?? TEAM_DEFAULTS.toolMode,
     defaultModelMode: TEAM_MODEL_MODES.includes(value.defaultModelMode) ? value.defaultModelMode : 'tiers',
     modelMode: TEAM_MODEL_MODES.includes(value.modelMode) ? value.modelMode : 'tiers',
     freeModels: Array.isArray(value.freeModels) ? value.freeModels.map((model) => ({ ...model })) : [],

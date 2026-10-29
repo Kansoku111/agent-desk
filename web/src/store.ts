@@ -174,7 +174,7 @@ let state: State = {
   sidebarOpen: !isNarrow(),
   toasts: [],
   queued: readQueued(),
-  draft: { workspace: null, model: null, effort: 'medium', permissionMode: 'workspace-write', toolMode: 'native' },
+  draft: { workspace: null, model: null, effort: 'medium', permissionMode: 'workspace-write', toolMode: 'ptc' },
 }
 
 const listeners = new Set<() => void>()
@@ -694,7 +694,7 @@ export async function startThread(text: string, images: Attachment[], plan = fal
     return true
   }
   upsertThread(result.thread)
-  setState((current) => ({ turns: { ...current.turns, [result.thread.id]: current.turns[result.thread.id] ?? [] }, draft: { ...current.draft, toolMode: 'native' } }))
+  setState((current) => ({ turns: { ...current.turns, [result.thread.id]: current.turns[result.thread.id] ?? [] }, draft: { ...current.draft, toolMode: 'ptc' } }))
   navigate({ view: 'thread', id: result.thread.id })
   void loadThread(result.thread.id)
   return true

@@ -58,10 +58,24 @@ test('AB retry uses the new PTC selection without replaying completed stages', a
   assert.equal(runner.calls.at(-1).permissionMode, 'danger-full-access')
 })
 
-test('AB PTC defaults off and rejects invalid selections', () => {
-  assert.equal(abConfig().toolMode, 'native')
-  assert.equal(abConfig({ toolMode: 'ptc' }).toolMode, 'ptc')
+test('AB PTC defaults on and preserves explicit off and rejects invalid selections', () => {
+  assert.equal(abConfig().toolMode, 'ptc')
+  assert.equal(abConfig({ toolMode: 'native' }).toolMode, 'native')
   for (const toolMode of ['other', true, {}]) assert.throws(() => abConfig({ toolMode }), /不明/)
+})
+
+test('AB legacy runs stay native while new preferences default to PTC', async (t) => {
+  const { dir, runner, manager, id } = await setup(t)
+  assert.equal(manager.require(id).config.toolMode, 'ptc')
+  assert.ok(runner.calls.every((call) => call.toolMode === 'ptc'))
+  const file = path.join(dir, 'state.json')
+  const saved = JSON.parse(await fs.readFile(file, 'utf8'))
+  delete saved.config.toolMode
+  delete saved.runs[0].config.toolMode
+  await fs.writeFile(file, JSON.stringify(saved))
+  const restored = await new AbManager({ dir, runner }).load()
+  assert.equal(restored.config.toolMode, 'ptc')
+  assert.equal(restored.require(id).config.toolMode, 'native')
 })
 
 test('AB totals every stage and failed attempt once, including after restart', async (t) => {

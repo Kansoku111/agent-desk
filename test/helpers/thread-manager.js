@@ -33,7 +33,7 @@ export async function fixture(t, options = {}) {
       this.liveSessions.add(sessionId)
       return { sessionId, configOptions: [] }
     },
-    async setOption() { return [] },
+    async setOption(_sessionId, id, value) { return id === 'agent_desk_tool_mode' ? [{ id, currentValue: value }] : [] },
     async prompt(sessionId, blocks) {
       calls.prompts.push({ sessionId, blocks })
       started.resolve()
@@ -69,7 +69,7 @@ export async function fixture(t, options = {}) {
     return manager
   }
   const manager = makeManager()
-  const thread = await manager.create({ workspace: base, model: '["test","model"]' })
+  const thread = await manager.create({ workspace: base, model: '["test","model"]', toolMode: 'native' })
   t.after(async () => {
     finish.resolve()
     for (const entry of managers) await entry.shutdown()

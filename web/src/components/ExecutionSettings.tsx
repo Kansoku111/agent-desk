@@ -18,7 +18,7 @@ const providers: { id: TeamProvider; name: string; catalog?: string }[] = [
 ]
 
 const CHOICE_KEY = 'agent-desk.execution-models'
-const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '', toolMode: 'native' as 'native' | 'ptc', planImplement: false }
+const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '', toolMode: 'ptc' as 'native' | 'ptc', planImplement: false }
 function readChoice() {
   try {
     const value = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? 'null')

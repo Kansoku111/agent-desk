@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { Outbox, readQueues } from '../web/src/outbox.ts'
-import { RpcClient } from '../web/src/rpc-client.ts'
+import { RpcClient, requestErrorMessage } from '../web/src/rpc-client.ts'
 import { notificationRoute, notificationText } from '../web/src/notification.ts'
 import * as turnUpdates from '../web/src/turn-updates.ts'
 import * as createIntent from '../web/src/create-intent.ts'
@@ -20,7 +20,7 @@ async function fixture(settings = {}) {
   const require = (name) => {
     if (name === 'react') return {}
     if (name === './outbox') return { Outbox, readQueues }
-    if (name === './rpc-client') return { RpcClient }
+    if (name === './rpc-client') return { RpcClient, requestErrorMessage }
     if (name === './turn-updates') return turnUpdates
     if (name === './notification') return { notificationRoute, notificationText }
     if (name === './create-intent') return {
@@ -220,6 +220,7 @@ test('startThread retries a lost response with the same createId, then uses a fr
   assert.equal(retryRequest.createId, firstRequest.createId)
   assert.equal(await retryAttempt, true)
   assert.equal(store.getState().route.id, accepted.get(firstRequest.createId).thread.id)
+  assert.equal(store.getState().draft.toolMode, 'ptc')
   assert.equal(storage.getItem('agent-desk-pending-create-intents'), null)
 
   store.setState({ route: { view: 'home' }, draft })
@@ -235,6 +236,7 @@ test('the first hello reads the saved default effort and permission mode', async
   const { store } = await fixture({ defaultEffort: 'high', defaultPermissionMode: 'read-only' })
   assert.equal(store.getState().draft.effort, 'high')
   assert.equal(store.getState().draft.permissionMode, 'read-only')
+  assert.equal(store.getState().draft.toolMode, 'ptc')
 })
 
 test('a reconnect keeps the chosen effort instead of the saved default', async () => {

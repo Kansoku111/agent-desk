@@ -46,7 +46,7 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
           model: model ?? null,
           effort: effort ?? '',
           permissionMode: permissionMode ?? 'workspace-write',
-          toolMode: toolMode ?? 'native',
+          toolMode: toolMode ?? 'ptc',
           ...message,
         })).digest('hex')
         const result = await threads.createWithFirstMessage({ createId, payloadHash: fingerprint, options, message })

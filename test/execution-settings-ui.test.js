@@ -200,6 +200,20 @@ test('eco saves plan → implement before starting and restores it on reopening'
   assert.deepEqual(reopened.teamStarts[0][3], { leaderModel: LEADER_VALUE, planImplement: true })
 })
 
+test('eco defaults to PTC without saved choices and preserves an explicit off choice', async () => {
+  const fresh = mountExecutionDialog({ modelsStore: { models: null } })
+  await fresh.ready()
+  const ptc = (ui) => ui.walk((node) => node.type === 'button' && node.props['aria-label'] === 'PTC')[0]
+  assert.equal(ptc(fresh).props['aria-pressed'], true)
+  assert.equal(fresh.modelsStore.models.toolMode, 'ptc')
+  await click(ptc(fresh))
+  fresh.render()
+  assert.equal(fresh.modelsStore.models.toolMode, 'native')
+  const reopened = mountExecutionDialog({ modelsStore: fresh.modelsStore })
+  await reopened.ready()
+  assert.equal(ptc(reopened).props['aria-pressed'], false)
+})
+
 test('eco preserves PTC independently when plan → implement is toggled', async () => {
   const ui = mountExecutionDialog({ childEffort: '' })
   await ui.ready()

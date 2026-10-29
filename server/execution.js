@@ -149,7 +149,7 @@ export function normalizeExecutionModels(value) {
   const leaderEffort = value.leaderEffort ?? ''
   const childEffort = value.childEffort ?? ''
   if ([leaderEffort, childEffort].some((effort) => typeof effort !== 'string' || effort.length > 100)) throw new Error('ecoの推論レベルが不正です')
-  const toolMode = value.toolMode ?? 'native'
+  const toolMode = value.toolMode ?? 'ptc'
   assertToolMode(toolMode)
   const planImplement = value.planImplement ?? false
   if (typeof planImplement !== 'boolean') throw new Error('計画→実装の設定が不正です')

@@ -124,7 +124,7 @@ const api = {
     const passed: string[] = []
     for (const kind of ['ab-start', 'tm-start', 'eco-start']) {
       await render(kind)
-      check(toggle()?.textContent === 'PTC OFF', kind + ' defaults off')
+      check(toggle()?.textContent === 'PTC OFF', kind + ' restores saved off selection')
       toggle().click(); await tick()
       check(toggle().getAttribute('aria-pressed') === 'true', kind + ' switches on')
       if (kind === 'ab-start') {

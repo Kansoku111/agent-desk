@@ -104,7 +104,7 @@ test('shutdown writes every turn even when the index write fails', async (t) => 
     runtimeCwd: path.join(base, 'runtime'),
   }
   const manager = new ThreadManager({ paths, pool, catalog: { learn: () => false }, getAccounts: async () => ({}), getTurnUsage: async () => null })
-  const thread = await manager.create({ workspace: base, model: '["test","model"]' })
+  const thread = await manager.create({ workspace: base, model: '["test","model"]', toolMode: 'native' })
   await manager.send(thread.id, { text: 'hello' })
   await started
   // A file where the index folder should be makes the index write fail at once.

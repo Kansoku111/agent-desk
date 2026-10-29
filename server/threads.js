@@ -416,7 +416,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   /** `team`: the agent team (teams.js) this task works for as a child, as { id, childId }. */
-  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'native', team = null, ab = null, createReceipt = null }) {
+  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'ptc', team = null, ab = null, createReceipt = null }) {
     if (this.stopping) throw new Error('アプリを終了しています')
     await assertDirectory(workspace)
     if (this.stopping) throw new Error('アプリを終了しています')

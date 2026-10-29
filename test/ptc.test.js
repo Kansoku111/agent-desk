@@ -51,6 +51,22 @@ test('bridge releases the exact declaration before switching, rejects busy/inval
   assertPresentationReady(record)
 })
 
+test('new tasks default to PTC while explicit native remains available', async (t) => {
+  const f = await fixture(t)
+  const thread = await f.manager.create({ workspace: f.base, model: '["test","model"]' })
+  assert.equal(thread.toolMode, 'ptc')
+  assert.equal(f.thread.toolMode, 'native')
+  const calls = []
+  f.runtime.newSession = async () => { f.runtime.liveSessions.add('default-session'); return { sessionId: 'default-session', configOptions: option('native') } }
+  f.runtime.setOption = async (_id, config, mode) => { calls.push([config, mode]); return option(mode) }
+  const done = new Promise((resolve) => f.manager.once('turn-finished', resolve))
+  await f.manager.send(thread.id, { text: 'start' })
+  await f.started.promise
+  f.finish.resolve()
+  assert.equal((await done).status, 'done')
+  assert.deepEqual(calls, [[TOOL_MODE_CONFIG, 'ptc']])
+})
+
 test('native → PTC → native stays in one session and only takes effect on next send', async (t) => {
   const f = await fixture(t)
   let mode = 'native'

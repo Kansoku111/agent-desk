@@ -459,7 +459,7 @@ test('TM parks delegated waits but can keep independent work running until a rep
 })
 
 test('team PTC validates selections and stays off for legacy teams even when new-team defaults are on', async (t) => {
-  assert.equal(teamConfig({}).toolMode, 'native')
+  assert.equal(teamConfig({}).toolMode, 'ptc')
   assert.equal(mergeTeamConfig({}, { toolMode: 'ptc' }).toolMode, 'ptc')
   assert.throws(() => mergeTeamConfig({}, { toolMode: 'other' }), /不明/)
   const f = await setup(t, { toolMode: 'ptc' })
@@ -1166,7 +1166,7 @@ test('eco reserves a resumed writer during baseline capture and restores evidenc
   const pending = tool('send', { child: child.id, message: 'next work' })
   assert.equal(typeof release, 'function')
   await assert.rejects(tool('spawn', exTask), /作業|判定/)
-  assert.throws(() => manager.updateConfig(team.id, { toolMode: 'ptc' }), /実行中/)
+  assert.throws(() => manager.updateConfig(team.id, { toolMode: 'native' }), /実行中/)
   await assert.rejects(tool('send', { child: child.id, message: 'duplicate' }), /作業中/)
   await manager.stopAll(team.id)
   release({ error: 'test baseline' })
@@ -1767,7 +1767,7 @@ test('a GPT child is a full-access dsh task whose first message names it and giv
   assert.match(text, /子「A」を起動しました（GPT-6 Luna・低）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
-    workspace, model: '["openai-codex","gpt-6-luna"]', effort: 'medium', permissionMode: 'danger-full-access', toolMode: 'native',
+    workspace, model: '["openai-codex","gpt-6-luna"]', effort: 'medium', permissionMode: 'danger-full-access', toolMode: 'ptc',
     team: { id: team.id, childId: team.children[0].id },
   })
   const [, , message] = threads.calls.find((call) => call[0] === 'send')
@@ -2951,7 +2951,7 @@ test('a DeepSeek child is a full-access dsh task on a DeepSeek model', async (t)
   assert.match(await tool('spawn', { title: '翻訳', task: 'docs を訳す', tier: 'low', provider: 'deepseek', name: 'D' }), /子「D」を起動しました（DeepSeek V4 Flash・低）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
-    workspace, model: '["deepseek-official","deepseek-v4-flash"]', effort: '', permissionMode: 'danger-full-access', toolMode: 'native',
+    workspace, model: '["deepseek-official","deepseek-v4-flash"]', effort: '', permissionMode: 'danger-full-access', toolMode: 'ptc',
     team: { id: team.id, childId: team.children[0].id },
   })
   assert.equal(manager.summary(team).children[0].kind, 'thread')
@@ -2970,7 +2970,7 @@ test('an OpenCode Go child is a full-access dsh task on an OpenCode Go model', a
   assert.match(await tool('spawn', { title: '調査', task: 'ログを読む', tier: 'mid', provider: 'opencodeGo', name: 'O' }), /子「O」を起動しました（GLM-5\.3・中）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
-    workspace, model: '["opencode-go","glm-5.3"]', effort: 'high', permissionMode: 'danger-full-access', toolMode: 'native',
+    workspace, model: '["opencode-go","glm-5.3"]', effort: 'high', permissionMode: 'danger-full-access', toolMode: 'ptc',
     team: { id: team.id, childId: team.children[0].id },
   })
   assert.equal(manager.summary(team).children[0].kind, 'thread')
@@ -2994,7 +2994,7 @@ test('a Claude (API) child is a full-access dsh task on an Anthropic model, not 
   assert.match(await tool('spawn', { title: '要約', task: 'docs を要約', tier: 'low', provider: 'claudeApi', name: 'A' }), /子「A」を起動しました（Claude Haiku 5\.5・低）/)
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   assert.deepEqual(options, {
-    workspace, model: '["anthropic","claude-haiku-5-5"]', effort: '', permissionMode: 'danger-full-access', toolMode: 'native',
+    workspace, model: '["anthropic","claude-haiku-5-5"]', effort: '', permissionMode: 'danger-full-access', toolMode: 'ptc',
     team: { id: team.id, childId: team.children[0].id },
   })
   assert.deepEqual([manager.summary(team).children[0].kind, manager.summary(team).children[0].provider], ['thread', 'claudeApi'])
@@ -3009,7 +3009,7 @@ test('a GPT leader is a dsh task whose session mounts the team tools with the le
   const [, options] = threads.calls.find((call) => call[0] === 'create')
   // No model of its own: the GPT "mid" tier's.
   assert.deepEqual(options, {
-    workspace, model: '["openai-codex","gpt-6.1-sol"]', effort: 'high', permissionMode: 'danger-full-access', toolMode: 'native', team: { id: team.id, role: 'leader' },
+    workspace, model: '["openai-codex","gpt-6.1-sol"]', effort: 'high', permissionMode: 'danger-full-access', toolMode: 'ptc', team: { id: team.id, role: 'leader' },
   })
   assert.equal(manager.teamLedBy(leader), team.id)
   assert.equal(manager.isChild(leader), false)

@@ -49,7 +49,7 @@ test('EX legacy saved models restore default efforts and invalid effort types ar
   const models = { leader: 'claude:sonnet', provider: 'claude', model: 'haiku' }
   await fs.writeFile(path.join(dir, 'models.json'), JSON.stringify({ models }))
   const restored = await new ExecutionVerifier({ dir }).load()
-  assert.deepEqual(await restored.modelSelection(), { ...models, leaderEffort: '', childEffort: '', toolMode: 'native', planImplement: false })
+  assert.deepEqual(await restored.modelSelection(), { ...models, leaderEffort: '', childEffort: '', toolMode: 'ptc', planImplement: false })
   for (const patch of [{ leaderEffort: 1 }, { childEffort: [] }, { childEffort: 'x'.repeat(101) }]) await assert.rejects(restored.configureModels({ ...models, ...patch }), /推論レベル/)
 })
 
