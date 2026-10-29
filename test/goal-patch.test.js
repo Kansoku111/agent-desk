@@ -121,6 +121,10 @@ test('leaves an unexpected dsh-acp alone', () => {
   const source = installedSource()
   assert.equal(patchGoalSource(source.replace('\n\tsettleAfterQuiescence(inflight) {', '\n\tsettle(inflight) {')), null)
   assert.equal(patchGoalSource(source.replace('inflight.endReason = event.data.reason', 'inflight.end = event.data.reason')), null)
+  assert.equal(patchGoalSource(source.replace('protocolVersion: PROTOCOL_VERSION,', 'protocolVersion: changedVersion,')), null)
+  assert.equal(patchGoalSource(source.replace('source: { kind: "user" }', 'source: { kind: "changed" }')), null)
+  assert.equal(patchGoalSource(source.replace('inflight.messageQueued = false;', 'inflight.queueFailed = true;')), null)
+  assert.equal(patchGoalSource(patchGoalSource(source)), null)
 })
 
 

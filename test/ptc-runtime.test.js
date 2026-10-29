@@ -242,6 +242,60 @@ for (const toolMode of ['native', 'ptc']) {
 
 
 for (const toolMode of ['native', 'ptc']) {
+  test('explicit /goal is registered before the model, parks, resumes, completes and survives restart (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'danger-full-access')
+    const id = f.session.sessionId
+    assert.equal(f.runtime.goalCommandSupported, true, 'ACP initialization attests the command hook')
+    await f.runtime.setOption(id, TOOL_MODE_CONFIG, toolMode)
+    await f.runtime.setGoalWaiting(id, true)
+    const tool = (name, args) => ({ name: toolMode === 'ptc' ? 'run_code' : name, args: toolMode === 'ptc'
+      ? { code: 'return await tools.' + name + '(' + JSON.stringify(args) + ');', description: 'Inspect explicit goal fixture' } : args })
+    f.queue.push(tool('get_goal', {}))
+    const objective = 'Finish explicit goal fixture without widening its scope'
+    await f.runtime.prompt(id, [{ type: 'text', text: '/GOAL ' + objective }], objective)
+    assert.equal(f.requests.length, 2, 'no create_goal tool call and no polling rounds')
+    const output = JSON.stringify(f.requests.at(-1).messages.filter((entry) => entry.role === 'tool').at(-1).content)
+    assert.match(output, /Finish explicit goal fixture/)
+    assert.match(output, /armed/)
+    assert.match(output, /roundsStarted[\s\S]{0,10}0/)
+    const goalId = output.match(/goal-[a-z0-9-]+/)[0]
+    const before = f.requests.length
+    await assert.rejects(f.runtime.prompt(id, [{ type: 'text', text: '/goal replacement' }], 'replacement'), /既存の目標/)
+    assert.equal(f.requests.length, before, 'a conflicting goal never reaches the model')
+    await f.runtime.stop()
+    await f.runtime.start()
+    await f.runtime.resumeSession(id, f.workspace)
+    await f.runtime.setOption(id, TOOL_MODE_CONFIG, toolMode)
+    f.queue.push(tool('get_goal', {}))
+    await f.runtime.prompt(id, [{ type: 'text', text: 'Read the persisted goal after restart without resuming it' }])
+    const restored = JSON.stringify(f.requests.at(-1).messages.filter((entry) => entry.role === 'tool').at(-1).content)
+    assert.match(restored, new RegExp(goalId))
+    assert.match(restored, /disarmed/)
+    // Resume in a direct human turn, then let the real autonomous round finish.
+    f.queue.push(tool('update_goal', { goal_id: goalId, revision: 1, action: 'resume' }), undefined,
+      tool('update_goal', { goal_id: goalId, revision: 2, action: 'complete' }))
+    const from = f.requests.length
+    await f.runtime.prompt(id, [{ type: 'text', text: 'Resume the same goal and finish it in the next round' }])
+    assert.equal(f.requests.length, from + 4)
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /goal_round/)
+    // A completed goal can be followed by a new explicit goal, and stop disarms it.
+    await f.runtime.setGoalWaiting(id, true)
+    f.queue.push(tool('get_goal', {}))
+    await f.runtime.prompt(id, [{ type: 'text', text: '/goal next objective' }], 'next objective')
+    const next = JSON.stringify(f.requests.at(-1).messages.filter((entry) => entry.role === 'tool').at(-1).content)
+    assert.match(next, /next objective/)
+    assert.equal(next.includes(goalId), false)
+    await f.runtime.cancel(id)
+    await f.runtime.setGoalWaiting(id, false)
+    f.queue.push(tool('get_goal', {}))
+    const stopped = f.requests.length
+    await f.prompt()
+    assert.equal(f.requests.length, stopped + 2)
+    assert.match(JSON.stringify(f.requests.at(-1).messages.filter((entry) => entry.role === 'tool').at(-1).content), /disarmed/)
+  })
+}
+
+for (const toolMode of ['native', 'ptc']) {
   test('real team goal wait makes no automatic calls and accepts reports and user prompts (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
     const f = await setup(t, 'danger-full-access')
     await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)

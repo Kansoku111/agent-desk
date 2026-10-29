@@ -23,6 +23,8 @@ Planの回帰検証は `node --test test/plan.test.js` と `node --test --test-n
 
 AB・TM・ecoのPTC画面検証は同じViteフィクスチャサーバーの `ptc-ui.html` を開き、DevToolsで `await ptcTest.run()` を実行します。各開始画面の選択・設定保存・送信値、既存AB／チームの保存失敗・二重操作防止・実行中の無効化・通知後の表示更新を確認します。同じ画面で `await ptcTest.runTeamFree()` を実行すると、TM自由モードの推論レベル別の追加、開始・保存・再表示、選択解除とフォーカスを確認できます。375px幅でも実行でき、本番データや実モデルは使いません。
 
+`/goal` の回帰確認は `node --test test/goal-command.test.js` と `node --test --test-name-pattern="explicit /goal" test/ptc-runtime.test.js` です。初回作成・通常送信・予約・重複排除、人間の入力と内部報告の区別、未対応の役割やPlanの拒否を確認します。通常方式／PTCの実dshとローカル模擬応答で、モデル呼び出し前の直接登録、既存目標の保護、待機、再起動後の保持と自動継続解除、明示再開、実goal roundによる完了、停止を確認します。外部モデルや本番データは使いません。専用メタデータはアプリが受理した人間のコマンドだけに付け、ACPの初期応答でフックの対応を確認できなければ呼び出しません。会話への指示追加だけではgoal登録を保証できないため、既存フックでdshのgoalドメインを直接使っています。保存形式は変更せず、既存セッションの移行も不要です。
+
 TM・eco共通の親の自動継続待機は `test/goal-driver-wait.test.js`・`test/goal-patch.test.js`・`test/thread-goal-wait.test.js`・`test/teams.test.js` で、予約前／実行直前の再確認、ターン終了、設定の適用確認、報告の配送順序を検査します。`test/ptc-runtime.test.js` は通常方式・PTCの実dshで、待機中にgoal roundのモデル要求が増えないこと、目標のactive／armed状態と残り回数、明示入力の受領、キャンセル、同一プロセスの通常セッションの自動継続を確認します。`wait` の並行作業指定より質問・停止・未配送の報告を優先すること、送信失敗・重複再送・内部報告が質問待ちを解除しないこと、休止中の親のキャンセル、停止と送信の競合も検査します。実dshでは質問への割り込み受理と待機解除の原子性、終了済みターンへの割り込みが管理外のモデル要求を開始しないことを確認します。`goal-wait` と steering の実フック合成も更新時の互換性ゲートに含みます。
 
 設定の回帰確認は同じフィクスチャサーバーの `settings-bug-audit-ui.html` で `await settingsAudit.run()` を実行します。候補が後から届くClaudeワークスペースの選択・送信と、検証行の削除→追加→保存を実コンポーネントで確認します。`usage-pricing-ui.html` の `await usagePricingTest.run()` は、未算定・一部未算定・非課金・利用なし・既知ゼロをタイル、モデル行、グラフのツールチップで確認します。どちらもRPCは模擬応答で、本番データや実モデルを使いません。

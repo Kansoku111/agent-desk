@@ -13,6 +13,7 @@ import { dshEnv } from './dsh-env.js'
 import { dshBin } from './paths.js'
 import { STEERED_META, STEER_META } from './steer-patch.js'
 import { GOAL_WAIT_CONFIG, GOAL_WAIT_AFTER_STEER } from './goal-wait.js'
+import { GOAL_OBJECTIVE_META, GOAL_COMMAND_CAPABILITY } from './goal-command.js'
 
 // Runtime and update validation must compose the same hooks in the same order.
 import { runtimeHookArgs } from './dsh-compatibility.js'
@@ -125,6 +126,7 @@ export class AcpRuntime extends EventEmitter {
       timeout,
     ])
     this.agentInfo = init.agentInfo
+    this.goalCommandSupported = init._meta?.[GOAL_COMMAND_CAPABILITY] === true
     this.capabilities = init.agentCapabilities
     this.state = 'ready'
     return this
@@ -177,8 +179,13 @@ export class AcpRuntime extends EventEmitter {
     else this.waitingSessions.add(sessionId)
   }
 
-  prompt(sessionId, prompt) {
-    return this.#requireConn().prompt({ sessionId, prompt })
+  prompt(sessionId, prompt, goalObjective) {
+    const conn = this.#requireConn()
+    if (goalObjective !== undefined) {
+      if (!this.goalCommandSupported) throw new Error('/goalの実行機能を確認できません。Agent Deskを再起動し、dshとの互換性を確認してください。')
+      return conn.prompt({ sessionId, prompt, _meta: { [GOAL_OBJECTIVE_META]: goalObjective } })
+    }
+    return conn.prompt({ sessionId, prompt })
   }
 
   /**

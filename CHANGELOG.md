@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `/goal <objective>` (case-insensitive) directly creates and arms a persisted goal before the first model request in ordinary dsh tasks and dsh-led Eco/TM. Initial and queued messages are supported; commands do not interrupt running turns or overwrite unfinished goals. Empty commands, Plan combinations, AB and child commands are rejected. Internal reports stay plain text, and missing runtime support fails closed. Claude Code terminal commands are unchanged.
+
 ### Changed
 
 - Updated the bundled Codex app-server (`@openai/codex`) from 0.164.0 to 0.165.0.

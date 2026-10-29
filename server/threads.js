@@ -21,6 +21,7 @@ import { OUTPUT_SPEED_META } from './output-speed.js'
 import { TOOL_MODE_CONFIG, assertToolMode, assertToolModeApplied, toolModeOption } from './ptc.js'
 import { emptyScore, scoresUpTo } from '../shared/usage-score.js'
 import { assertSessionPolicy } from './session-policy-plugin.js'
+import { goalCommandObjective } from './goal-command.js'
 export { carryoverText, describeError, isUndoable, restoreNoteText } from './thread-utils.js'
 
 const TURN_EMIT_MS = 60
@@ -390,7 +391,7 @@ export class ThreadManager extends EventEmitter {
 
   async #sendFirstMessage(thread, createId, message) {
     try {
-      const receipt = await this.send(thread.id, { ...message, messageId: createId })
+      const receipt = await this.send(thread.id, { ...message, messageId: createId }, { userInitiated: true })
       if (receipt?.status !== 'accepted') throw new Error('初回メッセージの受領結果を確認できません')
       return { thread: this.summary(this.threads.get(thread.id)), receipt }
     } catch (error) {
@@ -682,6 +683,7 @@ export class ThreadManager extends EventEmitter {
     this.#available(threadId, thread)
     const known = this.#receipt(threadId, message)
     if (known) return known
+    const goalObjective = this.#goalObjective(thread, message, userInitiated)
     this.#assertNotRestoring(thread)
     if (this.active.has(threadId)) throw new Error('このタスクはまだ作業中です')
     if (!thread.model) throw new Error('モデルを選択してください')
@@ -702,7 +704,7 @@ export class ThreadManager extends EventEmitter {
     thread.status = 'running'
     let resolveDone
     const active = {
-      turn, runtime: null, cancelled: false, phase: 'starting', steers: new Set(),
+      turn, goalObjective, runtime: null, cancelled: false, phase: 'starting', steers: new Set(),
       done: new Promise((resolve) => { resolveDone = resolve }),
     }
     this.active.set(threadId, active)
@@ -779,7 +781,9 @@ export class ThreadManager extends EventEmitter {
       }
       if (restoreNote) prompt.unshift({ type: 'text', text: restoreNoteText(restoreNote) })
       active.phase = 'prompting'
-      const result = await runtime.prompt(thread.sessionId, prompt)
+      const result = active.goalObjective === undefined
+        ? await runtime.prompt(thread.sessionId, prompt)
+        : await runtime.prompt(thread.sessionId, prompt, active.goalObjective)
       // Only a prompt the runtime took counts as telling the agent; a failed one keeps both for the next turn.
       if (carryover) delete thread.carryover
       if (restoreNote) delete thread.restoreNote
@@ -1144,6 +1148,8 @@ export class ThreadManager extends EventEmitter {
       this.#available(threadId, thread)
       const known = this.#receipt(threadId, message)
       if (known) return known.status === 'accepted' ? { ...known, steered: true } : known
+      // Goal creation belongs to the next prompt's admission, not a live turn.
+      if (this.#goalObjective(thread, message, userInitiated) !== undefined) return { steered: false }
       const active = this.active.get(threadId)
       if (!this.#canSteer(thread, active)) return { steered: false }
       const delivery = this.#deliverSteer(thread, active, message, userInitiated, guard)
@@ -1224,6 +1230,15 @@ export class ThreadManager extends EventEmitter {
     }
     this.#emitTurn(threadId, turn, true)
     return { status: 'accepted', turnId: turn.id, kind: 'steer', steered: true }
+  }
+
+  #goalObjective(thread, { text, plan }, userInitiated) {
+    if (!userInitiated) return undefined
+    const objective = goalCommandObjective(text)
+    if (objective === undefined) return undefined
+    if (thread.ab || thread.team?.childId) throw new Error('/goalは通常のdshタスク、eco・TMのdshの親で使えます。AB・子では使えません。')
+    if (plan) throw new Error('/goalはPlanをオフにして送信してください。')
+    return objective
   }
 
   async #promptBlocks(turn) {

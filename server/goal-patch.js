@@ -15,6 +15,9 @@
 // the last turn. Cancelling the prompt also disarms the goal, so a round the
 // driver was about to queue does not run with no prompt waiting for it.
 
+import { GOAL_OBJECTIVE_META, GOAL_COMMAND_CAPABILITY } from './goal-command.js'
+
+const COMMAND_IMPORT = `import { applyGoalCommand as agentDeskApplyGoalCommand } from ${JSON.stringify(new URL('./goal-command.js', import.meta.url).href)};\n`
 const WAIT_IMPORT = `import { GOAL_WAIT_CONFIG as agentDeskGoalWaitConfig, setGoalWaiting as agentDeskSetGoalWaiting, isGoalWaiting as agentDeskGoalWaiting } from ${JSON.stringify(new URL('./goal-wait.js', import.meta.url).href)};\n`
 
 /** Longest wait for the driver to start the next round once the agent is idle. */
@@ -63,9 +66,19 @@ const WAIT_FOR_ROUND = `async agentDeskNextGoalRound(inflight) {
 export function patchGoalSource(source) {
   const config = '\tsetConfig(configId, value, signal) {\n\t\tthis.assertActive();'
   if (source.includes('agentDeskGoalWaitConfig') || source.split(config).length !== 2) return null
+  const message = /const message = [\w$]+\(\{\s*content,\s*source: \{ kind: "user" \}\s*\}\);/.exec(source)
+  const initialize = '\t\t\t\tprotocolVersion: PROTOCOL_VERSION,'
+  const failedAdmission = '\t\t\t\t\tinflight.messageQueued = false;'
+  if (!message || source.split(message[0]).length !== 2 || source.split(initialize).length !== 2 || source.split(failedAdmission).length !== 2) return null
   const patched = patchGoalSettlement(source)
   if (!patched) return null
-  return WAIT_IMPORT + patched.replace(config, config + '\n\t\tif (configId === agentDeskGoalWaitConfig) return Promise.resolve(agentDeskSetGoalWaiting(this, value));')
+  const objective = `params._meta?.[${JSON.stringify(GOAL_OBJECTIVE_META)}]`
+  return WAIT_IMPORT + COMMAND_IMPORT + patched
+    .replace(initialize, initialize + `\n\t\t\t\t_meta: { ${JSON.stringify(GOAL_COMMAND_CAPABILITY)}: true },`)
+    .replace(message[0], () => `if (${objective} !== undefined) agentDeskApplyGoalCommand(this.ctx, this.agent, ${objective}, content);\n\t\t\t\t${message[0]}`)
+    // Never leave automatic work armed if the explicit prompt could not queue.
+    .replace(failedAdmission, failedAdmission + `\n\t\t\t\t\tif (${objective} !== undefined) this.ctx.get("goals")?.disarm(this.agent);`)
+    .replace(config, config + '\n\t\tif (configId === agentDeskGoalWaitConfig) return Promise.resolve(agentDeskSetGoalWaiting(this, value));')
     .replace('\tcancel() {\n\t\tconst inflight = this.inflight;', '\tcancel() {\n\t\tif (agentDeskGoalWaiting(this.agent)) this.ctx.get("goals")?.disarm(this.agent);\n\t\tconst inflight = this.inflight;')
 }
 

@@ -44,7 +44,7 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
       } else {
         thread = await threads.create(options)
         try {
-          await threads.send(thread.id, { text: text ?? '', images: await saveImages(images), ...(plan !== undefined ? { plan } : {}) })
+          await threads.send(thread.id, { text: text ?? '', images: await saveImages(images), ...(plan !== undefined ? { plan } : {}) }, { userInitiated: true })
         } catch (error) {
           await threads.remove(thread.id)
           throw error
