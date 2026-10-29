@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the bundled Codex app-server (`@openai/codex`) from 0.164.0 to 0.165.0.
+
 ## [0.1.5] - 2026-10-27
 
 ### Added

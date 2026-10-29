@@ -8,7 +8,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 const require = createRequire(import.meta.url)
-export const CODEX_VERSION = '0.164.0'
+export const CODEX_VERSION = '0.165.0'
 const APP_VERSION = require('../package.json').version
 export function bundledCodex() {
   const pkg = require('@openai/codex/package.json')

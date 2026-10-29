@@ -94,7 +94,7 @@ test('contextOverrides raises a window up to the model ceiling', async () => {
 
 test('homePatch adds fixed-model subagent tools and tells the agent about them', async () => {
   const { shippedPersona } = await import('../server/dsh-config.js')
-  assert.equal(YAML.parse(homePatch()).length, 3)
+  assert.equal(YAML.parse(homePatch()).length, 4)
 
   const persona = await shippedPersona()
   assert.match(persona.personaPrefix, /\{\{model\}\}/)
@@ -107,7 +107,7 @@ test('homePatch adds fixed-model subagent tools and tells the agent about them',
       { provider: 'anthropic', model: 'bad\nid: 1' },
     ],
   }))
-  const tools = rows.find((row) => row.insert).insert
+  const tools = rows.find((row) => row.insert?.some((entry) => entry.id === 'agent-desk-subagent-claude')).insert
   assert.deepEqual(tools.map((row) => row.config), [
     { provider: 'spawn', toolName: 'subagent_claude', backgroundMode: 'continuable', agentOptions: { provider: 'anthropic', model: 'claude-haiku-5-5' } },
     { provider: 'spawn', toolName: 'subagent_gpt', backgroundMode: 'continuable', agentOptions: { provider: 'openai-codex', model: 'gpt-5.5' } },
