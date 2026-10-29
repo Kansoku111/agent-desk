@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { IMAGE_TYPES, isImageFile, isOtherFile, MAX_ATTACHMENT_BYTES, otherFileId } from './attachments.js'
+import { listSkills } from './skills.js'
 
 /** Handlers for thread tasks; index.js merges them into the request table. */
 export function createThreadHandlers({ paths, threads, teams, subagents, mutateSettings }) {
@@ -20,6 +21,15 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
 
   return {
     'thread.get': ({ threadId }) => threads.get(threadId),
+
+    'skills.list': async ({ threadId, workspace }) => {
+      if (threadId) {
+        const { thread } = await threads.get(threadId)
+        workspace = thread.workspace
+      }
+      if (typeof workspace !== 'string' || !path.isAbsolute(workspace)) throw new Error('ワークスペースがありません')
+      return { skills: await listSkills(workspace, paths.dshHome) }
+    },
 
     'subagents.list': async ({ threadId }) => {
       const { thread } = await threads.get(threadId)

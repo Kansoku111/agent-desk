@@ -5,6 +5,7 @@ import type { Attachment, PermissionMode, ThreadSummary } from '../types'
 import { formatTokens } from '../util'
 import { EffortPicker, FastModeChip, ModelPicker, PermissionPicker } from './Pickers'
 import { ChatGptLimitChip } from './ChatGptUsage'
+import { SkillPicker } from './SkillPicker'
 
 // Unsent text survives switching between threads.
 const drafts = new Map<string, string>()
@@ -230,6 +231,21 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
               event.target.value = ''
             }}
           />
+          {(thread?.workspace ?? draft.workspace) && !thread?.ab && (
+            <SkillPicker workspace={(thread?.workspace ?? draft.workspace)!} threadId={thread?.id} onSelect={(name) => {
+              const element = input.current
+              const start = element?.selectionStart ?? text.length
+              const end = element?.selectionEnd ?? start
+              const before = text.slice(0, start)
+              const after = text.slice(end)
+              const insertion = `${before && !/\s$/.test(before) ? ' ' : ''}/${name}${/^\s/.test(after) ? '' : ' '}`
+              updateText(before + insertion + after)
+              requestAnimationFrame(() => {
+                element?.focus()
+                element?.setSelectionRange(start + insertion.length, start + insertion.length)
+              })
+            }} />
+          )}
           <ModelPicker value={model} onChange={setModel} />
           <EffortPicker model={model} value={effort} onChange={setEffort} />
           <FastModeChip model={model} />
