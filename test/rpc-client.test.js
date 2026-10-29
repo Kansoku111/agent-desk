@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { RpcClient, RequestError, TransportError } from '../web/src/rpc-client.ts'
+import { RpcClient, RequestError, TransportError, requestErrorMessage } from '../web/src/rpc-client.ts'
+
+test('an older server asks for a safe restart and other errors keep their detail', () => {
+  assert.match(requestErrorMessage(new RequestError('unknown request: skills.list')), /作業が終わってから Agent Desk を起動し直し/)
+  assert.equal(requestErrorMessage(new TransportError('サーバーに接続していません')), 'サーバーに接続していません')
+  assert.equal(requestErrorMessage(new RequestError('一覧の取得に失敗')), '一覧の取得に失敗')
+})
 
 function socket() {
   const sent = []

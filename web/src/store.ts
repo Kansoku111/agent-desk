@@ -4,7 +4,7 @@ import type {
   AppState, Attachment, ClaudeAuthConfirmation, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
 } from './types'
 import { Outbox, readQueues, type QueuedMessage } from './outbox'
-import { RpcClient } from './rpc-client'
+import { RpcClient, requestErrorMessage } from './rpc-client'
 import { shareTurn, withSpeed } from './turn-updates'
 import { notificationRoute, notificationText, type TaskNotification } from './notification'
 import { beginCreateIntent, completeCreateIntent, createIntentFingerprint } from './create-intent'
@@ -230,9 +230,7 @@ export async function act<T = any>(type: string, params: Record<string, unknown>
   try {
     return await request<T>(type, params)
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    // This page is newer than the server, which still runs the code from before an update.
-    toast(message.startsWith('unknown request:') ? 'Agent Desk が古いまま動いています。Agent Desk を起動し直すと使えます' : message, 'error')
+    toast(requestErrorMessage(error), 'error')
     return null
   }
 }

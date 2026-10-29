@@ -8,6 +8,14 @@ export class RequestError extends Error {
   readonly code = 'REQUEST_REJECTED'
 }
 
+/** Explain an older server when a newer UI calls an unavailable action. */
+export function requestErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.startsWith('unknown request:')
+    ? 'Agent Desk が古いまま動いています。作業が終わってから Agent Desk を起動し直してください。'
+    : message
+}
+
 type Socket = { readyState: number; send(data: string): void }
 type Pending = {
   resolve(value: unknown): void

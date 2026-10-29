@@ -1,21 +1,22 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown, Sparkles } from 'lucide-react'
 import { request } from '../store'
+import { requestErrorMessage } from '../rpc-client'
 import { Dropdown, MenuItem } from './Popover'
 
 interface Skill { name: string; description: string }
 
 function SkillList({ workspace, threadId, onSelect }: { workspace: string; threadId?: string; onSelect: (name: string) => void }) {
   const [skills, setSkills] = useState<Skill[] | null>(null)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     let active = true
     request<{ skills: Skill[] }>('skills.list', { workspace, threadId }).then((result) => {
       if (active) setSkills(result.skills)
-    }).catch(() => { if (active) setError(true) })
+    }).catch((reason) => { if (active) setError(requestErrorMessage(reason)) })
     return () => { active = false }
   }, [workspace, threadId])
-  if (error) return <div className="menu-empty">skills を取得できませんでした</div>
+  if (error) return <div className="menu-empty" role="alert">skills を取得できませんでした。{error}</div>
   if (!skills) return <div className="menu-empty">読み込み中…</div>
   if (!skills.length) return <div className="menu-empty">利用できる skills はありません</div>
   return <div className="menu-scroll">{skills.map((skill) => (
