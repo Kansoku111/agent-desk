@@ -223,7 +223,7 @@ for (const acknowledge of [true, false]) {
       if (acknowledge) options.find((entry) => entry.id === key).currentValue = value
       return options
     }
-    const thread = await f.manager.create({ workspace: f.base, model, effort: 'high', ab: { runId: 'R', jobId: 'J' } })
+    const thread = await f.manager.create({ workspace: f.base, model, effort: 'high', toolMode: 'native', ab: { runId: 'R', jobId: 'J' } })
     const result = once(f.manager, 'turn-finished')
     await f.manager.send(thread.id, { text: 'test' })
     if (acknowledge) { await f.started.promise; f.finish.resolve() }

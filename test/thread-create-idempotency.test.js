@@ -24,7 +24,7 @@ function handlersFor(f, threads = f.manager) {
 }
 
 function createInput(f, createId, patch = {}) {
-  return { workspace: f.base, model: '["test","model"]', text: 'hello', images: [], createId, ...patch }
+  return { workspace: f.base, model: '["test","model"]', toolMode: 'native', text: 'hello', images: [], createId, ...patch }
 }
 
 async function waitFor(predicate) {
@@ -49,6 +49,23 @@ test('a pending create reuses its key, then a completed identical intent gets a 
   completeCreateIntent(first.id, storage)
   const nextIntent = beginCreateIntent(fingerprint, storage, () => ids.shift())
   assert.equal(nextIntent.id, NEXT_ID)
+})
+
+test('thread.create defaults to PTC and treats an explicit PTC retry as the same request', async (t) => {
+  const f = await fixture(t)
+  f.runtime.newSession = async () => {
+    f.runtime.liveSessions.add('ptc-session')
+    return { sessionId: 'ptc-session', configOptions: [{ id: 'agent_desk_tool_mode', currentValue: 'ptc' }] }
+  }
+  const handlers = handlersFor(f)
+  const input = createInput(f, ID, { toolMode: undefined })
+  const first = await handlers['thread.create'](input)
+  await f.started.promise
+  const retry = await handlers['thread.create']({ ...input, toolMode: 'ptc' })
+  assert.equal(first.thread.toolMode, 'ptc')
+  assert.equal(retry.thread.id, first.thread.id)
+  assert.equal(f.calls.prompts.length, 1)
+  await assert.rejects(handlers['thread.create']({ ...input, toolMode: 'native' }), /同じ初回作成キーに異なる内容/)
 })
 
 test('same-key concurrent thread.create handlers share one durable thread and first turn', async (t) => {

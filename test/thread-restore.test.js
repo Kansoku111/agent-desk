@@ -80,7 +80,7 @@ test('a turn can be undone, the agent is told, and the undo can be taken back', 
   })
   t.after(() => manager.shutdown())
 
-  const thread = await manager.create({ workspace, model: '["test","model"]' })
+  const thread = await manager.create({ workspace, model: '["test","model"]', toolMode: 'native' })
   await manager.send(thread.id, { text: 'edit' })
   let turns = await settled(manager, thread.id)
   assert.equal(turns[0].checkpoint.changed, 2)
@@ -151,7 +151,7 @@ test('undoing the latest of two restores still tells the agent about the one tha
   const manager = await open(first.pool)
   let closed = false
   t.after(() => closed || manager.shutdown())
-  const thread = await manager.create({ workspace, model: '["test","model"]' })
+  const thread = await manager.create({ workspace, model: '["test","model"]', toolMode: 'native' })
   await manager.send(thread.id, { text: 'T1' })
   await settled(manager, thread.id)
   await manager.send(thread.id, { text: 'T2' })
@@ -231,7 +231,7 @@ test('a partly failed undo keeps its record, so the undo can be tried again', as
   })
   t.after(() => manager.shutdown())
 
-  const thread = await manager.create({ workspace: base, model: '["test","model"]' })
+  const thread = await manager.create({ workspace: base, model: '["test","model"]', toolMode: 'native' })
   await manager.send(thread.id, { text: 'edit' })
   const [turn] = await settled(manager, thread.id)
   await manager.restoreCheckpoint(thread.id, turn.id)

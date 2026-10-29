@@ -73,7 +73,7 @@ test('two sends that arrive together start one turn; the other is refused', asyn
   })
   t.after(() => manager.shutdown())
 
-  const thread = await manager.create({ workspace: base, model: '["test","model"]' })
+  const thread = await manager.create({ workspace: base, model: '["test","model"]', toolMode: 'native' })
   const results = await Promise.allSettled([
     manager.send(thread.id, { text: 'first' }),
     manager.send(thread.id, { text: 'second' }),

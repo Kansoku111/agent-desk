@@ -70,7 +70,7 @@ test('a new conversation recognizes /goal and its creation receipt prevents a se
   const prompt = t.mock.method(f.runtime, 'prompt', async () => { f.started.resolve(); await f.finish.promise; return { stopReason: 'end_turn' } })
   const request = {
     createId: '00000000-0000-4000-8000-000000000003', payloadHash: 'a'.repeat(64),
-    options: { workspace: f.base, model: '["test","model"]' }, message: { text: '/goal first objective' },
+    options: { workspace: f.base, model: '["test","model"]', toolMode: 'native' }, message: { text: '/goal first objective' },
   }
   const created = await f.manager.createWithFirstMessage(request)
   await f.started.promise

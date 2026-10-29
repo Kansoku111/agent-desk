@@ -77,7 +77,7 @@ for (const mode of ['ab', 'eco']) for (const scenario of ['medium', 'unsupported
     }
     const effort = scenario === 'no-reasoning' ? '' : 'medium'
     const metadata = mode === 'ab' ? { ab: { strictEffort: true } } : { team: { id: 'eco', strictEffort: true } }
-    const thread = await f.manager.create({ workspace: f.base, model, effort, ...metadata })
+    const thread = await f.manager.create({ workspace: f.base, model, effort, toolMode: 'native', ...metadata })
     const done = once(f.manager, 'turn-finished')
     await f.manager.send(thread.id, { text: 'request' })
     const succeeds = ['medium', 'no-reasoning'].includes(scenario)
