@@ -7,14 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-10-31
+
+### Added
+
+- Choose available skills directly from the composer.
+- Opt in to AI conversation history search tools; history access remains disabled by default.
+- Configure reasoning levels for subagents and enable or disable custom instructions without deleting them.
+
 ### Changed
 
+- PTC is enabled by default for new work; existing saved choices are preserved.
 - Updated the bundled DeepSeek Harness (`@deepseek-ai/dsh` and `@deepseek-ai/dsh-atomic-write`) from 0.2.1-rc.2 to 0.2.1-rc.5; refreshed dependency notices and made the OpenCode catalog integration test independent of retired upstream model IDs.
 - Documented isolated validation and the prohibition on running `npm ci` from a live Agent Desk installation.
 - Updated the bundled Codex app-server (`@openai/codex`) from 0.165.0 to 0.166.0.
 
 ### Fixed
 
+- Corrected Claude Code model selection in workflows, restored conversation scroll position on reopening, and improved history-copy retries on phones.
 - Automatic dependency installation no longer rewrites the tracked lockfile, which could prevent subsequent Git-based updates or rollback. Existing local changes are still preserved and must be resolved before updating.
 
 ## [0.1.6] - 2026-10-29
