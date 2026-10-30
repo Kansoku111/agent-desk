@@ -2629,6 +2629,11 @@ select:focus {
   color: var(--text-muted);
 }
 
+.history-copy-text {
+  width: 100%;
+  resize: vertical;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

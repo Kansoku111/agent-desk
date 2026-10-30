@@ -61,19 +61,44 @@ async function copyHistory(thread: ThreadSummary) {
 }
 
 /** Copies a Claude Code task's conversation, read from the file Claude Code keeps, as `copyHistory` does for a thread. */
-async function copyTerminalHistory(terminal: TerminalSummary) {
+async function copyTerminalHistory(terminal: TerminalSummary, onCopyFailed: (text: string) => void) {
   const snapshot = await act<{ turns: Turn[]; omitted: number; file: string | null }>('terminal.conversation', { terminalId: terminal.id })
   if (!snapshot) return
   if (!snapshot.turns.length) {
     toast('コピーできる会話がまだありません', 'info')
     return
   }
+  let text: string
   try {
-    await copyText(threadMarkdown({ ...terminal, model: terminal.modelInUse ?? terminal.model }, snapshot.turns, { omitted: snapshot.omitted, file: snapshot.file }))
-    toast('履歴をコピーしました', 'success')
+    text = threadMarkdown({ ...terminal, model: terminal.modelInUse ?? terminal.model }, snapshot.turns, { omitted: snapshot.omitted, file: snapshot.file })
   } catch {
     toast('コピーできませんでした', 'error')
+    return
   }
+  try {
+    await copyText(text)
+    toast('履歴をコピーしました', 'success')
+  } catch {
+    // The transcript read can outlast the browser's user-activation window.
+    onCopyFailed(text)
+  }
+}
+
+function CopyHistoryDialog({ text, onClose }: { text: string; onClose: () => void }) {
+  const copy = () => {
+    void copyText(text).then(() => {
+      toast('履歴をコピーしました', 'success')
+      onClose()
+    }, () => toast('コピーできませんでした。本文を選択してコピーしてください', 'error'))
+  }
+  return <Modal title="履歴をコピー" onClose={onClose}>
+    <div className="modal-body">
+      <textarea className="history-copy-text" aria-label="履歴" readOnly value={text} rows={8} />
+    </div>
+    <div className="modal-actions">
+      <button type="button" className="button primary" onClick={copy}>コピー</button>
+    </div>
+  </Modal>
 }
 
 function ThreadStatus({ thread }: { thread: ThreadSummary }) {
@@ -278,6 +303,7 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
   const team = useLedTeam(terminal.id)
   const [renaming, setRenaming] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [copyFallback, setCopyFallback] = useState<string | null>(null)
   const [title, setTitle] = useState(terminal.title)
   const save = async () => {
     setRenaming(false)
@@ -351,7 +377,7 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
                 label="履歴をコピー"
                 onSelect={() => {
                   close()
-                  void copyTerminalHistory(terminal)
+                  void copyTerminalHistory(terminal, setCopyFallback)
                 }}
               />
               <MenuItem
@@ -387,6 +413,7 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
           )}
         </Dropdown>
       )}
+      {copyFallback !== null && createPortal(<CopyHistoryDialog text={copyFallback} onClose={() => setCopyFallback(null)} />, document.body)}
       {removing && (
         <ConfirmDialog title="チームを削除しますか？"
           body={<p>リーダーと子 {team?.children.length ?? 0} 人のタスクと、報告の記録を削除します。この操作は元に戻せません。実行中の作業は停止します。</p>}

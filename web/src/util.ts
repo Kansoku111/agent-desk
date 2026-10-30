@@ -413,9 +413,12 @@ export async function copyText(text: string) {
   area.style.position = 'fixed'
   area.style.opacity = '0'
   document.body.appendChild(area)
-  area.select()
-  area.setSelectionRange(0, text.length)
-  const copied = document.execCommand('copy')
-  area.remove()
-  if (!copied) throw new Error('copy failed')
+  try {
+    area.focus()
+    area.select()
+    area.setSelectionRange(0, text.length)
+    if (!document.execCommand('copy')) throw new Error('copy failed')
+  } finally {
+    area.remove()
+  }
 }
