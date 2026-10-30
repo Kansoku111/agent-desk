@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the bundled Codex app-server (`@openai/codex`) from 0.165.0 to 0.166.0.
+
 ### Fixed
 
 - Automatic dependency installation no longer rewrites the tracked lockfile, which could prevent subsequent Git-based updates or rollback. Existing local changes are still preserved and must be resolved before updating.

@@ -28,7 +28,7 @@ Agent Desk は、この PC の上で動くローカルのアプリです。次�
 - **ローカルサーバー:** サーバーは `127.0.0.1` で待ち受けます。起動ごとのトークンと Origin の検査で、ほかの Web ページからの接続を拒否します。
 - **認証情報の保存:** API キーと公式 SIWC の登録・トークンは、データフォルダの `dsh-home/.credentials.yaml` に保存します（SIWC は `agent-desk/chatgpt-siwc`）。旧 Codex OAuth レコードは再ログイン案内の検出にだけ使い、チャット・検索・画像・上限の認証へ流用しません。Claude の Admin API キーも同ファイルです。Codex app-server の認証は別の専用 `codex-home` に保存され、SIWC トークンを渡しません。保存ファイルはローカル平文で、OS のユーザー権限とデータフォルダの保護が必要です。
 - **公式 SIWC:** Agent Desk 自身の名前、PKCE/state/nonce、loopback callback、公開JWKSによるID token検証を使います。access/refresh/ID token、認可コード、ID token hint入りURLはUIやログに出しません。回転refresh tokenはプロセス間ロックとatomic保存で更新し、GPT実行ごとに最新のaccess tokenを注入します。送信先は公開Responses endpointに固定し、任意URLへの資格情報送信を拒否します。
-- **Codex app-server の隔離:** 同梱 `@openai/codex` 0.165.0の実行ファイルを解決し、PATHのcodexやユーザーの `~/.codex` は使いません。専用CODEX_HOME、空のcwd、read-only sandbox、最小ツール構成を使います。シェル/ファイル変更等の追加承認を自動許可しません。画像生成の入力・参照画像はOpenAIへ送信されます。5分idleまたは終了時にプロセスを停止します。これはプロセス全体をOSレベルで完全隔離するものではありません。
+- **Codex app-server の隔離:** 同梱 `@openai/codex` 0.166.0の実行ファイルを解決し、PATHのcodexやユーザーの `~/.codex` は使いません。専用CODEX_HOME、空のcwd、read-only sandbox、最小ツール構成を使います。シェル/ファイル変更等の追加承認を自動許可しません。画像生成の入力・参照画像はOpenAIへ送信されます。5分idleまたは終了時にプロセスを停止します。これはプロセス全体をOSレベルで完全隔離するものではありません。
 - **スマホからの接続（Tailscale）:** 「設定 → スマホ」で「スマホから使う」をオンにすると、この PC の Tailscale のアドレス（100.64.0.0/10）でも待ち受けます。QR コードのリンクには専用のトークンが入っており、リンクを知っている人は PC のエージェントを操作できます。トークンはデータフォルダの `remote.json` に保存されます。「新しいリンクを作る」を押すと、古いリンクは使えなくなります。
 - **Chrome のデバッグポート:** 127.0.0.1 だけで待ち受けます。
 - **デスクトップ操作（Windows）:** 権限モードに関係なく、承認なしで実際の画面を操作します。使うときだけオンにしてください。
