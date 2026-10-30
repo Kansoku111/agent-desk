@@ -657,6 +657,8 @@ for (const mode of ['TM', 'eco']) {
 for (const mode of ['TM', 'eco']) {
   test(`${mode} sums parent and children once and preserves scores across restart`, async (t) => {
     const f = mode === 'eco' ? await setupExecution(t) : await setup(t, { leaderProvider: 'gpt' })
+    const updates = []
+    f.manager.on('team', (summary) => updates.push(summary.score))
     const parent = f.threads.threads.get(f.leader)
     parent.score = { points: 10, priced: 1, unpriced: 0 }
     f.threads.emit('thread', { ...parent })
@@ -667,6 +669,9 @@ for (const mode of ['TM', 'eco']) {
     f.threads.finish(child.taskId, 'done')
     f.threads.emit('thread', { ...childRecord })
     assert.equal(f.manager.summary(f.team).score.points, 11)
+    assert.deepEqual(updates.at(-1), { points: 11, priced: 2, unpriced: 0 }, 'child completion broadcasts the team total')
+    f.threads.emit('thread', { ...childRecord })
+    assert.deepEqual(updates.at(-1), { points: 11, priced: 2, unpriced: 0 }, 'repeated notifications do not double-count')
     if (mode === 'TM') {
       await f.tool('send', { child: child.name, message: 'start fresh', fresh: true })
       const next = f.threads.threads.get(child.taskId)

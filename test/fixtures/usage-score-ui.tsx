@@ -102,7 +102,7 @@ const api = {
       if (costs.at(-1)?.textContent?.trim() !== expected) throw new Error(`${kind}: expected ${expected}, got ${costs.at(-1)?.textContent}`)
       if (!costs.at(-1)?.title.includes('サブスク')) throw new Error(`${kind}: missing equivalent cost explanation`)
       if (kind !== 'AB' && !document.querySelector('.usage-line')?.textContent?.includes('入力')) throw new Error(`${kind}: original token counts disappeared`)
-      if (kind === 'normal' && costs[0]?.textContent?.trim() !== `API換算 ${currency === 'JPY' ? '¥0.3' : '< $0.1'}`) throw new Error('historical cumulative amount')
+      if (['normal', 'TM', 'eco', 'CL'].includes(kind) && costs[0]?.textContent?.trim() !== `API換算 ${currency === 'JPY' ? '¥0.3' : '< $0.1'}`) throw new Error(`${kind}: historical leader cumulative amount`)
       if (costs.some((element) => element.getBoundingClientRect().width > innerWidth)) throw new Error(`${kind}: overflow`)
       for (const line of document.querySelectorAll('.usage-line')) {
         if ((line.textContent?.match(/[$¥]/g) ?? []).length > 1 || line.textContent?.includes(' pt')) throw new Error(`${kind}: duplicated or stale currency display`)
