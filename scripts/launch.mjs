@@ -38,7 +38,7 @@ try {
   // npm records the installed tree in node_modules/.package-lock.json.
   const installed = mtime(path.join(root, 'node_modules', '.package-lock.json'))
   if (!installed || mtime(path.join(root, 'package-lock.json')) > installed) {
-    run('npm', ['install', '--no-audit', '--no-fund'])
+    run('npm', ['install', '--no-save', '--no-audit', '--no-fund'])
   }
   run(process.execPath, [path.join(root, 'scripts', 'ensure-build.mjs')])
 

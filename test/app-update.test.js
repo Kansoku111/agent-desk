@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { githubRepository, latestRelease, prepareGit, prepareZip, updateFiles } from '../server/app-update.js'
 import { claimDataFolder } from '../server/single-instance.js'
 import { UpdateChecker } from '../server/update-checks.js'
-import { applyGit, applyZip } from '../scripts/apply-update.mjs'
+import { applyGit, applyZip, systemSteps } from '../scripts/apply-update.mjs'
 
 async function tempDir(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-app-update-'))
@@ -105,6 +105,34 @@ test('prepareGit fetches the tag and refuses a checkout that cannot move forward
   await assert.rejects(prepareGit({ root: clone, release, remote: upstream }), /コミットしていない変更/)
   git(clone, 'commit', '-q', '-am', 'local work')
   await assert.rejects(prepareGit({ root: clone, release, remote: upstream }), /自動では更新できません/)
+})
+
+test('automatic npm installs leave the tracked lockfile clean during update and launch', async (t) => {
+  const root = await tempDir(t)
+  const home = path.join(root, 'home')
+  await fs.mkdir(path.join(root, 'scripts'))
+  await fs.mkdir(path.join(root, 'server'))
+  await fs.mkdir(home)
+  await fs.copyFile(new URL('../scripts/launch.mjs', import.meta.url), path.join(root, 'scripts', 'launch.mjs'))
+  await fs.writeFile(path.join(root, 'scripts', 'ensure-build.mjs'), '')
+  await fs.writeFile(path.join(root, 'server', 'paths.js'), "export const appPaths = () => ({ home: process.env.TEST_HOME })\n")
+  await fs.writeFile(path.join(root, 'server', 'index.js'), "import fs from 'node:fs'; import path from 'node:path'; fs.writeFileSync(path.join(process.env.TEST_HOME, 'server.json'), JSON.stringify({ pid: process.pid })); setTimeout(() => {}, 1500)\n")
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'update-fixture', version: '1.0.0', type: 'module' }))
+  const lock = JSON.stringify({ name: 'update-fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'update-fixture', version: '1.0.0' } }, marker: 'keep' }, null, 2) + '\n'
+  await fs.writeFile(path.join(root, 'package-lock.json'), lock)
+  git(root, 'init', '-q', '-b', 'main')
+  git(root, 'add', 'package.json', 'package-lock.json')
+  git(root, 'commit', '-q', '-m', 'fixture')
+
+  await systemSteps(() => {}).npm(root)
+  assert.equal(await read(path.join(root, 'package-lock.json')), lock)
+  assert.equal(git(root, 'status', '--porcelain', '--untracked-files=no'), '')
+
+  // Force the launcher's install path without touching the lockfile.
+  await fs.rm(path.join(root, 'node_modules'), { recursive: true, force: true })
+  execFileSync(process.execPath, [path.join(root, 'scripts', 'launch.mjs')], { cwd: root, env: { ...process.env, TEST_HOME: home }, timeout: 30_000, windowsHide: true })
+  assert.equal(await read(path.join(root, 'package-lock.json')), lock)
+  assert.equal(git(root, 'status', '--porcelain', '--untracked-files=no'), '')
 })
 
 function steps(overrides = {}) {

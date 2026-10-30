@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Automatic dependency installation no longer rewrites the tracked lockfile, which could prevent subsequent Git-based updates or rollback. Existing local changes are still preserved and must be resolved before updating.
+
 ## [0.1.6] - 2026-10-29
 
 ### Added

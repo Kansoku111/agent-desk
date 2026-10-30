@@ -155,7 +155,7 @@ export function systemSteps(log) {
   return {
     npm: (root) => {
       log('npm install')
-      return output('npm', ['install', '--no-audit', '--no-fund'], { cwd: root, shell: process.platform === 'win32', timeoutMs: 15 * 60_000 }, log)
+      return output('npm', ['install', '--no-save', '--no-audit', '--no-fund'], { cwd: root, shell: process.platform === 'win32', timeoutMs: 15 * 60_000 }, log)
     },
     git: (args, root) => output('git', args, { cwd: root, timeoutMs: 120_000 }, log),
     // scripts/launch.mjs builds the UI when needed and exits 0 once the server listens.
