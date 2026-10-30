@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated the bundled DeepSeek Harness (`@deepseek-ai/dsh` and `@deepseek-ai/dsh-atomic-write`) from 0.2.1-rc.2 to 0.2.1-rc.5; refreshed dependency notices and made the OpenCode catalog integration test independent of retired upstream model IDs.
+- Documented isolated validation and the prohibition on running `npm ci` from a live Agent Desk installation.
 - Updated the bundled Codex app-server (`@openai/codex`) from 0.165.0 to 0.166.0.
 
 ### Fixed

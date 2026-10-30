@@ -173,7 +173,13 @@ test('saving and removing an OpenCode Go key adds and removes its catalog models
 })
 
 test('new OpenCode models reach the real picker and auto-sync off/on restores the correct catalogs', { timeout: 60_000 }, async (t) => {
-  const template = openCodeModels(await readOpenCodeCatalog()).find((model) => model.api === 'openai-completions')
+  const bundled = openCodeModels(await readOpenCodeCatalog())
+  const template = bundled.find((model) => model.api === 'openai-completions')
+  // Upstream catalogs retire models; verify the whole installed baseline, not a particular id.
+  // The picker omits dated aliases, just as parseConfigOptions does.
+  const bundledIds = [...new Set(bundled.map((model) => model.id))].filter((id) => !/-\d{8}$/.test(id)).sort()
+  assert.ok(bundledIds.length > 1)
+  assert.ok(!bundledIds.includes('test-new-go'))
   const providers = { 'opencode-go': { 'openai-completions': {
     'test-new-go': { ...template, id: 'test-new-go', name: 'Test New Go' },
   } } }
@@ -187,7 +193,8 @@ test('new OpenCode models reach the real picker and auto-sync off/on restores th
       assert.deepEqual(ids(added), ['glm-5.3', 'test-new-go'])
       assert.ok(added.modelUpdate.models.some((model) => model.provider === 'opencode-go' && model.id === 'test-new-go'))
       await request('settings.update', { patch: { modelAutoUpdate: false } })
-      const off = await waitFor((state) => ids(state).includes('space-bunny') && !ids(state).includes('test-new-go'))
+      const off = await waitFor((state) => JSON.stringify(ids(state)) === JSON.stringify(bundledIds))
+      assert.deepEqual(ids(off), bundledIds)
       assert.equal(off.modelUpdate.opencodeGo, null)
       await request('settings.update', { patch: { modelAutoUpdate: true } })
       const on = await waitFor((state) => JSON.stringify(ids(state)) === JSON.stringify(['glm-5.3', 'test-new-go']))
