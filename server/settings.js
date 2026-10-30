@@ -49,6 +49,7 @@ export const DEFAULT_SETTINGS = {
   contextLimits: { 'openai-codex': null, anthropic: null },
   subagentsEnabled: true,
   subagentModels: { 'openai-codex': null, anthropic: null },
+  subagentEfforts: { 'openai-codex': null, anthropic: null },
   fastMode: { 'openai-codex': false, anthropic: false },
   fastModePeriods: { anthropic: [] },
   dshUpdateChannel: 'latest',
@@ -132,6 +133,17 @@ export function planSettingsUpdate(current, patch, now) {
       const value = patch.subagentModels[provider]
       if (value !== null && !isModelId(value)) throw new Error('使えないモデル ID です')
       next.subagentModels[provider] = value
+    }
+    effects.homePatch = true
+  }
+  if (owns(patch, 'subagentEfforts')) {
+    assertRecord(patch.subagentEfforts, 'subagentEfforts')
+    next.subagentEfforts = { ...DEFAULT_SETTINGS.subagentEfforts, ...current.subagentEfforts }
+    for (const provider of Object.keys(SUBAGENT_TOOLS)) {
+      if (!owns(patch.subagentEfforts, provider)) continue
+      const value = patch.subagentEfforts[provider]
+      if (value !== null && !['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) throw new Error('使えない推論レベルです')
+      next.subagentEfforts[provider] = value
     }
     effects.homePatch = true
   }

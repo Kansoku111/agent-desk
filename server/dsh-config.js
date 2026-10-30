@@ -149,7 +149,7 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  *   unscoped Claude personal or service account key acts in.
  * @param {Record<string, Record<string, object>>} [options.modelOverrides] -
  *   per provider and model id, from {@link contextOverrides}.
- * @param {{ provider: string, model: string, name?: string | null }[]} [options.subagents] -
+ * @param {{ provider: string, model: string, name?: string | null, effort?: string | null }[]} [options.subagents] -
  *   the fixed-model delegation tools to add, one per {@link SUBAGENT_TOOLS} provider.
  * @param {boolean} [options.subagentsEnabled] - false omits all delegation tools and their generated guidance.
  * @param {string | null} [options.settingsFile] - saved settings read by the live execution gate.
@@ -233,14 +233,14 @@ export function homePatch({
     // Same shape as dsh-base's `subagent` row: fresh in-process children that
     // keep running in the background and accept `send_message`.
     rows.push({
-      insert: pinned.map(({ provider, model }) => ({
+      insert: pinned.map(({ provider, model, effort }) => ({
         id: `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`,
         name: '@deepseek-ai/dsh-tool-subagent',
         config: {
           provider: 'spawn',
           toolName: SUBAGENT_TOOLS[provider].toolName,
           backgroundMode: 'continuable',
-          agentOptions: { provider, model },
+          agentOptions: { provider, model, ...(effort ? { reasoningEffort: effort } : {}) },
         },
       })),
     })
@@ -301,7 +301,7 @@ export function gptSubagentPatch({ subagents = [], subagentsEnabled = true, pers
   if (!gpt) return null
   const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
   const rows = [
-    { id: 'agent-default-model', config: { provider: gpt.provider, model: gpt.model } },
+    { id: 'agent-default-model', config: { provider: gpt.provider, model: gpt.model, ...(gpt.effort ? { reasoningEffort: gpt.effort } : {}) } },
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
     ...pinned.map(({ provider }) => ({ id: `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`, disabled: true })),
   ]

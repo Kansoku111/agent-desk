@@ -353,7 +353,7 @@ async function applyHomePatch() {
     .map((provider) => {
       const model = settings.subagentModels[provider]
       const name = catalog.data.models.find((entry) => entry.provider === provider && entry.id === model)?.name ?? null
-      return { provider, model, name }
+      return { provider, model, name, effort: settings.subagentEfforts?.[provider] ?? null }
     })
   const persona = await shippedPersona()
   const home = await writeHomePatch(paths.homePatch, {

@@ -22,6 +22,18 @@ test('the GPT subagent\'s layer runs the chosen GPT model, without subagent tool
   assert.deepEqual(rows.find((row) => row.id === 'system-prompt'), { id: 'system-prompt', config: persona })
 })
 
+test('configured reasoning reaches both pinned tools and the Claude Code GPT layer', () => {
+  const subagents = [
+    { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' },
+    { provider: 'openai-codex', model: 'gpt-6.1-sol', effort: 'high' },
+  ]
+  const tools = YAML.parse(homePatch({ subagents })).flatMap(row => row.insert ?? []).filter(row => row.config?.toolName?.startsWith('subagent_'))
+  assert.deepEqual(tools.map(row => row.config.agentOptions.reasoningEffort), ['low', 'high'])
+  assert.deepEqual(YAML.parse(gptSubagentPatch({ subagents }))[0].config, {
+    provider: 'openai-codex', model: 'gpt-6.1-sol', reasoningEffort: 'high',
+  })
+})
+
 test('no GPT subagent model, no layer', () => {
   assert.equal(gptSubagentPatch({ subagents: [{ provider: 'anthropic', model: 'claude-sonnet-5-5' }] }), null)
   assert.equal(gptSubagentPatch(), null)

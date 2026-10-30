@@ -4,6 +4,7 @@ import { act, useStore } from '../../store'
 import type { FastProvider } from '../../types'
 import { byNewest, providerReady } from '../Pickers'
 import { isModelVisible } from '../../model-selection'
+import { effortLabel, pickableEfforts } from '../../util'
 import { CLAUDE_CODE } from '../WorkflowModelField'
 
 function contextLabel(tokens: number) {
@@ -138,24 +139,39 @@ function Subagents() {
         const models = server.catalog.models.filter((model) => model.provider === provider).sort(byNewest)
         const ready = providerReady(server, provider)
         const value = chosen[provider] ?? ''
+        const effort = server.settings.subagentEfforts?.[provider] ?? ''
+        const levelsFor = (model: string) => pickableEfforts(server.catalog.effortsByModel[JSON.stringify([provider, model])] ?? server.catalog.fallbackEfforts).map((item) => item.value)
+        const levels = value ? levelsFor(value) : []
         return (
           <div key={provider} className="setting compact">
             <div>
               <h3>{label}</h3>
               <p className="muted">{ready ? note : `${label} のアカウントを接続すると選べます。`}</p>
             </div>
-            <select
-              value={value}
-              disabled={!ready && !value}
-              onChange={(event) => void act('settings.update', {
-                patch: { subagentModels: { [provider]: event.target.value || null } },
-              })}
-              aria-label={`${label} のサブエージェントに使うモデル`}
-            >
-              <option value="">使わない</option>
-              {value && !models.some((model) => model.id === value) && <option value={value}>{value}</option>}
-              {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-            </select>
+            <div className="team-tier-pickers">
+              <select
+                value={value}
+                disabled={!ready && !value}
+                onChange={(event) => {
+                  const model = event.target.value
+                  void act('settings.update', { patch: {
+                    subagentModels: { [provider]: model || null },
+                    ...(effort && model && !levelsFor(model).includes(effort) ? { subagentEfforts: { [provider]: null } } : {}),
+                  } })
+                }}
+                aria-label={`${label} のサブエージェントに使うモデル`}
+              >
+                <option value="">使わない</option>
+                {value && !models.some((model) => model.id === value) && <option value={value}>{value}</option>}
+                {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+              </select>
+              <select value={effort} disabled={!value} aria-label={`${label} のサブエージェントの推論レベル`}
+                onChange={(event) => void act('settings.update', { patch: { subagentEfforts: { [provider]: event.target.value || null } } })}>
+                <option value="">既定</option>
+                {effort && !levels.includes(effort) && <option value={effort}>{effortLabel(effort)}（非対応）</option>}
+                {levels.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}
+              </select>
+            </div>
           </div>
         )
       })}

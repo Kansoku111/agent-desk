@@ -429,6 +429,7 @@ export interface Settings extends UsageDisplay {
   subagentsEnabled?: boolean
   /** Model of each fixed-model subagent tool; null leaves the tool out. */
   subagentModels: Record<'openai-codex' | 'anthropic', string | null>
+  subagentEfforts?: Record<'openai-codex' | 'anthropic', string | null>
   /** Fast mode per provider; applies to the models in `AppState.fastModels`. */
   fastMode: Record<FastProvider, boolean>
   dshUpdateChannel: UpdateChannel

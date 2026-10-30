@@ -111,6 +111,24 @@ test('queued currency changes validate the last committed rate and retain it whe
   assert.deepEqual(h.events, ['save', 'publish', 'save', 'publish', 'save', 'publish'])
 })
 
+test('subagent efforts migrate, merge and validate before committing', async () => {
+  assert.deepEqual(migrateSettings({}).subagentEfforts, { 'openai-codex': null, anthropic: null })
+  const h = harness()
+  await Promise.all([
+    h.service.update({ subagentEfforts: { anthropic: 'low' } }),
+    h.service.update({ subagentEfforts: { 'openai-codex': 'high' } }),
+  ])
+  assert.deepEqual(h.live.subagentEfforts, { 'openai-codex': 'high', anthropic: 'low' })
+  assert.deepEqual(migrateSettings(JSON.parse(JSON.stringify(h.live))).subagentEfforts, h.live.subagentEfforts)
+  assert.deepEqual(h.events, ['save', 'publish', 'home', 'restart', 'save', 'publish', 'home', 'restart'])
+  for (const value of ['', 'bogus', 1, {}, []]) {
+    await assert.rejects(h.service.update({ subagentEfforts: { anthropic: value } }), /推論レベル/)
+  }
+  await assert.rejects(h.service.update({ subagentEfforts: [] }), /オブジェクト/)
+  await h.service.update({ subagentEfforts: { anthropic: null } })
+  assert.equal(h.live.subagentEfforts.anthropic, null)
+})
+
 test('mixed valid/invalid patches have no persistence, publication or effects', async () => {
   const patches = [
     { customInstructions: 'valid', dshUpdateChannel: 'invalid' },
