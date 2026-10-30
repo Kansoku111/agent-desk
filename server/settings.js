@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS = {
   browserHeadless: false,
   desktopTool: false,
   imageTool: true,
+  historyTool: false,
   checkpoints: true,
   projectNames: {},
   projectColors: {},
@@ -67,10 +68,10 @@ export const DEFAULT_SETTINGS = {
 }
 
 const BOOLEAN_SETTINGS = [
-  'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool',
+  'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool',
   'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'customInstructionsEnabled',
 ]
-const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool']
+const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool']
 const ENUM_SETTINGS = {
   theme: ['system', 'light', 'dark'],
   usageCurrency: ['USD', 'JPY'],

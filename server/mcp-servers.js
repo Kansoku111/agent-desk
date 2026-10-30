@@ -7,6 +7,7 @@ import { TIMEOUT_ENV } from './mcp-timeout-patch.js'
 const chromeMcpScript = fileURLToPath(new URL('./chrome-mcp.js', import.meta.url))
 const desktopMcpScript = fileURLToPath(new URL('./desktop-mcp.js', import.meta.url))
 const imagegenMcpScript = fileURLToPath(new URL('./imagegen-mcp.js', import.meta.url))
+const historyMcpScript = fileURLToPath(new URL('./history-mcp.js', import.meta.url))
 
 /** Builds `mcpServersFor(thread)`; `getSettings` and `getTeams` read index.js's current state. */
 export function createMcpServerList({ paths, getSettings, getTeams }) {
@@ -21,6 +22,10 @@ export function createMcpServerList({ paths, getSettings, getTeams }) {
     if (tools && getSettings().browserTool) servers.push(chromeServer(thread))
     if (tools && getSettings().desktopTool && process.platform === 'win32') {
       servers.push({ name: 'desktop', command: process.execPath, args: [desktopMcpScript], env: [] })
+    }
+    if (tools && getSettings().historyTool === true) {
+      servers.push({ name: 'history', command: process.execPath,
+        args: [historyMcpScript, '--home', paths.home, '--settings', paths.settings, '--workspace', thread.workspace], env: [] })
     }
     if (tools && getSettings().imageTool) {
       servers.push({

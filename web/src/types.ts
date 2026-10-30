@@ -420,6 +420,7 @@ export interface Settings extends UsageDisplay {
   browserHeadless: boolean
   desktopTool: boolean
   imageTool: boolean
+  historyTool?: boolean
   checkpoints: boolean
   projectNames: Record<string, string>
   /** Sidebar tint of each project: an index into PROJECT_HUES, or -1 for none. */

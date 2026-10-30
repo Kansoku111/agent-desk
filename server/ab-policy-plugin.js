@@ -8,7 +8,7 @@ const IMPLEMENT = new Set([...READ, 'write', 'edit', 'bash', 'pwsh', 'job_list',
   'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'])
 // Only the app's own optional implementation MCP servers. Newly introduced
 // native/interactive/delegating tools are denied unless explicitly reviewed.
-const IMPLEMENT_MCP = /^mcp__(?:chrome|desktop|imagegen)__/
+const IMPLEMENT_MCP = /^mcp__(?:chrome|desktop|imagegen|history)__/
 export function abToolAllowed(name, writable) { return writable ? IMPLEMENT.has(name) || IMPLEMENT_MCP.test(name) : READ.has(name) }
 export function apply(ctx, config) {
   ctx.tools.guard((exec) => {

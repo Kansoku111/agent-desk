@@ -93,6 +93,16 @@ export function GeneralSettings() {
       </div>
       <div className="setting">
         <div>
+          <h3>会話履歴の検索</h3>
+          <p className="muted">AIが過去の会話を検索・参照できます。他のプロジェクトも対象にできます。</p>
+        </div>
+        <label className="switch">
+          <input type="checkbox" aria-label="会話履歴の検索" checked={settings.historyTool === true} onChange={(event) => update({ historyTool: event.target.checked })} />
+          <span />
+        </label>
+      </div>
+      <div className="setting">
+        <div>
           <h3>変更を戻せるようにする</h3>
           <p className="muted">リクエストごとにファイルを保存します。Git が必要で、.gitignore 対象と 50MB 超は除きます。</p>
         </div>
