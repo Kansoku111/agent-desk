@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import {
   ArrowDown, Bot, ChevronDown, Copy, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, RotateCw, SquareTerminal, Trash2,
 } from 'lucide-react'
@@ -10,6 +10,7 @@ import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
 import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
 import { TurnView } from './TurnView'
+import { useConversationScroll } from './useConversationScroll'
 import { scoresUpTo } from '../../../shared/usage-score.js'
 
 function useGit(workspace: string, refreshKey: unknown) {
@@ -200,20 +201,9 @@ export function ThreadView({ threadId }: { threadId: string }) {
   // Keep the same team beside its leader and its children.
   const panelTeam = useTeam(thread?.team?.id) ?? team
   const teamPanel = useStore((state) => state.teamPanel)
-  const scroller = useRef<HTMLDivElement>(null)
-  const stick = useRef(true)
-  const [showJump, setShowJump] = useState(false)
-
-  // Follow new output while the reader is at the bottom.
-  useLayoutEffect(() => {
-    const element = scroller.current
-    if (element && stick.current) element.scrollTop = element.scrollHeight
-  }, [turns])
+  const { scroller, showJump, onScroll } = useConversationScroll(threadId, !!thread, turns)
 
   useEffect(() => {
-    stick.current = true
-    const element = scroller.current
-    if (element) element.scrollTop = element.scrollHeight
     // Another task's subagent is not one to show here.
     setState({ subagentFocus: null })
   }, [threadId])
@@ -230,12 +220,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           <div
             className="scroller"
             ref={scroller}
-            onScroll={(event) => {
-              const element = event.currentTarget
-              const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80
-              stick.current = atBottom
-              setShowJump(!atBottom)
-            }}
+            onScroll={onScroll}
           >
             <div className="column">
               {!turns && <div className="loading-turns">読み込み中…</div>}

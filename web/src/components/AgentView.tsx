@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { ArrowDown, Clock3, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, Send, Square, X } from 'lucide-react'
 import { act, isTouch, setState, teamChildOf, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
@@ -6,6 +6,7 @@ import { workspaceLabel } from '../util'
 import { StateIcon, stateLabel, TeamPanel, TeamToggle } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
 import { TurnView } from './TurnView'
+import { useConversationScroll } from './useConversationScroll'
 
 /**
  * A team's Claude child: Claude Code run headless (server/claude-runner.js),
@@ -22,20 +23,10 @@ export function AgentView({ taskId }: { taskId: string }) {
   const teamPanel = useStore((state) => state.teamPanel)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
-  const scroller = useRef<HTMLDivElement>(null)
-  const stick = useRef(true)
-  const [showJump, setShowJump] = useState(false)
+  const { scroller, stick, showJump, onScroll } = useConversationScroll(taskId, !!team && !!child, turns)
   const [text, setText] = useDraft(`agent:${taskId}`)
   const ime = useImeField()
   const [sending, setSending] = useState(false)
-
-  useLayoutEffect(() => {
-    const element = scroller.current
-    if (element && stick.current) element.scrollTop = element.scrollHeight
-  }, [turns])
-  useEffect(() => {
-    stick.current = true
-  }, [taskId])
 
   if (!team || !child) return <div className="main-empty">この子は見つかりません</div>
   const working = child.state === 'running'
@@ -89,12 +80,7 @@ export function AgentView({ taskId }: { taskId: string }) {
             <div
               className="scroller"
               ref={scroller}
-              onScroll={(event) => {
-                const element = event.currentTarget
-                const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80
-                stick.current = atBottom
-                setShowJump(!atBottom)
-              }}
+              onScroll={onScroll}
             >
               <div className="column">
                 {!turns && <div className="loading-turns"><Loader2 size={14} className="spin" /> 読み込み中…</div>}

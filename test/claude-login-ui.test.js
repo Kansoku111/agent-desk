@@ -38,6 +38,7 @@ const TurnView = (await compile('../web/src/components/TurnView.tsx', {
 const TerminalChat = (await compile('../web/src/components/TerminalChat.tsx', {
   react, 'react/jsx-runtime': runtime, 'lucide-react': icons,
   '../store': {}, './TurnView': { TurnView: 'TurnView' }, './TeamPanel': { useLedTeam: () => null },
+  './useConversationScroll': { useConversationScroll: () => ({ scroller: { current: null } }) },
 })).TerminalChat
 
 const nodes = (root) => {

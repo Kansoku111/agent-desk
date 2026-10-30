@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, Loader2, ShieldQuestion, SquareTerminal } from 'lucide-react'
 import { act, request } from '../store'
 import type { TerminalSummary, Turn } from '../types'
 import { TurnView } from './TurnView'
 import { useLedTeam } from './TeamPanel'
+import { useConversationScroll } from './useConversationScroll'
 
 type Snapshot = { epoch: string | null; rev: number; omitted: number; reset: boolean; turns: Turn[]; ids: string[] }
 
@@ -179,9 +180,6 @@ export function TerminalChat({ terminal, turns, omitted, loaded, error, onShowSc
   onShowScreen: () => void
   onRestart: () => void
 }) {
-  const scroller = useRef<HTMLDivElement>(null)
-  const stick = useRef(true)
-  const [showJump, setShowJump] = useState(false)
   const working = terminal.state === 'running' && terminal.activity !== 'idle'
   const team = useLedTeam(terminal.id)
   // A turn the file still calls running is over once Claude Code is idle (or ended).
@@ -189,27 +187,14 @@ export function TerminalChat({ terminal, turns, omitted, loaded, error, onShowSc
     turn.status === 'running' && (index < turns.length - 1 || !working) ? { ...turn, status: 'done' as const } : turn
   )), [turns, working])
 
-  // Follow new output while the reader is at the bottom.
-  useLayoutEffect(() => {
-    const element = scroller.current
-    if (element && stick.current) element.scrollTop = element.scrollHeight
-  }, [shown, terminal.activity])
-
-  useEffect(() => {
-    stick.current = true
-  }, [terminal.id])
+  const { scroller, showJump, onScroll } = useConversationScroll(terminal.id, true, shown)
 
   return (
     <div className="terminal-chat">
       <div
         className="scroller"
         ref={scroller}
-        onScroll={(event) => {
-          const element = event.currentTarget
-          const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80
-          stick.current = atBottom
-          setShowJump(!atBottom)
-        }}
+        onScroll={onScroll}
       >
         <div className="column">
           {!loaded && !error && <div className="loading-turns"><Loader2 size={14} className="spin" /> 読み込み中…</div>}

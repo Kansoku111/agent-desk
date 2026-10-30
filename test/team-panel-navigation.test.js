@@ -27,7 +27,8 @@ async function harness(execution) {
   const modules = { react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '../store': store,
     '../drafts': { useDraft: () => ['', () => {}], useImeField: () => ({}) },
     '../util': { workspaceLabel: () => 'Workspace', parseModel: () => null },
-    './TerminalPickers': { claudeModelName: () => 'Claude' } }
+    './TerminalPickers': { claudeModelName: () => 'Claude' },
+    './useConversationScroll': { useConversationScroll: () => ({ scroller: { current: null }, stick: { current: true } }) } }
   async function load(name, extra = '') {
     const source = await fs.readFile(new URL('../web/src/components/' + name + '.tsx', import.meta.url), 'utf8')
     const { outputText } = ts.transpileModule(source + extra, {
