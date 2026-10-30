@@ -21,6 +21,23 @@ Please do not report security vulnerabilities in public issues or pull requests.
 最新のリリース版だけを対象にします。
 Only the latest release is supported.
 
+## 依存関係のセキュリティ更新 / Dependency security updates
+
+上流が修正前の版を固定しているため、`package.json` の `overrides` で次の間接依存だけを修正版に固定します。dsh・Codex 本体、保存形式、モデル・プロバイダー・課金経路は変更しません。
+
+| 間接依存 | 固定版 | 修正対象 |
+|---|---|---|
+| Zod | 4.6.6 | [大きなコレクションの検証によるメモリ消費](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) |
+| undici | 8.12.2 | HTTP・TLS・リダイレクト・WebSocket 等の [8.12.2 セキュリティ修正](https://github.com/nodejs/undici/releases/tag/v8.12.2) |
+| fflate | 0.8.3 | [不正な ZIP64 による無限ループ](https://github.com/advisories/GHSA-px8p-9vwx-vf98) |
+| MCP client | 2.3.0 | [別オリジンへのリダイレクトによるヘッダー・本文の漏えい](https://github.com/advisories/GHSA-6prh-2h8m-c8cw) |
+
+MCP の HTTP 接続と OAuth は、別オリジンへのリダイレクトを既定で拒否するようになります。意図的に別ホストへ転送している MCP サーバーは、転送先の最終 URL を接続先に設定してください。`redirectPolicy: 'follow'` で旧動作へ戻すと漏えいリスクも戻るため、回避策にはしません。stdio 接続はこの変更の対象外です。過去に管理外の転送先へ認証情報を送った可能性がある場合は、該当するキー・トークンを失効・再発行してください。
+
+これらの固定は、上流の依存指定が修正版以上になったときに見直します。解除は独立した worktree で試し、ロックファイルと実際のインストール先（ネストしたコピーも含む）、`npm audit`、`test/dependency-security.test.js`、dsh 互換性テスト、全テスト・型チェック・ビルドを確認してから行います。監査の検出がゼロでも、未知の脆弱性がないことを保証するものではありません。
+
+稼働中のインストール先で `npm ci` を実行しないでください。適用には新しいリリースへの更新、または Agent Desk と関連タスクを終了した後の外部ターミナルでの依存関係更新と再起動が必要です。[更新手順](docs/updating.md)を参照してください。
+
 ## セキュリティに関わる設計 / Security-relevant design
 
 Agent Desk は、この PC の上で動くローカルのアプリです。次の点に注意してください（詳しくは [仕組みとデータの保存場所](docs/architecture.md#データの保存場所)、[スマホから使う](docs/remote.md)、[既知の制約](docs/known-issues.md) を参照）。

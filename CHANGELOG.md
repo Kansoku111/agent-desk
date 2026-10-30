@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Override vulnerable transitive dependencies with MCP client 2.3.0, fflate 0.8.3, undici 8.12.2 and Zod 4.6.6, without changing the pinned dsh/Codex runtimes or model routes. Add installed-tree and ZIP64, collection-validation and cross-origin MCP redirect regression tests; document the override lifecycle and MCP redirect compatibility.
+
 ## [0.1.7] - 2026-10-31
 
 ### Added

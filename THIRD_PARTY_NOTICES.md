@@ -401,8 +401,8 @@ Platform-specific optional packages are installed only for matching operating sy
 | `@koromix/koffi-win32-ia32` | 3.1.1 | `MIT` | <https://github.com/Koromix/koffi> | Runtime |
 | `@koromix/koffi-win32-x64` | 3.1.1 | `MIT` | <https://github.com/Koromix/koffi> | Runtime |
 | `@mixmark-io/domino` | 2.2.0 | `BSD-2-Clause` | <https://github.com/mixmark-io/domino> | Runtime |
-| `@modelcontextprotocol/client` | 2.2.0 | `MIT` | <https://github.com/modelcontextprotocol/typescript-sdk> | Runtime |
-| `@modelcontextprotocol/core` | 2.2.0 | `MIT` | <https://github.com/modelcontextprotocol/typescript-sdk> | Runtime |
+| `@modelcontextprotocol/client` | 2.3.0 | `Apache-2.0` | <https://github.com/modelcontextprotocol/typescript-sdk> | Runtime |
+| `@modelcontextprotocol/core` | 2.3.0 | `Apache-2.0` | <https://github.com/modelcontextprotocol/typescript-sdk> | Runtime |
 | `@openai/codex` | 0.166.0 | `Apache-2.0` | <https://github.com/openai/codex> | Runtime |
 | `@openai/codex-darwin-arm64` | 0.166.0-darwin-arm64 | `Apache-2.0` | <https://github.com/openai/codex> | Runtime |
 | `@openai/codex-darwin-x64` | 0.166.0-darwin-x64 | `Apache-2.0` | <https://github.com/openai/codex> | Runtime |
@@ -543,7 +543,6 @@ Platform-specific optional packages are installed only for matching operating sy
 | `fast-sha256` | 1.3.0 | `Unlicense` | <https://github.com/dchest/fast-sha256-js> | Runtime |
 | `fast-uri` | 3.1.9 | `BSD-3-Clause` | <https://github.com/fastify/fast-uri> | Runtime |
 | `fetch-blob` | 3.2.0 | `MIT` | <https://github.com/node-fetch/fetch-blob> | Runtime |
-| `fflate` | 0.8.2 | `MIT` | <https://github.com/101arrowz/fflate> | Runtime |
 | `fflate` | 0.8.3 | `MIT` | <https://github.com/101arrowz/fflate> | Runtime |
 | `figures` | 6.1.0 | `MIT` | <https://github.com/sindresorhus/figures> | Runtime |
 | `find-up` | 4.1.0 | `MIT` | <https://github.com/sindresorhus/find-up> | Runtime |
@@ -755,7 +754,7 @@ Platform-specific optional packages are installed only for matching operating sy
 | `turndown` | 7.2.4 | `MIT` | <https://github.com/mixmark-io/turndown> | Runtime |
 | `type-fest` | 4.41.0 | `(MIT OR CC0-1.0)` | <https://github.com/sindresorhus/type-fest> | Runtime |
 | `typebox` | 1.3.27 | `MIT` | <https://github.com/sinclairzx81/typebox> | Runtime |
-| `undici` | 8.11.2 | `MIT` | <https://github.com/nodejs/undici> | Runtime |
+| `undici` | 8.12.2 | `MIT` | <https://github.com/nodejs/undici> | Runtime |
 | `undici-types` | 8.9.0 | `MIT` | <https://github.com/nodejs/undici> | Runtime |
 | `unicode-properties` | 1.4.1 | `MIT` | <https://github.com/devongovett/unicode-properties> | Runtime |
 | `unicode-trie` | 2.0.0 | `MIT` | <https://github.com/devongovett/unicode-trie> | Runtime |
@@ -783,8 +782,7 @@ Platform-specific optional packages are installed only for matching operating sy
 | `yargs-parser` | 18.1.3 | `ISC` | <https://github.com/yargs/yargs-parser> | Runtime |
 | `yocto-queue` | 1.2.2 | `MIT` | <https://github.com/sindresorhus/yocto-queue> | Runtime |
 | `yoctocolors` | 2.2.0 | `MIT` | <https://github.com/sindresorhus/yoctocolors> | Runtime |
-| `zod` | 4.4.3 | `MIT` | <https://github.com/colinhacks/zod> | Runtime |
-| `zod` | 4.6.5 | `MIT` | <https://github.com/colinhacks/zod> | Runtime |
+| `zod` | 4.6.6 | `MIT` | <https://github.com/colinhacks/zod> | Runtime |
 | `zwitch` | 2.0.4 | `MIT` | <https://github.com/wooorm/zwitch> | Bundled UI |
 
 ## Copied model-catalog data
