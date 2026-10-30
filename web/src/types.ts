@@ -438,6 +438,8 @@ export interface Settings extends UsageDisplay {
   remoteAccess: boolean
   /** Standing instructions the agent reads before every task (設定 → パーソナライズ). */
   customInstructions: string
+  /** Older saves default to enabled. */
+  customInstructionsEnabled?: boolean
   /** A local OpenAI-compatible server and the models it listed (older saves lack it). */
   localLlm?: { baseURL: string | null; models: { id: string; contextWindow?: number }[] }
   agentTeams: TeamSettings

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircle2, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { request, toast, useStore } from '../../store'
 
 const INSTRUCTIONS_MAX = 10_000
@@ -7,6 +7,8 @@ const INSTRUCTIONS_MAX = 10_000
 /** Standing instructions the agent reads before every task. */
 export function PersonalizeSettings() {
   const saved = useStore((state) => state.server?.settings.customInstructions ?? '')
+  const enabled = useStore((state) => state.server?.settings.customInstructionsEnabled !== false)
+  const [toggling, setToggling] = useState(false)
   const [draft, setDraft] = useState(saved)
   const [base, setBase] = useState(saved)
   const [saving, setSaving] = useState(false)
@@ -31,6 +33,17 @@ export function PersonalizeSettings() {
     setSaving(false)
   }
 
+  const toggle = async (enabled: boolean) => {
+    setToggling(true)
+    setError(null)
+    try {
+      await request('settings.update', { patch: { customInstructionsEnabled: enabled } })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    setToggling(false)
+  }
+
   return (
     <div className="settings-section">
       <section className="account-card">
@@ -39,7 +52,10 @@ export function PersonalizeSettings() {
             <h3>カスタム指示</h3>
             <p className="muted">すべてのタスクとサブエージェントが作業前に読みます。</p>
           </div>
-          {saved.trim() && <span className="badge success"><CheckCircle2 size={12} /> 有効</span>}
+          <label className="switch">
+            <input type="checkbox" role="switch" aria-label="カスタム指示" checked={enabled} disabled={toggling} onChange={(event) => void toggle(event.target.checked)} />
+            <span />
+          </label>
         </div>
         <textarea
           className="instructions-input"
@@ -72,7 +88,7 @@ export function PersonalizeSettings() {
           </div>
         </div>
         {error && <p className="form-error">{error}</p>}
-        <p className="fine-print">次のメッセージから反映（Claude Code は再起動後）。会話での依頼が優先です。</p>
+        <p className="fine-print">dsh は待機後、Claude Code は再起動後に反映。会話での依頼が優先です。</p>
       </section>
     </div>
   )

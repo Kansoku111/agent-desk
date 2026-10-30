@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import YAML from 'yaml'
 import { INSTRUCTIONS_PLUGIN, homePatch } from '../server/dsh-config.js'
 import { SECTION_NAME, apply, instructionsSection } from '../server/instructions-plugin.js'
+import { effectiveCustomInstructions } from '../server/settings.js'
 
 test('the home patch loads the instructions plugin only when there is text', () => {
   const plain = YAML.parse(homePatch({ instructions: '  \n ' }))
@@ -12,6 +13,16 @@ test('the home patch loads the instructions plugin only when there is text', () 
   const rows = YAML.parse(homePatch({ instructions: `\n${text}\n` }))
   assert.deepEqual(rows.at(-1).insert, [{ id: 'agent-desk-instructions', name: INSTRUCTIONS_PLUGIN, config: { text } }])
   assert.ok(INSTRUCTIONS_PLUGIN.startsWith('file:') && INSTRUCTIONS_PLUGIN.endsWith('/server/instructions-plugin.js'))
+})
+
+test('disabling saved instructions removes them from the home patch without deleting them', () => {
+  const settings = { customInstructions: 'saved instructions', customInstructionsEnabled: false }
+  const rows = YAML.parse(homePatch({ instructions: effectiveCustomInstructions(settings) }))
+  assert.ok(!rows.some((row) => row.insert?.some((entry) => entry.id === 'agent-desk-instructions')))
+  assert.equal(settings.customInstructions, 'saved instructions')
+  settings.customInstructionsEnabled = true
+  const enabled = YAML.parse(homePatch({ instructions: effectiveCustomInstructions(settings) }))
+  assert.equal(enabled.at(-1).insert[0].config.text, 'saved instructions')
 })
 
 test('the plugin adds one literal section after the deployment persona', () => {

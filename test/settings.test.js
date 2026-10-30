@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createSettingsService, DEFAULT_SETTINGS, migrateSettings, planSettingsUpdate } from '../server/settings.js'
+import { createSettingsService, DEFAULT_SETTINGS, effectiveCustomInstructions, migrateSettings, planSettingsUpdate } from '../server/settings.js'
 
 const defaults = (patch = {}) => ({ ...structuredClone(DEFAULT_SETTINGS), ...patch })
 const deferred = () => {
@@ -51,6 +51,26 @@ function harness(initial = {}, hooks = {}) {
   })
   return { service, events, writes, published, get live() { return live } }
 }
+
+test('custom instructions switch preserves text, persists, and refreshes runtime configuration', async () => {
+  const legacy = migrateSettings({ customInstructions: 'saved instructions' })
+  assert.equal(legacy.customInstructionsEnabled, true)
+  assert.equal(effectiveCustomInstructions(legacy), 'saved instructions')
+  assert.equal(effectiveCustomInstructions({ customInstructions: 'legacy' }), 'legacy')
+  const h = harness(legacy)
+  await h.service.update({ customInstructionsEnabled: false })
+  assert.equal(h.live.customInstructions, 'saved instructions')
+  assert.equal(effectiveCustomInstructions(h.live), '')
+  assert.deepEqual(h.events, ['save', 'publish', 'home', 'restart'])
+  const restored = migrateSettings(JSON.parse(JSON.stringify(h.writes[0])))
+  assert.equal(restored.customInstructionsEnabled, false)
+  assert.equal(effectiveCustomInstructions(restored), '')
+  await h.service.update({ customInstructions: 'edited while off' })
+  assert.equal(effectiveCustomInstructions(h.live), '')
+  await h.service.update({ customInstructionsEnabled: true })
+  assert.equal(effectiveCustomInstructions(h.live), 'edited while off')
+  assert.deepEqual(h.events.slice(-4), ['save', 'publish', 'home', 'restart'])
+})
 
 test('manual currency defaults and validation do not infer a USDJPY rate', () => {
   const legacy = migrateSettings({ theme: 'light' })
@@ -340,7 +360,7 @@ test('a failed queued request does not drop a following valid update', async () 
 })
 
 test('boolean settings and provider toggles reject coercion', async () => {
-  const keys = ['notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'checkpoints', 'modelAutoUpdate']
+  const keys = ['notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'checkpoints', 'modelAutoUpdate', 'customInstructionsEnabled']
   for (const key of keys) {
     for (const value of ['false', 0, 1, null, undefined, {}, []]) {
       const h = harness()

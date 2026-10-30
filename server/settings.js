@@ -55,6 +55,7 @@ export const DEFAULT_SETTINGS = {
   modelAutoUpdate: true,
   remoteAccess: false,
   customInstructions: '',
+  customInstructionsEnabled: true,
   // A local OpenAI-compatible server and the models it listed (see local-llm.js).
   localLlm: { baseURL: null, models: [] },
   // 設定 → エージェントチーム (see team-config.js).
@@ -66,7 +67,7 @@ export const DEFAULT_SETTINGS = {
 
 const BOOLEAN_SETTINGS = [
   'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool',
-  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled',
+  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'customInstructionsEnabled',
 ]
 const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool']
 const ENUM_SETTINGS = {
@@ -76,6 +77,10 @@ const ENUM_SETTINGS = {
   dshUpdateChannel: UPDATE_CHANNELS,
 }
 const owns = (object, key) => Object.hasOwn(object, key)
+
+export function effectiveCustomInstructions(settings) {
+  return settings.customInstructionsEnabled !== false ? settings.customInstructions : ''
+}
 
 function assertRecord(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -218,6 +223,7 @@ export function planSettingsUpdate(current, patch, now) {
   effects.channel = next.dshUpdateChannel !== current.dshUpdateChannel
   effects.modelCatalog = (next.modelAutoUpdate !== false) !== (current.modelAutoUpdate !== false)
   effects.homePatch ||= effects.modelCatalog || next.subagentsEnabled !== current.subagentsEnabled
+    || next.customInstructionsEnabled !== current.customInstructionsEnabled
   effects.modelCheck = effects.modelCatalog && next.modelAutoUpdate !== false
   // The local route joins the catalog signature and the home patch; it fetches nothing.
   if (localChanged) {

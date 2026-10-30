@@ -21,7 +21,7 @@ import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
 import { createAppRestarter } from './app-restart.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
-import { createSettingsService, DEFAULT_SETTINGS, migrateSettings } from './settings.js'
+import { createSettingsService, DEFAULT_SETTINGS, effectiveCustomInstructions, migrateSettings } from './settings.js'
 import { localLlmSettings, localRoute } from './local-llm.js'
 import { teamConfig } from './team-config.js'
 import { readJson, UnmovableFileError, writeJson } from './json-file.js'
@@ -147,7 +147,7 @@ const terminals = await new TerminalManager({
     if (client.socket?.readyState === client.socket?.OPEN) client.socket.send(JSON.stringify(frame))
   },
   launch: (record) => teams?.launchFor(record) ?? null,
-  instructions: () => settings.customInstructions,
+  instructions: () => effectiveCustomInstructions(settings),
   gptSubagent: () => (settings.subagentsEnabled !== false && settings.subagentModels?.['openai-codex'] ? { model: settings.subagentModels['openai-codex'], home: paths.home } : null),
   preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
   log,
@@ -365,7 +365,7 @@ async function applyHomePatch() {
     settingsFile: paths.settings,
     persona,
     webSearch: { plugin: WEB_SEARCH_PLUGIN, credentials: paths.credentials },
-    instructions: settings.customInstructions,
+    instructions: effectiveCustomInstructions(settings),
     localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
     opencodeGo: (await accounts()).opencodeGo.configured,
     opencodeGoModels: opencodeGoServed(),
@@ -441,14 +441,14 @@ teams = await new TeamManager({
   catalog,
   getSettings: () => settings.agentTeams,
   apiUrl: () => `http://127.0.0.1:${server.address().port}/api/team`,
-  instructions: () => settings.customInstructions,
+  instructions: () => effectiveCustomInstructions(settings),
   guides: () => ({ policies: settings.teamPolicies, playbooks: settings.teamPlaybooks }),
   log,
 }).load()
 
 const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'),
   preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
-const abRunner = new AbRunner({ threads, agents: abAgents, attachmentsDir: paths.attachmentsDir, instructions: () => settings.customInstructions,
+const abRunner = new AbRunner({ threads, agents: abAgents, attachmentsDir: paths.attachmentsDir, instructions: () => effectiveCustomInstructions(settings),
   guard: (record) => teams.guardExecution(record) })
 const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalog.data,
   validateImages: async (images, config) => {
