@@ -1,16 +1,10 @@
 // Use the Harness filesystem provider so project roots, metadata and precedence
 // match the skills that the agent can invoke, even before a session exists.
-import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
-import { dshBin } from './paths.js'
-
-// Resolve the provider from dsh's dependencies, including nested npm installs.
-const requireFromDsh = createRequire(dshBin)
-const { FileSystemSkillProvider } = await import(pathToFileURL(requireFromDsh.resolve('@deepseek-ai/dsh-skill-filesystem')).href)
+import { AgentDeskSkillProvider } from './skill-filesystem-plugin.js'
 
 export async function listSkills(workspace, dshHome) {
   const controller = new AbortController()
-  const provider = new FileSystemSkillProvider(
+  const provider = new AgentDeskSkillProvider(
     { get: () => undefined, logger: console },
     { signal: controller.signal, invalidate() {} },
     { dshHome, watch: false },

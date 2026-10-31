@@ -647,3 +647,34 @@ for (const mode of ['read-only', 'workspace-write']) {
     else assert.equal(await fs.readFile(registered, 'utf8'), 'registered probe')
   })
 }
+
+for (const toolMode of ['native', 'ptc']) {
+  test('Codex and Claude skills load through the real skill tool (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'danger-full-access')
+    const workspace = path.join(f.home, 'skill-project')
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true })
+    for (const directory of ['.codex', '.claude']) {
+      const name = directory.slice(1) + '-fixture'
+      const folder = path.join(workspace, directory, 'skills', name)
+      await fs.mkdir(folder, { recursive: true })
+      await fs.writeFile(path.join(folder, 'SKILL.md'), ['---', 'name: ' + name, 'description: deterministic skill fixture', '---', 'BODY_' + name].join('\n'))
+    }
+    const session = await f.runtime.newSession(workspace)
+    await f.runtime.setOption(session.sessionId, TOOL_MODE_CONFIG, toolMode)
+    if (toolMode === 'ptc') {
+      f.queue.push({ name: 'run_code', args: { code: 'for (const name of ["codex-fixture", "claude-fixture"]) console.log(await tools.skill({name}))', description: 'Load local skill fixtures' } })
+    } else {
+      f.queue.push({ name: 'skill', args: { name: 'codex-fixture' } }, { name: 'skill', args: { name: 'claude-fixture' } })
+    }
+    const result = await f.runtime.prompt(session.sessionId, [{ type: 'text', text: 'Load the two fixture skills' }])
+    assert.equal(result.stopReason, 'end_turn')
+    const firstPrompt = JSON.stringify(f.requests[0].messages)
+    assert.ok(firstPrompt.includes('codex-fixture'), 'Codex skill missing from model catalog')
+    assert.ok(firstPrompt.includes('claude-fixture'), 'Claude skill missing from model catalog')
+    const replies = JSON.stringify(f.requests.at(-1).messages)
+    assert.match(replies, /BODY_codex-fixture/)
+    assert.match(replies, /BODY_claude-fixture/)
+    assert.doesNotMatch(replies, /unknown or no longer available/)
+    assert.equal(f.permissions.length, 0)
+  })
+}

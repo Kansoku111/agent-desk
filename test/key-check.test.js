@@ -94,7 +94,7 @@ test('contextOverrides raises a window up to the model ceiling', async () => {
 
 test('homePatch adds fixed-model subagent tools and tells the agent about them', async () => {
   const { shippedPersona } = await import('../server/dsh-config.js')
-  assert.equal(YAML.parse(homePatch()).length, 4)
+  assert.equal(YAML.parse(homePatch()).length, 5)
 
   const persona = await shippedPersona()
   assert.match(persona.personaPrefix, /\{\{model\}\}/)

@@ -220,7 +220,12 @@ export function homePatch({
     ...(acpModel ? [{ id: 'acp', config: { provider: 'openai-codex', model: acpModel } }] : []),
     // Its tool and prompt section go together; delegation is configured below.
     { id: 'tool-workflow', disabled: true },
-    { insert: [{ id: 'agent-desk-session-policy', name: new URL('./session-policy-plugin.js', import.meta.url).href }] },
+    // Replace only discovery; keep Harness's skill registry, tool and invocation policy.
+    { id: 'skill-filesystem', disabled: true },
+    { insert: [
+      { id: 'agent-desk-session-policy', name: new URL('./session-policy-plugin.js', import.meta.url).href },
+      { id: 'agent-desk-skill-filesystem', name: new URL('./skill-filesystem-plugin.js', import.meta.url).href },
+    ] },
   ]
   if (settingsFile) rows.push({ insert: [{
     id: 'agent-desk-subagent-policy',
