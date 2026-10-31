@@ -416,7 +416,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   /** `team`: the agent team (teams.js) this task works for as a child, as { id, childId }. */
-  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'ptc', team = null, ab = null, createReceipt = null }) {
+  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'ptc', team = null, ab = null, preset = null, createReceipt = null }) {
     if (this.stopping) throw new Error('アプリを終了しています')
     await assertDirectory(workspace)
     if (this.stopping) throw new Error('アプリを終了しています')
@@ -448,6 +448,7 @@ export class ThreadManager extends EventEmitter {
       pendingApproval: false,
       ...(team ? { team } : {}),
       ...(ab ? { ab } : {}),
+      ...(preset ? { preset } : {}),
     }
     this.threads.set(thread.id, thread)
     this.turns.set(thread.id, [])
@@ -497,13 +498,14 @@ export class ThreadManager extends EventEmitter {
   async #update(threadId, patch) {
     const thread = this.#available(threadId)
     const running = this.active.has(threadId)
+    if (['model', 'effort', 'permissionMode', 'toolMode'].some((key) => patch[key] !== undefined)) this.presetSettingsGuard?.(thread)
     if (patch.toolMode !== undefined) {
       assertToolMode(patch.toolMode)
       if ((thread.ab || thread.team) && patch.toolMode !== this.summary(thread).toolMode) throw new Error('PTCはAB・チームの設定から変更してください')
       if (running && patch.toolMode !== thread.toolMode) throw new Error('実行中はPTCを変更できません')
       // Persist the choice now; apply and verify it immediately before the next prompt.
     }
-    if (thread.ab && (patch.permissionMode !== undefined || patch.model !== undefined)) throw new Error('ABの担当モデルと権限は変更できません')
+    if ((thread.ab || thread.preset) && (patch.permissionMode !== undefined || patch.model !== undefined || (thread.preset && (patch.effort !== undefined || patch.toolMode !== undefined)))) throw new Error('AB・委託担当のモデルと実行設定は変更できません')
     if (patch.toolMode !== undefined) thread.toolMode = patch.toolMode
     if (typeof patch.title === 'string' && patch.title.trim()) thread.title = patch.title.trim().slice(0, 120)
     if (typeof patch.archived === 'boolean') thread.archived = patch.archived
@@ -539,6 +541,10 @@ export class ThreadManager extends EventEmitter {
     this.#saveIndex()
     this.#emitThread(thread)
     return this.summary(thread)
+  }
+
+  goalWaiting(thread, options) {
+    return this.presetGoalWaiting?.(thread, options) ?? this.teamGoalWaiting?.(thread, options)
   }
 
   /** Scheduling control, not a model-visible goal phase mutation. */
@@ -684,12 +690,12 @@ export class ThreadManager extends EventEmitter {
    * working in the background and reports through `turn` events. An optional
    * UUID messageId deduplicates across send/steer and application restarts.
    */
-  async send(threadId, input, { userInitiated = false, guard } = {}) {
+  async send(threadId, input, { userInitiated = false, guard, presetRunId } = {}) {
     const message = normalizeMessage(input)
-    return this.#request(threadId, () => this.#send(threadId, message, userInitiated, guard))
+    return this.#request(threadId, () => this.#send(threadId, message, userInitiated, guard, presetRunId))
   }
 
-  async #send(threadId, message, userInitiated, guard) {
+  async #send(threadId, message, userInitiated, guard, presetRunId) {
     const { text, images, messageId, plan } = message
     const thread = this.#available(threadId)
     if (plan && thread.ab) throw new Error('ABではPlanを使えません')
@@ -705,7 +711,7 @@ export class ThreadManager extends EventEmitter {
     this.#available(threadId, thread)
     this.#assertNotRestoring(thread)
     if (this.active.has(threadId)) throw new Error('このタスクはまだ作業中です')
-    this.executionGuard?.(thread)
+    this.executionGuard?.(thread, { presetRunId })
     guard?.()
 
     const turn = newTurn({ id: randomUUID(), text, images })
@@ -741,7 +747,7 @@ export class ThreadManager extends EventEmitter {
       resolveDone()
       throw error
     }
-    if (userInitiated) this.userMessageAccepted?.(threadId)
+    if (userInitiated) { this.userMessageAccepted?.(threadId); this.presetUserAccepted?.(threadId) }
     this.#emitThread(thread)
     this.#emitTurn(threadId, turn, true)
     void this.#run(thread, active).finally(resolveDone).catch((error) => {
@@ -849,7 +855,7 @@ export class ThreadManager extends EventEmitter {
   async #capture(thread, turn, which) {
     try {
       // A team's children never undo turns; their snapshots would only slow them down.
-      if (!this.checkpoints || !this.checkpointsEnabled() || thread.team) return null
+      if (!this.checkpoints || !this.checkpointsEnabled() || thread.team || thread.preset) return null
       const { commit } = await this.checkpoints.snapshot(thread.workspace, `${thread.id}/${turn.id}/${which}`)
       turn.checkpoint = { ...turn.checkpoint, [which]: commit }
       return commit
@@ -1095,7 +1101,7 @@ export class ThreadManager extends EventEmitter {
       this.#checkRun(thread, active)
     }
 
-    const waiting = this.teamGoalWaiting?.(thread)
+    const waiting = this.goalWaiting(thread)
     if (waiting !== undefined) {
       await runtime.setGoalWaiting(thread.sessionId, waiting)
       this.#checkRun(thread, active)
@@ -1122,10 +1128,10 @@ export class ThreadManager extends EventEmitter {
       this.#learnOptions(thread, changed)
       parsed = parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? [])
     }
-    if ((thread.ab?.strictModel || this.teamModelGuard?.(thread)) && parsed.currentModel !== thread.model) throw new Error('フォールバック先モデルの適用を確認できません')
+    if ((thread.preset || thread.ab?.strictModel || this.teamModelGuard?.(thread)) && parsed.currentModel !== thread.model) throw new Error(thread.preset ? '担当モデルの適用を確認できません' : 'フォールバック先モデルの適用を確認できません')
     const wanted = thread.effort ?? ''
-    const strict = (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort
-    const label = thread.ab ? 'AB' : 'eco'
+    const strict = thread.preset || (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort
+    const label = thread.preset ? 'タスクのプリセット' : thread.ab ? 'AB' : 'eco'
     if (strict) assertWorkflowEffort(wanted, parsed, label)
     const target = strict ? wanted : nearestEffort(wanted, parsed.efforts)
     if (target !== wanted) {
@@ -1185,6 +1191,7 @@ export class ThreadManager extends EventEmitter {
 
   async #deliverSteer(thread, active, { text, images, messageId, plan }, userInitiated, guard) {
     const threadId = thread.id
+    this.executionGuard?.(thread)
     const blocks = await this.#promptBlocks({ user: { text, images, plan } })
     if (!this.#canSteer(thread, active)) return { steered: false }
     const receipts = this.receipts.get(threadId)
@@ -1205,7 +1212,7 @@ export class ThreadManager extends EventEmitter {
     try {
       if (this.#canSteer(thread, active)) {
         guard?.()
-        const waiting = userInitiated ? this.teamGoalWaiting?.(thread, { userInput: true }) : undefined
+        const waiting = userInitiated ? this.goalWaiting(thread, { userInput: true }) : undefined
         steered = waiting === undefined ? await active.runtime.steer(thread.sessionId, blocks)
           : await active.runtime.steer(thread.sessionId, blocks, waiting)
       }
@@ -1228,7 +1235,7 @@ export class ThreadManager extends EventEmitter {
       }
       return { steered: false }
     }
-    if (userInitiated) this.userMessageAccepted?.(threadId)
+    if (userInitiated) { this.userMessageAccepted?.(threadId); this.presetUserAccepted?.(threadId) }
     const turn = active.turn
     const item = { type: 'steer', id: `steer-${randomUUID()}`, text, images, at: Date.now(), ...(plan ? { plan: true } : {}) }
     if (messageId) item.messageId = messageId
@@ -1251,7 +1258,7 @@ export class ThreadManager extends EventEmitter {
     if (!userInitiated) return undefined
     const objective = goalCommandObjective(text)
     if (objective === undefined) return undefined
-    if (thread.ab || thread.team?.childId) throw new Error('/goalは通常のdshタスク、eco・TMのdshの親で使えます。AB・子では使えません。')
+    if (thread.preset || thread.ab || thread.team?.childId) throw new Error('/goalは通常のdshタスク、eco・TMのdshの親で使えます。AB・子では使えません。')
     if (plan) throw new Error('/goalはPlanをオフにして送信してください。')
     return objective
   }
@@ -1273,7 +1280,7 @@ export class ThreadManager extends EventEmitter {
     const active = this.active.get(threadId)
     if (!active) {
       const thread = this.threads.get(threadId)
-      if (thread?.sessionId && this.teamGoalWaiting?.(thread) !== undefined) {
+      if (thread?.sessionId && this.goalWaiting(thread) !== undefined) {
         await this.pool.holderOf(thread.sessionId)?.cancel(thread.sessionId, true)
       }
       return
@@ -1285,7 +1292,7 @@ export class ThreadManager extends EventEmitter {
     }
     this.#resolvePermissions(threadId, null)
     const thread = this.threads.get(threadId)
-    const controlled = thread && this.teamGoalWaiting?.(thread) !== undefined
+    const controlled = thread && this.goalWaiting(thread) !== undefined
     const runtime = active.runtime ?? (controlled && thread.sessionId ? this.pool.holderOf(thread.sessionId) : null)
     if (runtime && thread?.sessionId && (controlled || active.phase === 'prompting')) {
       active.cancelTask ??= (controlled ? runtime.cancel(thread.sessionId, true) : runtime.cancel(thread.sessionId)).catch(() => {})
@@ -1333,6 +1340,11 @@ export class ThreadManager extends EventEmitter {
     const thread = threadId && this.threads.get(threadId)
     const active = threadId && this.active.get(threadId)
     if (!thread || !active || active.cancelled) {
+      return Promise.resolve({ outcome: { outcome: 'cancelled' } })
+    }
+    if (thread.preset) {
+      active.turn.items.push({ type: 'notice', id: 'preset-permission-' + randomUUID(), level: 'warning', text: '担当の権限外の操作は拒否しました。必要な権限を確認し、明示的に再実行してください。' })
+      this.#emitTurn(threadId, active.turn, true)
       return Promise.resolve({ outcome: { outcome: 'cancelled' } })
     }
     if (active.turn.outputSpeed?.state === 'streaming') {

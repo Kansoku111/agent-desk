@@ -17,6 +17,7 @@ import { ConfirmDialog } from './Modal'
 import { Dropdown, MenuItem } from './Popover'
 import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
+import { TaskPresetRuns } from './TaskPresets'
 import { TerminalChat, useConversation } from './TerminalChat'
 import { TerminalModelPicker } from './TerminalPickers'
 import { Elapsed } from './TurnView'
@@ -170,7 +171,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
         >
           {mode === 'chat' ? <SquareTerminal size={16} /> : <MessageSquare size={16} />}
         </button>
-        <OpenInMenu workspace={terminal.workspace} />
+        <OpenInMenu workspace={terminal.workspace} task={!terminal.team && !team ? { kind: 'terminal', id: terminal.id } : undefined} />
         <Dropdown
           placement="bottom"
           align="right"
@@ -698,6 +699,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
   return (
     <div className="thread-view terminal-view">
       <Header terminal={terminal} mode={mode} onMode={chooseMode} onRestart={() => void restart()} />
+      <TaskPresetRuns source={{ kind: 'terminal', id: terminal.id }} />
       <div className="thread-body">
         <div className="thread-main">
           {screen && mismatch && (

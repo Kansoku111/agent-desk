@@ -183,8 +183,8 @@ export class TeamManager extends EventEmitter {
       const team = thread.team && this.teams.get(thread.team.id)
       return team && team.leaderId === thread.id ? this.#goalWaiting(team, options) : undefined
     }
-    threads.executionGuard = (record) => this.guardExecution(record)
-    terminals.executionGuard = (record) => this.guardExecution(record)
+    threads.executionGuard = (record, context) => this.guardExecution(record, context)
+    terminals.executionGuard = (record, context) => this.guardExecution(record, context)
 
     threads.on('thread', (thread) => this.#onThread(thread))
     threads.on('usage-priced', (thread) => this.#onUsagePriced(thread))
@@ -695,7 +695,8 @@ export class TeamManager extends EventEmitter {
     }, { ...state, closed: child.closed, mode: child.execution?.mode ?? null, phase: child.execution?.phase ?? null })
   }
 
-  guardExecution(record) {
+  guardExecution(record, context) {
+    this.presetGuard?.(record, context)
     if (!record?.workspace) return
     const owner = record.team?.role === 'leader' ? this.teams.get(record.team.id) : null
     if (this.retiringLeaders.has(record.id) || (record.team?.role === 'leader' && (!owner || (owner.leaderId && owner.leaderId !== record.id && !this.fallingBack.has(owner.id)))) || [...this.teams.values()].some((team) => team.retiredLeaders?.some((entry) => entry.id === record.id))) throw new Error('このリーダーは切り替え済みです。現在のリーダーを開いてください')

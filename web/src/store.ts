@@ -1,7 +1,7 @@
 // App state plus the WebSocket connection to the Agent Desk server.
 import { useSyncExternalStore } from 'react'
 import type {
-  AppState, Attachment, ClaudeAuthConfirmation, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
+  TaskPresetSource, TaskPresetKind, AppState, Attachment, ClaudeAuthConfirmation, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
 } from './types'
 import { Outbox, readQueues, type QueuedMessage } from './outbox'
 import { RpcClient, requestErrorMessage } from './rpc-client'
@@ -41,6 +41,8 @@ export interface State {
   teamStart: string | null
   executionStart: string | null
   abStart: string | null
+  presetStart: { source: TaskPresetSource; kind: TaskPresetKind } | null
+  presetRun: string | null
   /** The confirmation for "build and restart" (the open menu). */
   restartConfirm: boolean
   sidebarOpen: boolean
@@ -170,6 +172,8 @@ let state: State = {
   teamStart: null,
   executionStart: null,
   abStart: null,
+  presetStart: null,
+  presetRun: null,
   restartConfirm: false,
   sidebarOpen: !isNarrow(),
   toasts: [],
@@ -348,6 +352,11 @@ function handleFrame(frame: any) {
       if (!server) break
       updateServer({ terminals: server.terminals.filter((terminal) => terminal.id !== frame.terminalId) })
       if (state.route.view === 'terminal' && state.route.id === frame.terminalId) navigate({ view: 'home' })
+      break
+    }
+    case 'taskPreset': {
+      const runs = state.server?.taskPresets ?? []
+      updateServer({ taskPresets: [...runs.filter((run) => run.id !== frame.run.id), frame.run] })
       break
     }
     case 'ab': {

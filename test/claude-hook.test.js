@@ -45,4 +45,9 @@ test('a prompt is not forwarded, only the team messages it carries', async (t) =
   assert.deepEqual(own.event.team_marks, [])
   const stop = await forward(t, { hook_event_name: 'Stop', last_assistant_message: 'done' })
   assert.equal(stop.event.team_marks, undefined)
+  const id = '01234567-1234-4567-89ab-0123456789ab'
+  const preset = await forward(t, { hook_event_name: 'UserPromptSubmit', prompt: '[Agent Desk: 独立レビュー / ' + id + ']\nprivate instructions' })
+  assert.deepEqual(preset.event.task_preset_marks, [id])
+  assert.equal(preset.event.prompt, undefined)
+  assert.equal(JSON.stringify(preset).includes('private instructions'), false)
 })

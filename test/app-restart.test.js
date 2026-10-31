@@ -112,7 +112,7 @@ test('the open menu offers restart on PC and phone, behind a confirmation', asyn
   assert.match(menu, /!remote && targets\?\.terminal/)
   for (const [file, workspace] of [['ThreadView', 'thread'], ['TerminalView', 'terminal'], ['AgentView', 'team'], ['Ab', 'run']]) {
     const code = await read(`components/${file}.tsx`)
-    assert.ok(code.includes(`<OpenInMenu workspace={${workspace}.workspace} />`), file)
+    assert.ok(code.includes(`<OpenInMenu workspace={${workspace}.workspace}`), file)
     assert.ok(!code.includes('{!remote && <OpenInMenu'), file)
   }
 })

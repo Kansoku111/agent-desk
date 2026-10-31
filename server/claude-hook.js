@@ -26,6 +26,7 @@ process.stdin.on('end', async () => {
   // knows its leader took a message even when Claude Code took it long after it was typed.
   if (rest.hook_event_name === 'UserPromptSubmit' && typeof prompt === 'string') {
     rest.team_marks = [...prompt.matchAll(/\[Agent Desk チーム\] #([0-9a-f]{8})/g)].map((match) => match[1])
+    rest.task_preset_marks = [...prompt.matchAll(/\[Agent Desk: (?:子に委託|独立レビュー) \/ ([a-f0-9-]{36})\]/g)].map((match) => match[1])
   }
   // A team child's report is the reply its turn ended with; keep it under the server's size limit.
   if (typeof rest.last_assistant_message === 'string' && rest.last_assistant_message.length > MAX_REPLY) {

@@ -48,6 +48,7 @@ export const DEFAULT_SETTINGS = {
   projectColors: {},
   // null keeps each model's context size / leaves the fixed-model tool out.
   contextLimits: { 'openai-codex': null, anthropic: null },
+  taskPresets: { delegate: { model: null, effort: null }, review: { model: null, effort: null } },
   subagentsEnabled: true,
   subagentModels: { 'openai-codex': null, anthropic: null },
   subagentEfforts: { 'openai-codex': null, anthropic: null },
@@ -125,6 +126,21 @@ export function planSettingsUpdate(current, patch, now) {
       next.contextLimits[provider] = value
     }
     effects.homePatch = true
+  }
+  if (owns(patch, 'taskPresets')) {
+    assertRecord(patch.taskPresets, 'taskPresets')
+    next.taskPresets = { ...structuredClone(DEFAULT_SETTINGS.taskPresets), ...current.taskPresets }
+    for (const role of ['delegate', 'review']) {
+      if (!owns(patch.taskPresets, role)) continue
+      const value = patch.taskPresets[role]
+      assertRecord(value, 'taskPresets.' + role)
+      const choice = { ...next.taskPresets[role] }
+      for (const key of ['model', 'effort']) if (owns(value, key)) {
+        if (value[key] !== null && (typeof value[key] !== 'string' || value[key].length > (key === 'model' ? 1000 : 100))) throw new Error('プリセットのモデル・推論設定が不正です')
+        choice[key] = value[key]
+      }
+      next.taskPresets[role] = choice
+    }
   }
   if (owns(patch, 'subagentModels')) {
     assertRecord(patch.subagentModels, 'subagentModels')

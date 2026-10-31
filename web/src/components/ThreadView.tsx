@@ -3,9 +3,10 @@ import {
   ArrowDown, Bot, ChevronDown, Copy, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, RotateCw, SquareTerminal, Trash2,
 } from 'lucide-react'
 import { act, setState, setSubagentPanel, toast, useRemote, useStore } from '../store'
-import type { ThreadSummary, Turn } from '../types'
+import type { TaskPresetSource, ThreadSummary, Turn } from '../types'
 import { copyText, undoableRestore, workspaceLabel } from '../util'
 import { Composer } from './Composer'
+import { TaskPresetRuns } from './TaskPresets'
 import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
 import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
@@ -27,7 +28,7 @@ function useGit(workspace: string, refreshKey: unknown) {
   return git
 }
 
-export function OpenInMenu({ workspace }: { workspace: string }) {
+export function OpenInMenu({ workspace, task }: { workspace: string; task?: TaskPresetSource }) {
   const remote = useRemote()
   const targets = useStore((state) => state.server?.openTargets)
   return (
@@ -62,6 +63,11 @@ export function OpenInMenu({ workspace }: { workspace: string }) {
               copyText(workspace).then(() => toast('パスをコピーしました', 'success'), () => toast('コピーできませんでした', 'error'))
             }}
           />
+          {task && <>
+            <MenuDivider />
+            <MenuItem label="子に委託" onSelect={() => { close(); setState({ presetStart: { source: task, kind: 'delegate' } }) }} />
+            <MenuItem label="独立レビュー" onSelect={() => { close(); setState({ presetStart: { source: task, kind: 'review' } }) }} />
+          </>}
           <MenuDivider />
           <MenuItem
             icon={<RotateCw size={14} />}
@@ -160,7 +166,7 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
       <div className="header-right">
         {panelTeam && <TeamToggle team={panelTeam} />}
         <SubagentToggle threadId={thread.id} />
-        <OpenInMenu workspace={thread.workspace} />
+        <OpenInMenu workspace={thread.workspace} task={!panelTeam && !thread.ab && !thread.preset ? { kind: 'thread', id: thread.id } : undefined} />
         <Dropdown
           placement="bottom"
           align="right"
@@ -215,6 +221,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   return (
     <div className="thread-view">
       <Header thread={thread} />
+      <TaskPresetRuns source={{ kind: 'thread', id: thread.id }} />
       <div className="thread-body">
         <div className="thread-main">
           <div

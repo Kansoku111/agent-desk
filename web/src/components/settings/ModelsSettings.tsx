@@ -6,6 +6,7 @@ import { byNewest, providerReady } from '../Pickers'
 import { isModelVisible } from '../../model-selection'
 import { effortLabel, pickableEfforts } from '../../util'
 import { CLAUDE_CODE } from '../WorkflowModelField'
+import { TaskPresetModels } from '../TaskPresets'
 
 function contextLabel(tokens: number) {
   return tokens >= 1_000_000 ? `${tokens / 1_000_000}M` : `${Math.round(tokens / 1000)}K`
@@ -264,6 +265,7 @@ export function ModelsSettings({ contextOptions }: { contextOptions: number[] })
       <ModelVisibility />
       <FastMode />
       <ContextSizes contextOptions={contextOptions} />
+      <TaskPresetModels />
       <Subagents />
     </div>
   )

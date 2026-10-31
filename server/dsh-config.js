@@ -350,6 +350,15 @@ export function abPatch({ subagents = [], persona = null, writable = false, lean
     { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable } }] },
   ])
 }
+export async function writeTaskPresetPatch(file, options) {
+  const rows = YAML.parse(abPatch({ ...options, writable: true }))
+  const policy = rows.find((row) => row.insert)?.insert[0]
+  policy.id = 'agent-desk-task-preset-policy'
+  policy.name = new URL('./task-preset-policy-plugin.js', import.meta.url).href
+  policy.config = {}
+  return writePatch(file, YAML.stringify(rows))
+}
+
 export async function writeAbPatches(paths, options) {
   const results = await Promise.all([
     writePatch(paths.abLeanPatch, abPatch({ ...options, lean: true })),

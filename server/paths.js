@@ -45,6 +45,7 @@ export function appPaths(home = defaultAppHome()) {
     abLeanPatch: path.join(home, 'ab-lean.patch.yml'),
     abResearchPatch: path.join(home, 'ab-research.patch.yml'),
     abWritePatch: path.join(home, 'ab-write.patch.yml'),
+    taskPresetPatch: path.join(home, 'task-preset.patch.yml'),
     // The headless dsh behind a Claude Code task's subagent_gpt (dsh-config.js gptSubagentPatch).
     gptSubagentPatch: path.join(home, 'gpt-subagent.patch.yml'),
     dshHome,

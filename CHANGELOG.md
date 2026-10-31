@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add on-demand “子に委託” and independent review-and-fix presets to normal task open menus, with role-specific model/effort settings, isolated workers, guarded writes, saved diffs/checks, and explicit-only “本セッションに渡す”. Completion never automatically prompts the parent; no permanent delegation MCP is added.
 - Add Settings → Skills to list the skills available in a project by scope and source folder, mark skills overridden by a same-named one, reveal their files and delete them. On request, translate non-Japanese descriptions with Claude Code (`haiku`, low effort, no tools) under an already confirmed auth mode and cache them in `skill-translations.json`. Skill files are only changed by the delete button, which asks first and permanently removes the skill's folder (never a symlink target or a bundled skill). Saved settings and sessions are unchanged.
 
 ### Changed

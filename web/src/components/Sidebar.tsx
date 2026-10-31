@@ -641,7 +641,7 @@ export function Sidebar() {
     const shown = (task: { archived: boolean; title: string; workspace: string }) => Boolean(task.archived) === archived
       && (!needle || task.title.toLowerCase().includes(needle) || task.workspace.toLowerCase().includes(needle))
     // A team's children show in their leader's panel, not as tasks of their own.
-    const visible = threads.filter((thread) => !thread.team?.childId && !thread.ab && shown(thread))
+    const visible = threads.filter((thread) => !thread.team?.childId && !thread.ab && !thread.preset && shown(thread))
     const visibleTerminals = terminals.filter((terminal) => shown(terminal))
     // My PC first, then projects in recent-use order, then any project only a task remembers.
     const order = [myPc, ...workspaces, ...threads.map((thread) => thread.workspace), ...terminals.map((terminal) => terminal.workspace), ...ab.map((run) => run.workspace)].filter(Boolean)

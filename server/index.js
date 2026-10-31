@@ -16,7 +16,7 @@ import { Checkpoints } from './checkpoints.js'
 import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF,
 } from './credentials.js'
-import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches } from './dsh-config.js'
+import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
 import { createAppRestarter } from './app-restart.js'
@@ -53,6 +53,7 @@ import { TeamManager } from './teams.js'
 import { ClaudeRunner } from './claude-runner.js'
 import { AbManager, validateAbModel } from './ab.js'
 import { AbRunner } from './ab-runner.js'
+import { TaskPresets } from './task-presets.js'
 import { createAbHandlers } from './rpc-handlers-ab.js'
 import { claimDataFolder } from './single-instance.js'
 import { createRequestHandler, listenWithRetry } from './http-routes.js'
@@ -153,7 +154,7 @@ const terminals = await new TerminalManager({
   log,
 }).load()
 /** Whether an agent or a Claude Code task is working: the app must not exit or be replaced then. */
-const busy = () => threads.busy || terminals.busy || agents.busy || teams.busy || ab.busy || abAgents.busy
+const busy = () => threads.busy || terminals.busy || agents.busy || teams.busy || ab.busy || abAgents.busy || presets.busy || presetAgents.busy
 
 async function accounts() {
   let snapshot = { refs: {}, records: {} }
@@ -374,7 +375,8 @@ async function applyHomePatch() {
   // Read by each subagent_gpt call, so no runtime restarts for it.
   await writeGptSubagentPatch(paths.gptSubagentPatch, { subagents, persona, subagentsEnabled: settings.subagentsEnabled !== false })
   const abChanged = await writeAbPatches(paths, { subagents, persona })
-  return home || children || abChanged
+  const presetsChanged = await writeTaskPresetPatch(paths.taskPresetPatch, { subagents, persona })
+  return home || children || abChanged || presetsChanged
 }
 await applyHomePatch()
 
@@ -470,6 +472,28 @@ ab.on('removed', ({ id }) => broadcast('abRemoved', { id }))
 ab.on('fault', (error) => log('AB:', error.message))
 abRunner.on('fault', (error) => log('AB runner:', error.message))
 ab.on('notify', (notification) => broadcast('notify', notification))
+
+const presetAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'task-preset-agents'),
+  preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
+const presets = await new TaskPresets({
+  dir: path.join(paths.home, 'task-presets'), threads, terminals, agents: presetAgents, teams,
+  catalog: () => catalogState(), settings: getSettings, mcpServers: mcpServersFor,
+  instructions: () => effectiveCustomInstructions(settings),
+  writers: () => ab.list().flatMap((run) => run.jobs.filter((job) => job.writable && ['running', 'stopping'].includes(job.status)).map(() => ({ title: run.title, workspace: run.workspace }))),
+  validateModel: (value) => validateAbModel(value, catalogState(), settings.modelVisibility),
+  authorize: async ({ workspace, model, authConfirmation }) => {
+    if (!model.startsWith('claude:')) return
+    await teams.confirmAbAuth(workspace, authConfirmation)
+    const problem = await teams.claudeAuth.guard(null, teams.claudeAuth.context(workspace))
+    if (problem) throw new Error(problem)
+  },
+}).load()
+teams.presetGuard = (record, context) => presets.guard(record, context)
+threads.presetGoalWaiting = (thread, options) => presets.goalWaiting(thread, options)
+threads.presetUserAccepted = (id) => presets.userAccepted(id)
+threads.presetSettingsGuard = (thread) => presets.guard(thread)
+presets.on('run', (run) => broadcast('taskPreset', { run }))
+presets.on('fault', (error) => log('task preset:', error.message))
 
 // What each task's subagents are doing, read from their dsh logs (see subagents.js).
 const subagents = new SubagentTracker({
@@ -698,6 +722,7 @@ async function fullState(client) {
     terminals: terminals.list(),
     teams: teams.list(),
     ab: ab.list(),
+    taskPresets: presets.list(),
     runtime: pool.status(),
     login: login.state,
     codexLogin: client?.remote ? { phase: 'idle' } : codexApp.login,
@@ -754,6 +779,13 @@ const handlers = {
   ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
 
   ...createAbHandlers(ab),
+  'preset.inspect': ({ source }) => presets.inspect(source),
+  'preset.create': (input) => presets.create(input),
+  'preset.get': ({ runId }) => presets.get(runId),
+  'preset.evidence': ({ runId, kind, index }) => presets.readEvidence(runId, kind, index),
+  'preset.stop': ({ runId }) => presets.stop(runId),
+  'preset.resume': ({ runId }) => presets.resume(runId),
+  'preset.deliver': ({ runId }) => presets.deliver(runId),
 
   'state.get': (_params, client) => fullState(client),
 
@@ -886,11 +918,14 @@ async function shutdown(code = 0) {
   clearInterval(opencodeGoTimer)
   // Request cancellation first, then close the transports as well. A stalled
   // ACP cancellation must not keep shutdown waiting forever for its prompt.
+  const presetsDrained = presets.shutdown().catch((error) => log('preset shutdown:', error.message))
   const abDrained = ab.shutdown().catch((error) => log('AB shutdown:', error.message))
   const drained = threads.shutdown().catch((error) => log('thread shutdown:', error.message))
   await pool.pause().catch((error) => log('runtime shutdown:', error.message))
   await drained
   await abDrained
+  await presetsDrained
+  await presetAgents.shutdown().catch((error) => log('preset agents shutdown:', error.message))
   await pricingDrained
   await abAgents.shutdown().catch((error) => log('AB agents shutdown:', error.message))
   await teams.stop().catch((error) => log('team shutdown:', error.message))

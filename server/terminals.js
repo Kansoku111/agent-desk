@@ -661,7 +661,7 @@ export class TerminalManager extends EventEmitter {
   }
 
   /** A message typed outside the terminal screen: pasted (keeping its line breaks) and sent with Enter. */
-  async sendMessage(id, text) {
+  async sendMessage(id, text, context) {
     const live = await this.#whenReady(id)
     const record = this.#record(id)
     if (typeof text !== 'string') return
@@ -680,7 +680,7 @@ export class TerminalManager extends EventEmitter {
       try {
         if (!current()) throw new Error('Claude Code が動いていません')
         if (live.sendBlocked) throw new Error('前回の送信状態が不明です。再起動してから送信してください。')
-        this.executionGuard?.(record)
+        this.executionGuard?.(record, context)
         // A paste marker inside the text would end the paste early and send the rest as typed keys.
         if (text) {
           bodyAttempted = true

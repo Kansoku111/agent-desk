@@ -7,6 +7,7 @@ import { ExecutionStartDialog } from './components/ExecutionSettings'
 import { Sidebar } from './components/Sidebar'
 import { AbStartDialog, AbView } from './components/Ab'
 import { ThreadView } from './components/ThreadView'
+import { TaskPresetDialogs } from './components/TaskPresets'
 import { AgentView } from './components/AgentView'
 import { FileMenuHost } from './components/FileRef'
 import { lazyChunk } from './lazy-chunk'
@@ -166,6 +167,7 @@ export function App() {
           }}
         />
       )}
+      <TaskPresetDialogs />
       <Toasts />
       <FileMenuHost />
     </div>
