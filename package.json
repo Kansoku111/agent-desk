@@ -1,6 +1,6 @@
 {
   "name": "agent-desk",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "type": "module",
   "description": "Codex-style desktop for agents running on DeepSeek Harness (ChatGPT subscription + Claude API key)",
