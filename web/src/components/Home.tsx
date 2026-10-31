@@ -48,9 +48,7 @@ export function Home() {
         </header>
       )}
       <div className="home-center">
-        <h1 className="home-title">
-          {draft.workspace ? <>何を作りましょうか？</> : <>ワークスペースを選んで始めましょう</>}
-        </h1>
+        {!draft.workspace && <h1 className="home-title">ワークスペースを選んで始めましょう</h1>}
         <div className="home-workspace">
           <WorkspacePicker
             value={draft.workspace}
