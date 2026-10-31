@@ -43,7 +43,7 @@ test('pins survive collapsed and expanded row quotas without hiding recent or ac
 
 test('thread RPC pins a running task, broadcasts and restores state, independently of archive', async (t) => {
   const f = await fixture(t)
-  const rpc = createThreadHandlers({ threads: f.manager, mutateSettings: async () => {} })
+  const rpc = createThreadHandlers({ paths: f.paths, threads: f.manager, mutateSettings: async () => {} })
   assert.equal(f.thread.pinned, false, 'old records default to unpinned')
   await f.manager.send(f.thread.id, { text: 'working' })
   await f.started.promise
