@@ -87,6 +87,22 @@ const api = {
     labels.push('independent review: explicit target, repair contract, no auto-return, no overflow')
     return labels
   },
+  async failures() {
+    const sent = requests.filter((entry) => entry.type === 'preset.deliver').length
+    const calls = parentCalls
+    current = { id: 'failed-start-' + ++sequence, source, kind: 'delegate', model: delegate, effort: 'low', title: '制作の相談', workspace: 'fixture', phase: 'needs-attention', createdAt: sequence, updatedAt: sequence, report: '', error: '開始状況を確認してください', permissionMode: 'workspace-write' }
+    server.taskPresets.push(current); publish(); store.setState({ presetRun: current.id }); render(); await tick(200)
+    check(document.body.textContent?.includes('担当は開始していません'), 'startup failure is distinct from a worker report')
+    check(!button('本セッションに渡す') && !button('送信済み'), 'startup metadata cannot be returned as a worker report')
+    current = { ...current, id: 'no-report-' + ++sequence, worker: { kind: 'thread', id: 'worker-no-report' }, phase: 'stopped', createdAt: sequence, updatedAt: sequence }
+    server.taskPresets.push(current); publish(); store.setState({ presetRun: current.id }); await tick(200)
+    check(document.body.textContent?.includes('担当からの報告はまだありません'), 'allocated worker alone is not a report')
+    check(button('同じ担当で続ける'), 'explicit continuation remains available')
+    check(!button('本セッションに渡す'), 'no-report attempt cannot be returned')
+    check(requests.filter((entry) => entry.type === 'preset.deliver').length === sent && parentCalls === calls, 'opening failures never prompts the parent')
+    check(document.documentElement.scrollWidth <= innerWidth, 'failure copy fits the viewport')
+    return ['startup error is not a worker report', 'no-report state cannot prompt the parent', 'explicit continuation remains available']
+  },
   async showSettings() { store.setState({ presetRun: null, presetStart: null }); root.render(<div className="settings-section" style={{ maxWidth: 600, margin: '30px auto', padding: 16 }}><TaskPresetModels /></div>); await tick() },
   async showReview() { render(); store.setState({ presetRun: current.id }); await tick(150) },
 }

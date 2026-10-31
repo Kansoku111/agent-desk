@@ -162,6 +162,7 @@ test('EX source fingerprint reports a timeout instead of waiting indefinitely on
   assert.ok(blocked, 'the source file was reached')
   assert.ok(outcome, 'the source read must finish at its deadline')
   assert.match(outcome.error?.message ?? '', /ソース.*時間/)
+  assert.equal(outcome.error?.code, 'SOURCE_SNAPSHOT_LIMIT')
 })
 
 test('EX persists checks per project and records actual command results', async (t) => {

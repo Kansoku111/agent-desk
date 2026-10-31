@@ -208,7 +208,7 @@ export class Checkpoints {
   async #snapshot(repo, ref) {
     const skipFile = path.join(repo.gitDir, 'skip.json')
     const skip = await fs.readFile(skipFile, 'utf8').then(JSON.parse).catch(() => null)
-    if (skip && Date.now() - skip.at < SKIP_MS) throw new Error(skip.reason)
+    if (skip && Date.now() - skip.at < SKIP_MS) throw Object.assign(new Error(skip.reason), { code: 'CHECKPOINT_SNAPSHOT_LIMIT' })
     // A snapshot cut off by a timeout or a crash leaves the index locked.
     await fs.rm(path.join(repo.gitDir, 'index.lock'), { force: true })
     let warning = null
@@ -234,7 +234,7 @@ export class Checkpoints {
         const reason = 'フォルダ内のファイルが多すぎるため、変更を戻すための保存を省略しました。'
         await fs.writeFile(skipFile, JSON.stringify({ at: Date.now(), reason })).catch(() => {})
         await fs.rm(path.join(repo.gitDir, 'index.lock'), { force: true })
-        throw new Error(reason)
+        throw Object.assign(new Error(reason), { code: 'CHECKPOINT_SNAPSHOT_LIMIT' })
       }
       throw error
     }

@@ -13,6 +13,9 @@ import { gitPresetReview, presetFileScope } from './task-preset-evidence.js'
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const finalText = (turn) => (turn?.items ?? []).filter((item) => item.type === 'agent').at(-1)?.text ?? ''
 const sourceKey = (source) => source.kind + ':' + source.id
+const recordingWarning = (run) => run.snapshotUnavailable
+  ? 'フォルダー全体の変更確認・差分保存は上限のため省略します。担当自身の成果物と確認結果を参照してください。理由: ' + run.snapshotUnavailable
+  : run.diffUnavailable ? 'フォルダー全体の差分保存は上限のため省略します。変更がないことを意味しません。理由: ' + run.diffUnavailable : ''
 export class TaskPresets extends EventEmitter {
   constructor({ dir, threads, terminals, agents, teams, catalog, settings, validateModel, authorize, mcpServers = () => [], instructions = () => '', writers = () => [], snapshot = sourceSnapshot }) {
     super()
@@ -188,7 +191,14 @@ export class TaskPresets extends EventEmitter {
     try {
       const conversation = source.kind === 'thread' ? await this.threads.get(source.id) : await this.terminals.conversation(source.id)
       run.parentTurnIds = conversation.turns.map((turn) => turn.id)
-      run.parentBefore = (await this.snapshot(run.workspace)).hash
+      try { run.parentBefore = (await this.snapshot(run.workspace, run.kind === 'delegate' && !run.checks.length ? { timeoutMs: 10_000 } : undefined)).hash }
+      catch (error) {
+        // Optional recording must not turn an unrelated asset library into a task prerequisite.
+        // Explicit checks and independent review still require their original evidence.
+        if (run.kind !== 'delegate' || run.checks.length || error.code !== 'SOURCE_SNAPSHOT_LIMIT') throw error
+        run.snapshotUnavailable = error.message
+        run.warning = recordingWarning(run)
+      }
       this.assertLive(run)
       if (source.kind === 'thread') await this.threads.setGoalWaiting(source.id, true)
       this.assertLive(run)
@@ -229,7 +239,7 @@ export class TaskPresets extends EventEmitter {
     const result = parsePresetBrief(run.parentReport, run)
     run.brief = result.brief
     if (result.status === 'needs_input') { run.phase = 'needs-attention'; run.error = result.questions; return this.save(run) }
-    if ((await this.snapshot(run.workspace)).hash !== run.parentBefore) throw new Error('指示の作成中にソースが変更されました。内容を確認して再度開始してください。')
+    if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== run.parentBefore) throw new Error('指示の作成中にソースが変更されました。内容を確認して再度開始してください。')
     await this.launch(run)
   }
   async evidence(run) {
@@ -248,6 +258,15 @@ export class TaskPresets extends EventEmitter {
     const after = await this.threads.checkpoints.snapshot(run.workspace)
     return { ...await this.threads.checkpoints.reviewDiff(run.workspace, turn.checkpoint.before, after.commit, after.omitted), warning: after.warning }
   }
+  async captureCheckpoint(run, phase) {
+    try { return await this.checkpoints.snapshot(run.workspace, run.id + '/' + phase) }
+    catch (error) {
+      if (run.kind !== 'delegate' || error.code !== 'CHECKPOINT_SNAPSHOT_LIMIT') throw error
+      run.diffUnavailable = error.message
+      run.warning = recordingWarning(run)
+      return null
+    }
+  }
   async launch(run) {
     this.assertLive(run)
     const folder = path.join(this.dir, 'runs', run.id)
@@ -259,12 +278,12 @@ export class TaskPresets extends EventEmitter {
       run.originalPatch = path.join(folder, 'original.patch')
       await writeText(run.originalPatch, evidence.patch)
     }
-    run.baseline = await this.checkpoints.snapshot(run.workspace, run.id + '/before')
+    run.baseline = run.snapshotUnavailable ? null : await this.captureCheckpoint(run, 'before')
     run.record = path.join(folder, 'report.md')
     run.contract = path.join(folder, 'instructions.md')
     await writeText(run.contract, run.brief)
     this.assertLive(run)
-    if ((await this.snapshot(run.workspace)).hash !== run.parentBefore) throw new Error('担当の起動前にソースが変更されました。対象を確認し、再度開始してください。')
+    if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== run.parentBefore) throw new Error('担当の起動前にソースが変更されました。対象を確認し、再度開始してください。')
     this.assertLive(run)
     this.validateModel(run.model)
     if (run.model.startsWith('claude:')) {
@@ -282,7 +301,7 @@ export class TaskPresets extends EventEmitter {
     this.assertLive(run)
     run.phase = 'running'
     await this.save(run)
-    const prompt = [run.worker.kind === 'thread' ? workerPresetInstructions(run) : '', '依頼:\n' + run.brief, run.reviewEvidence ? 'レビュー対象（アプリ取得）:\n' + JSON.stringify(run.reviewEvidence) + '\n差分全文: ' + run.originalPatch : '', 'アプリが最後に実行する検証:\n' + JSON.stringify(run.checks) + '\n未選択の場合は検証未実行です。自分で必要な確認は省略しないでください。'].filter(Boolean).join('\n\n')
+    const prompt = [run.worker.kind === 'thread' ? workerPresetInstructions(run) : '', '依頼:\n' + run.brief, run.reviewEvidence ? 'レビュー対象（アプリ取得）:\n' + JSON.stringify(run.reviewEvidence) + '\n差分全文: ' + run.originalPatch : '', recordingWarning(run), 'アプリが最後に実行する検証:\n' + JSON.stringify(run.checks) + '\n未選択の場合は検証未実行です。自分で必要な確認は省略しないでください。'].filter(Boolean).join('\n\n')
     await this.sendWorker(run, prompt)
   }
   async sendWorker(run, text) {
@@ -291,7 +310,7 @@ export class TaskPresets extends EventEmitter {
     else await this.threads.send(run.worker.id, { text }, { presetRunId: run.id })
   }
   async retryWork(run, code, reason) {
-    const state = (await this.snapshot(run.workspace)).hash
+    const state = run.snapshotUnavailable ? null : (await this.snapshot(run.workspace)).hash
     const key = hash({ state, code })
     if (run.lastRetryKey === key) throw new Error('同じ未完了状態で進捗を確認できません: ' + reason)
     run.lastRetryKey = key
@@ -313,7 +332,12 @@ export class TaskPresets extends EventEmitter {
     if (result.status === 'verify' && (!run.checks.length || result.blocker)) throw new Error('登録コマンドだけの検証待ちではありません。担当の報告を確認してください。')
     run.phase = 'verifying'
     await this.save(run)
-    let verification = await this.verifier.verify({ id: run.id, folder: run.workspace, checks: run.checks })
+    let verification
+    if (run.snapshotUnavailable && !run.checks.length) {
+      const now = Date.now()
+      verification = { id: randomUUID(), ownerId: run.id, workspace: run.workspace, startedAt: now, finishedAt: now, status: 'unverified', checks: [], sourceHash: null, endHash: null, skippedReason: run.snapshotUnavailable, record: path.join(this.dir, 'runs', run.id, 'verification.json') }
+      await writeJson(verification.record, verification)
+    } else verification = await this.verifier.verify({ id: run.id, folder: run.workspace, checks: run.checks })
     if (verification.canRerun && !run.cancelled) verification = await this.verifier.verify({ id: run.id, folder: run.workspace, checks: run.checks, previousRun: verification })
     this.assertLive(run)
     run.verification = verification
@@ -323,13 +347,16 @@ export class TaskPresets extends EventEmitter {
       return this.retryWork(run, 'check:' + failed.id + ':' + failed.exitCode, 'アプリの検証が失敗しました。結果: ' + verification.record + '\nログ: ' + failed.log)
     }
     if (!['passed', 'unverified'].includes(verification.status)) throw new Error('検証を確定できません: ' + verification.status + (verification.error ? '\n' + verification.error : ''))
-    const after = await this.checkpoints.snapshot(run.workspace, run.id + '/after')
-    const diff = await this.checkpoints.reviewDiff(run.workspace, run.baseline.commit, after.commit, [...(run.baseline.omitted ?? []), ...after.omitted])
-    run.changedFiles = diff.files
-    run.patch = path.join(this.dir, 'runs', run.id, 'changes.patch')
-    run.warning = [run.reviewEvidence?.warning, run.baseline.warning, after.warning].filter(Boolean).join('\n')
-    await writeText(run.patch, diff.patch)
-    if ((await this.snapshot(run.workspace)).hash !== verification.endHash) throw new Error('検証後にソースが変更されました。再確認が必要です。')
+    const after = run.baseline?.commit ? await this.captureCheckpoint(run, 'after') : null
+    if (after) {
+      const diff = await this.checkpoints.reviewDiff(run.workspace, run.baseline.commit, after.commit, [...(run.baseline.omitted ?? []), ...after.omitted])
+      run.changedFiles = diff.files
+      run.patch = path.join(this.dir, 'runs', run.id, 'changes.patch')
+      await writeText(run.patch, diff.patch)
+      delete run.diffUnavailable
+    } else { delete run.changedFiles; delete run.patch }
+    run.warning = [recordingWarning(run), run.reviewEvidence?.warning, run.baseline?.warning, after?.warning].filter(Boolean).join('\n')
+    if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== verification.endHash) throw new Error('検証後にソースが変更されました。再確認が必要です。')
     if (result.status === 'verify') run.result = { ...result, status: 'complete', remaining: '', summary: result.summary + '\n\n登録されたアプリの検証が成功しました。' }
     run.phase = 'completed'
     run.error = null
@@ -407,6 +434,7 @@ export class TaskPresets extends EventEmitter {
   async deliver(id) {
     const run = this.require(id)
     if (PRESET_ACTIVE.has(run.phase)) throw new Error('担当が終了してから送信してください')
+    if (!run.worker || !(run.report?.trim() || run.result?.summary?.trim())) throw new Error('担当からの報告はまだありません。結果画面で開始状況を確認してください。')
     if (run.deliveredAt) return { sent: true }
     if (this.sends.has(id)) return this.sends.get(id)
     const task = (async () => {
@@ -416,7 +444,7 @@ export class TaskPresets extends EventEmitter {
       run.deliveryAttempted = true
       run.deliveryMessageId ??= randomUUID()
       await this.save(run)
-      const text = '[Agent Desk: ' + PRESET_LABEL[run.kind] + 'の結果 / ' + run.id + ']\n状態: ' + run.phase + '\n検証: ' + (run.verification?.status ?? '未実行') + '\n' + (run.result?.summary ?? run.report ?? '').slice(0, 5000) + '\n未完了: ' + (run.error || run.result?.remaining || 'なし') + '\n資料: ' + (run.record ?? '担当開始前') + (run.patch ? '\n修正差分: ' + run.patch : '') + '\nこれは担当の報告です。未検証事項を成功とみなさず、必要に応じて確認してください。'
+      const text = '[Agent Desk: ' + PRESET_LABEL[run.kind] + 'の結果 / ' + run.id + ']\n状態: ' + run.phase + '\n検証: ' + (run.verification?.status ?? '未実行') + (run.warning ? '\n注意: ' + run.warning : '') + '\n' + (run.result?.summary ?? run.report ?? '').slice(0, 5000) + '\n未完了: ' + (run.error || run.result?.remaining || 'なし') + '\n資料: ' + (run.record ?? '担当開始前') + (run.patch ? '\n修正差分: ' + run.patch : '') + '\nこれは担当の報告です。未検証事項を成功とみなさず、必要に応じて確認してください。'
       if (run.source.kind === 'thread') await this.threads.send(run.source.id, { text, messageId: run.deliveryMessageId }, { userInitiated: true })
       else await this.terminals.sendMessage(run.source.id, text)
       run.deliveredAt = Date.now()

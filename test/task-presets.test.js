@@ -8,10 +8,11 @@ import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { TaskPresets } from '../server/task-presets.js'
 import { TeamManager } from '../server/teams.js'
-import { parsePresetBrief, parsePresetResult, preparePresetPrompt, matchesPresetPrompt } from '../server/task-preset-protocol.js'
+import { parsePresetBrief, parsePresetResult, preparePresetPrompt, matchesPresetPrompt, workerPresetInstructions } from '../server/task-preset-protocol.js'
 import { gitPresetReview } from '../server/task-preset-evidence.js'
 import { createMcpServerList } from '../server/mcp-servers.js'
 import { runtimeKey } from '../server/runtime.js'
+import { sourceSnapshot } from '../server/execution.js'
 import { fixture as threadFixture } from './helpers/thread-manager.js'
 import { writeTaskPresetPatch } from '../server/dsh-config.js'
 import YAML from 'yaml'
@@ -69,6 +70,127 @@ test('one-shot envelopes reject wrong run, ambiguous blocks, extra fields and in
   assert.ok(matchesPresetPrompt(wrapped, preparePresetPrompt(run)))
   assert.equal(matchesPresetPrompt('extra instructions\n' + wrapped, preparePresetPrompt(run)), false)
   assert.equal(matchesPresetPrompt(wrapped.replace('id="123a">', 'id="different">'), preparePresetPrompt(run)), false)
+})
+
+const sourceLimit = () => Object.assign(new Error('検証対象が多すぎます。プロジェクト範囲を絞ってください'), { code: 'SOURCE_SNAPSHOT_LIMIT' })
+
+test('large plain-folder creative delegation prepares the parent and finishes without pretending whole-folder checks ran', async (t) => {
+  const f = await fixture(t)
+  const readdir = fs.readdir.bind(fs)
+  const entries = Array.from({ length: 100001 }, (_, index) => ({ name: 'asset-' + index, isDirectory: () => false }))
+  const mocked = t.mock.method(fs, 'readdir', (folder, ...args) => path.resolve(String(folder)) === f.workspace ? Promise.resolve(entries) : readdir(folder, ...args))
+  let reads = 0
+  f.manager.snapshot = async (...args) => { reads++; return sourceSnapshot(...args) }
+  f.manager.checkpoints.snapshot = async () => { throw new Error('whole-folder checkpoint must not be retried') }
+  f.manager.verifier.verify = async () => { throw new Error('unselected whole-folder checks must not be retried') }
+  try {
+    const run = await f.start({ instruction: 'AgentDrawで合意した絵を制作し、完成画像を確認する' })
+    assert.equal(run.phase, 'preparing')
+    assert.equal(f.threads.calls.length, 1, 'the actual parent still creates the brief')
+    assert.ok(run.snapshotUnavailable)
+    assert.match(run.warning, /全体.*差分/)
+    await f.complete(f.parent.id, brief(run, { brief: 'AgentDrawで合意した絵を制作。編集可能なソースと画像を保存し、画像を見て確認する。' }))
+    assert.equal(run.phase, 'running')
+    assert.equal(f.threads.threads.get(run.worker.id).workspace, f.workspace, 'do not silently change the workspace')
+    assert.match(f.threads.calls.at(-1).input.text, /AgentDraw/)
+    assert.match(f.threads.calls.at(-1).input.text, /artwork/)
+    await fs.mkdir(path.join(f.workspace, 'out'), { recursive: true })
+    await fs.writeFile(path.join(f.workspace, 'out', 'fixture.adraw.json'), JSON.stringify({ fixture: true }))
+    await f.complete(run.worker.id, result(run, { summary: '制作物と確認結果の報告' }))
+    assert.equal(run.phase, 'completed')
+    assert.equal(run.verification.status, 'unverified')
+    assert.equal(JSON.parse(await fs.readFile(run.verification.record, 'utf8')).endHash, null)
+    assert.equal(run.patch, undefined, 'unavailable is not an empty diff')
+    assert.equal(reads, 1, 'do not repeat an unsupported global scan')
+    assert.equal((await f.manager.inspect(f.source)).bases.length, 0, 'do not offer a nonexistent review baseline')
+    assert.equal(f.threads.calls.filter((call) => call.id === f.parent.id).length, 1, 'completion still never wakes the parent')
+    await f.manager.deliver(run.id)
+    assert.match(f.threads.calls.at(-1).input.text, /注意:.*全体/s)
+    assert.doesNotMatch(f.threads.calls.at(-1).input.text, /資料: 担当開始前/)
+  } finally { mocked.mock.restore() }
+})
+
+test('recording fallback never bypasses permission errors, selected checks, or review requirements', async (t) => {
+  const cases = [
+    { name: 'permissions', error: Object.assign(new Error('access denied'), { code: 'EACCES' }), input: {} },
+    { name: 'explicit checks', error: sourceLimit(), input: { command: 'node check.cjs' } },
+    { name: 'review', error: sourceLimit(), input: { kind: 'review', review: { mode: 'files', files: ['source.txt'] } } },
+  ]
+  for (const item of cases) await t.test(item.name, async (t) => {
+    const f = await fixture(t)
+    f.manager.snapshot = async () => { throw item.error }
+    const run = await f.start(item.input)
+    assert.equal(run.phase, 'needs-attention')
+    assert.equal(run.snapshotUnavailable, undefined)
+    assert.equal(run.worker, undefined)
+    assert.equal(f.threads.calls.length, 0)
+    await assert.rejects(f.manager.deliver(run.id), /報告|開始/)
+    assert.equal(f.threads.calls.length, 0, 'a startup error is not a worker report')
+    assert.equal(run.deliveryAttempted, undefined)
+  })
+})
+
+test('a new snapshot limit during parent preparation still fails closed', async (t) => {
+  const f = await fixture(t)
+  let calls = 0
+  f.manager.snapshot = async () => { if (++calls > 1) throw sourceLimit(); return { hash: 'original' } }
+  const run = await f.start()
+  await f.complete(f.parent.id, brief(run))
+  assert.equal(run.phase, 'needs-attention')
+  assert.equal(run.worker, undefined)
+  assert.equal(run.snapshotUnavailable, undefined)
+  await assert.rejects(f.manager.deliver(run.id), /報告|開始/)
+})
+
+test('checkpoint budget does not block delegated work, but its missing diff remains explicit', async (t) => {
+  for (const when of ['before', 'after']) await t.test(when, async (t) => {
+    const f = await fixture(t)
+    const snapshot = f.manager.checkpoints.snapshot.bind(f.manager.checkpoints)
+    f.manager.checkpoints.snapshot = async (workspace, ref) => {
+      if (ref.endsWith('/' + when)) throw Object.assign(new Error('checkpoint budget'), { code: 'CHECKPOINT_SNAPSHOT_LIMIT' })
+      return snapshot(workspace, ref)
+    }
+    const run = await f.start()
+    await f.complete(f.parent.id, brief(run))
+    assert.equal(run.phase, 'running')
+    await fs.writeFile(path.join(f.workspace, 'source.txt'), 'finished')
+    await f.complete(run.worker.id, result(run))
+    assert.equal(run.phase, 'completed')
+    assert.equal(run.snapshotUnavailable, undefined, 'fingerprinting remains enabled when only diff storage is unavailable')
+    assert.ok(run.verification.endHash)
+    assert.equal(run.patch, undefined)
+    assert.match(run.warning, /差分.*省略/)
+  })
+})
+
+test('checkpoint permission errors are not treated as optional recording budgets', async (t) => {
+  const f = await fixture(t)
+  f.manager.checkpoints.snapshot = async () => { throw Object.assign(new Error('checkpoint access denied'), { code: 'EACCES' }) }
+  const run = await f.start()
+  await f.complete(f.parent.id, brief(run))
+  assert.equal(run.phase, 'needs-attention')
+  assert.equal(run.worker, undefined)
+  assert.equal(run.diffUnavailable, undefined)
+  assert.match(run.error, /access denied/)
+  await assert.rejects(f.manager.deliver(run.id), /報告/)
+})
+
+test('an allocated worker with no report cannot forward application-only failure metadata', async (t) => {
+  const f = await fixture(t), run = await f.start()
+  await f.complete(f.parent.id, brief(run))
+  await f.manager.stop(run.id)
+  const count = f.threads.calls.length
+  assert.ok(run.worker)
+  await assert.rejects(f.manager.deliver(run.id), /報告/)
+  assert.equal(f.threads.calls.length, count)
+})
+
+test('task handoff retains requested creative tools and does not inherit an assistant-only consultation restriction', () => {
+  const run = { id: 'R', kind: 'delegate' }
+  assert.match(preparePresetPrompt(run), /スキル/)
+  assert.match(preparePresetPrompt(run), /利用者.*制約/)
+  assert.match(workerPresetInstructions(run), /artwork/)
+  assert.doesNotMatch(workerPresetInstructions(run), /running implementation worker/)
 })
 
 test('delegate completes one-way; only explicit delivery sends a parent prompt, once', async (t) => {

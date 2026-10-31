@@ -111,7 +111,7 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
       </div></details>
       {cli && inspection && <ClaudeAuthConsent workspace={inspection.workspace} taskPreset onChange={setAuth} />}
       {error && <p className="team-warning" role="alert">{error}</p>}
-      <div className="preset-start-note muted">{kind === 'review' ? '別モデルが指摘箇所の修正・検証まで行います。' : '現在のモデルが指示を作り、子が実装・検証します。'} 完了後、親には自動送信しません。</div>
+      <div className="preset-start-note muted">{kind === 'review' ? '別モデルが指摘箇所の修正・検証まで行います。' : '現在のモデルが指示を作り、子が実作業と確認を行います。'} 完了後、親には自動送信しません。</div>
       <div className="modal-actions"><button type="button" className="button" disabled={busy} onClick={close}>キャンセル</button>
         <button type="button" className="button primary" disabled={busy || !inspection || !ready || (cli && !auth.ready) || (kind === 'review' && ((scope === 'git' && !ref.trim()) || (scope === 'files' && !files.trim())))} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
     </div>
@@ -161,6 +161,7 @@ function ResultDialog({ id }: { id: string }) {
     return () => { alive = false; if (timer) clearInterval(timer) }
   }, [id, summary?.updatedAt, summary?.phase])
   const run = detail?.run ?? summary
+  const hasReport = !!(run?.worker && (run.report?.trim() || run.result?.summary?.trim()))
   const action = async (method: string) => {
     setBusy(true); setError('')
     try { await request('preset.' + method, { runId: id }) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
@@ -183,12 +184,13 @@ function ResultDialog({ id }: { id: string }) {
         {run.brief && <details><summary>親からの指示</summary><Markdown text={run.brief} workspace={run.workspace} /></details>}
         {detail?.turns.length ? <details><summary>作業記録</summary>{detail.turns.map((turn) => <TurnView key={turn.id} turn={turn} workspace={run.workspace} threadId={run.worker?.id ?? run.source.id} hideUser threadBusy={active(run)} undoable={false} />)}</details> : run.parentReport && <details><summary>親の回答</summary><Markdown text={run.parentReport} workspace={run.workspace} /></details>}
         {run.sourceGone && <p className="muted">元タスクは削除済みです。</p>}
-        {!active(run) && !run.sourceGone && <p className="muted">「本セッションに渡す」を押すと、元のモデルへ送信し、応答を開始します。</p>}
+        {!active(run) && !hasReport && !run.sourceGone && <p className="muted">{run.worker ? '担当からの報告はまだありません。' : '担当は開始していません。元の会話で依頼を確認し、「開く」から開始し直してください。'}</p>}
+        {!active(run) && hasReport && !run.sourceGone && <p className="muted">「本セッションに渡す」を押すと、元のモデルへ送信し、応答を開始します。</p>}
         <div className="modal-actions">
           {active(run) && <button type="button" className="button" disabled={busy || run.phase === 'stopping'} onClick={() => void action('stop')}><Square size={13} />停止</button>}
           {!active(run) && run.worker && !run.sourceGone && run.phase !== 'completed' && <button type="button" className="button" disabled={busy} onClick={() => void action('resume')}>同じ担当で続ける</button>}
           <button type="button" className="button" onClick={close}>閉じる</button>
-          {!active(run) && <button type="button" className="button primary" disabled={busy || run.sourceGone || !!run.deliveredAt} onClick={() => void action('deliver')}>{run.deliveredAt ? '送信済み' : '本セッションに渡す'}</button>}
+          {!active(run) && hasReport && <button type="button" className="button primary" disabled={busy || run.sourceGone || !!run.deliveredAt} onClick={() => void action('deliver')}>{run.deliveredAt ? '送信済み' : '本セッションに渡す'}</button>}
         </div>
       </>}
       {error && <p className="team-warning" role="alert">{error}</p>}

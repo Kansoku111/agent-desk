@@ -81,7 +81,7 @@ export async function sourceSnapshot(folder, { signal, timeoutMs = 120_000 } = {
           const name = path.join(relative, entry.name)
           if (entry.isDirectory()) { if (!PLAIN_IGNORED_DIRS.has(entry.name)) await walk(name) }
           else names.push(name)
-          if (names.length > 100_000) throw new Error('検証対象が多すぎます。プロジェクト範囲を絞ってください')
+          if (names.length > 100_000) throw Object.assign(new Error('検証対象が多すぎます。プロジェクト範囲を絞ってください'), { code: 'SOURCE_SNAPSHOT_LIMIT' })
         }
       }
       await walk('')
@@ -111,7 +111,7 @@ export async function sourceSnapshot(folder, { signal, timeoutMs = 120_000 } = {
     reading.throwIfAborted()
     return { hash: digest.digest('hex'), files, git }
   } catch (error) {
-    if (deadline.aborted && !signal?.aborted) throw new Error('ソースの確認が制限時間を超えました。プロジェクト範囲や読み取りに時間のかかるファイルを確認してください。')
+    if (deadline.aborted && !signal?.aborted) throw Object.assign(new Error('ソースの確認が制限時間を超えました。プロジェクト範囲や読み取りに時間のかかるファイルを確認してください。'), { code: 'SOURCE_SNAPSHOT_LIMIT' })
     throw error
   }
 }

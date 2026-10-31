@@ -19,6 +19,19 @@ async function setup(maxFileBytes = MAX_FILE_BYTES) {
   return { base, workspace, checkpoints, write, read, exists }
 }
 
+test('legacy checkpoint budget cooldowns expose a recording-only limit without changing the workspace', async (t) => {
+  const { base, workspace, checkpoints, write, read } = await setup()
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('source.txt', 'unchanged')
+  await checkpoints.snapshot(workspace, 'seed')
+  const repo = [...checkpoints.repos.values()][0]
+  const reason = 'フォルダ内のファイルが多すぎるため、変更を戻すための保存を省略しました。'
+  await fs.writeFile(path.join(repo.gitDir, 'skip.json'), JSON.stringify({ at: Date.now(), reason }))
+  const restored = new Checkpoints({ root: path.join(base, 'checkpoints') })
+  await assert.rejects(restored.snapshot(workspace), (error) => error.code === 'CHECKPOINT_SNAPSHOT_LIMIT' && error.message === reason)
+  assert.equal(await read('source.txt'), 'unchanged')
+})
+
 test('restore puts changed, deleted and created files back', async (t) => {
   const { base, workspace, checkpoints, write, read, exists } = await setup()
   t.after(() => fs.rm(base, { recursive: true, force: true }))
