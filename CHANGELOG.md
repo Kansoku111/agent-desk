@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add Settings → Skills to list the skills available in a project by scope and source folder, mark skills overridden by a same-named one, and reveal their files. Read-only; saved settings and sessions are unchanged.
+
 ## [0.1.8] - 2026-10-31
 
 ### Security

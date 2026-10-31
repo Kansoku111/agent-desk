@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { IMAGE_TYPES, isImageFile, isOtherFile, MAX_ATTACHMENT_BYTES, otherFileId } from './attachments.js'
-import { listSkills } from './skills.js'
+import { listSkillOverview, listSkills } from './skills.js'
 
 /** Handlers for thread tasks; index.js merges them into the request table. */
 export function createThreadHandlers({ paths, threads, teams, subagents, mutateSettings }) {
@@ -19,17 +19,19 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
     return saved
   }
 
+  async function skillWorkspace({ threadId, workspace }) {
+    if (threadId) workspace = (await threads.get(threadId)).thread.workspace
+    if (typeof workspace !== 'string' || !path.isAbsolute(workspace)) throw new Error('ワークスペースがありません')
+    return workspace
+  }
+
   return {
     'thread.get': ({ threadId }) => threads.get(threadId),
 
-    'skills.list': async ({ threadId, workspace }) => {
-      if (threadId) {
-        const { thread } = await threads.get(threadId)
-        workspace = thread.workspace
-      }
-      if (typeof workspace !== 'string' || !path.isAbsolute(workspace)) throw new Error('ワークスペースがありません')
-      return { skills: await listSkills(workspace, paths.dshHome) }
-    },
+    'skills.list': async (params) => ({ skills: await listSkills(await skillWorkspace(params), paths.dshHome) }),
+
+    // Settings → Skills: also the skills that lose to a same-named one.
+    'skills.overview': async (params) => ({ skills: await listSkillOverview(await skillWorkspace(params), paths.dshHome) }),
 
     'subagents.list': async ({ threadId }) => {
       const { thread } = await threads.get(threadId)

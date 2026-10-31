@@ -24,6 +24,12 @@ Codex・Claude の互換保存先では `.system` を除外し、`.archive/<skil
 
 `user-invocable: false` は選択欄に出しません。`disable-model-invocation: true` はモデルの自動選択から除外し、ユーザーによる明示呼び出しは維持します。
 
+## 設定 → Skills
+
+「設定 → Skills」では、選んだプロジェクトで読み込まれる skill を、プロジェクト・ユーザー・組み込みに分けて確認できます。取得元のフォルダー（例: `.claude/skills`）を併記し、フォルダーボタンで SKILL.md の場所を開きます（PC のみ）。
+同名で優先順位に負けた skill は薄く表示し「上書きされています」と示します。`user-invocable: false` は「自動のみ」、`disable-model-invocation: true` は「手動のみ」です。
+不正な frontmatter の skill は Harness が除外するため、この一覧にも出ません。表示のみで、ファイルや設定は変更しません。
+
 ## 反映と検証
 
 この探索範囲の修正を反映するには Agent Desk を再起動してください。保存済みセッション・設定の移行は不要です。

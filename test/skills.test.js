@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { listSkills } from '../server/skills.js'
+import { listSkillOverview, listSkills } from '../server/skills.js'
 import { createThreadHandlers } from '../server/rpc-handlers-threads.js'
 import { AgentDeskSkillProvider, apply } from '../server/skill-filesystem-plugin.js'
 import { homePatch } from '../server/dsh-config.js'
@@ -137,4 +137,43 @@ test('home patch installs the shared provider and preserves watcher disposal and
   assert.equal(observed, 'skill')
   await cleanup()
   assert.equal(dispose.mock.callCount(), 1)
+})
+
+test('skill overview keeps skills that lose a name clash and reports scope, root and invocation', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-skill-overview-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.mock.method(os, 'homedir', () => path.join(root, 'user'))
+  const previous = process.env.DSH_AGENTS_HOME
+  process.env.DSH_AGENTS_HOME = path.join(root, 'agents')
+  t.after(() => {
+    if (previous === undefined) delete process.env.DSH_AGENTS_HOME
+    else process.env.DSH_AGENTS_HOME = previous
+  })
+  const workspace = path.join(root, 'project')
+  const dshHome = path.join(root, 'dsh')
+  await fs.mkdir(path.join(workspace, '.git'), { recursive: true })
+  const put = async (base, name, description, extra = '') => {
+    await fs.mkdir(path.join(base, name), { recursive: true })
+    await fs.writeFile(path.join(base, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n${extra}---\nBody\n`)
+  }
+  await put(path.join(workspace, '.claude', 'skills'), 'shared', 'project copy')
+  await put(path.join(os.homedir(), '.codex', 'skills'), 'shared', 'user copy')
+  await put(path.join(dshHome, 'skills'), 'manual', 'manual only', 'disable-model-invocation: true\n')
+  await put(path.join(workspace, '.dsh', 'skills'), 'auto', 'model only', 'user-invocable: false\n')
+  const overview = await listSkillOverview(workspace, dshHome)
+  const find = (name, description) => overview.find((skill) => skill.name === name && (!description || skill.description === description))
+  assert.deepEqual(
+    [find('shared', 'project copy'), find('shared', 'user copy')].map(({ scope, root, active }) => ({ scope, root, active })),
+    [{ scope: 'project', root: '.claude/skills', active: true }, { scope: 'user', root: '.codex/skills', active: false }],
+  )
+  assert.equal(find('shared', 'project copy').file, path.join(workspace, '.claude', 'skills', 'shared', 'SKILL.md'))
+  assert.deepEqual({ scope: find('manual').scope, modelInvocable: find('manual').modelInvocable, userInvocable: find('manual').userInvocable },
+    { scope: 'user', modelInvocable: false, userInvocable: true })
+  assert.equal(find('auto').userInvocable, false)
+  // The picker list is unchanged: winners the user can invoke.
+  assert.deepEqual((await listSkills(workspace, dshHome)).map((skill) => skill.name), ['manual', 'shared'])
+
+  const handlers = createThreadHandlers({ paths: { dshHome }, threads: { get: async () => ({ thread: { workspace } }) } })
+  assert.deepEqual(await handlers['skills.overview']({ threadId: 'thread' }), { skills: overview })
+  await assert.rejects(handlers['skills.overview']({ workspace: 'relative' }), /ワークスペース/)
 })

@@ -11,7 +11,7 @@ import { beginCreateIntent, completeCreateIntent, createIntentFingerprint } from
 export type { QueuedMessage } from './outbox'
 
 type Route = { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string } | { view: 'ab'; id: string }
-export type SettingsTab = 'accounts' | 'models' | 'teams' | 'personalize' | 'usage' | 'general' | 'remote' | 'about'
+export type SettingsTab = 'accounts' | 'models' | 'teams' | 'personalize' | 'skills' | 'usage' | 'general' | 'remote' | 'about'
 
 interface Toast {
   id: number

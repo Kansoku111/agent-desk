@@ -8,6 +8,7 @@ import { AccountsSettings } from './settings/AccountsSettings'
 import { GeneralSettings } from './settings/GeneralSettings'
 import { ModelsSettings } from './settings/ModelsSettings'
 import { PersonalizeSettings } from './settings/PersonalizeSettings'
+import { SkillsSettings } from './settings/SkillsSettings'
 
 const CONTEXT_OPTIONS = [1_000_000, 500_000, 400_000, 272_000, 200_000, 128_000, 64_000]
 
@@ -18,6 +19,7 @@ export function SettingsDialog({ tab }: { tab: SettingsTab }) {
     { id: 'models', label: 'モデル' },
     { id: 'teams', label: 'エージェントチーム' },
     { id: 'personalize', label: 'パーソナライズ' },
+    { id: 'skills', label: 'Skills' },
     { id: 'usage', label: '使用量' },
     { id: 'general', label: '一般' },
     { id: 'remote', label: 'スマホ' },
@@ -45,6 +47,7 @@ export function SettingsDialog({ tab }: { tab: SettingsTab }) {
           {tab === 'models' && <ModelsSettings contextOptions={CONTEXT_OPTIONS} />}
           {tab === 'teams' && <TeamSettings />}
           {tab === 'personalize' && <PersonalizeSettings />}
+          {tab === 'skills' && <SkillsSettings />}
           {tab === 'usage' && <UsagePanel />}
           {tab === 'general' && <GeneralSettings />}
           {tab === 'remote' && <RemotePanel />}
