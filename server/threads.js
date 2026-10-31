@@ -959,7 +959,7 @@ export class ThreadManager extends EventEmitter {
   async #restoreCheckpoint(threadId, turnId) {
     const { thread, turns, turn } = await this.#checkpointTurn(threadId, turnId)
     this.#available(threadId, thread)
-    this.executionGuard?.(thread)
+    this.executionGuard?.(thread, { operation: 'restore' })
     const result = await this.checkpoints.restore(thread.workspace, turn.checkpoint.before, `${thread.id}/${turn.id}/undo`)
     const files = result.restored.length + result.removed.length
     // `turns`: how many turns there were, so a message sent afterwards ends the chance to undo.
@@ -995,7 +995,7 @@ export class ThreadManager extends EventEmitter {
     if (!isUndoable(turns, turn)) {
       throw new Error('このあとに新しいメッセージを送ったか、別の時点に戻したため、取り消せません')
     }
-    this.executionGuard?.(thread)
+    this.executionGuard?.(thread, { operation: 'restore' })
     const result = await this.checkpoints.restore(thread.workspace, turn.restore.undo)
     // A partial undo keeps its record, so it can be tried again.
     if (result.error) return { files: result.restored.length + result.removed.length, error: result.error }

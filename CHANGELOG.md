@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Settings → Agent teams now lists TM, AB and eco as collapsible sections, so AB and eco models can be set without opening their start dialogs. Saved settings are shared with the dialogs and unchanged.
 
+### Fixed
+
+- Prevent task preset workspace conflicts during checkpoint restore, ordinary TM Claude work and concurrent resumes; allow each explicitly resumed result to be delivered once with its own message receipt. Existing sessions, model selections and billing routes are unchanged.
+
 ## [0.1.8] - 2026-10-31
 
 ### Security

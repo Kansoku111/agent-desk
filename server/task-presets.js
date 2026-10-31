@@ -113,7 +113,8 @@ export class TaskPresets extends EventEmitter {
       const ownWorker = run.worker?.id === record.id && record.preset?.runId === run.id
       const ownParent = run.phase === 'preparing' && run.source.id === record.id
       if (context?.presetRunId === run.id && (ownWorker && run.phase === 'running' || ownParent)) continue
-      if (record.permissionMode === 'read-only' && run.source.id !== record.id && !ownWorker) continue
+      // Model read-only permissions do not make checkpoint restore/undo read-only.
+      if (record.permissionMode === 'read-only' && context?.operation !== 'restore' && run.source.id !== record.id && !ownWorker) continue
       throw new Error(PRESET_LABEL[run.kind] + 'が実行中です（' + run.title + ' / ' + run.id + ' / ' + run.workspace + '）')
     }
     if (record.preset && context?.presetRunId !== record.preset.runId) throw new Error('委託の担当には結果画面から操作してください')
@@ -121,7 +122,14 @@ export class TaskPresets extends EventEmitter {
   room(workspace) {
     for (const record of this.threads.threads.values()) if ((record.status === 'running' && record.permissionMode !== 'read-only' || this.threads.restoring.has(record)) && workspacesOverlap(workspace, record.workspace)) throw new Error('同じフォルダーで別タスクが作業・復元中です: ' + record.title)
     for (const record of this.terminals.list()) if ((record.activity !== 'idle' || record.background > 0) && workspacesOverlap(workspace, record.workspace)) throw new Error('同じフォルダーでClaude Codeが作業中です: ' + record.title)
-    for (const team of this.teams.teams.values()) if (workspacesOverlap(workspace, team.workspace) && team.children.some((child) => !child.closed && (team.execution ? child.execution?.mode !== 'research' : child.state === 'running' || child.state === 'approval'))) throw new Error('同じフォルダーのチーム作業が終わっていません')
+    // Stored children have no state; summaries include starting and still-stopping workers.
+    for (const team of this.teams.list()) {
+      if (!workspacesOverlap(workspace, team.workspace)) continue
+      const writing = team.children.some((child) => team.execution
+        ? !child.closed && child.execution?.mode !== 'research'
+        : ['running', 'approval', 'resuming'].includes(child.state))
+      if (writing) throw new Error('同じフォルダーのチーム作業が終わっていません')
+    }
     for (const record of this.writers()) if (workspacesOverlap(workspace, record.workspace)) throw new Error('同じフォルダーで別の担当が作業中です: ' + record.title)
     this.guard({ workspace })
     this.teams.guardExecution({ workspace })
@@ -379,9 +387,18 @@ export class TaskPresets extends EventEmitter {
     this.room(run.workspace)
     this.validateModel(run.model)
     await this.authorize({ workspace: run.workspace, model: run.model })
+    // Authorization yields: recheck and claim synchronously, just as a new run does.
+    await this.source(run.source, true)
+    if (this.closing) throw new Error('アプリを終了しています')
+    if (this.sends.has(id)) throw new Error('結果を送信中です。送信完了後に再開してください。')
+    this.room(run.workspace)
     run.cancelled = false
     run.error = null
     delete run.lastRetryKey
+    // A resumed attempt produces a new result, not a retry of the previous delivery.
+    delete run.deliveredAt
+    delete run.deliveryAttempted
+    delete run.deliveryMessageId
     run.phase = 'running'
     await this.save(run)
     this.enqueue(run, () => this.sendWorker(run, workerPresetInstructions(run) + '\n依頼を途中から再開し、未完了の修正・検証を完了してください。前回の状態:\n' + JSON.stringify({ error: run.result?.blocker, remaining: run.result?.remaining, verification: run.verification })))

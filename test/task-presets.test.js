@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { TaskPresets } from '../server/task-presets.js'
+import { TeamManager } from '../server/teams.js'
 import { parsePresetBrief, parsePresetResult, preparePresetPrompt, matchesPresetPrompt } from '../server/task-preset-protocol.js'
 import { gitPresetReview } from '../server/task-preset-evidence.js'
 import { createMcpServerList } from '../server/mcp-servers.js'
@@ -39,8 +40,8 @@ async function fixture(t) {
   const terminal = { id: 'terminal', sessionId: 'S', workspace, title: 'CLI相談', state: 'running', activity: 'idle', background: 0 }
   const terminals = Object.assign(new EventEmitter(), { records: new Map([['terminal', terminal]]), calls: [], turns: [], list: () => [terminal], status: () => ({ ready: true }),
     async conversation() { return { turns: this.turns } }, async sendMessage(id, text, context) { this.executionGuard?.(terminal, context); this.calls.push({ id, text }) }, interrupt() {} })
-  const agents = Object.assign(new EventEmitter(), { turns: () => [], live: new Map() })
-  const teams = { teams: new Map(), teamLedBy: () => null, execution: { checks: () => [] }, guardExecution(record, context) { this.presetGuard?.(record, context) } }
+  const agents = Object.assign(new EventEmitter(), { turns: () => [], live: new Map(), calls: [], run(id, text) { this.calls.push({ id, text }) }, stop() {} })
+  const teams = { teams: new Map(), list() { return [...this.teams.values()] }, teamLedBy: () => null, execution: { checks: () => [] }, guardExecution(record, context) { this.presetGuard?.(record, context) } }
   const config = { taskPresets: { delegate: { model: 'B', effort: 'low' }, review: { model: 'C', effort: 'low' } } }
   const options = { dir: path.join(root, 'state'), threads, terminals, agents, teams, settings: () => config, catalog: () => ({}), validateModel() {}, authorize: async () => {} }
   const manager = await new TaskPresets(options).load()
@@ -54,7 +55,7 @@ async function fixture(t) {
     await Promise.all([...manager.pending.values()])
   }
   t.after(async () => { await manager.shutdown(); await fs.rm(root, { recursive: true, force: true }) })
-  return { root, workspace, parent, threads, terminals, terminal, manager, source, start, complete, config, options }
+  return { root, workspace, parent, threads, terminals, terminal, agents, teams, manager, source, start, complete, config, options }
 }
 
 test('one-shot envelopes reject wrong run, ambiguous blocks, extra fields and invalid completion', () => {
@@ -319,6 +320,157 @@ test('actual ThreadManager immediately denies hidden worker approvals without le
   assert.deepEqual(answer, { outcome: { outcome: 'cancelled' } })
   assert.equal(f.manager.pendingPermissions(f.thread.id).length, 0)
   assert.equal(record.pendingApproval, false)
+})
+
+function suspendedClaudeRun(f, id, source = f.source) {
+  const run = { id, source, kind: 'delegate', title: id, workspace: f.workspace, model: 'claude:haiku', effort: 'low', phase: 'stopped', cancelled: true, checks: [], report: '', brief: '元の依頼', worker: { kind: 'claude', id: 'worker-' + id } }
+  f.manager.runs.set(id, run)
+  return run
+}
+
+test('read-only task restore and undo remain writes during preset work and verification', async (t) => {
+  for (const phase of ['running', 'verifying']) await t.test(phase, async (t) => {
+    let restored = 0
+    const f = await threadFixture(t, { checkpoints: { async restore() { restored++; return { restored: ['source.txt'], removed: [], undo: 'undo' } } } })
+    const terminals = Object.assign(new EventEmitter(), { list: () => [] })
+    const agents = Object.assign(new EventEmitter(), { live: new Map() })
+    const manager = new TaskPresets({ dir: path.join(f.base, 'presets'), threads: f.manager, terminals, agents, teams: {}, settings: () => ({}), catalog: () => ({}), authorize: async () => {}, validateModel() {} })
+    t.after(async () => { manager.runs.clear(); await manager.shutdown() })
+    const record = f.manager.threads.get(f.thread.id)
+    record.permissionMode = 'read-only'
+    const turn = { id: 'earlier-write', status: 'done', user: { text: 'earlier implementation' }, items: [], checkpoint: { before: 'saved', changed: 1 } }
+    f.manager.turns.set(record.id, [turn])
+    manager.runs.set('writer', { id: 'writer', source: { kind: 'thread', id: 'other-parent' }, workspace: f.base, phase, kind: 'delegate', title: 'active writer' })
+    f.manager.executionGuard = (value, context) => manager.guard(value, context)
+    assert.doesNotThrow(() => manager.guard(record), 'parallel read-only model work remains allowed')
+    await assert.rejects(f.manager.restoreCheckpoint(record.id, turn.id), /実行中/)
+    turn.restore = { at: Date.now(), undo: 'undo', turns: 1 }
+    await assert.rejects(f.manager.undoRestore(record.id, turn.id), /実行中/)
+    assert.equal(restored, 0, 'neither restore path can touch files')
+    manager.runs.clear()
+    await f.manager.undoRestore(record.id, turn.id)
+    assert.equal(restored, 1, 'restore is allowed again when the writer ends')
+  })
+})
+
+test('ordinary TM admission uses computed child state, including startup and closing Claude workers', async (t) => {
+  const f = await fixture(t)
+  let state = 'running'
+  f.agents.get = () => ({ state })
+  f.agents.running = () => state === 'running'
+  const teams = new TeamManager({ file: path.join(f.root, 'teams.json'), dir: path.join(f.root, 'teams'), threads: f.threads, terminals: f.terminals, agents: f.agents, catalog: { data: { models: [] } }, getSettings: () => ({}), apiUrl: () => '' })
+  teams.presetGuard = (record, context) => f.manager.guard(record, context)
+  f.manager.teams = teams
+  t.after(async () => { teams.teams.clear(); await teams.stop() })
+  const child = { id: 'C', name: 'child', title: 'TM writer', provider: 'claude', model: 'haiku', kind: 'agent', taskId: 'tm-worker', closed: false, awaiting: true, pending: [], followups: [], reports: [] }
+  const team = { id: 'TM', workspace: f.workspace, leaderId: f.terminal.id, leaderKind: 'terminal', children: [child], queue: [], asks: [] }
+  teams.teams.set(team.id, team)
+  assert.equal(child.state, undefined, 'stored children do not carry runtime state')
+  assert.equal(teams.summary(team).children[0].state, 'running')
+  assert.throws(() => f.manager.room(f.workspace), /チーム/)
+  await assert.rejects(f.start(), /チーム/)
+  assert.equal(f.threads.calls.length, 0, 'reject before prompting the parent')
+  child.closed = true
+  assert.throws(() => f.manager.room(f.workspace), /チーム/, 'closing does not make a live writer harmless')
+  child.closed = false
+  state = 'idle'
+  assert.doesNotThrow(() => f.manager.room(f.workspace))
+  child.taskId = null
+  assert.throws(() => f.manager.room(f.workspace), /チーム/, 'startup is also a writer reservation')
+  child.taskId = 'tm-worker'
+  teams.approvals.set('ask', { childId: child.id })
+  assert.throws(() => f.manager.room(f.workspace), /チーム/)
+  teams.approvals.clear()
+  teams.retries.set('resume:' + child.id, null)
+  assert.equal(teams.summary(team).children[0].state, 'resuming')
+  assert.throws(() => f.manager.room(f.workspace), /チーム/)
+  teams.retries.clear()
+})
+
+test('distinct Claude runs cannot both resume after concurrent authorization in one workspace', async (t) => {
+  const f = await fixture(t)
+  const other = await f.threads.create({ workspace: f.workspace, model: 'A', permissionMode: 'workspace-write', title: 'other parent' })
+  const a = suspendedClaudeRun(f, 'A'), b = suspendedClaudeRun(f, 'B', { kind: 'thread', id: other.id })
+  let entered, release, count = 0
+  const both = new Promise((resolve) => { entered = resolve })
+  const gate = new Promise((resolve) => { release = resolve })
+  f.manager.authorize = async () => { if (++count === 2) entered(); await gate }
+  const resuming = Promise.allSettled([f.manager.resume(a.id), f.manager.resume(b.id)])
+  await both; release()
+  const settled = await resuming
+  await Promise.all([...f.manager.pending.values()])
+  assert.equal(settled.filter((entry) => entry.status === 'fulfilled').length, 1)
+  const rejected = settled.find((entry) => entry.status === 'rejected')
+  assert.match(rejected?.reason.message ?? '', /実行中/)
+  assert.equal(f.agents.calls.length, 1)
+  assert.equal([a, b].filter((run) => run.phase === 'running').length, 1)
+  assert.equal([a, b].filter((run) => run.phase === 'stopped').length, 1)
+})
+
+test('a newly created run reserves the workspace while another run waits for resume authorization', async (t) => {
+  const f = await fixture(t), old = suspendedClaudeRun(f, 'old')
+  let entered, release
+  const authorizing = new Promise((resolve) => { entered = resolve })
+  const gate = new Promise((resolve) => { release = resolve })
+  f.manager.authorize = async ({ model }) => { if (model.startsWith('claude:')) { entered(); await gate } }
+  const resumed = f.manager.resume(old.id)
+  const denied = assert.rejects(resumed, /実行中|作業・復元中/)
+  await authorizing
+  const other = await f.threads.create({ workspace: f.workspace, model: 'A', permissionMode: 'workspace-write', title: 'other parent' })
+  const fresh = await f.start({ requestId: randomUUID(), source: { kind: 'thread', id: other.id } })
+  release(); await denied
+  assert.equal(fresh.phase, 'preparing')
+  assert.equal(old.phase, 'stopped')
+  assert.equal(f.agents.calls.length, 0)
+})
+
+test('each resumed result can be delivered once with a new receipt and no automatic parent prompt', async (t) => {
+  for (const kind of ['thread', 'terminal']) await t.test(kind, async (t) => {
+    const f = await fixture(t)
+    const source = kind === 'thread' ? f.source : { kind, id: f.terminal.id }
+    const run = await f.start({ source })
+    if (kind === 'thread') await f.complete(f.parent.id, brief(run))
+    else {
+      f.terminals.turns.push({ id: 'prepared', user: { text: run.preparePrompt }, status: 'done', items: [{ type: 'agent', text: brief(run) }] })
+      f.terminals.emit('hook', { terminalId: f.terminal.id, input: { hook_event_name: 'UserPromptSubmit', task_preset_marks: [run.id] } })
+      f.terminals.emit('hook', { terminalId: f.terminal.id, input: { hook_event_name: 'Stop' } })
+      await Promise.all([...f.manager.pending.values()])
+    }
+    const parentCalls = () => kind === 'thread' ? f.threads.calls.filter((call) => call.id === f.parent.id) : f.terminals.calls
+    await f.complete(run.worker.id, result(run, { status: 'blocked', summary: 'old blocked report', remaining: 'verification', blocker: 'environment' }))
+    await f.manager.deliver(run.id)
+    const oldReceipt = run.deliveryMessageId
+    assert.ok(run.deliveredAt)
+    if (kind === 'thread') await f.complete(f.parent.id, '報告を確認しました')
+    const sent = parentCalls().length
+    await f.manager.resume(run.id)
+    await Promise.all([...f.manager.pending.values()])
+    assert.equal(run.deliveredAt, undefined, 'the resumed attempt has not been delivered')
+    await fs.writeFile(path.join(f.workspace, 'source.txt'), 'fixed after resume')
+    await f.complete(run.worker.id, result(run, { summary: 'new final result' }))
+    assert.equal(run.phase, 'completed')
+    assert.equal(parentCalls().length, sent, 'completion still never prompts the parent')
+    await Promise.all([f.manager.deliver(run.id), f.manager.deliver(run.id)])
+    assert.equal(parentCalls().length, sent + 1)
+    assert.notEqual(run.deliveryMessageId, oldReceipt)
+    assert.match(parentCalls().at(-1).input?.text ?? parentCalls().at(-1).text, /new final result/)
+    await f.manager.deliver(run.id)
+    assert.equal(parentCalls().length, sent + 1, 'the same result is not delivered twice')
+  })
+})
+
+test('resume does not replace delivery state while a previous result is still being sent', async (t) => {
+  const f = await fixture(t), run = suspendedClaudeRun(f, 'R')
+  Object.assign(run, { deliveredAt: 123, deliveryAttempted: true, deliveryMessageId: randomUUID() })
+  const receipt = run.deliveryMessageId
+  f.manager.sends.set(run.id, Promise.resolve())
+  try {
+    await assert.rejects(f.manager.resume(run.id), /送信中/)
+    assert.equal(run.phase, 'stopped')
+    assert.equal(run.deliveredAt, 123)
+    assert.equal(run.deliveryMessageId, receipt)
+    assert.equal(f.agents.calls.length, 0)
+  } finally { f.manager.sends.delete(run.id) }
 })
 
 test('dedicated patch disables inherited delegate definitions while preserving the base persona', async (t) => {
