@@ -46,6 +46,16 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
     // Settings → Skills: also the skills that lose to a same-named one.
     'skills.overview': async (params) => ({ skills: await overview(params) }),
 
+    // The skill must be one the overview lists, so no other path can be named.
+    'skills.delete': async (params) => {
+      const skill = (await listSkillOverview(await skillWorkspace(params), paths.dshHome)).find((entry) => entry.file === params.file)
+      if (!skill) throw new Error('この skill は見つかりません')
+      if (skill.scope === 'bundled') throw new Error('組み込みの skill は削除できません')
+      // A symbolic link is removed itself; what it points to stays.
+      await fsp.rm(skill.target, { recursive: true })
+      return { deleted: skill.target }
+    },
+
     // Billed Claude Code call, only on the user's request; see skill-translate.js.
     'skills.translate': async (params) => ({
       translated: await translator.translate((await listSkillOverview(await skillWorkspace(params), paths.dshHome)).map((skill) => skill.description)),

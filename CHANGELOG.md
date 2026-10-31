@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add Settings → Skills to list the skills available in a project by scope and source folder, mark skills overridden by a same-named one, and reveal their files. On request, translate non-Japanese descriptions with Claude Code (`haiku`, low effort, no tools) under an already confirmed auth mode and cache them in `skill-translations.json`. Skill files, saved settings and sessions are unchanged.
+- Add Settings → Skills to list the skills available in a project by scope and source folder, mark skills overridden by a same-named one, reveal their files and delete them. On request, translate non-Japanese descriptions with Claude Code (`haiku`, low effort, no tools) under an already confirmed auth mode and cache them in `skill-translations.json`. Skill files are only changed by the delete button, which asks first and permanently removes the skill's folder (never a symlink target or a bundled skill). Saved settings and sessions are unchanged.
 
 ## [0.1.8] - 2026-10-31
 

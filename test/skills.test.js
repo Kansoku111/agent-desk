@@ -177,3 +177,44 @@ test('skill overview keeps skills that lose a name clash and reports scope, root
   assert.deepEqual(await handlers['skills.overview']({ threadId: 'thread' }), { skills: overview.map((skill) => ({ ...skill, translatable: true })) })
   await assert.rejects(handlers['skills.overview']({ workspace: 'relative' }), /ワークスペース/)
 })
+
+test('skills.delete removes only a listed skill, leaves symlink targets and refuses unknown paths', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-skill-delete-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.mock.method(os, 'homedir', () => path.join(root, 'user'))
+  const previous = process.env.DSH_AGENTS_HOME
+  process.env.DSH_AGENTS_HOME = path.join(root, 'agents')
+  t.after(() => {
+    if (previous === undefined) delete process.env.DSH_AGENTS_HOME
+    else process.env.DSH_AGENTS_HOME = previous
+  })
+  const workspace = path.join(root, 'project')
+  const skills = path.join(workspace, '.claude', 'skills')
+  await fs.mkdir(path.join(workspace, '.git'), { recursive: true })
+  const body = (name) => `---\nname: ${name}\ndescription: ${name}\n---\nBody\n`
+  await fs.mkdir(path.join(skills, 'bundle', 'scripts'), { recursive: true })
+  await fs.writeFile(path.join(skills, 'bundle', 'SKILL.md'), body('bundle'))
+  await fs.writeFile(path.join(skills, 'bundle', 'scripts', 'run.sh'), 'echo')
+  await fs.writeFile(path.join(skills, 'flat.md'), body('flat'))
+  await fs.writeFile(path.join(skills, 'keep.md'), body('keep'))
+  // A skill folder that is a link to a folder elsewhere: only the link goes.
+  const outside = path.join(root, 'outside')
+  await fs.mkdir(outside)
+  await fs.writeFile(path.join(outside, 'SKILL.md'), body('linked'))
+  await fs.symlink(outside, path.join(skills, 'linked'), 'junction')
+  const handlers = createThreadHandlers({ paths: { dshHome: path.join(root, 'dsh') }, threads: {} })
+  const del = (file) => handlers['skills.delete']({ workspace, file })
+
+  await del(path.join(skills, 'bundle', 'SKILL.md'))
+  await assert.rejects(fs.stat(path.join(skills, 'bundle')))
+  await del(path.join(skills, 'flat.md'))
+  await assert.rejects(fs.stat(path.join(skills, 'flat.md')))
+  await del(path.join(skills, 'linked', 'SKILL.md'))
+  await assert.rejects(fs.lstat(path.join(skills, 'linked')))
+  assert.equal(await fs.readFile(path.join(outside, 'SKILL.md'), 'utf8'), body('linked'))
+  // Not in the overview: nothing outside it can be named.
+  await assert.rejects(del(path.join(root, 'outside', 'SKILL.md')), /見つかりません/)
+  await assert.rejects(del(path.join(skills, '..', '..', '.git', 'config')), /見つかりません/)
+  await fs.stat(path.join(skills, 'keep.md'))
+  await assert.rejects(handlers['skills.delete']({ workspace: 'relative', file: 'x' }), /ワークスペース/)
+})

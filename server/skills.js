@@ -56,6 +56,8 @@ export async function listSkillOverview(workspace, dshHome) {
       scope: scopeOf(skill),
       root: rootLabel(skill.locator),
       file: skill.locator.path,
+      // What deleting the skill removes: its folder, or the flat Markdown file itself.
+      target: path.basename(skill.locator.path) === 'SKILL.md' ? skill.locator.directory : skill.locator.path,
       active,
       userInvocable: skill.invocation.userInvocable,
       modelInvocable: skill.invocation.modelInvocable,

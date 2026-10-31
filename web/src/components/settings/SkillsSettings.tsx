@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, Languages, Loader2 } from 'lucide-react'
+import { FolderOpen, Languages, Loader2, Trash2 } from 'lucide-react'
 import { request, toast, useStore } from '../../store'
 import { requestErrorMessage } from '../../rpc-client'
 import { workspaceLabel } from '../../util'
 import { openRef } from '../FileRef'
+import { ConfirmDialog } from '../Modal'
 
 interface SkillEntry {
   name: string
@@ -15,6 +16,8 @@ interface SkillEntry {
   scope: 'project' | 'user' | 'bundled'
   root: string
   file: string
+  /** The folder (or flat file) that deleting the skill removes. */
+  target: string
   /** False when a same-named skill with a higher precedence wins. */
   active: boolean
   userInvocable: boolean
@@ -37,6 +40,7 @@ export function SkillsSettings() {
   const [skills, setSkills] = useState<SkillEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [translating, setTranslating] = useState(false)
+  const [deleting, setDeleting] = useState<SkillEntry | null>(null)
   const workspaces = workspace && !known.includes(workspace) ? [workspace, ...known] : known
 
   useEffect(() => {
@@ -62,6 +66,18 @@ export function SkillsSettings() {
       toast(requestErrorMessage(reason), 'error')
     }
     setTranslating(false)
+  }
+
+  const remove = async (skill: SkillEntry) => {
+    if (!workspace) return
+    try {
+      await request('skills.delete', { workspace, file: skill.file })
+      toast(`${skill.name} を削除しました`, 'success')
+    } catch (reason) {
+      toast(requestErrorMessage(reason), 'error')
+    }
+    // Reload either way: the list may have changed under us.
+    try { setSkills((await load(workspace)).skills) } catch (reason) { setError(requestErrorMessage(reason)) }
   }
 
   const reveal = (skill: SkillEntry) => {
@@ -106,11 +122,26 @@ export function SkillsSettings() {
                 <button type="button" className="icon-button small" onClick={() => reveal(skill)} title="場所を表示" aria-label={`${skill.name} の場所を表示`}>
                   <FolderOpen size={14} />
                 </button>
+                {skill.scope !== 'bundled' && (
+                  <button type="button" className="icon-button small" onClick={() => setDeleting(skill)} title="削除" aria-label={`${skill.name} を削除`}>
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
             ))}
           </section>
         )
       })}
+      {deleting && (
+        <ConfirmDialog
+          title={`${deleting.name} を削除しますか？`}
+          body={<><p>次の場所を完全に削除します。元に戻せません。</p><code>{deleting.target}</code></>}
+          confirmLabel="削除"
+          danger
+          onConfirm={() => void remove(deleting)}
+          onClose={() => setDeleting(null)}
+        />
+      )}
     </div>
   )
 }
