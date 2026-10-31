@@ -476,8 +476,22 @@ export class ThreadManager extends EventEmitter {
     return this.summary(thread)
   }
 
-  update(threadId, patch) {
-    return this.#request(threadId, () => this.#update(threadId, patch))
+  update(threadId, patch, { guard } = {}) {
+    return this.#request(threadId, () => { guard?.(); return this.#update(threadId, patch) })
+  }
+
+  async suspendTeamLeader(threadId, guard) {
+    return this.#request(threadId, async () => {
+      guard()
+      const thread = this.#available(threadId)
+      if (this.active.has(threadId)) throw new Error('リーダーはまだ作業中です')
+      const holder = thread.sessionId && this.pool.holderOf(thread.sessionId)
+      if (holder) {
+        await holder.closeSession(thread.sessionId)
+        guard()
+        this.liveOptions.delete(thread.sessionId)
+      }
+    })
   }
 
   async #update(threadId, patch) {
@@ -1108,6 +1122,7 @@ export class ThreadManager extends EventEmitter {
       this.#learnOptions(thread, changed)
       parsed = parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? [])
     }
+    if ((thread.ab?.strictModel || this.teamModelGuard?.(thread)) && parsed.currentModel !== thread.model) throw new Error('フォールバック先モデルの適用を確認できません')
     const wanted = thread.effort ?? ''
     const strict = (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort
     const label = thread.ab ? 'AB' : 'eco'

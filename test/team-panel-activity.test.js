@@ -101,6 +101,11 @@ for (const mode of ['TM', 'eco']) {
   })
 }
 
+test('fallback failures surface as team attention', () => {
+  assert.equal(panel.teamNeedsUser({ ...team, leaderFallbackError: '切り替えに失敗' }), true)
+  assert.equal(panel.teamNeedsUser(team), false)
+})
+
 function renderedChildCard(current, planImplement) {
   const sidebar = panel.TeamPanel({ team: { ...team, execution: { planImplement }, children: [current] } })
   const card = nodes(sidebar, (node) => node.type === panel.ChildCard)[0]

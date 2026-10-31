@@ -8,12 +8,13 @@ import { readJson, writeJson } from './json-file.js'
 import { abContextImages } from './ab-images.js'
 import { assertToolMode } from './ptc.js'
 import { EFFORTS as CLAUDE_EFFORTS } from './terminal-helpers.js'
-import { workflowEffort, workflowLevels } from '../shared/workflow-effort.js'
+import { workflowEffort, workflowEffortSupported, workflowLevels } from '../shared/workflow-effort.js'
 import { addScores, emptyScore } from '../shared/usage-score.js'
+import { isLeaderUsageLimit } from './leader-usage-limit.js'
 
 const ROLES = ['a', 'b', 'leader', 'implementer']
 // Raw preferences retain legacy blanks; new-run resolution below materializes medium.
-export const AB_DEFAULTS = { a: '', b: '', leader: '', implementer: '', efforts: { a: '', b: '', leader: '', implementer: '' }, lean: true, delegate: true, review: true, toolMode: 'ptc' }
+export const AB_DEFAULTS = { a: '', b: '', leader: '', implementer: '', leaderFallback: '', fallbackEffort: '', efforts: { a: '', b: '', leader: '', implementer: '' }, lean: true, delegate: true, review: true, toolMode: 'ptc' }
 // Implementation always runs unsandboxed; every other stage is read-only.
 export const abJobPermission = (writable) => writable ? 'danger-full-access' : 'read-only'
 export function validateAbModel(value, catalog, visibility = {}) {
@@ -37,6 +38,11 @@ export function abConfig(input = {}) {
     result[key] = input[key] ?? result[key]
     if (result[key].startsWith('claude:') && effort && !CLAUDE_EFFORTS.includes(effort)) throw new Error('Claude Codeの推論レベルが不正です')
   }
+  for (const key of ['leaderFallback', 'fallbackEffort']) {
+    if (input[key] !== undefined && (typeof input[key] !== 'string' || input[key].length > (key === 'leaderFallback' ? 1000 : 100))) throw new Error('ABのフォールバック設定が不正です')
+    result[key] = input[key] ?? ''
+  }
+  if (result.leaderFallback.startsWith('claude:') && result.fallbackEffort && !CLAUDE_EFFORTS.includes(result.fallbackEffort)) throw new Error('Claude Codeの推論レベルが不正です')
   for (const key of ['lean', 'delegate', 'review']) {
     if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error('ABの設定が不正です')
     result[key] = input[key] ?? result[key]
@@ -131,6 +137,12 @@ export class AbManager extends EventEmitter {
     config = abConfig(config)
     for (const key of ROLES) config.efforts[key] = workflowEffort(config.efforts[key], workflowLevels(this.catalog(), config[key]))
     for (const key of ['a', 'b', 'leader', ...(config.delegate ? ['implementer'] : [])]) this.validateModel(config[key])
+    if (config.leaderFallback) {
+      this.validateModel(config.leaderFallback)
+      if (config.leaderFallback === config.leader) throw new Error('フォールバック先はリーダーと別のモデルを選んでください')
+      config.fallbackEffort = workflowEffort(config.fallbackEffort, workflowLevels(this.catalog(), config.leaderFallback))
+      if (!workflowEffortSupported(config.fallbackEffort, workflowLevels(this.catalog(), config.leaderFallback))) throw new Error('フォールバック先の推論レベルを選び直してください')
+    }
     images = await this.validateImages(images, config)
     await this.authorize({ workspace, config, authConfirmation })
     const run = { id: randomUUID(), workspace: path.resolve(workspace), title: text.trim().split('\n')[0].slice(0, 80) || '画像の相談', text, images, config,
@@ -160,7 +172,7 @@ export class AbManager extends EventEmitter {
   async launch(run, job) {
     try {
       const handle = await this.runner.start({ runId: run.id, jobId: job.id, workspace: run.workspace, model: job.model, effort: job.effort ?? '', strictEffort: run.strictEffort === true,
-        toolMode: job.toolMode ?? run.config.toolMode, text: job.text, images: await this.validateImages(job.images ?? abContextImages(run), run.config), instructions: job.instructions, writable: job.writable, lean: run.config.lean, permissionMode: job.permissionMode })
+        toolMode: job.toolMode ?? run.config.toolMode, ...(run.leaderFallbackUsed && job.model === run.config.leaderFallback ? { strictModel: true } : {}), text: job.text, images: await this.validateImages(job.images ?? abContextImages(run), run.config), instructions: job.instructions, writable: job.writable, lean: run.config.lean, permissionMode: job.permissionMode })
       job.handle = handle
       await this.save(run)
     } catch (error) {
@@ -202,10 +214,31 @@ export class AbManager extends EventEmitter {
   }
   async next(run, phase, role, model, text, instructions, writable = false, effort) {
     run.phase = phase
+    if (run.leaderFallbackUsed && ['leader', 'instructions', 'direct', 'reviewer'].includes(role) && model === run.config.leader) {
+      model = run.config.leaderFallback
+      effort = run.config.fallbackEffort
+    }
     const job = this.job(run, role, model, text, instructions, writable, effort)
     await this.save(run)
     await this.launch(run, job)
-    if (job.error) await this.fail(run, job)
+    if (job.error && !(await this.fallbackLeader(run, job, job.error))) await this.fail(run, job)
+  }
+  async fallbackLeader(run, job, error) {
+    if (!ACTIVE.has(run.phase) || !['leader', 'instructions', 'direct', 'reviewer'].includes(job.role)
+      || !run.config.leaderFallback || run.leaderFallbackUsed || job.model !== run.config.leader
+      || job.status !== 'error' || !isLeaderUsageLimit(error)) return false
+    try {
+      this.validateModel(run.config.leaderFallback)
+      await this.validateImages(job.images ?? [], run.config)
+    } catch (failure) {
+      job.error += '\n' + 'フォールバック先を使えません: ' + failure.message
+      return false
+    }
+    run.leaderFallbackUsed = true
+    const context = JSON.stringify({ task: job.text, previousError: job.error, previousReport: job.report })
+    const instructions = job.instructions + '\n\n' + '利用上限で中断したリーダーの代わりに続けてください。既に変更されたファイルは残っています。現在の状態を確認し、実行済みまたは完了が不明な外部操作を繰り返さないでください。'
+    await this.next(run, run.phase, job.role, run.config.leaderFallback, context, instructions, job.writable, run.config.fallbackEffort)
+    return true
   }
   async updateScore({ runId, jobId, threadId, score }) {
     const run = this.runs.get(runId)
@@ -215,7 +248,7 @@ export class AbManager extends EventEmitter {
     job.score = score
     await this.save(run)
   }
-  async finished({ runId, jobId, status, text, error, denials = [], blockers = [], score }) {
+  async finished({ runId, jobId, status, text, error, errorDetail, denials = [], blockers = [], score }) {
     const run = this.runs.get(runId)
     const job = run?.jobs.find((entry) => entry.id === jobId)
     if (job && score) job.score = score
@@ -239,6 +272,7 @@ export class AbManager extends EventEmitter {
     job.status = status === 'completed' && answer.trim() ? 'completed' : 'error'
     if (job.status === 'error') {
       job.error = error || '有効な完了報告がありません'
+      if (await this.fallbackLeader(run, job, { message: job.error, detail: errorDetail })) return
       if (ACTIVE.has(run.phase)) await this.fail(run, job)
       else await this.save(run)
       return
@@ -289,7 +323,7 @@ export class AbManager extends EventEmitter {
       const run = this.require(id)
       if (run.phase !== 'awaiting-approval' || revision !== run.revision || run.jobs.some((job) => RUNNING.has(job.status))) throw new Error('最新の案を確認してから承認してください')
       if (typeof delegate !== 'boolean' || typeof review !== 'boolean') throw new Error('実装方式を選択してください')
-      this.validateModel(delegate ? run.config.implementer : run.config.leader)
+      this.validateModel(delegate ? run.config.implementer : run.leaderFallbackUsed ? run.config.leaderFallback : run.config.leader)
       await this.validateImages(abContextImages(run), { ...run.config, delegate, review })
       run.config.delegate = delegate
       run.config.review = review

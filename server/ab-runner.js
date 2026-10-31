@@ -35,7 +35,7 @@ export class AbRunner extends EventEmitter {
       const finishing = threads.get(threadId).then(({ thread, turns }) => {
         const turn = turns.at(-1)
         this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: status === 'done' ? 'completed' : status,
-          text: turn?.items?.filter((item) => item.type === 'agent').at(-1)?.text ?? '', error: turn?.error?.message,
+          text: turn?.items?.filter((item) => item.type === 'agent').at(-1)?.text ?? '', error: turn?.error?.message, ...(turn?.error?.detail ? { errorDetail: turn.error.detail } : {}),
           ...(thread?.score ? { score: thread.score } : {}),
           denials: owner.denials, ...(owner.writable ? { blockers: (turn?.items ?? [])
             .filter((item) => item.type === 'tool' && item.status === 'failed' && /SetNamedSecurityInfoW failed \(Win32 5\)/i.test(item.output ?? ''))
@@ -88,7 +88,7 @@ export class AbRunner extends EventEmitter {
       return { kind: 'claude', id: session.id }
     }
     const thread = await this.threads.create({ workspace, model, effort, toolMode, permissionMode: abJobPermission(writable),
-      ab: { runId, jobId, writable, lean, ...(input.strictEffort ? { strictEffort: true } : {}) } })
+      ab: { runId, jobId, writable, lean, ...(input.strictEffort ? { strictEffort: true } : {}), ...(input.strictModel ? { strictModel: true } : {}) } })
     this.owned.set(thread.id, owner)
     try {
       // Consultation user content is not rewritten or prefixed by a leader.

@@ -23,6 +23,50 @@ async function setup(t, config = {}) {
   return { dir, runner, manager, id: run.id, finish }
 }
 
+test('AB switches only the leader on explicit exhaustion and keeps its work', async (t) => {
+  const { manager, id, finish, runner, dir } = await setup(t, { leaderFallback: 'F', fallbackEffort: 'low' })
+  await finish('a'); await finish('b')
+  const failed = manager.require(id).jobs.at(-1)
+  await manager.finished({ runId: id, jobId: failed.id, status: 'error', text: 'partial', error: '利用上限に達しました。', errorDetail: 'subscription_sharing_usage_limit_exceeded' })
+  const run = manager.require(id)
+  assert.equal(run.leaderFallbackUsed, true)
+  assert.equal(run.jobs.at(-1).model, 'F')
+  assert.equal(runner.calls.at(-1).effort, 'low')
+  assert.match(runner.calls.at(-1).text, /partial/)
+  await finish('leader')
+  await manager.approve({ id, revision: 1, delegate: true, review: true })
+  assert.equal(run.jobs.at(-1).model, 'F')
+  await finish('instructions'); await finish('implementer')
+  assert.equal(run.jobs.at(-1).model, 'F')
+  const restored = await new AbManager({ dir, runner }).load()
+  assert.equal(restored.require(id).leaderFallbackUsed, true)
+})
+
+test('AB does not switch on transient errors, other roles or twice', async (t) => {
+  const { manager, id, finish, runner } = await setup(t, { leaderFallback: 'F' })
+  await finish('a'); await finish('b')
+  const failed = manager.require(id).jobs.at(-1)
+  await manager.finished({ runId: id, jobId: failed.id, status: 'error', error: '429 rate limit' })
+  assert.equal(manager.require(id).phase, 'error')
+  assert.equal(runner.calls.length, 3)
+})
+
+test('AB fallback never switches consultation and never loops if the fallback fails', async (t) => {
+  const a = await setup(t, { leaderFallback: 'F' })
+  const first = a.manager.require(a.id).jobs[0]
+  await a.manager.finished({ runId: a.id, jobId: first.id, status: 'error', error: 'subscription_sharing_usage_limit_exceeded' })
+  assert.equal(a.manager.require(a.id).phase, 'error')
+  assert.equal(a.runner.calls.length, 2)
+  const b = await setup(t, { leaderFallback: 'F' })
+  await b.finish('a'); await b.finish('b')
+  let job = b.manager.require(b.id).jobs.at(-1)
+  await b.manager.finished({ runId: b.id, jobId: job.id, status: 'error', error: 'subscription_sharing_usage_limit_exceeded' })
+  job = b.manager.require(b.id).jobs.at(-1)
+  await b.manager.finished({ runId: b.id, jobId: job.id, status: 'error', error: 'subscription_sharing_usage_limit_exceeded' })
+  assert.equal(b.manager.require(b.id).phase, 'error')
+  assert.equal(b.runner.calls.length, 4)
+})
+
 test('AB PTC is saved, inherited by every stage and switchable only between stages', async (t) => {
   const { dir, runner, manager, id, finish } = await setup(t, { toolMode: 'ptc' })
   assert.ok(runner.calls.every((call) => call.toolMode === 'ptc' && call.permissionMode === 'read-only'))

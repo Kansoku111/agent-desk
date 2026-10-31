@@ -569,7 +569,7 @@ function upsertTeam(team: TeamSummary) {
   const removedChild = previous?.children.find((child) => child.kind === route.view && child.taskId === route.id
     && !team.children.some((entry) => entry.id === child.id))
   updateServer({ teams: [...(server.teams ?? []).filter((entry) => entry.id !== team.id), team] })
-  if (removedChild) navigate({ view: team.leaderKind === 'thread' ? 'thread' : 'terminal', id: team.leaderId })
+  if (removedChild || (previous && previous.leaderId !== team.leaderId && route.view === previous.leaderKind && route.id === previous.leaderId)) navigate({ view: team.leaderKind === 'thread' ? 'thread' : 'terminal', id: team.leaderId })
 }
 
 /** Starts an agent team in a project (or My PC): its Claude Code leader opens to talk to. */

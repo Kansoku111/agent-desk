@@ -50,7 +50,7 @@ function mount(run) {
     './Markdown': { Markdown: 'Markdown', CopyButton: 'CopyButton' },
     './ClaudeAuthConsent': { ClaudeAuthConsent: 'ClaudeAuthConsent' },
     './AbInput': { AbImages: 'AbImages', AbInput: 'AbInput', useAbDraft: () => ({}) },
-    './PtcToggle': { PtcToggle: 'PtcToggle' },
+    './PtcToggle': { PtcToggle: 'PtcToggle' }, './LeaderFallback': { LeaderFallback: 'LeaderFallback' },
   }
   const { outputText } = ts.transpileModule(source + '\nexport { Report }', {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },

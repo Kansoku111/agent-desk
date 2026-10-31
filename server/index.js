@@ -458,7 +458,7 @@ const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRun
   },
   validateModel: (value) => validateAbModel(value, catalog.data, settings.modelVisibility),
   authorize: async ({ workspace, config, authConfirmation }) => {
-    if ([config.a, config.b, config.leader, config.implementer].some((value) => value.startsWith('claude:'))) {
+    if ([config.a, config.b, config.leader, config.implementer, config.leaderFallback].some((value) => value?.startsWith('claude:'))) {
       await teams.confirmAbAuth(workspace, authConfirmation)
       const problem = await teams.claudeAuth.guard(null, teams.claudeAuth.context(workspace))
       if (problem) throw new Error(problem)

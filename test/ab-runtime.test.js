@@ -98,6 +98,17 @@ test('AB pricing updates follow the pending completion notification', async () =
   assert.deepEqual(events, ['finished', 'score'])
 })
 
+test('AB adapter preserves raw quota detail for fallback classification', async () => {
+  const threads = new EventEmitter(), agents = new EventEmitter()
+  threads.get = async () => ({ turns: [{ items: [], error: { message: '利用上限に達しました。', detail: 'subscription_sharing_usage_limit_exceeded' } }] })
+  const runner = new AbRunner({ threads, agents })
+  runner.owned.set('T', { runId: 'R', jobId: 'J', writable: false, denials: [] })
+  const finished = new Promise((resolve) => runner.once('finished', resolve))
+  threads.emit('turn-finished', { threadId: 'T', status: 'error' })
+  const event = await finished
+  assert.equal(event.errorDetail, 'subscription_sharing_usage_limit_exceeded')
+})
+
 test('AB adapter sends raw consultation and translates final results', async () => {
   const threads = new EventEmitter()
   const agents = new EventEmitter()

@@ -39,6 +39,8 @@ test('auth requirement preserves choices and allows disabling Claude without acc
   const config = { leaderProvider: 'gpt', claude: { enabled: false }, claudeApi: { enabled: true } }
   const snapshot = structuredClone(config)
   assert.equal(needsClaudeAuth(config), false)
+  assert.equal(needsClaudeAuth({ ...config, leaderFallback: 'claude:sonnet' }), true)
+  assert.equal(needsClaudeAuth({ ...config, leaderFallback: '["anthropic","model"]' }), false)
   assert.equal(needsClaudeAuth({ ...config, leaderProvider: 'claude' }), true)
   assert.equal(needsClaudeAuth({ ...config, claude: { enabled: true } }), true)
   assert.equal(needsClaudeAuth(config, { leaderKind: 'terminal', children: [] }), true)

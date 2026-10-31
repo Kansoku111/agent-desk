@@ -92,7 +92,7 @@ export function useLedTeam(terminalId: string) {
 }
 
 /** Whether a team needs the user: an approval nobody decided yet, or a question from the leader. */
-export const teamNeedsUser = (team: TeamSummary | undefined) => Boolean(team && (team.approvals.length || team.asks.length || team.delivery === 'failed'))
+export const teamNeedsUser = (team: TeamSummary | undefined) => Boolean(team && (team.approvals.length || team.asks.length || team.delivery === 'failed' || team.leaderFallbackError))
 
 /** Shows or hides the team panel from either the leader or a child. */
 export function TeamToggle({ team }: { team: TeamSummary | undefined }) {
@@ -323,6 +323,8 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
           </div>
           <PtcToggle mode={team.config?.toolMode} disabled={team.toolModeBusy} onChange={(toolMode) => act('team.update', { teamId: team.id, patch: { toolMode } })} />
           <Notices team={team} />
+          {team.leaderFallbackUsed && <p role="status" className="muted">利用上限のためリーダーを切り替えました{leader ? `（${leaderModel(server, leader)}）` : ''}。</p>}
+          {team.leaderFallbackError && <p role="alert" className="error-text">切り替えできませんでした: {team.leaderFallbackError}</p>}
           <button
             type="button"
             className={`subagent-card team-card state-${status}`}

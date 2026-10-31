@@ -10,9 +10,11 @@ import { claudeEfforts, claudeModelName, claudeModels } from './TerminalPickers'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { TeamGuides } from './TeamGuides'
 import { PtcToggle } from './PtcToggle'
+import { LeaderFallback } from './LeaderFallback'
 import { ModelField, modelGroups } from './WorkflowModelField'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
+import { workflowEffortSupported, workflowLevels } from '../../../shared/workflow-effort.js'
 
 const MAX_CHILDREN = 12
 const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'local']
@@ -410,8 +412,11 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
   if (!server || !draft) return null
   const change: Change = (patch) => setDraft((current) => (current ? applyPatch(current, patch) : current))
   const needsAuth = needsClaudeAuth(draft)
+  const leaderModel = draft.leaderProvider === 'claude' ? draft.leader.model : draft.leaderProvider === 'gpt' ? draft.gptLeader.model ?? draft.gpt.mid.model ?? draft.gpt.low.model ?? (draft.modelMode === 'free' ? draft.freeModels?.find((entry) => entry.provider === 'gpt')?.model : null) : draft.dshLeader?.model
+  const leaderValue = leaderModel ? modelValue({ provider: draft.leaderProvider, model: leaderModel }) : ''
+  const fallbackReady = !draft.leaderFallback || (draft.leaderFallback !== leaderValue && teamModelGroups(server).some((group) => group.models.some((model) => model.value === draft.leaderFallback)) && workflowEffortSupported(draft.fallbackEffort ?? '', workflowLevels(server.catalog, draft.leaderFallback)))
   const start = async () => {
-    if (needsAuth && !auth.ready) return
+    if (!fallbackReady || (needsAuth && !auth.ready)) return
     setStarting(true)
     const started = await startTeam(workspace, draft, needsAuth ? auth.confirmation : undefined)
     setStarting(false)
@@ -427,6 +432,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
         </p>
         <p className="muted">Claude の自動処理には「Claude（API）」の子を推奨します。選択は自動で変更せず、API 利用は従量課金です。</p>
         <LeaderSection server={server} config={draft} onChange={change} />
+        <LeaderFallback server={server} value={draft.leaderFallback ?? ''} effort={draft.fallbackEffort ?? ''} disabled={starting} onChange={(leaderFallback, fallbackEffort) => change({ leaderFallback, fallbackEffort })} />
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
           <LeanChildrenSwitch config={draft} onChange={change} />
@@ -446,7 +452,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={close}>キャンセル</button>
-        <button type="button" className="button primary" disabled={starting || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void start()}>始める</button>
+        <button type="button" className="button primary" disabled={starting || !anyChildOn(draft) || !fallbackReady || (needsAuth && !auth.ready)} onClick={() => void start()}>始める</button>
       </div>
     </Modal>
   )

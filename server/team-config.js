@@ -42,6 +42,8 @@ export const TEAM_DEFAULTS = {
   // null model: GPT's mid, low, then the first selected GPT model in free mode.
   gptLeader: { model: null, effort: 'high' },
   dshLeader: null,
+  leaderFallback: '',
+  fallbackEffort: '',
   // The leader runs with --permission-mode bypassPermissions (children always do).
   leaderBypass: true,
   // Every provider is off until the user turns it on (a team starts with at least one on), so
@@ -89,6 +91,8 @@ export function teamConfig(saved) {
     leader: { ...TEAM_DEFAULTS.leader, ...value.leader },
     gptLeader: { ...TEAM_DEFAULTS.gptLeader, ...value.gptLeader },
     dshLeader: value.dshLeader && typeof value.dshLeader === 'object' ? { ...value.dshLeader } : null,
+    leaderFallback: typeof value.leaderFallback === 'string' ? value.leaderFallback : '',
+    fallbackEffort: typeof value.fallbackEffort === 'string' ? value.fallbackEffort : '',
     ...Object.fromEntries(SWITCHES.map((name) => [name, typeof value[name] === 'boolean' ? value[name] : TEAM_DEFAULTS[name]])),
     gpt: provider('gpt'),
     claude: provider('claude'),
@@ -139,6 +143,11 @@ export function mergeTeamConfig(current, patch) {
   if (Object.hasOwn(patch, 'toolMode')) {
     assertToolMode(patch.toolMode)
     next.toolMode = patch.toolMode
+  }
+  for (const name of ['leaderFallback', 'fallbackEffort']) {
+    if (!Object.hasOwn(patch, name)) continue
+    if (typeof patch[name] !== 'string' || patch[name].length > (name === 'leaderFallback' ? 1000 : 100)) throw new Error('フォールバック設定が不正です')
+    next[name] = patch[name]
   }
   if (Object.hasOwn(patch, 'leader')) {
     if (!isRecord(patch.leader)) throw new Error('agentTeams.leader はオブジェクトで指定してください')

@@ -24,6 +24,7 @@ test('TM startup exposes the shared tool switch outside advanced settings and se
   assert.match(dialog, /<ChildCount config=\{draft\} onChange=\{change\} \/>\s*<LeanChildrenSwitch config=\{draft\} onChange=\{change\} \/>/)
   assert.ok(dialog.indexOf('<LeanChildrenSwitch') < dialog.indexOf('{details &&'))
   assert.match(dialog, /startTeam\(workspace, draft,/)
+  assert.match(dialog, /<LeaderFallback server=\{server\}/)
   const toggle = code.split('function LeanChildrenSwitch(')[1].split('function Switch(')[0]
   assert.match(toggle, /checked=\{config\.leanChildren === true\}/)
   assert.match(toggle, /onChange=\{\(value\) => onChange\(\{ leanChildren: value \}\)\}/)

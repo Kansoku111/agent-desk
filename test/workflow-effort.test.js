@@ -89,6 +89,24 @@ for (const mode of ['ab', 'eco']) for (const scenario of ['medium', 'unsupported
   })
 }
 
+for (const mode of ['team', 'ab']) for (const acknowledged of [true, false]) {
+  test(`${mode} fallback verifies selected model before prompting: ${acknowledged}`, async (t) => {
+    const f = await fixture(t)
+    const model = '["test","fallback"]'
+    f.manager.teamModelGuard = () => mode === 'team'
+    const original = f.runtime.newSession.bind(f.runtime)
+    f.runtime.newSession = async () => ({ ...await original(), configOptions: [{ id: 'model', currentValue: '["test","old"]', options: [{ value: model }] }] })
+    f.runtime.setOption = async () => [{ id: 'model', currentValue: acknowledged ? model : '["test","old"]', options: [{ value: model }] }]
+    const metadata = mode === 'ab' ? { ab: { strictModel: true } } : { team: { id: 'team', role: 'leader' } }
+    const thread = await f.manager.create({ workspace: f.base, model, toolMode: 'native', ...metadata })
+    const done = once(f.manager, 'turn-finished')
+    await f.manager.send(thread.id, { text: 'continue' })
+    if (acknowledged) { await f.started.promise; f.finish.resolve() }
+    assert.equal((await done)[0].status, acknowledged ? 'done' : 'error')
+    assert.equal(f.calls.prompts.length, acknowledged ? 1 : 0)
+  })
+}
+
 test('catalog remembers empty live capabilities instead of retaining stale reasoning levels', async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-catalog-'))
   t.after(() => fs.rm(dir, { recursive: true, force: true }))

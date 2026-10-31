@@ -37,13 +37,15 @@ function fakeThreads() {
       threads.calls.push(['send', id, text])
       const thread = threads.threads.get(id)
       thread.status = 'running'
-      threads.turns.get(id).push({ id: `turn-${Date.now()}`, items: [], status: 'running' })
+      threads.turns.get(id).push({ id: `turn-${Date.now()}`, user: { text, images: [] }, items: [], status: 'running' })
       return { status: 'accepted' }
     },
-    async update(id, patch) {
+    async update(id, patch, { guard } = {}) {
+      guard?.()
       threads.calls.push(['update', id, patch])
       Object.assign(threads.threads.get(id), patch)
     },
+    async suspendTeamLeader(id, guard) { guard(); threads.calls.push(['suspendLeader', id]) },
     async setGoalWaiting(id, waiting) {
       threads.goalWaitCalls.push([id, waiting])
       threads.threads.get(id).goalWaiting = waiting
@@ -96,6 +98,7 @@ function fakeTerminals(team) {
     async create(options) {
       const id = `terminal-${terminals.records.size + 1}`
       const record = { id, workspace: options.workspace, ...options }
+      team.manager?.guardExecution(record)
       terminals.records.set(id, record)
       terminals.states.set(id, { state: 'running', activity: options.prompt ? 'running' : 'idle', ready: !options.prompt, inputAt: 0 })
       // As TerminalManager does: the launch flags are asked for while starting.
@@ -105,6 +108,8 @@ function fakeTerminals(team) {
     },
     summary: (record) => ({ id: record.id, workspace: record.workspace, team: record.team, ...terminals.states.get(record.id) }),
     status: (id) => (terminals.records.has(id) ? { ...terminals.states.get(id) } : null),
+    async conversation(id) { return { turns: [{ id: 'previous', status: 'error', user: { text: '依頼', images: [] }, items: [{ type: 'agent', text: '途中の作業' }] }] } },
+    async update(id, patch) { Object.assign(terminals.records.get(id), patch) },
     set(id, patch) {
       Object.assign(terminals.states.get(id), patch)
       terminals.emit('terminal', terminals.summary(terminals.records.get(id)))
@@ -3245,6 +3250,128 @@ function failThread(threads, id, message) {
   threads.emit('thread', { ...thread })
   threads.emit('turn-finished', { threadId: id, title: thread.title, status: 'error' })
 }
+
+for (const mode of ['TM', 'eco']) {
+  test(mode + ': dsh leader changes to its configured fallback on exhausted subscription', async (t) => {
+    const settings = { leaderProvider: 'gpt', leaderFallback: '["anthropic","claude-haiku-5-5"]', fallbackEffort: 'medium' }
+    const f = mode === 'eco' ? await setupExecution(t, {}, settings) : await setup(t, settings)
+    await f.threads.send(f.leader, { text: 'work' })
+    const switched = new Promise((resolve) => f.manager.on('team', function onTeam(summary) {
+      if (summary.leaderFallbackError || (summary.leaderFallbackUsed && f.threads.threads.get(f.leader).status === 'running')) { f.manager.off('team', onTeam); resolve() }
+    }))
+    failThread(f.threads, f.leader, 'subscription_sharing_usage_limit_exceeded')
+    await switched
+    assert.equal(f.team.leaderFallbackUsed, true)
+    assert.equal(f.threads.threads.get(f.leader).model, settings.leaderFallback)
+    assert.match(f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).at(-1)[2], /利用上限/)
+  })
+}
+
+for (const mode of ['TM', 'eco']) for (const origin of ['thread', 'terminal']) for (const target of ['thread', 'terminal']) {
+  if (origin === 'thread' && target === 'thread') continue
+  test(mode + ': leader fallback carries history from ' + origin + ' to ' + target, async (t) => {
+    const fallback = target === 'thread' ? '["anthropic","claude-haiku-5-5"]' : 'claude:sonnet'
+    const settings = { leaderProvider: origin === 'thread' ? 'gpt' : 'claude', leaderFallback: fallback, fallbackEffort: 'medium' }
+    const f = mode === 'eco' ? await setupExecution(t, {}, settings) : await setup(t, settings)
+    if (origin === 'thread') await f.threads.send(f.leader, { text: '元の依頼' })
+    const switched = new Promise((resolve) => f.manager.on('team', function onTeam(summary) {
+      if (summary.leaderFallbackError || (summary.leaderFallbackUsed && summary.leaderId !== f.leader && (target === 'thread' ? f.threads.calls.some((c) => c[0] === 'send' && c[1] === summary.leaderId) : f.terminals.calls.some((c) => c[0] === 'type' && c[1] === summary.leaderId)))) { f.manager.off('team', onTeam); resolve() }
+    }))
+    if (origin === 'thread') failThread(f.threads, f.leader, 'subscription_sharing_usage_limit_exceeded')
+    else f.terminals.emit('hook', { terminalId: f.leader, input: { hook_event_name: 'StopFailure', error_details: "You've hit your limit" } })
+    await switched
+    assert.equal(f.team.leaderFallbackError, undefined)
+    assert.equal(f.team.leaderKind, target)
+    assert.notEqual(f.team.leaderId, f.leader)
+    const calls = target === 'thread' ? f.threads.calls : f.terminals.calls
+    const sent = calls.findLast((c) => (target === 'thread' ? c[0] === 'send' : c[0] === 'type') && c[1] === f.team.leaderId)
+    assert.match(sent[2], origin === 'thread' ? /元の依頼/ : /途中の作業/)
+    assert.throws(() => f.manager.guardExecution({ id: f.leader, workspace: f.workspace, team: { id: f.team.id, role: 'leader' } }), /切り替え済み/)
+    assert.equal(f.manager.summary(f.team).leaderFallbackUsed, true)
+  })
+}
+
+test('eco permits fallback to Claude while its write child is working', async (t) => {
+  const f = await setupExecution(t, {}, { leaderFallback: 'claude:sonnet', fallbackEffort: 'medium' })
+  await f.tool('spawn', { ...exTask, mode: 'write' })
+  await f.threads.send(f.leader, { text: 'request' })
+  const switched = new Promise((resolve) => f.manager.on('team', function handler(summary) { if (summary.leaderFallbackError || (summary.leaderFallbackUsed && summary.leaderId !== f.leader && f.terminals.calls.some((c) => c[0] === 'type' && c[1] === summary.leaderId))) { f.manager.off('team', handler); resolve() } }))
+  failThread(f.threads, f.leader, 'subscription_sharing_usage_limit_exceeded')
+  await switched
+  assert.equal(f.team.leaderFallbackError, undefined)
+  assert.equal(f.team.leaderKind, 'terminal')
+  assert.equal(f.team.children[0].execution.phase, 'working')
+})
+
+test('leader fallback does not trigger for transient limits or stopped work', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt', leaderFallback: '["anthropic","claude-haiku-5-5"]', fallbackEffort: 'medium' })
+  await f.threads.send(f.leader, { text: 'request' })
+  failThread(f.threads, f.leader, '429 rate limit')
+  await tick()
+  assert.equal(f.team.leaderFallbackUsed, undefined)
+  await f.threads.send(f.leader, { text: 'new request' })
+  await f.manager.stopAll(f.team.id)
+  failThread(f.threads, f.leader, 'subscription_sharing_usage_limit_exceeded')
+  await tick()
+  assert.equal(f.team.leaderFallbackUsed, undefined)
+})
+
+test('a child reaching its limit does not switch the team leader', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt', leaderFallback: '["anthropic","claude-haiku-5-5"]', fallbackEffort: 'medium' })
+  await f.tool('spawn', { provider: 'gpt', tier: 'low', title: 'child', task: 'work' })
+  const child = f.team.children[0]
+  failThread(f.threads, child.taskId, 'subscription_sharing_usage_limit_exceeded')
+  await tick()
+  assert.equal(f.team.leaderFallbackUsed, undefined)
+  assert.equal(f.threads.threads.get(f.leader).model, '["openai-codex","gpt-6.1-sol"]')
+})
+
+test('stop during fallback prevents the continuation from starting', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt', leaderFallback: '["anthropic","claude-haiku-5-5"]', fallbackEffort: 'medium' })
+  await f.threads.send(f.leader, { text: 'request' })
+  let release
+  const blocked = new Promise((resolve) => { release = resolve })
+  const update = f.threads.update
+  f.threads.update = async (...args) => { await blocked; return update(...args) }
+  const failed = new Promise((resolve) => f.manager.on('team', function handler(summary) { if (summary.leaderFallbackError) { f.manager.off('team', handler); resolve() } }))
+  failThread(f.threads, f.leader, 'subscription_sharing_usage_limit_exceeded')
+  await f.manager.stopAll(f.team.id)
+  release()
+  await failed
+  assert.equal(f.threads.calls.filter((call) => call[0] === 'send').length, 1)
+  assert.match(f.team.leaderFallbackError, /状態が変わ/)
+})
+
+test('interrupted fallback remains stopped after restoring the team', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt', leaderFallback: '["anthropic","claude-haiku-5-5"]', fallbackEffort: 'medium' })
+  await f.manager.writes
+  const saved = JSON.parse(await fs.readFile(f.manager.file, 'utf8'))
+  const team = saved.teams[0]
+  team.leaderFallbackPending = true
+  team.queue = [{ id: 'queued', childId: null, kind: 'notice', at: Date.now(), text: 'queued report' }]
+  await fs.writeFile(f.manager.file, JSON.stringify(saved))
+  const restored = await new TeamManager({ file: f.manager.file, dir: f.manager.dir, threads: f.threads, terminals: f.terminals, agents: f.agents,
+    catalog: CATALOG, getSettings: () => team.config, apiUrl: () => 'http://127.0.0.1:47130/api/team' }).load()
+  t.after(() => restored.stop())
+  const loaded = restored.teams.get(team.id)
+  assert.match(loaded.leaderFallbackError, /切り替え中にアプリが終了/)
+  restored.start()
+  await tick()
+  assert.equal(loaded.queue.length, 1)
+  assert.equal(f.threads.calls.filter((call) => call[0] === 'send').length, 0)
+})
+
+test('terminal fallback stops when its previous conversation cannot be read', async (t) => {
+  const f = await setup(t, { leaderFallback: '["anthropic","claude-haiku-5-5"]', fallbackEffort: 'medium' })
+  f.terminals.conversation = async () => ({ turns: [] })
+  const failed = new Promise((resolve) => f.manager.on('team', function handler(summary) { if (summary.leaderFallbackError) { f.manager.off('team', handler); resolve() } }))
+  f.terminals.emit('hook', { terminalId: f.leader, input: { hook_event_name: 'StopFailure', error_details: "You've hit your limit" } })
+  await failed
+  assert.equal(f.team.leaderId, f.leader)
+  assert.equal(f.team.leaderFallbackUsed, undefined)
+  assert.match(f.team.leaderFallbackError, /会話を引き継げない/)
+  assert.equal(f.threads.threads.size, 0)
+})
 
 test('passing failures are told apart from ones that would come back at once', () => {
   for (const message of ['API Error: 529 {"type":"overloaded_error"}', 'WebSocket closed 1006', 'fetch failed: ECONNRESET', '503 Service Unavailable', 'Request timed out']) {

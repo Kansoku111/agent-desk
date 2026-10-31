@@ -4,6 +4,22 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { deferred, fixture, pending, tick } from './helpers/thread-manager.js'
 
+test('retiring a leader closes only an idle session and rechecks its guard', async (t) => {
+  const f = await fixture(t)
+  await f.manager.send(f.thread.id, { text: 'work' })
+  await f.started.promise
+  await assert.rejects(f.manager.suspendTeamLeader(f.thread.id, () => {}), /作業中/)
+  const active = f.manager.active.get(f.thread.id)
+  f.finish.resolve()
+  await active.done
+  const session = f.manager.threads.get(f.thread.id).sessionId
+  let checks = 0
+  await f.manager.suspendTeamLeader(f.thread.id, () => { checks++ })
+  assert.deepEqual(f.calls.closed, [session])
+  assert.equal(checks, 2)
+  assert.equal(f.manager.threads.has(f.thread.id), true)
+})
+
 test('remove waits for startup completion and cannot resurrect a deleted thread', async (t) => {
   const f = await fixture(t)
   const startup = deferred()

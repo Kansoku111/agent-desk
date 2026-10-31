@@ -19,7 +19,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readJson, writeJson } from './json-file.js'
 import { sameToken } from './remote.js'
-import { workflowTeamEfforts } from '../shared/workflow-effort.js'
+import { workflowTeamEfforts, workflowEffort, workflowEffortSupported, workflowLevels } from '../shared/workflow-effort.js'
+import { validateAbModel } from './ab.js'
+import { isLeaderUsageLimit } from './leader-usage-limit.js'
+import { carryoverText } from './thread-utils.js'
 import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
 import { CATALOG_PROVIDER, childTask, clip, describeTool, executionTask, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
@@ -163,12 +166,19 @@ export class TeamManager extends EventEmitter {
     this.exPending = new Set()
     this.removingChildren = new Set()
     this.workingLeaders = new Set()
+    this.fallingBack = new Set()
+    this.retiringLeaders = new Set()
+    this.stopping = false
     // Read the owning team's current choice at send time, including resumed children.
     threads.teamToolMode = (thread) => {
       const team = thread.team && this.teams.get(thread.team.id)
       return team ? this.config(team).toolMode : undefined
     }
     threads.userMessageAccepted = (threadId) => this.userWrote(threadId)
+    threads.teamModelGuard = (thread) => {
+      const team = thread.team?.role === 'leader' && this.teams.get(thread.team.id)
+      return Boolean(team && team.leaderId === thread.id && team.leaderFallbackUsed)
+    }
     threads.teamGoalWaiting = (thread, options) => {
       const team = thread.team && this.teams.get(thread.team.id)
       return team && team.leaderId === thread.id ? this.#goalWaiting(team, options) : undefined
@@ -202,7 +212,13 @@ export class TeamManager extends EventEmitter {
   async load() {
     await this.execution.load()
     const saved = await readJson(this.file, EMPTY_TEAMS)
-    for (const team of restoreTeams(saved, this.getSettings)) this.teams.set(team.id, team)
+    for (const team of restoreTeams(saved, this.getSettings)) {
+      if (team.leaderFallbackPending) {
+        delete team.leaderFallbackPending
+        team.leaderFallbackError = '切り替え中にアプリが終了しました。リーダーと作業状態を確認してください'
+      }
+      this.teams.set(team.id, team)
+    }
     const remembered = await readJson(this.authFile, { version: 1, accepted: [] })
     this.claudeAuth.restore(remembered?.accepted)
     // A team confirmed before the confirmation was shared still counts for every team.
@@ -279,6 +295,7 @@ export class TeamManager extends EventEmitter {
   }
 
   async stop() {
+    this.stopping = true
     for (const team of this.teams.values()) if (team.execution) team.execution.stopped = true
     await this.execution.stop()
     await Promise.allSettled([...this.exPending])
@@ -309,6 +326,8 @@ export class TeamManager extends EventEmitter {
       leaderKind: team.leaderKind,
       config: this.config(team),
       toolModeBusy: this.toolModeBusy(team),
+      ...(team.leaderFallbackUsed ? { leaderFallbackUsed: true } : {}),
+      ...(team.leaderFallbackError ? { leaderFallbackError: team.leaderFallbackError } : {}),
       ...(team.execution ? { execution: { leaderModel: team.execution.leaderModel, stopped: team.execution.stopped, metrics: team.execution.metrics, ...(team.execution.planImplement ? { planImplement: true } : {}) } } : {}),
       createdAt: team.createdAt,
       updatedAt: team.updatedAt,
@@ -446,7 +465,7 @@ export class TeamManager extends EventEmitter {
    */
   launchFor(record) {
     const team = this.teams.get(record.team?.id)
-    if (!team || record.team.role !== 'leader') return null
+    if (!team || record.team.role !== 'leader' || team.retiredLeaders?.some((entry) => entry.id === record.id)) return null
     return leaderLaunch({
       team, config: this.config(team), models: this.catalog.data.models, dir: this.#teamDir(team),
       node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(), guides: this.#guides(team),
@@ -480,7 +499,7 @@ export class TeamManager extends EventEmitter {
    */
   mcpServerFor(thread) {
     const team = thread.team?.role === 'leader' ? this.teams.get(thread.team.id) : null
-    if (!team) return null
+    if (!team || team.retiredLeaders?.some((entry) => entry.id === thread.id)) return null
     return leaderMcpServer({
       team, config: this.config(team), models: this.catalog.data.models, dir: this.#teamDir(team),
       node: this.node, script: this.script, apiUrl: this.apiUrl(), guides: this.#guides(team),
@@ -513,7 +532,7 @@ export class TeamManager extends EventEmitter {
   guardClaudeLaunch(context) {
     const team = context.record?.team?.id
       ? this.teams.get(context.record.team.id) : this.#byTask(context.record?.id)?.team
-    if (!team || typeof context.cwd !== 'string' || path.resolve(context.cwd) !== path.resolve(team.workspace)) return AUTH_REQUIRED
+    if (!team || this.retiringLeaders.has(context.record?.id) || team.retiredLeaders?.some((entry) => entry.id === context.record?.id) || (context.record?.team?.role === 'leader' && team.leaderId && team.leaderId !== context.record.id && !this.fallingBack.has(team.id)) || typeof context.cwd !== 'string' || path.resolve(context.cwd) !== path.resolve(team.workspace)) return AUTH_REQUIRED
     return this.claudeAuth.guard(team, context)
   }
 
@@ -557,6 +576,13 @@ export class TeamManager extends EventEmitter {
       const leaderModel = team.execution.leaderModel ?? (gpt ? this.catalog.data.models.find((model) => model.provider === 'openai-codex' && model.id === id)?.value ?? JSON.stringify(['openai-codex', id]) : undefined)
       workflowTeamEfforts(config, this.catalog.data, leaderModel, CATALOG_PROVIDER)
       team.execution.strictEffort = true
+    }
+    if (config.leaderFallback) {
+      try { validateAbModel(config.leaderFallback, this.catalog.data) } catch { throw new Error('フォールバック先のモデルを選び直してください') }
+      config.fallbackEffort = workflowEffort(config.fallbackEffort, workflowLevels(this.catalog.data, config.leaderFallback))
+      if (!workflowEffortSupported(config.fallbackEffort, workflowLevels(this.catalog.data, config.leaderFallback))) throw new Error('フォールバック先の推論レベルを選び直してください')
+      const current = team.execution?.leaderModel ?? (dshLeader ? JSON.stringify([CATALOG_PROVIDER[config.leaderProvider], config.leaderProvider === 'gpt' ? config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels.find((entry) => entry.provider === 'gpt')?.model : null) : config.dshLeader?.model]) : 'claude:' + config.leader.model)
+      if (config.leaderFallback === current) throw new Error('フォールバック先はリーダーと別のモデルを選んでください')
     }
     if (authConfirmation) await this.#confirmAuth(team, authConfirmation, false)
     if (dshLeader || team.execution?.leaderModel) return this.#createDshLed(team, config)
@@ -631,6 +657,12 @@ export class TeamManager extends EventEmitter {
       }
     }
     try {
+      for (const retired of team.retiredLeaders ?? []) {
+        try {
+          if (retired.kind === 'thread' && this.threads.threads.has(retired.id)) await this.threads.remove(retired.id)
+          else if (retired.kind === 'terminal' && this.terminals.records.has(retired.id)) await this.terminals.remove(retired.id)
+        } catch (error) { this.log(`team ${teamId}: removing retired leader:`, error.message) }
+      }
       if (team.leaderKind === 'thread') {
         if (this.threads.threads.has(team.leaderId)) await this.threads.remove(team.leaderId)
       } else if (this.terminals.records.has(team.leaderId)) await this.terminals.remove(team.leaderId)
@@ -665,7 +697,9 @@ export class TeamManager extends EventEmitter {
 
   guardExecution(record) {
     if (!record?.workspace) return
-    const own = this.#byTask(record.id)
+    const owner = record.team?.role === 'leader' ? this.teams.get(record.team.id) : null
+    if (this.retiringLeaders.has(record.id) || (record.team?.role === 'leader' && (!owner || (owner.leaderId && owner.leaderId !== record.id && !this.fallingBack.has(owner.id)))) || [...this.teams.values()].some((team) => team.retiredLeaders?.some((entry) => entry.id === record.id))) throw new Error('このリーダーは切り替え済みです。現在のリーダーを開いてください')
+    const own = this.#byTask(record.id) ?? (owner && this.fallingBack.has(owner.id) ? { team: owner, child: null } : null)
     if (own?.child?.execution && own.child.execution.phase !== 'working') {
       throw this.#exChildConflict('ecoの検証・判定中です。親から send で手直しを依頼してください', record.workspace, own.team, own.child)
     }
@@ -1725,7 +1759,7 @@ export class TeamManager extends EventEmitter {
 
   /** Types the next report into the leader when it can take one: running, idle, not being typed into. */
   #pump(team) {
-    if (!this.teams.has(team.id) || this.delivering.has(team.id) || team.deliveryFailed) return
+    if (!this.teams.has(team.id) || this.delivering.has(team.id) || this.fallingBack.has(team.id) || team.deliveryFailed || team.leaderFallbackError) return
     // An approval decided (in the panel) while it waited needs no message any more.
     team.queue = team.queue.filter((item) => item.kind !== 'approval' || this.approvals.has(item.approvalId))
     if (!team.queue.length) return
@@ -1791,6 +1825,7 @@ export class TeamManager extends EventEmitter {
     const found = this.#byTask(threadId)
     if (!found || found.child) return
     this.workingLeaders.delete(found.team.id)
+    delete found.team.leaderFallbackError
     for (const ask of found.team.asks) ask.done = true
     void this.#save()
     this.#emit(found.team)
@@ -1878,10 +1913,19 @@ export class TeamManager extends EventEmitter {
    * reports that waited for a retry go on once this turn ends.
    */
   #onLeaderHook({ terminalId, input }) {
-    if (input?.hook_event_name !== 'UserPromptSubmit' || !Array.isArray(input.team_marks)) return
     const found = this.#byTask(terminalId)
     if (!found || found.child) return
     const { team } = found
+    if (input?.hook_event_name === 'StopFailure') {
+      const error = JSON.stringify({ error: input.error, error_details: input.error_details, message: input.message })
+      if (!this.#startLeaderFallback(team, error) && team.leaderFallbackUsed) {
+        team.leaderFallbackError = isLeaderUsageLimit(error) ? '切り替え先も利用上限に達しました' : '切り替え先でエラーが発生しました'
+        void this.#save()
+        this.#emit(team)
+      }
+      return
+    }
+    if (input?.hook_event_name !== 'UserPromptSubmit' || !Array.isArray(input.team_marks)) return
     if (team.execution) { team.execution.metrics.parentTurns = (team.execution.metrics.parentTurns ?? 0) + 1; void this.#save() }
     const marks = input.team_marks.map(String)
     // A prompt without team marks is the user's own: its answer to the questions the leader asked.
@@ -1941,7 +1985,8 @@ export class TeamManager extends EventEmitter {
     if (this.#captureScores(found.team)) void this.#save()
     if (!found.child) {
       // A dsh leader: its state shows in the panel, and an idle one takes the next report.
-      if (thread.status !== 'running') this.#pump(found.team)
+      const turn = this.threads.turns.get(thread.id)?.at(-1)
+      if (thread.status !== 'running' && !(thread.status === 'error' && found.team.config?.leaderFallback && (found.team.leaderFallbackUsed || isLeaderUsageLimit(turn?.error)))) this.#pump(found.team)
       return this.#emit(found.team)
     }
     // A child can have several concurrent approvals; a direct answer removes only its own request.
@@ -2024,7 +2069,19 @@ export class TeamManager extends EventEmitter {
       found.team.execution.usage = [...entries, { role: found.child ? 'child' : 'parent', taskId: threadId, turnId: turn?.id, at: this.now(), usage: turn?.usage ?? null, status }].slice(-500)
       void this.#save()
     }
-    if (!found.child) return this.#onLeaderFinished(found.team)
+    if (!found.child) {
+      const turn = this.threads.turns.get(threadId)?.at(-1)
+      if (status === 'error' && this.#startLeaderFallback(found.team, turn?.error)) {
+        this.workingLeaders.delete(found.team.id)
+        if (found.team.execution) { found.team.execution.metrics.parentTurns = (found.team.execution.metrics.parentTurns ?? 0) + 1; void this.#save() }
+        return
+      }
+      if (status === 'error' && found.team.leaderFallbackUsed) {
+        found.team.leaderFallbackError = isLeaderUsageLimit(turn?.error) ? '切り替え先も利用上限に達しました' : turn?.error?.message ?? '切り替え先でエラーが発生しました'
+        void this.#save()
+      }
+      return this.#onLeaderFinished(found.team)
+    }
     const { team, child } = found
     const apiStopped = this.apiStopped.delete(child.id)
     const byUser = this.userStopped.delete(child.id)
@@ -2053,6 +2110,117 @@ export class TeamManager extends EventEmitter {
     this.#emit(team)
   }
 
+  #startLeaderFallback(team, error) {
+    const config = this.config(team)
+    if (!config.leaderFallback || team.leaderFallbackUsed || team.stopped || team.execution?.stopped || this.stopping || this.fallingBack.has(team.id) || !isLeaderUsageLimit(error)) return false
+    this.fallingBack.add(team.id)
+    const id = team.leaderId
+    const turn = team.leaderKind === 'thread' ? this.threads.turns.get(id)?.at(-1) : null
+    const pending = this.#switchLeader(team, id, turn).catch((failure) => {
+      delete team.leaderFallbackPending
+      team.leaderFallbackError = failure.message
+      this.log(`team ${team.id}: leader fallback failed:`, failure.message)
+      void this.#save()
+      this.#emit(team)
+    }).finally(() => { this.fallingBack.delete(team.id); this.exPending.delete(pending); if (!this.stopping) this.#pump(team) })
+    this.exPending.add(pending)
+    return true
+  }
+  async #switchLeader(team, id, turn) {
+    const config = this.config(team)
+    const oldKind = team.leaderKind
+    const version = team.stopVersion
+    const current = () => this.teams.get(team.id) === team && team.leaderId === id && team.stopVersion === version && !this.stopping && !this.threads.stopping && (oldKind !== 'thread' || this.threads.turns.get(id)?.at(-1) === turn)
+    if (!current() || (oldKind === 'thread' && !turn)) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
+    try { validateAbModel(config.leaderFallback, this.catalog.data) } catch { throw new Error('フォールバック先のモデルを選び直してください') }
+    team.leaderFallbackPending = true
+    await this.#save({ required: true })
+    if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
+    if (oldKind === 'terminal' || config.leaderFallback.startsWith('claude:')) return this.#replaceLeader(team, id, turn, current, version)
+    team.leaderFallbackUsed = true
+    await this.#save({ required: true })
+    if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
+    await this.threads.update(id, { model: config.leaderFallback, effort: config.fallbackEffort }, { guard: () => { if (!current()) throw new Error('リーダーの状態が変わりました') } })
+    if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
+    await this.threads.send(id, { text: '[Agent Desk] 利用上限のため指定されたモデルへ切り替えました。途中の作業を続けてください。変更済みのファイルや実行済み・完了が不明な外部操作を確認し、重複実行しないでください。\n\n直前の入力:\n' + (turn.user?.text ?? ''), images: turn.user?.images ?? [] }, { guard: () => { if (!current()) throw new Error('リーダーの状態が変わりました') } })
+    delete team.leaderFallbackPending
+    await this.#save({ required: true })
+    this.workingLeaders.delete(team.id)
+    this.#emit(team)
+  }
+  async #replaceLeader(team, id, turn, current, version) {
+    const config = this.config(team)
+    const oldKind = team.leaderKind
+    const inputAt = oldKind === 'terminal' ? this.terminals.status(id)?.inputAt : null
+    const source = oldKind === 'thread' ? this.threads.turns.get(id) : (await this.terminals.conversation(id)).turns
+    if (!current() || !source?.length) throw new Error('会話を引き継げないため切り替えを中止しました')
+    const history = carryoverText(source).replace('the permission mode changed or the previous session could not be resumed', 'the leader model and runtime changed after a usage limit')
+    if (!history) throw new Error('会話を引き継げないため切り替えを中止しました')
+    this.retiringLeaders.add(id)
+    let replacement
+    let committed = false
+    try {
+      if (oldKind === 'terminal') {
+        const status = this.terminals.status(id)
+        const record = this.terminals.records.get(id)
+        if (!status || status.activity !== 'idle' || status.inputAt !== inputAt || (record && this.terminals.summary(record).background > 0)) throw new Error('元のリーダーがまだ作業中か入力中です')
+        if (status.state === 'running') await this.#stopLeaderTerminal(id)
+      } else {
+        await this.threads.suspendTeamLeader(id, () => { if (!current()) throw new Error('リーダーの状態が変わりました') })
+      }
+      if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
+      const toClaude = config.leaderFallback.startsWith('claude:')
+      if (toClaude) {
+        replacement = await this.terminals.create({ workspace: team.workspace, team: { id: team.id, role: 'leader' }, model: config.leaderFallback.slice(7), effort: config.fallbackEffort || null, title: 'リーダー（切り替え後）' })
+      } else {
+        replacement = await this.threads.create({ workspace: team.workspace, model: config.leaderFallback, effort: config.fallbackEffort, toolMode: config.toolMode,
+          permissionMode: config.leaderBypass ? 'danger-full-access' : 'workspace-write', team: { id: team.id, role: 'leader', ...(team.execution?.strictEffort ? { strictEffort: true } : {}) } })
+      }
+      if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
+      team.retiredLeaders = [...(team.retiredLeaders ?? []), { id, kind: oldKind }]
+      team.leaderId = replacement.id
+      team.leaderKind = toClaude ? 'terminal' : 'thread'
+      team.leaderFallbackUsed = true
+      await this.#save({ required: true })
+      committed = true
+      this.#emit(team)
+      if (oldKind === 'thread') await this.threads.update(id, { archived: true })
+      else await this.terminals.update(id, { archived: true })
+      const prompt = history + '\n\n' + '[Agent Desk] 利用上限のためリーダーが切り替わりました。上記の会話は抜粋です。チームの状態を確認して途中の依頼を続けてください。変更済みファイルを確認し、実行済みまたは完了が不明な外部操作を繰り返さないでください。過去の画像は自動では引き継がれません。'
+      if (this.teams.get(team.id) !== team || team.leaderId !== replacement.id || this.stopping || team.stopVersion !== version) throw new Error('切り替え中にチームが停止しました')
+      if (toClaude) await this.terminals.sendMessage(replacement.id, prompt)
+      else await this.threads.send(replacement.id, { text: prompt }, { guard: () => { if (this.teams.get(team.id) !== team || team.leaderId !== replacement.id || this.stopping || team.stopVersion !== version) throw new Error('切り替え中にチームが停止しました') } })
+      delete team.leaderFallbackPending
+      await this.#save({ required: true })
+      this.workingLeaders.delete(team.id)
+      this.#emit(team)
+    } catch (error) {
+      if (replacement && !committed) {
+        if (team.leaderId === replacement.id) {
+          team.leaderId = id
+          team.leaderKind = oldKind
+          delete team.leaderFallbackUsed
+          team.retiredLeaders = (team.retiredLeaders ?? []).filter((entry) => entry.id !== id)
+        }
+        if (config.leaderFallback.startsWith('claude:')) await this.terminals.remove(replacement.id).catch(() => {})
+        else await this.threads.remove(replacement.id).catch(() => {})
+      }
+      throw error
+    } finally { this.retiringLeaders.delete(id) }
+  }
+  async #stopLeaderTerminal(id) {
+    await new Promise((resolve, reject) => {
+      const done = (summary) => { if (summary.id === id && summary.state !== 'running') { cleanup(); resolve() } }
+      const timer = setTimeout(() => { cleanup(); reject(new Error('元のリーダーの終了を確認できません')) }, 5000)
+      const cleanup = () => { clearTimeout(timer); this.terminals.off('terminal', done) }
+      this.terminals.on('terminal', done)
+      try {
+        this.terminals.stop(id)
+        const state = this.terminals.status(id)
+        if (!state || state.state !== 'running') { cleanup(); resolve() }
+      } catch (error) { cleanup(); reject(error) }
+    })
+  }
   /** A dsh leader's turn ended: why, if Agent Desk stopped it; then the next report. */
   #onLeaderFinished(team) {
     this.workingLeaders.delete(team.id)
@@ -2080,6 +2248,8 @@ export class TeamManager extends EventEmitter {
     if (summary.state === 'running' && summary.activity !== 'idle') {
       // A submit hook carries the actual marks and is handled below, after this state event.
       if (input?.hook_event_name !== 'UserPromptSubmit' && this.delivering.has(team.id)) this.#delivered(team)
+    } else if (team.config?.leaderFallback) {
+      queueMicrotask(() => this.#pump(team))
     } else {
       this.#pump(team)
     }

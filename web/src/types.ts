@@ -9,6 +9,7 @@ export type Theme = 'system' | 'light' | 'dark'
 
 export interface AbConfig {
   a: string; b: string; leader: string; implementer: string
+  leaderFallback: string; fallbackEffort: string
   efforts: Record<'a' | 'b' | 'leader' | 'implementer', string>
   lean: boolean; delegate: boolean; review: boolean; toolMode?: ToolMode
 }
@@ -21,7 +22,7 @@ export interface AbJob {
 export interface AbRun {
   id: string; workspace: string; title: string; text: string; images?: ImageRef[]; config: AbConfig
   score?: UsageScore
-  phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string; warning?: string; retryJobId?: string
+  phase: string; revision: number; plan: string; jobs: AbJob[]; error?: string; warning?: string; retryJobId?: string; leaderFallbackUsed?: boolean
   archived?: boolean
   pinned?: boolean
   messages: (string | { text: string; images?: ImageRef[]; afterJobId?: string })[]; createdAt: number; updatedAt: number
@@ -164,6 +165,7 @@ export interface TeamSummary {
   /** The team's own settings: chosen when it started, changed in its panel since. */
   config?: TeamSettings
   toolModeBusy?: boolean
+  leaderFallbackUsed?: boolean; leaderFallbackError?: string
   execution?: { leaderModel?: string; planImplement?: boolean; stopped: boolean; metrics: { childTurns: number; parentTurns?: number; parentReports: number; verifications: number; repairs: number } }
   createdAt: number
   updatedAt: number
@@ -196,6 +198,7 @@ export interface TeamSettings {
   gptLeader: { model: string | null; effort: string | null }
   /** Other dsh routes; older settings lack this field. */
   dshLeader?: { provider: Exclude<TeamProvider, 'claude' | 'gpt'>; model: string; effort: string | null } | null
+  leaderFallback?: string; fallbackEffort?: string
   toolMode?: ToolMode
   defaultModelMode?: TeamModelMode
   modelMode?: TeamModelMode

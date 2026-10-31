@@ -15,6 +15,7 @@ import { Markdown, CopyButton } from './Markdown'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { AbImages, AbInput, useAbDraft } from './AbInput'
 import { PtcToggle } from './PtcToggle'
+import { LeaderFallback } from './LeaderFallback'
 import type { AuthConsentState } from '../team-auth-consent'
 
 export const AB_PHASE: Record<string, string> = { consulting: '2社に相談中', judging: '判断中', 'awaiting-approval': '案を確認', preparing: '実装指示を作成中', implementing: '実装中', reviewing: 'レビュー中', completed: '実装担当の報告', reviewed: 'レビュー報告', 'needs-attention': '要確認', stopped: '停止', interrupted: '中断', error: 'エラー' }
@@ -44,7 +45,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
     let alive = true
     void act<{ config: AbConfig }>('ab.config', {}).then((result) => {
       if (!alive || !result) return
-      const next = { ...result.config, efforts: { ...result.config.efforts } }
+      const next = { ...result.config, leaderFallback: result.config.leaderFallback ?? '', fallbackEffort: result.config.fallbackEffort ?? '', efforts: { ...result.config.efforts } }
       if (server) for (const [key] of FIELDS) {
         next.efforts[key] = workflowEffort(next.efforts[key], workflowLevels(server.catalog, next[key]))
       }
@@ -65,10 +66,11 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
   const requiredKeys: ('a' | 'b' | 'leader' | 'implementer')[] = config ? (['a', 'b', 'leader', 'implementer'] as const).filter((key) => key !== 'implementer' || config.delegate) : []
   const required = config ? requiredKeys.map((key) => config[key]) : []
-  const usesClaude = config ? [config.a, config.b, config.leader, config.implementer].some((value) => value.startsWith('claude:')) : false
+  const usesClaude = config ? [config.a, config.b, config.leader, config.implementer, config.leaderFallback].some((value) => value?.startsWith('claude:')) : false
   // A strict AB run refuses an effort its model does not offer; block start instead of failing right after it.
   const effortsReady = config ? requiredKeys.every((key) => workflowEffortSupported(config.efforts[key], workflowLevels(server.catalog, config[key]))) : false
-  const ready = config && required.every(valid) && effortsReady && draft.ready && (!usesClaude || auth.ready)
+  const fallbackReady = config && (!config.leaderFallback || (valid(config.leaderFallback) && config.leaderFallback !== config.leader && workflowEffortSupported(config.fallbackEffort, workflowLevels(server.catalog, config.leaderFallback))))
+  const ready = config && required.every(valid) && effortsReady && fallbackReady && draft.ready && (!usesClaude || auth.ready)
   const start = () => draft.submit(Boolean(ready), async () => {
     setBusy(true)
     try {
@@ -87,6 +89,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
             onEffort={(value) => change({ efforts: { ...config.efforts, [key]: value } })}
             onChange={(value) => change({ [key]: value, efforts: { ...config.efforts, [key]: workflowEffort(config.efforts[key], workflowLevels(server.catalog, value), true) } })} />
         ))}</div>
+        <LeaderFallback server={server} value={config.leaderFallback} effort={config.fallbackEffort} disabled={busy} onChange={(leaderFallback, fallbackEffort) => change({ leaderFallback, fallbackEffort })} />
         <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
         <ImplementationOptions config={config} change={change} disabled={busy} />
         <PtcToggle mode={config.toolMode} disabled={busy} onChange={(toolMode) => change({ toolMode })} />
@@ -171,6 +174,7 @@ export function AbView({ id }: { id: string }) {
     <div ref={content} className="ab-content">
       <section className="ab-question"><CopyButton text={run.text} /><Markdown text={run.text} workspace={run.workspace} /><AbImages images={run.images} /></section>
       <div className="ab-consultations">{run.jobs.filter((job) => ['a', 'b'].includes(job.role)).map((job) => <Report key={job.id} job={job} workspace={run.workspace} modelName={modelName(job.model)} />)}</div>
+      {run.leaderFallbackUsed && <p role="status" className="muted">利用上限のためリーダーを {modelName(run.config.leaderFallback)} に切り替えました。</p>}
       {run.error && <p role="alert" className="error-text">{run.error}</p>}
       {run.warning && <p role="alert" className="error-text">{run.warning}</p>}
       {abTimeline(run).filter((entry) => entry.kind !== 'job' || !['a', 'b'].includes(entry.job.role)).map((entry) => entry.kind === 'message'

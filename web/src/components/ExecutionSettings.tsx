@@ -8,6 +8,7 @@ import { ModelField, modelGroups } from './WorkflowModelField'
 import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { Modal } from './Modal'
 import { PtcToggle } from './PtcToggle'
+import { LeaderFallback } from './LeaderFallback'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import type { AuthConsentState } from '../team-auth-consent'
 
@@ -18,7 +19,7 @@ const providers: { id: TeamProvider; name: string; catalog?: string }[] = [
 ]
 
 const CHOICE_KEY = 'agent-desk.execution-models'
-const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '', toolMode: 'ptc' as 'native' | 'ptc', planImplement: false }
+const DEFAULT_CHOICE = { leader: 'claude:opus', provider: 'claude' as TeamProvider, model: 'haiku', leaderEffort: '', childEffort: '', leaderFallback: '', fallbackEffort: '', toolMode: 'ptc' as 'native' | 'ptc', planImplement: false }
 function readChoice() {
   try {
     const value = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? 'null')
@@ -131,13 +132,14 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
     models: group.models.filter((entry) => (group.id === 'claude-code' && /^claude:(?:claude-)?(?:opus|sonnet)(?:-|$)/i.test(entry.value)) || selection.leaderModels.some((model) => model.value === entry.value)),
   })).filter((group) => group.models.length)
   const childValue = provider === 'claude' ? (selection.model ? `claude:${selection.model}` : '') : selection.childModels.find((entry) => entry.id === selection.model)?.value ?? ''
-  const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude')
+  const fallbackReady = !choice.leaderFallback || (groups.some((group) => group.models.some((entry) => entry.value === choice.leaderFallback)) && choice.leaderFallback !== selection.leader && workflowEffortSupported(choice.fallbackEffort, workflowLevels(server.catalog, choice.leaderFallback)))
+  const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude' || choice.leaderFallback.startsWith('claude:'))
   const start = async () => {
     const current = { ...latest.current }
     const currentLevels = effortOptions(current)
     if (startingRef.current || !modelsReady || !checks || !selection.leader || !selection.model
       || !workflowEffortSupported(current.leaderEffort, currentLevels.leader) || !workflowEffortSupported(current.childEffort, currentLevels.child)
-      || (usesClaude && !auth.ready)) return
+      || !fallbackReady || (usesClaude && !auth.ready)) return
     startingRef.current = true
     setStarting(true)
     try {
@@ -149,6 +151,8 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       choices.leaderProvider = leader.startsWith('claude:') ? 'claude' : 'gpt'
       choices.leader = { model: leader.startsWith('claude:') ? leader.slice(7) : 'opus', effort: leaderEffort || null }
       choices.gptLeader = { model: null, effort: leaderEffort || null }
+      choices.leaderFallback = current.leaderFallback
+      choices.fallbackEffort = current.fallbackEffort
       choices.toolMode = current.toolMode
       choices.leanChildren = false
       choices.batchReports = true
@@ -170,6 +174,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
           effort={childEffort} efforts={workflowOptions(childEffort, levels.child)} onEffort={(childEffort) => changeModels({ childEffort })}
           allowClearUnavailableEffort onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
       </section>
+      <LeaderFallback server={server} value={choice.leaderFallback} effort={choice.fallbackEffort} disabled={!modelsReady || starting} onChange={(leaderFallback, fallbackEffort) => changeModels({ leaderFallback, fallbackEffort })} />
       <div className="ex-options">
         <PtcToggle mode={choice.toolMode} disabled={!modelsReady || starting} onChange={(toolMode) => changeModels({ toolMode })} />
         <button type="button" className={`chip plan-implement-chip ${choice.planImplement ? 'on' : ''}`} aria-label="計画 → 実装" aria-pressed={choice.planImplement}
@@ -179,6 +184,6 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
     </div>
-    <div className="modal-actions"><button type="button" className="button" onClick={close}>キャンセル</button><button type="button" className="button primary" disabled={starting || !modelsReady || !checks || !selection.leader || !selection.model || !workflowEffortSupported(leaderEffort, levels.leader) || !workflowEffortSupported(childEffort, levels.child) || (usesClaude && !auth.ready)} onClick={() => void start()}>始める</button></div>
+    <div className="modal-actions"><button type="button" className="button" onClick={close}>キャンセル</button><button type="button" className="button primary" disabled={starting || !modelsReady || !checks || !selection.leader || !selection.model || !workflowEffortSupported(leaderEffort, levels.leader) || !workflowEffortSupported(childEffort, levels.child) || !fallbackReady || (usesClaude && !auth.ready)} onClick={() => void start()}>始める</button></div>
   </Modal>
 }

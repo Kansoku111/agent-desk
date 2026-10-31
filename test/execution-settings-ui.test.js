@@ -19,6 +19,7 @@ const compile = (source, modules, localStorage) => {
   return exports
 }
 const moduleSource = async (file) => fs.readFile(new URL(file, import.meta.url), 'utf8')
+const fallbackSource = await moduleSource('../web/src/components/LeaderFallback.tsx')
 const fieldSource = await moduleSource('../web/src/components/WorkflowModelField.tsx')
 const fieldComponents = compile(fieldSource, {
   react: {}, 'react/jsx-runtime': jsxRuntime, 'lucide-react': { ChevronDown: 'ChevronDown' },
@@ -42,7 +43,7 @@ function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', le
   planImplement = false, legacy = false, modelsStore, browserChoice = null, onSave } = {}) {
   const models = {
     leader, provider: 'gpt', model: 'eco-child',
-    leaderEffort, childEffort, toolMode: 'native', planImplement,
+    leaderEffort, childEffort, leaderFallback: '', fallbackEffort: '', toolMode: 'native', planImplement,
   }
   if (legacy) delete models.planImplement
   modelsStore ??= { models }
@@ -122,6 +123,7 @@ function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', le
     },
     '../execution-checks': { nextCheckId: () => 'check-1' },
     './WorkflowModelField': fieldComponents,
+    './LeaderFallback': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, './WorkflowModelField': fieldComponents, '../../../shared/workflow-effort.js': workflowEffort }),
     '../../../shared/workflow-effort.js': workflowEffort,
     './Modal': { Modal: ({ children }) => jsx('div', { children }) },
     './PtcToggle': compile(ptcSource, { react, 'react/jsx-runtime': jsxRuntime }),
@@ -169,6 +171,22 @@ async function click(node) {
 const planToggle = (ui) => ui.walk((node) => node.type === 'button' && node.props['aria-label'] === '計画 → 実装')[0]
 const startButton = (ui) => ui.walk((node) => node.type === 'button' && node.props.children === '始める')[0]
 const savedChoices = (ui) => ui.rpcCalls.filter(({ type }) => type === 'execution.setModels')
+
+test('eco fallback is collapsed and saved with the start choice', async () => {
+  const ui = mountExecutionDialog({ childEffort: '' })
+  await ui.ready()
+  assert.equal(Boolean(ui.walk((node) => node.type === 'details')[0].props.open), false)
+  const field = ui.walk((node) => node.type === 'div' && node.props.className === 'ab-field' && node.props.children?.[0]?.props?.children === 'リーダーの切り替え先')[0]
+  const menu = []
+  const scan = (node) => { if (Array.isArray(node)) return node.forEach(scan); if (!node || typeof node !== 'object') return; if (node.props?.label === 'Eco child') menu.push(node); scan(node.props?.children) }
+  scan(field)
+  menu[0].props.onSelect()
+  ui.render()
+  await new Promise((resolve) => setImmediate(resolve))
+  await click(startButton(ui))
+  assert.equal(ui.teamStarts[0][1].leaderFallback, CHILD_VALUE)
+  assert.equal(ui.modelsStore.models.leaderFallback, CHILD_VALUE)
+})
 
 test('eco restores older saved choices with plan → implement off and sends false', async () => {
   const ui = mountExecutionDialog({ childEffort: '', legacy: true })

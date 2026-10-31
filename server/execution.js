@@ -148,12 +148,15 @@ export function normalizeExecutionModels(value) {
   // Empty strings are intentional: a provider may have been selected before its model.
   const leaderEffort = value.leaderEffort ?? ''
   const childEffort = value.childEffort ?? ''
-  if ([leaderEffort, childEffort].some((effort) => typeof effort !== 'string' || effort.length > 100)) throw new Error('ecoの推論レベルが不正です')
+  const leaderFallback = value.leaderFallback ?? ''
+  const fallbackEffort = value.fallbackEffort ?? ''
+  if (typeof leaderFallback !== 'string' || leaderFallback.length > 1000) throw new Error('ecoのフォールバック先が不正です')
+  if ([leaderEffort, childEffort, fallbackEffort].some((effort) => typeof effort !== 'string' || effort.length > 100)) throw new Error('ecoの推論レベルが不正です')
   const toolMode = value.toolMode ?? 'ptc'
   assertToolMode(toolMode)
   const planImplement = value.planImplement ?? false
   if (typeof planImplement !== 'boolean') throw new Error('計画→実装の設定が不正です')
-  return { leader: value.leader, provider: value.provider, model: value.model, leaderEffort, childEffort, toolMode, planImplement }
+  return { leader: value.leader, provider: value.provider, model: value.model, leaderEffort, childEffort, leaderFallback, fallbackEffort, toolMode, planImplement }
 }
 
 export class ExecutionVerifier {

@@ -9,7 +9,7 @@ export interface AuthConsentState {
  * Existing CLI children are still guarded by the server if explicitly resumed. */
 export function needsClaudeAuth(config: TeamSettings, team?: TeamSummary): boolean {
   const claudeChild = config.modelMode === 'free' ? (config.freeModels ?? []).some((model) => model.provider === 'claude') : config.claude.enabled
-  return (team ? team.leaderKind === 'terminal' : config.leaderProvider === 'claude') || claudeChild
+  return (team ? team.leaderKind === 'terminal' : config.leaderProvider === 'claude') || claudeChild || Boolean(config.leaderFallback?.startsWith('claude:'))
 }
 
 /** A displayed challenge alone is not consent, including for unknown auth. */
