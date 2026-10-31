@@ -23,7 +23,7 @@ const modules = {
   '../util': { parseModel: (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }, pickableEfforts: (efforts) => efforts },
   './Modal': {}, './Popover': {}, './Pickers': { byNewest: () => 0 },
   './TerminalPickers': { claudeModels: () => [], claudeModelName: (_server, model) => model, claudeEfforts: () => ['low', 'high'] },
-  './ClaudeAuthConsent': {}, './TeamGuides': {}, './PtcToggle': {}, './LeaderFallback': {}, '../team-auth-consent': {},
+  './ClaudeAuthConsent': {}, './TeamGuides': {}, './ModeSections': {}, './PtcToggle': {}, './LeaderFallback': {}, '../team-auth-consent': {},
   '../../../shared/workflow-effort.js': {},
   './WorkflowModelField': { ModelField: field, modelGroups: (server) => server.groups.map((group) => ({ ...group, models: [...group.models] })) },
 }

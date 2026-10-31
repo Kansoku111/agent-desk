@@ -34,12 +34,10 @@ function ImplementationOptions({ config, change, disabled = false }: { config: P
   </div>
 }
 
-export function AbStartDialog({ workspace }: { workspace: string }) {
+/** The AB model choices, saved as they change; shared by the start dialog and 設定. */
+export function useAbConfig() {
   const server = useStore((state) => state.server)
   const [config, setConfig] = useState<AbConfig | null>(null)
-  const draft = useAbDraft()
-  const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
-  const [busy, setBusy] = useState(false)
   const saves = useRef(Promise.resolve<unknown>(null))
   useEffect(() => {
     let alive = true
@@ -60,6 +58,32 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
     setConfig(next)
     saves.current = saves.current.then(() => act('ab.configure', { config: next }))
   }
+  return { config, change, saves }
+}
+
+export function AbConfigFields({ server, config, change, busy = false }: { server: AppState; config: AbConfig; change: (patch: Partial<AbConfig>) => void; busy?: boolean }) {
+  const groups = modelGroups(server)
+  const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
+  return <>
+    <div className="ab-model-grid">{FIELDS.map(([key, label]) => (
+      <ModelField key={key} label={label} value={valid(config[key]) ? config[key] : ''} groups={groups} disabled={busy}
+        effort={config.efforts[key]} efforts={modelEfforts(server, config[key], config.efforts[key])} allowClearUnavailableEffort
+        onEffort={(value) => change({ efforts: { ...config.efforts, [key]: value } })}
+        onChange={(value) => change({ [key]: value, efforts: { ...config.efforts, [key]: workflowEffort(config.efforts[key], workflowLevels(server.catalog, value), true) } })} />
+    ))}</div>
+    <LeaderFallback server={server} value={config.leaderFallback} effort={config.fallbackEffort} disabled={busy} onChange={(leaderFallback, fallbackEffort) => change({ leaderFallback, fallbackEffort })} />
+    <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
+    <ImplementationOptions config={config} change={change} disabled={busy} />
+    <PtcToggle mode={config.toolMode} disabled={busy} onChange={(toolMode) => change({ toolMode })} />
+  </>
+}
+
+export function AbStartDialog({ workspace }: { workspace: string }) {
+  const server = useStore((state) => state.server)
+  const { config, change, saves } = useAbConfig()
+  const draft = useAbDraft()
+  const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
+  const [busy, setBusy] = useState(false)
   const close = () => setState({ abStart: null })
   if (!server) return null
   const groups = modelGroups(server)
@@ -83,16 +107,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   return <Modal title="AB" onClose={close} width={700} className="team-start-modal">
     <div className="team-start-body">
       {config ? <>
-        <div className="ab-model-grid">{FIELDS.map(([key, label]) => (
-          <ModelField key={key} label={label} value={valid(config[key]) ? config[key] : ''} groups={groups} disabled={busy}
-            effort={config.efforts[key]} efforts={modelEfforts(server, config[key], config.efforts[key])} allowClearUnavailableEffort
-            onEffort={(value) => change({ efforts: { ...config.efforts, [key]: value } })}
-            onChange={(value) => change({ [key]: value, efforts: { ...config.efforts, [key]: workflowEffort(config.efforts[key], workflowLevels(server.catalog, value), true) } })} />
-        ))}</div>
-        <LeaderFallback server={server} value={config.leaderFallback} effort={config.fallbackEffort} disabled={busy} onChange={(leaderFallback, fallbackEffort) => change({ leaderFallback, fallbackEffort })} />
-        <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
-        <ImplementationOptions config={config} change={change} disabled={busy} />
-        <PtcToggle mode={config.toolMode} disabled={busy} onChange={(toolMode) => change({ toolMode })} />
+        <AbConfigFields server={server} config={config} change={change} busy={busy} />
         <AbInput draft={draft} label="相談内容" placeholder="相談したいこと" disabled={busy} rows={6} onSubmit={() => void start()} />
         {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
       </> : <Loader2 className="spin" size={20} />}

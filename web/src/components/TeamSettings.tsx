@@ -9,6 +9,7 @@ import { byNewest } from './Pickers'
 import { claudeEfforts, claudeModelName, claudeModels } from './TerminalPickers'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { TeamGuides } from './TeamGuides'
+import { AbSettings, ExecutionSettings, ModeSection } from './ModeSections'
 import { PtcToggle } from './PtcToggle'
 import { LeaderFallback } from './LeaderFallback'
 import { ModelField, modelGroups } from './WorkflowModelField'
@@ -521,22 +522,19 @@ export function TeamSettings() {
   const apiSubagent = server.settings.subagentModels?.anthropic
   return (
     <div className="settings-section">
-      <section className="account-card">
-        <div className="account-head">
-          <div>
-            <h3>エージェントチーム</h3>
-            <p className="muted">
-              サイドバーの <span className="cl-mark tm-mark inline">TM</span> で始め、構成もそこで選びます。
-            </p>
-          </div>
-        </div>
+      <ModeSection mark="TM" name="エージェントチーム">
+        <p className="muted">
+          サイドバーの <span className="cl-mark tm-mark inline">TM</span> で始め、構成もそこで選びます。
+        </p>
         <Switch title="自由モードを標準にする" note="オフの場合は低中モード" checked={config.defaultModelMode === 'free'}
           onChange={(value) => save({ defaultModelMode: value ? 'free' : 'tiers' })} />
         <BypassSwitch config={config} onChange={save} />
         <Switch title="報告をまとめて渡す" note="近い時間に届いた報告を1ターンにまとめます。"
           checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />
         <LeanChildrenSwitch config={config} onChange={save} />
-      </section>
+      </ModeSection>
+      <ModeSection mark="AB" name="2社に相談"><AbSettings /></ModeSection>
+      <ModeSection mark="eco" name="エコモード"><ExecutionSettings /></ModeSection>
       <TeamGuides policies={server.settings.teamPolicies ?? []} playbooks={server.settings.teamPlaybooks ?? []} modelGroups={teamModelGroups(server)} catalogLoaded={server.catalog.models.length > 0} />
       {apiSubagent && (
         <p className="team-warning">

@@ -69,13 +69,13 @@ export function ExecutionChecksDialog({ workspace, onClose }: { workspace: strin
   </Modal>
 }
 
-export function ExecutionStartDialog({ workspace }: { workspace: string }) {
+/** The eco parent/child model choices, saved as they change; shared by the start dialog and 設定. */
+export function useExecutionModels() {
   const server = useStore((state) => state.server)
   const [choice, setChoice] = useState(readChoice)
   const { leader, provider, model, leaderEffort, childEffort } = choice
   const latest = useRef(choice)
   const saves = useRef(Promise.resolve<unknown>(true))
-  const startingRef = useRef(false)
   const [modelsReady, setModelsReady] = useState(false)
   useEffect(() => {
     let alive = true
@@ -107,10 +107,6 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
     try { localStorage.setItem(CHOICE_KEY, JSON.stringify(next)) } catch { /* server persistence remains available */ }
     saves.current = saves.current.then(() => act('execution.setModels', { models: next }))
   }
-  const [checks, setChecks] = useChecks(workspace)
-  const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
-  const [starting, setStarting] = useState(false)
-  const close = () => setState({ executionStart: null })
   const effortOptions = (value: typeof DEFAULT_CHOICE) => {
     const levels = (model: string) => server && model ? workflowLevels(server.catalog, model) : []
     const selected = server ? executionModelSelection(server, value.provider, value.leader, value.model) : null
@@ -125,13 +121,51 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       changeModels({ leader: selection.leader, model: selection.model })
     }
   }, [modelsReady, selection?.leader, selection?.model, leader, model, leaderEffort, childEffort, levels.leader?.join(), levels.child?.join()])
-  if (!server?.settings.agentTeams || !selection) return null
+  return { server, choice, latest, saves, modelsReady, changeModels, effortOptions, levels, selection }
+}
+
+type ExecutionModels = ReturnType<typeof useExecutionModels>
+
+export function ExecutionModelFields({ models, starting = false }: { models: ExecutionModels; starting?: boolean }) {
+  const { server, choice, latest, modelsReady, changeModels, levels, selection } = models
+  if (!server || !selection) return null
   const groups = modelGroups(server)
   const leaderGroups = groups.map((group) => ({
     ...group,
     models: group.models.filter((entry) => (group.id === 'claude-code' && /^claude:(?:claude-)?(?:opus|sonnet)(?:-|$)/i.test(entry.value)) || selection.leaderModels.some((model) => model.value === entry.value)),
   })).filter((group) => group.models.length)
-  const childValue = provider === 'claude' ? (selection.model ? `claude:${selection.model}` : '') : selection.childModels.find((entry) => entry.id === selection.model)?.value ?? ''
+  const childValue = choice.provider === 'claude' ? (selection.model ? `claude:${selection.model}` : '') : selection.childModels.find((entry) => entry.id === selection.model)?.value ?? ''
+  const disabled = !modelsReady || starting
+  return <>
+    <section className="account-card ex-models">
+      <ModelField label="親" value={modelsReady ? selection.leader : ''} groups={leaderGroups} disabled={disabled}
+        effort={choice.leaderEffort} efforts={workflowOptions(choice.leaderEffort, levels.leader)} onEffort={(leaderEffort) => changeModels({ leaderEffort })}
+        allowClearUnavailableEffort onChange={(leader) => changeModels({ leader })} />
+      <ModelField label="子" value={modelsReady ? childValue : ''} groups={groups} disabled={disabled}
+        effort={choice.childEffort} efforts={workflowOptions(choice.childEffort, levels.child)} onEffort={(childEffort) => changeModels({ childEffort })}
+        allowClearUnavailableEffort onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
+    </section>
+    <LeaderFallback server={server} value={choice.leaderFallback} effort={choice.fallbackEffort} disabled={disabled} onChange={(leaderFallback, fallbackEffort) => changeModels({ leaderFallback, fallbackEffort })} />
+    <div className="ex-options">
+      <PtcToggle mode={choice.toolMode} disabled={disabled} onChange={(toolMode) => changeModels({ toolMode })} />
+      <button type="button" className={`chip plan-implement-chip ${choice.planImplement ? 'on' : ''}`} aria-label="計画 → 実装" aria-pressed={choice.planImplement}
+        title="親が計画、子が実装。親が最大1回レビューし、必要なら同じ子が最終修正" disabled={disabled}
+        onClick={() => changeModels({ planImplement: !latest.current.planImplement })}>計画 → 実装 {choice.planImplement ? 'ON' : 'OFF'}</button>
+    </div>
+  </>
+}
+
+export function ExecutionStartDialog({ workspace }: { workspace: string }) {
+  const models = useExecutionModels()
+  const { server, choice, latest, saves, modelsReady, effortOptions, levels, selection } = models
+  const { provider, leaderEffort, childEffort } = choice
+  const startingRef = useRef(false)
+  const [checks, setChecks] = useChecks(workspace)
+  const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
+  const [starting, setStarting] = useState(false)
+  const close = () => setState({ executionStart: null })
+  if (!server?.settings.agentTeams || !selection) return null
+  const groups = modelGroups(server)
   const fallbackReady = !choice.leaderFallback || (groups.some((group) => group.models.some((entry) => entry.value === choice.leaderFallback)) && choice.leaderFallback !== selection.leader && workflowEffortSupported(choice.fallbackEffort, workflowLevels(server.catalog, choice.leaderFallback)))
   const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude' || choice.leaderFallback.startsWith('claude:'))
   const start = async () => {
@@ -166,21 +200,7 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
 
   return <Modal title="エコモード" onClose={close} width={620} className="team-start-modal">
     <div className="team-start-body">
-      <section className="account-card ex-models">
-        <ModelField label="親" value={modelsReady ? selection.leader : ''} groups={leaderGroups} disabled={!modelsReady || starting}
-          effort={leaderEffort} efforts={workflowOptions(leaderEffort, levels.leader)} onEffort={(leaderEffort) => changeModels({ leaderEffort })}
-          allowClearUnavailableEffort onChange={(leader) => changeModels({ leader })} />
-        <ModelField label="子" value={modelsReady ? childValue : ''} groups={groups} disabled={!modelsReady || starting}
-          effort={childEffort} efforts={workflowOptions(childEffort, levels.child)} onEffort={(childEffort) => changeModels({ childEffort })}
-          allowClearUnavailableEffort onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
-      </section>
-      <LeaderFallback server={server} value={choice.leaderFallback} effort={choice.fallbackEffort} disabled={!modelsReady || starting} onChange={(leaderFallback, fallbackEffort) => changeModels({ leaderFallback, fallbackEffort })} />
-      <div className="ex-options">
-        <PtcToggle mode={choice.toolMode} disabled={!modelsReady || starting} onChange={(toolMode) => changeModels({ toolMode })} />
-        <button type="button" className={`chip plan-implement-chip ${choice.planImplement ? 'on' : ''}`} aria-label="計画 → 実装" aria-pressed={choice.planImplement}
-          title="親が計画、子が実装。親が最大1回レビューし、必要なら同じ子が最終修正" disabled={!modelsReady || starting}
-          onClick={() => changeModels({ planImplement: !latest.current.planImplement })}>計画 → 実装 {choice.planImplement ? 'ON' : 'OFF'}</button>
-      </div>
+      <ExecutionModelFields models={models} starting={starting} />
       {checks ? <CheckEditor checks={checks} onChange={setChecks} /> : <p>検証設定を読み込み中…</p>}
       {usesClaude && <ClaudeAuthConsent workspace={workspace} onChange={setAuth} />}
     </div>

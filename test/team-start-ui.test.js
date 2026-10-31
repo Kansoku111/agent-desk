@@ -31,3 +31,11 @@ test('TM startup exposes the shared tool switch outside advanced settings and se
   const settings = code.split('export function TeamSettings(')[1]
   assert.match(settings, /<LeanChildrenSwitch config=\{config\} onChange=\{save\} \/>/)
 })
+
+test('設定 → エージェントチーム lists TM, AB and eco as closed sections', async () => {
+  const settings = (await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')).split('export function TeamSettings(')[1]
+  for (const mark of ['TM', 'AB', 'eco']) assert.match(settings, new RegExp(`<ModeSection mark="${mark}"`))
+  const sections = await fs.readFile(new URL('../web/src/components/ModeSections.tsx', import.meta.url), 'utf8')
+  assert.match(sections, /useState\(false\)/)
+  assert.match(sections, /\{open && /)
+})
