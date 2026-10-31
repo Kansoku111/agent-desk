@@ -290,7 +290,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
   const [removingId, setRemovingId] = useState<string | null>(null)
   const running = team.children.filter(isActive).length
   const stoppable = team.children.filter(isStoppable).length
-  const children = [...team.children].sort((a, b) => a.createdAt - b.createdAt)
+  const children = [...team.children].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || a.createdAt - b.createdAt)
   return (
     <>
       <div className="subagent-backdrop" aria-hidden="true" onClick={() => setTeamPanel(false)} />

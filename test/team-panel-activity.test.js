@@ -78,6 +78,29 @@ for (const [state, phase, active, label, icon] of [
   })
 }
 
+for (const mode of ['TM', 'eco']) {
+  test(mode + ': active children appear after the leader, ordered by creation time', () => {
+    const children = [
+      { ...child, id: 'idle', state: 'idle', createdAt: 1 },
+      { ...child, id: 'approval', state: 'approval', createdAt: 3 },
+      { ...child, id: 'running', state: 'running', createdAt: 2 },
+      { ...child, id: 'verifying', state: 'idle', execution: { phase: 'verifying' }, createdAt: 4 },
+      { ...child, id: 'resuming', state: 'resuming', createdAt: 5 },
+      { ...child, id: 'closed', state: 'closed', createdAt: 6 },
+    ]
+    const summary = { ...team, execution: mode === 'eco' ? {} : undefined, children }
+    const cards = () => nodes(panel.TeamPanel({ team: summary }), (node) => node.type === panel.ChildCard || node.props?.title === 'リーダーの会話を開く')
+    const order = () => cards().slice(1).map((card) => card.props.child.id)
+    assert.equal(cards()[0].props.title, 'リーダーの会話を開く')
+    assert.deepEqual(order(), ['running', 'approval', 'verifying', 'idle', 'resuming', 'closed'])
+    children[2].state = 'idle'
+    children[0].state = 'running'
+    assert.equal(cards()[0].props.title, 'リーダーの会話を開く')
+    assert.deepEqual(order(), ['idle', 'approval', 'verifying', 'running', 'resuming', 'closed'])
+    assert.deepEqual(children.map((entry) => entry.id), ['idle', 'approval', 'running', 'verifying', 'resuming', 'closed'])
+  })
+}
+
 function renderedChildCard(current, planImplement) {
   const sidebar = panel.TeamPanel({ team: { ...team, execution: { planImplement }, children: [current] } })
   const card = nodes(sidebar, (node) => node.type === panel.ChildCard)[0]
