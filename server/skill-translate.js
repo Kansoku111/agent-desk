@@ -48,13 +48,15 @@ export class SkillTranslator {
 
   /** Translates the descriptions that have no cached translation yet; resolves to how many were added. */
   translate(descriptions) {
-    this.running ??= this.#run(descriptions).finally(() => { this.running = null })
-    return this.running
+    const run = (this.running ?? Promise.resolve()).catch(() => {}).then(() => this.#run(descriptions))
+    this.running = run
+    void run.finally(() => { if (this.running === run) this.running = null }).catch(() => {})
+    return run
   }
 
   async #run(descriptions) {
     const cache = await this.cache()
-    const pending = [...new Set(descriptions.filter(needsTranslation).map((text) => text.slice(0, TEXT_MAX)))]
+    const pending = [...new Set(descriptions.filter(needsTranslation))]
       .filter((text) => !cache[descriptionKey(text)]).slice(0, BATCH_MAX)
     if (!pending.length) return 0
     const claude = this.find()
@@ -62,7 +64,7 @@ export class SkillTranslator {
     await fs.mkdir(this.cwd, { recursive: true })
     const problem = await this.auth.guard(null, this.auth.context(this.cwd))
     if (problem) throw new Error(problem)
-    const translated = parseReply(await this.#ask(claude, pending), pending.length)
+    const translated = parseReply(await this.#ask(claude, pending.map((text) => text.slice(0, TEXT_MAX))), pending.length)
     // Re-read: another save may have landed while the model was working.
     const latest = await this.cache()
     pending.forEach((text, index) => { latest[descriptionKey(text)] = translated[index] })

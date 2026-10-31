@@ -160,6 +160,7 @@ test('skill overview keeps skills that lose a name clash and reports scope, root
   await put(path.join(os.homedir(), '.codex', 'skills'), 'shared', 'user copy')
   await put(path.join(dshHome, 'skills'), 'manual', 'manual only', 'disable-model-invocation: true\n')
   await put(path.join(workspace, '.dsh', 'skills'), 'auto', 'model only', 'user-invocable: false\n')
+  await put(path.join(workspace, '.dsh', 'skills'), 'disabled', 'not invocable', 'user-invocable: false\ndisable-model-invocation: true\n')
   const overview = await listSkillOverview(workspace, dshHome)
   const find = (name, description) => overview.find((skill) => skill.name === name && (!description || skill.description === description))
   assert.deepEqual(
@@ -170,6 +171,8 @@ test('skill overview keeps skills that lose a name clash and reports scope, root
   assert.deepEqual({ scope: find('manual').scope, modelInvocable: find('manual').modelInvocable, userInvocable: find('manual').userInvocable },
     { scope: 'user', modelInvocable: false, userInvocable: true })
   assert.equal(find('auto').userInvocable, false)
+  assert.equal(find('disabled').userInvocable, false)
+  assert.equal(find('disabled').modelInvocable, false)
   // The picker list is unchanged: winners the user can invoke.
   assert.deepEqual((await listSkills(workspace, dshHome)).map((skill) => skill.name), ['manual', 'shared'])
 
@@ -196,19 +199,41 @@ test('skills.delete removes only a listed skill, leaves symlink targets and refu
   await fs.writeFile(path.join(skills, 'bundle', 'SKILL.md'), body('bundle'))
   await fs.writeFile(path.join(skills, 'bundle', 'scripts', 'run.sh'), 'echo')
   await fs.writeFile(path.join(skills, 'flat.md'), body('flat'))
+  await fs.writeFile(path.join(skills, 'SKILL.md'), body('flat-skill'))
   await fs.writeFile(path.join(skills, 'keep.md'), body('keep'))
   // A skill folder that is a link to a folder elsewhere: only the link goes.
   const outside = path.join(root, 'outside')
   await fs.mkdir(outside)
   await fs.writeFile(path.join(outside, 'SKILL.md'), body('linked'))
   await fs.symlink(outside, path.join(skills, 'linked'), 'junction')
+  const bundled = path.join(root, 'bundled')
+  await fs.mkdir(path.join(bundled, 'builtin'), { recursive: true })
+  await fs.writeFile(path.join(bundled, 'builtin', 'SKILL.md'), body('builtin'))
+  const previousBundled = process.env.DSH_BUNDLED_SKILL_DIR
+  process.env.DSH_BUNDLED_SKILL_DIR = bundled
+  t.after(() => {
+    if (previousBundled === undefined) delete process.env.DSH_BUNDLED_SKILL_DIR
+    else process.env.DSH_BUNDLED_SKILL_DIR = previousBundled
+  })
   const handlers = createThreadHandlers({ paths: { dshHome: path.join(root, 'dsh') }, threads: {} })
-  const del = (file) => handlers['skills.delete']({ workspace, file })
+  const del = async (file) => {
+    const entry = (await handlers['skills.overview']({ workspace })).skills.find((skill) => skill.file === file)
+    return handlers['skills.delete']({ workspace, file, target: entry?.target })
+  }
+  await assert.rejects(handlers['skills.delete']({ workspace, file: path.join(skills, 'keep.md'), target: skills }), /削除対象が変わりました/)
+  await assert.rejects(del(path.join(bundled, 'builtin', 'SKILL.md')), /組み込み/)
+  await fs.stat(path.join(bundled, 'builtin', 'SKILL.md'))
 
   await del(path.join(skills, 'bundle', 'SKILL.md'))
   await assert.rejects(fs.stat(path.join(skills, 'bundle')))
   await del(path.join(skills, 'flat.md'))
   await assert.rejects(fs.stat(path.join(skills, 'flat.md')))
+  const flatSkill = (await handlers['skills.overview']({ workspace })).skills.find((item) => item.name === 'flat-skill')
+  assert.equal(flatSkill.target, path.join(skills, 'SKILL.md'))
+  assert.equal(flatSkill.root, '.claude/skills')
+  await del(flatSkill.file)
+  await assert.rejects(fs.stat(flatSkill.file))
+  await fs.stat(path.join(skills, 'keep.md'))
   await del(path.join(skills, 'linked', 'SKILL.md'))
   await assert.rejects(fs.lstat(path.join(skills, 'linked')))
   assert.equal(await fs.readFile(path.join(outside, 'SKILL.md'), 'utf8'), body('linked'))

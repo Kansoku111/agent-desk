@@ -51,6 +51,7 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
       const skill = (await listSkillOverview(await skillWorkspace(params), paths.dshHome)).find((entry) => entry.file === params.file)
       if (!skill) throw new Error('この skill は見つかりません')
       if (skill.scope === 'bundled') throw new Error('組み込みの skill は削除できません')
+      if (params.target !== skill.target) throw new Error('削除対象が変わりました。一覧を確認してください')
       // A symbolic link is removed itself; what it points to stays.
       await fsp.rm(skill.target, { recursive: true })
       return { deleted: skill.target }

@@ -56,6 +56,22 @@ test('translates once with Haiku at low effort and no tools, then serves the cac
   assert.equal(descriptionKey('a').length, 24)
 })
 
+test('long descriptions use the original text for cache lookup', async (t) => {
+  const { translator, calls } = await setup(t)
+  const description = 'Long description '.repeat(50)
+  assert.equal(await translator.translate([description]), 1)
+  assert.deepEqual(await translator.lookup([description]), ['日本語A'])
+  assert.equal(await translator.translate([description]), 0)
+  assert.equal(calls.length, 1)
+})
+
+test('concurrent requests translate each distinct set of descriptions', async (t) => {
+  const { translator, calls } = await setup(t)
+  assert.deepEqual(await Promise.all([translator.translate(['First']), translator.translate(['Second'])]), [1, 1])
+  assert.deepEqual(await translator.lookup(['First', 'Second']), ['日本語A', '日本語A'])
+  assert.equal(calls.length, 2)
+})
+
 test('an unconfirmed Claude Code auth mode blocks the call', async (t) => {
   const { translator, calls } = await setup(t, { problem: '認証方法の確認が必要です' })
   await assert.rejects(translator.translate(['Build agents']), /認証方法/)

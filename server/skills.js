@@ -13,7 +13,12 @@ async function discover(workspace, dshHome) {
   try {
     const result = await provider.list({ cwd: workspace })
     const candidates = Array.isArray(result) ? result : result.candidates
-    return candidates.sort((a, b) => a.rank - b.rank)
+    const roots = await provider.roots(workspace)
+    return candidates.map((candidate) => ({
+      ...candidate,
+      flat: roots.some((root) => root.source === candidate.source && root.rank === candidate.rank
+        && path.resolve(root.path) === path.resolve(candidate.locator.directory)),
+    })).sort((a, b) => a.rank - b.rank)
   } finally {
     await provider.dispose()
   }
@@ -39,8 +44,8 @@ function scopeOf({ source, rank }) {
 }
 
 // ".claude/skills" for <root>/<skill>/SKILL.md or a flat <root>/<skill>.md.
-function rootLabel({ path: file, directory }) {
-  const root = path.basename(file) === 'SKILL.md' ? path.dirname(directory) : directory
+function rootLabel({ directory }, flat) {
+  const root = flat ? directory : path.dirname(directory)
   return `${path.basename(path.dirname(root))}/${path.basename(root)}`
 }
 
@@ -54,10 +59,10 @@ export async function listSkillOverview(workspace, dshHome) {
       name: skill.name,
       description: skill.description,
       scope: scopeOf(skill),
-      root: rootLabel(skill.locator),
+      root: rootLabel(skill.locator, skill.flat),
       file: skill.locator.path,
       // What deleting the skill removes: its folder, or the flat Markdown file itself.
-      target: path.basename(skill.locator.path) === 'SKILL.md' ? skill.locator.directory : skill.locator.path,
+      target: skill.flat ? skill.locator.path : skill.locator.directory,
       active,
       userInvocable: skill.invocation.userInvocable,
       modelInvocable: skill.invocation.modelInvocable,
