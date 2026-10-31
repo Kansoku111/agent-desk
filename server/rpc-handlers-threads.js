@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { IMAGE_TYPES, isImageFile, isOtherFile, MAX_ATTACHMENT_BYTES, otherFileId } from './attachments.js'
+import { needsTranslation, SkillTranslator } from './skill-translate.js'
 import { listSkillOverview, listSkills } from './skills.js'
 
 /** Handlers for thread tasks; index.js merges them into the request table. */
@@ -19,6 +20,18 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
     return saved
   }
 
+  const translator = new SkillTranslator({ file: paths.skillTranslations, auth: teams?.claudeAuth, cwd: paths.runtimeCwd })
+
+  async function overview(params) {
+    const skills = await listSkillOverview(await skillWorkspace(params), paths.dshHome)
+    const ja = await translator.lookup(skills.map((skill) => skill.description))
+    return skills.map((skill, index) => ({
+      ...skill,
+      ...(ja[index] ? { descriptionJa: ja[index] } : {}),
+      translatable: !ja[index] && needsTranslation(skill.description),
+    }))
+  }
+
   async function skillWorkspace({ threadId, workspace }) {
     if (threadId) workspace = (await threads.get(threadId)).thread.workspace
     if (typeof workspace !== 'string' || !path.isAbsolute(workspace)) throw new Error('ワークスペースがありません')
@@ -31,7 +44,12 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
     'skills.list': async (params) => ({ skills: await listSkills(await skillWorkspace(params), paths.dshHome) }),
 
     // Settings → Skills: also the skills that lose to a same-named one.
-    'skills.overview': async (params) => ({ skills: await listSkillOverview(await skillWorkspace(params), paths.dshHome) }),
+    'skills.overview': async (params) => ({ skills: await overview(params) }),
+
+    // Billed Claude Code call, only on the user's request; see skill-translate.js.
+    'skills.translate': async (params) => ({
+      translated: await translator.translate((await listSkillOverview(await skillWorkspace(params), paths.dshHome)).map((skill) => skill.description)),
+    }),
 
     'subagents.list': async ({ threadId }) => {
       const { thread } = await threads.get(threadId)

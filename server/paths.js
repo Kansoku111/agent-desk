@@ -29,6 +29,8 @@ export function appPaths(home = defaultAppHome()) {
     opencodeGoCatalog: path.join(home, 'opencode-go-catalog.json'),
     browserProfile: path.join(home, 'browser-profile'),
     runtimeCwd: path.join(home, 'runtime-cwd'),
+    // Japanese translations of skill descriptions (Settings → Skills).
+    skillTranslations: path.join(home, 'skill-translations.json'),
     // "My PC": the working folder for tasks that belong to no project.
     myPc: path.join(home, 'my-pc'),
     // The browser tool's own Chrome profile and its debugging-port record.

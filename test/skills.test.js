@@ -174,6 +174,6 @@ test('skill overview keeps skills that lose a name clash and reports scope, root
   assert.deepEqual((await listSkills(workspace, dshHome)).map((skill) => skill.name), ['manual', 'shared'])
 
   const handlers = createThreadHandlers({ paths: { dshHome }, threads: { get: async () => ({ thread: { workspace } }) } })
-  assert.deepEqual(await handlers['skills.overview']({ threadId: 'thread' }), { skills: overview })
+  assert.deepEqual(await handlers['skills.overview']({ threadId: 'thread' }), { skills: overview.map((skill) => ({ ...skill, translatable: true })) })
   await assert.rejects(handlers['skills.overview']({ workspace: 'relative' }), /ワークスペース/)
 })

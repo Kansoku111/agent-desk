@@ -28,7 +28,9 @@ Codex・Claude の互換保存先では `.system` を除外し、`.archive/<skil
 
 「設定 → Skills」では、選んだプロジェクトで読み込まれる skill を、プロジェクト・ユーザー・組み込みに分けて確認できます。取得元のフォルダー（例: `.claude/skills`）を併記し、フォルダーボタンで SKILL.md の場所を開きます（PC のみ）。
 同名で優先順位に負けた skill は薄く表示し「上書きされています」と示します。`user-invocable: false` は「自動のみ」、`disable-model-invocation: true` は「手動のみ」です。
-不正な frontmatter の skill は Harness が除外するため、この一覧にも出ません。表示のみで、ファイルや設定は変更しません。
+不正な frontmatter の skill は Harness が除外するため、この一覧にも出ません。
+
+説明が日本語でない skill があるときだけ「日本語にする」が出ます。押すと Claude Code（`haiku`・推論 `low`、ツールなし）が説明を翻訳し、`skill-translations.json`（Agent Desk のデータフォルダー）に説明文ごとに保存します。自動では実行せず、「エージェントチーム」で確認済みの Claude Code の認証方法でのみ動きます（未確認なら確認を促すメッセージが出ます）。翻訳は表示だけで、SKILL.md は書き換えません。保存済みデータの移行は不要です。
 
 ## 反映と検証
 
