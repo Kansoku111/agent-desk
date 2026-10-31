@@ -15,7 +15,7 @@ const PC_ONLY = new Set([
 ])
 
 /** The socket server; `clients` and `handlers` are index.js's, `dev` is the dev-mode flag. */
-export function createSocketServer({ dev, clients, handlers, fullState, terminals, broadcastRemote, scheduleIdleExit, cancelIdleExit, isShuttingDown, log = () => {} }) {
+export function createSocketServer({ dev, clients, handlers, fullState, getSettings, terminals, broadcastRemote, scheduleIdleExit, cancelIdleExit, isShuttingDown, log = () => {} }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 })
 
   function handleUpgrade(req, socket, head, ctx) {
@@ -91,7 +91,12 @@ export function createSocketServer({ dev, clients, handlers, fullState, terminal
     })
     try {
       const state = await fullState(client)
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ event: 'hello', state }))
+      if (ws.readyState === ws.OPEN) {
+        // Settings may have changed while fullState awaited accounts, or before this continuation.
+        // Read them in the same synchronous step as hello so an earlier event cannot be overwritten.
+        const helloState = getSettings ? { ...state, settings: getSettings() } : state
+        ws.send(JSON.stringify({ event: 'hello', state: helloState }))
+      }
     } catch (error) {
       log('initial state failed:', error.message)
       ws.close(1011, 'initial state unavailable')

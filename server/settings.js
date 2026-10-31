@@ -272,6 +272,8 @@ export function createSettingsService({
   onChannelChange = () => {}, checkModelUpdate = () => {}, onBackgroundError = () => {}, now = Date.now,
 }) {
   let pending = Promise.resolve()
+  // Keep committed but incomplete effects on this queue, not in saved settings.
+  const outstanding = { homePatch: false, fastMode: false, modelCatalog: false, restart: false, channel: false, modelCheck: false }
   // Only settings commits own this queue. Candidate creation belongs inside it,
   // never at request receipt; nested update/mutate waits would deadlock.
   const run = (work) => {
@@ -289,8 +291,13 @@ export function createSettingsService({
   // The caller must install the saved snapshot synchronously before announcing it.
   // Keep the existing RPC error shape (message), but make a committed failure
   // explicit both to callers and in the message sent across the wire.
-  const commit = async (candidate, { notify = true, afterCommit = () => {} } = {}) => {
+  const commit = async (candidate, { notify = true, afterCommit = () => {}, effects = null } = {}) => {
     const saved = await saveSettings(candidate) ?? candidate
+    if (effects) {
+      for (const key of Object.keys(outstanding)) outstanding[key] ||= effects[key]
+      // A later commit may have disabled the check before an earlier one ran.
+      outstanding.modelCheck &&= saved.modelAutoUpdate !== false
+    }
     await afterSettingsCommit(async () => {
       publishSettings(saved, { notify })
       await afterCommit(saved)
@@ -317,22 +324,41 @@ export function createSettingsService({
       const captured = structuredClone(patch)
       return run(async () => {
         const { settings: candidate, effects } = planSettingsUpdate(structuredClone(getSettings()), captured, now())
-        return commit(candidate, { afterCommit: async () => {
-          if (effects.fastMode) await applyFastMode()
-          let restart = effects.restart
-          if (effects.modelCatalog) {
+        return commit(candidate, { effects, afterCommit: async () => {
+          if (outstanding.fastMode) {
+            await applyFastMode()
+            outstanding.fastMode = false
+          }
+          if (outstanding.modelCatalog) {
             const result = await updateModelCatalog()
-            restart ||= Boolean(result?.restartRequired)
+            outstanding.restart ||= Boolean(result?.restartRequired)
+            outstanding.modelCatalog = false
           }
-          if (effects.homePatch) {
-            const patched = await applyHomePatch()
-            restart ||= Boolean(patched)
+          if (outstanding.homePatch) {
+            try {
+              const patched = await applyHomePatch()
+              outstanding.restart ||= Boolean(patched)
+            } catch (error) {
+              // A multi-file patch may have changed a file before it failed.
+              outstanding.restart = true
+              throw error
+            }
+            outstanding.homePatch = false
           }
-          if (restart) await restartRuntimesWhenIdle()
+          if (outstanding.restart) {
+            await restartRuntimesWhenIdle()
+            outstanding.restart = false
+          }
           // These checks retain their background behavior. A later network fetch
           // may legitimately require another catalog refresh after this commit.
-          if (effects.channel) onChannelChange()
-          if (effects.modelCheck) launch(checkModelUpdate)
+          if (outstanding.channel) {
+            onChannelChange()
+            outstanding.channel = false
+          }
+          if (outstanding.modelCheck) {
+            launch(checkModelUpdate)
+            outstanding.modelCheck = false
+          }
         } })
       })
     },

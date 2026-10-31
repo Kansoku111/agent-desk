@@ -60,6 +60,39 @@ test('resolveReference finds the file, with or without a line suffix', async () 
   }
 })
 
+test('a colon line range points at its file, as the other line forms do', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-refs-'))
+  try {
+    await fs.mkdir(path.join(dir, 'src', 'deep'), { recursive: true })
+    const file = path.join(dir, 'src', 'deep', 'a.ts')
+    await fs.writeFile(file, 'x')
+    const hit = { file, line: 42, exists: true, directory: false }
+    assert.deepEqual(await resolveReference('src/deep/a.ts:42-50', dir), hit)
+    assert.deepEqual(await resolveReference(`${file}:42-50`, dir), hit)
+    for (const ref of ['`src/deep/a.ts:42-50`', '(src/deep/a.ts:42-50)', '"src/deep/a.ts:42-50",', 'src/deep/a.ts:42-50.', '<src/deep/a.ts:42-50>']) {
+      assert.deepEqual(await resolveReference(ref, dir), hit, ref)
+    }
+    // The forms that already worked still resolve to the same line.
+    assert.deepEqual(await resolveReference('src/deep/a.ts:42', dir), hit)
+    assert.deepEqual(await resolveReference('src/deep/a.ts:42:7', dir), hit)
+    assert.deepEqual(await resolveReference('src/deep/a.ts#L42-L50', dir), hit)
+    assert.deepEqual(await resolveReference('src/deep/a.ts#L42-50', dir), hit)
+    assert.equal((await resolveReference('src/deep/missing.ts:42-50', dir)).exists, false)
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('referenceCandidates tries the range as written first and still refuses UNC ranges', () => {
+  const ws = path.resolve('/work/project')
+  const found = referenceCandidates('src/deep/a.ts:42-50', ws)
+  assert.deepEqual(found[0], { file: path.join(ws, 'src', 'deep', 'a.ts:42-50'), line: null })
+  assert.deepEqual(found[1], { file: path.join(ws, 'src', 'deep', 'a.ts'), line: 42 })
+  for (const ref of ['//server/share/a.ts:42-50', '\\\\server\\share\\a.ts:42-50']) {
+    assert.deepEqual(referenceCandidates(ref, ws), [], ref)
+  }
+})
+
 test('resolveReference keeps a closing parenthesis that belongs to the name', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-refs-'))
   try {

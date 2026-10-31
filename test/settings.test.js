@@ -507,14 +507,132 @@ test('old saved values and unknown fields are retained without migration', async
   assert.deepEqual(h.events, ['save', 'publish'])
 })
 
-test('effect failure retains the saved commit and does not poison later updates', async () => {
-  const h = harness({}, { home: () => { throw new Error('home patch unavailable') } })
-  await assert.rejects(h.service.update({ customInstructions: 'already saved' }), /home patch unavailable/)
+test('effect failure retains the saved commit and retries with a later update', async () => {
+  let fail = true
+  const h = harness({}, { home: () => { if (fail) throw new Error('home patch unavailable'); return true } })
+  await assert.rejects(h.service.update({ customInstructions: 'already saved' }), error => {
+    assert.equal(error.settingsCommitted, true)
+    return /home patch unavailable/.test(error.message)
+  })
   assert.equal(h.live.customInstructions, 'already saved')
   assert.deepEqual(h.events, ['save', 'publish', 'home'])
+  fail = false
   await h.service.update({ theme: 'light' })
   assert.equal(h.live.customInstructions, 'already saved')
   assert.equal(h.live.theme, 'light')
+  assert.deepEqual(h.events, ['save', 'publish', 'home', 'save', 'publish', 'home', 'restart'])
+})
+
+test('same-value update retries a failed subagent home patch, but not after recovery', async () => {
+  let fail = true
+  let applied = true
+  const h = harness({}, { home: live => {
+    if (fail) throw new Error('home patch unavailable')
+    applied = live.subagentsEnabled
+    return true
+  } })
+  await assert.rejects(h.service.update({ subagentsEnabled: false }), error => error.settingsCommitted === true)
+  assert.equal(h.live.subagentsEnabled, false)
+  assert.equal(applied, true)
+  fail = false
+  await h.service.update({ subagentsEnabled: false })
+  assert.equal(applied, false)
+  assert.deepEqual(h.events, ['save', 'publish', 'home', 'save', 'publish', 'home', 'restart'])
+  await h.service.update({ subagentsEnabled: false })
+  assert.deepEqual(h.events.slice(-2), ['save', 'publish'])
+})
+
+test('a queued update retries the failed home patch with the latest committed settings', async () => {
+  const started = deferred()
+  const release = deferred()
+  let calls = 0
+  let applied = null
+  const h = harness({}, { home: async live => {
+    calls++
+    if (calls === 1) {
+      started.resolve()
+      await release.promise
+      throw new Error('home patch unavailable')
+    }
+    applied = { subagentsEnabled: live.subagentsEnabled, theme: live.theme }
+    return true
+  } })
+  const first = h.service.update({ subagentsEnabled: false })
+  await started.promise
+  const second = h.service.update({ subagentsEnabled: true, theme: 'light' })
+  assert.deepEqual(h.events, ['save', 'publish', 'home'])
+  release.resolve()
+  await assert.rejects(first, error => error.settingsCommitted === true)
+  await second
+  assert.deepEqual(applied, { subagentsEnabled: true, theme: 'light' })
+  assert.deepEqual(h.events, ['save', 'publish', 'home', 'save', 'publish', 'home', 'restart'])
+})
+
+test('retry after partial home patch failure still restarts when the patch now reports unchanged', async () => {
+  let patch = true
+  let fail = true
+  const h = harness({}, { home: live => {
+    const changed = patch !== live.subagentsEnabled
+    patch = live.subagentsEnabled
+    if (fail) throw new Error('second patch file unavailable')
+    return changed
+  } })
+  await assert.rejects(h.service.update({ subagentsEnabled: false }), /second patch file unavailable/)
+  assert.equal(patch, false)
+  fail = false
+  await h.service.update({ subagentsEnabled: false })
+  assert.deepEqual(h.events, ['save', 'publish', 'home', 'save', 'publish', 'home', 'restart'])
+})
+
+test('retry preserves a restart that failed after the patch was already written', async () => {
+  let patch = true
+  let fail = true
+  const h = harness({}, {
+    home: live => { const changed = patch !== live.subagentsEnabled; patch = live.subagentsEnabled; return changed },
+    restart: () => { if (fail) throw new Error('restart unavailable') },
+  })
+  await assert.rejects(h.service.update({ subagentsEnabled: false }), /restart unavailable/)
+  assert.equal(patch, false)
+  fail = false
+  await h.service.update({ subagentsEnabled: false })
+  assert.equal(h.events.filter(event => event === 'restart').length, 2)
+})
+
+test('save failure does not schedule effects and does not discard an earlier pending effect', async () => {
+  let failHome = true
+  let failSave = false
+  const h = harness({}, {
+    home: () => { if (failHome) throw new Error('home unavailable'); return true },
+    save: () => { if (failSave) throw new Error('disk full') },
+  })
+  await assert.rejects(h.service.update({ subagentsEnabled: false }), error => error.settingsCommitted === true)
+  failSave = true
+  await assert.rejects(h.service.update({ theme: 'light' }), error => error.settingsCommitted !== true && /disk full/.test(error.message))
+  assert.equal(h.live.theme, 'dark')
+  failHome = false
+  failSave = false
+  await h.service.update({ theme: 'light' })
+  assert.deepEqual(h.events, ['save', 'publish', 'home', 'save', 'save', 'publish', 'home', 'restart'])
+})
+
+test('a failed early effect leaves later effects pending and retries only the latest settings', async () => {
+  let fail = true
+  let fastApplied = null
+  let catalogAutoUpdate = null
+  const h = harness({ modelAutoUpdate: false }, {
+    fast: live => { if (fail) throw new Error('fast state unavailable'); fastApplied = live.fastMode.anthropic },
+    catalog: live => { catalogAutoUpdate = live.modelAutoUpdate; return { restartRequired: false } },
+    home: () => false,
+  })
+  await assert.rejects(h.service.update({
+    fastMode: { anthropic: true }, modelAutoUpdate: true, dshUpdateChannel: 'next',
+  }), error => error.settingsCommitted === true)
+  assert.deepEqual(h.events, ['save', 'publish', 'fast'])
+  fail = false
+  await h.service.update({ fastMode: { anthropic: false }, modelAutoUpdate: false })
+  assert.equal(fastApplied, false)
+  assert.equal(catalogAutoUpdate, false)
+  assert.deepEqual(h.events, ['save', 'publish', 'fast', 'save', 'publish', 'fast', 'catalog', 'home', 'channel'])
 })
 
 test('model visibility merges queued per-model changes, persists and publishes without runtime effects', async () => {

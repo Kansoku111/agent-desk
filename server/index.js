@@ -831,7 +831,7 @@ const server = http.createServer((req, res) => void handleRequest(req, res, loca
 let idleTimer = null
 
 const { handleUpgrade } = createSocketServer({
-  dev: DEV, clients, handlers, fullState, terminals, broadcastRemote, scheduleIdleExit,
+  dev: DEV, clients, handlers, fullState, getSettings, terminals, broadcastRemote, scheduleIdleExit,
   cancelIdleExit: () => clearTimeout(idleTimer), isShuttingDown: () => shuttingDown, log,
 })
 server.on('upgrade', (req, socket, head) => handleUpgrade(req, socket, head, localContext()))

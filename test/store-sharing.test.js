@@ -280,3 +280,18 @@ test('a create accepted and already deleted returns true without reviving the ta
   assert.equal(creates.length, 2)
   assert.notEqual(creates[1].createId, creates[0].createId)
 })
+
+test('a refreshed hello retains notifications enabled during reconnect', async () => {
+  const { store, frame, hello, document, notifications, getSocket } = await fixture({ notifications: false })
+  const old = getSocket()
+  old.readyState = 3
+  await old.onclose()
+  store.connect()
+  getSocket().onopen()
+  frame({ event: 'settings', settings: { notifications: true } })
+  hello({ notifications: true })
+  assert.equal(store.getState().server.settings.notifications, true)
+  document.hidden = true
+  frame({ event: 'notify', kind: 'ab-approval', ab: true, threadId: 'task', title: 'test' })
+  assert.equal(notifications.length, 1)
+})

@@ -96,7 +96,7 @@ export function referenceCandidates(ref, workspace) {
     // Git Bash style (/c/Users/...) on Windows.
     if (process.platform === 'win32' && /^\/[a-z]\//i.test(value)) value = `${value[1]}:${value.slice(2)}`
     const forms = [{ text: value, line: null }]
-    const withLine = /^(.*?)(?::(\d+)(?::\d+)?|#L(\d+)(?:-L?\d+)?)$/.exec(value)
+    const withLine = /^(.*?)(?::(\d+)(?:-\d+)?(?::\d+)?|#L(\d+)(?:-L?\d+)?)$/.exec(value)
     if (withLine && withLine[1]) forms.push({ text: withLine[1], line: Number(withLine[2] ?? withLine[3]) })
     for (const form of forms) {
       let file
