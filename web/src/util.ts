@@ -327,6 +327,7 @@ function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary 
   }
   if (name === 'edit' || name === 'str_replace_editor' || name === 'multi_edit') {
     const path = relativePath(filePath(input), workspace)
+    if (item.status === 'failed') return { icon: 'edit', verb: '編集', target: path, detail: output ? { kind: 'code', text: output } : null }
     const before = str(input.old_string ?? input.old_str)
     const after = str(input.new_string ?? input.new_str ?? input.file_text)
     if (before || after) {
@@ -337,6 +338,7 @@ function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary 
   }
   if (name === 'write') {
     const path = relativePath(filePath(input), workspace)
+    if (item.status === 'failed') return { icon: 'create', verb: '書き込み', target: path, detail: output ? { kind: 'code', text: output } : null }
     const content = str(input.content)
     const lines = content ? content.replace(/\n$/, '').split('\n') : []
     return {
