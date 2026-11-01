@@ -209,6 +209,8 @@ test('task handoff retains requested creative tools and does not inherit an assi
   assert.match(workerPresetInstructions(run), /artwork/)
   assert.match(workerPresetInstructions(run), /Default to implementation.*Explicit user instructions .* take precedence/)
   assert.doesNotMatch(workerPresetInstructions({ id: 'R', kind: 'review' }), /Default to implementation/)
+  assert.match(preparePresetPrompt({ id: 'R', kind: 'review' }), /報告や修正方針の相談だけで止める依頼にせず.*利用者自身が指摘の報告のみ.*最優先/)
+  assert.match(workerPresetInstructions({ id: 'R', kind: 'review' }), /do not stop to ask whether to fix them\. Explicit user instructions .* take precedence/)
   assert.doesNotMatch(workerPresetInstructions(run), /running implementation worker/)
 })
 
