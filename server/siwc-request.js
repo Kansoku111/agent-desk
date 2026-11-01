@@ -28,6 +28,14 @@ function withToolStrictDefault(tool) {
   if (tool.type === 'namespace') return { ...tool, tools: tool.tools.map(withToolStrictDefault) }
   return tool
 }
+// Models with additional-tools support (gpt-6.1-sol) get every tool declared in
+// these input items, leaving the top-level `tools` empty, so the default must
+// reach them too or run_code is sent without strict and gains required escalation fields.
+const TOOL_DECLARATION_ITEMS = ['additional_tools', 'tool_search_output']
+function withItemStrictDefault(item) {
+  if (!TOOL_DECLARATION_ITEMS.includes(item?.type) || !Array.isArray(item.tools)) return item
+  return { ...item, tools: item.tools.map(withToolStrictDefault) }
+}
 export function siwcPayload(payload, model) {
   const next = {
     ...payload,
@@ -38,10 +46,10 @@ export function siwcPayload(payload, model) {
   // Priority was measured to be ignored. Do not advertise/send fake GPT fast mode.
   delete next.service_tier
   if (!Array.isArray(next.input)) throw new Error('SIWC requires array input')
-  next.input = next.input.map(item => item?.role === 'system' ? {
+  next.input = next.input.map(item => withItemStrictDefault(item?.role === 'system' ? {
     ...item,
     role: 'developer'
-  } : item)
+  } : item))
   if (model?.reasoning === false) {
     delete next.reasoning
   } else next.reasoning = {

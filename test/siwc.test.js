@@ -105,6 +105,32 @@ test('SIWC keeps escalation controls optional instead of relying on the Response
   assert.deepEqual(payload, before, 'normalization must not mutate registry schemas')
   assert.deepEqual(siwcPayload(changed, model), changed, 'payload and fetch hooks may both normalize the same request')
 })
+test('SIWC keeps escalation controls optional for tools declared in input items', () => {
+  // gpt-6.1-sol declares every tool in additional_tools items and sends no top-level tools.
+  const parameters = {
+    type: 'object', additionalProperties: false,
+    properties: { code: { type: 'string' }, sandbox_permissions: { type: 'string' } },
+    required: ['code'],
+  }
+  const explicit = { type: 'function', name: 'strict_tool', strict: true, parameters }
+  const custom = { type: 'custom', name: 'custom_tool', format: { type: 'text' } }
+  const declared = { type: 'function', name: 'run_code', parameters }
+  const payload = { input: [
+    { type: 'additional_tools', role: 'developer', tools: [declared, explicit, custom] },
+    { type: 'tool_search_output', call_id: 'c', tools: [{ type: 'function', name: 'later', parameters, defer_loading: true }] },
+    { role: 'user', content: 'hi' },
+  ] }
+  const before = structuredClone(payload)
+  const changed = siwcPayload(payload, model)
+  assert.equal(changed.tools, undefined)
+  assert.deepEqual(changed.input[0].tools, [{ ...declared, strict: false }, explicit, custom])
+  assert.equal(changed.input[1].tools[0].strict, false)
+  assert.equal(changed.input[1].tools[0].defer_loading, true)
+  assert.deepEqual(changed.input[0].tools[0].parameters, parameters)
+  assert.deepEqual(changed.input[2], payload.input[2])
+  assert.deepEqual(payload, before, 'normalization must not mutate registry schemas')
+  assert.deepEqual(siwcPayload(changed, model), changed)
+})
 
 test('effort mapping never sends unsupported none/off/minimal/max and catalog only consumes capability metadata', () => {
   for (const effort of ['none', 'off', 'minimal', undefined, 'invalid']) assert.equal(siwcEffort(effort, model), 'low')
