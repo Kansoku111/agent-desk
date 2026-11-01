@@ -140,6 +140,19 @@ test('device login fallback exposes only user code and verification page', async
   assert.ok(states.some(state => state.phase === 'device' && state.userCode === 'TEST-CODE'))
   assert.ok(!JSON.stringify(states).includes('accessToken'))
 })
+test('askText runs one ephemeral turn on the named model with its own instructions', async t => {
+  const { client } = await setup(t)
+  await assert.rejects(client.askText({ model: 'gpt-6-luna', prompt: 'hi' }), /サインイン/)
+  await login(client)
+  const options = { model: 'gpt-6-luna', effort: 'low', instructions: 'Translate.', prompt: 'hi', outputSchema: { type: 'object' } }
+  assert.equal(await client.askText(options), '{"translations":["訳"]}')
+  await assert.rejects(client.askText({ ...options, model: 'gpt-missing' }), /gpt-missing/)
+  const methods = (await fs.readFile(path.join(client.home, 'mock-methods.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+  const thread = methods.find(entry => entry.method === 'thread/start')
+  assert.equal(thread.params.baseInstructions, 'Translate.')
+  assert.equal(thread.params.ephemeral, true)
+  assert.equal(methods.find(entry => entry.method === 'turn/start').params.effort, 'low')
+})
 test('unsigned-in image gives actionable message and never starts a model turn', async t => {
   const {
     client

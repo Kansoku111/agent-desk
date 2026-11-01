@@ -449,6 +449,68 @@ For references, edit/follow the attached local images. Call the tool exactly onc
       await this.cleanupImageThread(threadId).catch(error => console.warn('[agent-desk] Codex image cleanup failed:', error.message))
     }
   }
+  /** One ephemeral text turn on the named model (never a substitute); resolves to the final message. */
+  askText(options) {
+    const task = this.queue.then(() => this.use(() => this.askTextTurn(options)))
+    this.queue = task.catch(() => {})
+    return task
+  }
+  async askTextTurn({ model, effort = 'low', instructions, prompt, outputSchema }) {
+    if (!(await this.account()).signedIn) throw new Error('Codex にサインインしていません。設定 → アカウントでサインインしてください。')
+    const list = await this.rawRequest('model/list', { includeHidden: false })
+    if (!(list.data ?? []).some(entry => entry.model === model)) throw new Error(`Codex でモデル ${model} を使えません`)
+    // baseInstructions replaces the image-only instructions of the lean config.
+    const { thread } = await this.rawRequest('thread/start', {
+      model,
+      cwd: this.cwd,
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      ephemeral: true,
+      baseInstructions: instructions,
+      serviceName: 'agent_desk_text'
+    })
+    const threadId = thread.id
+    let text = '',
+      timer,
+      turnId
+    let finish, fail
+    const done = new Promise((resolve, reject) => {
+      finish = resolve
+      fail = reject
+    })
+    done.catch(() => {})
+    const listener = (method, params) => {
+      if (params.threadId !== threadId) return
+      if (method === 'item/completed' && params.item?.type === 'agentMessage') text = params.item.text
+      if (method === 'turn/completed') {
+        if (params.turn?.status === 'completed') finish()
+        else fail(new Error(`Codex turn ${params.turn?.status}: ${params.turn?.error?.message ?? 'no reply'}`))
+      }
+    }
+    const stopped = () => fail(new Error('Codex app-server stopped during the turn'))
+    this.on('notification', listener)
+    this.on('stopped', stopped)
+    try {
+      timer = setTimeout(() => fail(new Error('Codex turn timed out')), this.turnTimeoutMs)
+      const result = await this.rawRequest('turn/start', {
+        threadId,
+        effort,
+        input: [{ type: 'text', text: prompt }],
+        ...(outputSchema ? { outputSchema } : {})
+      })
+      turnId = result.turn?.id
+      await done
+      return text
+    } catch (error) {
+      if (turnId) await this.rawRequest('turn/interrupt', { threadId, turnId }).catch(() => {})
+      throw error
+    } finally {
+      clearTimeout(timer)
+      this.off('notification', listener)
+      this.off('stopped', stopped)
+      await this.rawRequest('thread/unsubscribe', { threadId }).catch(() => {})
+    }
+  }
   /** Remove only this validated thread's generated output, never account/config files. */
   async cleanupImageThread(threadId) {
     if (!/^[a-zA-Z0-9_-]+$/.test(threadId)) throw new Error('Invalid image cleanup thread ID')

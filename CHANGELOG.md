@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Make skill description translation reliable: Claude Code now returns schema-validated output, descriptions are sent 10 at a time with one retry, and finished batches stay cached when a later one fails. The confirmation dialog also lets you choose Haiku (Claude Code) or Luna (`gpt-6-luna` through Codex), both at low effort; an unavailable Luna is reported, never replaced by another model. Cached translations and saved settings are unchanged.
 - Keep ordinary delegation usable for creative and other non-code tasks in large workspaces: treat bounded recording limits as explicitly unavailable evidence instead of a mandatory task prerequisite, preserve strict requested checks and review requirements, and prevent startup metadata without a worker report from being sent to the parent.
 - Prevent task preset workspace conflicts during checkpoint restore, ordinary TM Claude work and concurrent resumes; allow each explicitly resumed result to be delivered once with its own message receipt. Existing sessions, model selections and billing routes are unchanged.
 

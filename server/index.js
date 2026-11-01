@@ -764,7 +764,7 @@ const restartApp = createAppRestarter({
 
 const mutateSettings = (...args) => settingsService.mutate(...args)
 const handlers = {
-  ...createThreadHandlers({ paths, threads, teams, subagents, mutateSettings }),
+  ...createThreadHandlers({ paths, threads, teams, codexApp, subagents, mutateSettings }),
   ...createWorkspaceHandlers({ paths, getSettings, mutateSettings }),
   ...createAccountHandlers({
     appVersion: APP_VERSION, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost,

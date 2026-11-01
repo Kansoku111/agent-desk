@@ -8,7 +8,7 @@ import { needsTranslation, SkillTranslator } from './skill-translate.js'
 import { listSkillOverview, listSkills } from './skills.js'
 
 /** Handlers for thread tasks; index.js merges them into the request table. */
-export function createThreadHandlers({ paths, threads, teams, subagents, mutateSettings }) {
+export function createThreadHandlers({ paths, threads, teams, codexApp, subagents, mutateSettings }) {
 
   async function saveImages(images) {
     const saved = []
@@ -20,7 +20,7 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
     return saved
   }
 
-  const translator = new SkillTranslator({ file: paths.skillTranslations, auth: teams?.claudeAuth, cwd: paths.runtimeCwd })
+  const translator = new SkillTranslator({ file: paths.skillTranslations, auth: teams?.claudeAuth, codex: codexApp, cwd: paths.runtimeCwd })
 
   async function overview(params) {
     const skills = await listSkillOverview(await skillWorkspace(params), paths.dshHome)
@@ -57,9 +57,9 @@ export function createThreadHandlers({ paths, threads, teams, subagents, mutateS
       return { deleted: skill.target }
     },
 
-    // Billed Claude Code call, only on the user's request; see skill-translate.js.
+    // Billed model call (Haiku via Claude Code or Luna via Codex), only on the user's request; see skill-translate.js.
     'skills.translate': async (params) => ({
-      translated: await translator.translate((await listSkillOverview(await skillWorkspace(params), paths.dshHome)).map((skill) => skill.description)),
+      translated: await translator.translate((await listSkillOverview(await skillWorkspace(params), paths.dshHome)).map((skill) => skill.description), params.engine),
     }),
 
     'subagents.list': async ({ threadId }) => {

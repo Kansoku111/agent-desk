@@ -24,6 +24,11 @@ interface SkillEntry {
   modelInvocable: boolean
 }
 
+const ENGINES = [
+  { id: 'haiku', label: 'Haiku', service: 'Claude Code' },
+  { id: 'luna', label: 'Luna', service: 'Codex（ChatGPT）' },
+] as const
+
 const SCOPES: { id: SkillEntry['scope']; label: string }[] = [
   { id: 'project', label: 'プロジェクト' },
   { id: 'user', label: 'ユーザー' },
@@ -41,6 +46,7 @@ export function SkillsSettings() {
   const [error, setError] = useState<string | null>(null)
   const [translating, setTranslating] = useState(false)
   const [confirmTranslate, setConfirmTranslate] = useState(false)
+  const [engine, setEngine] = useState<(typeof ENGINES)[number]['id']>('haiku')
   const [deleting, setDeleting] = useState<SkillEntry | null>(null)
   const [removing, setRemoving] = useState(false)
   const busy = translating || removing || deleting !== null || confirmTranslate
@@ -63,11 +69,14 @@ export function SkillsSettings() {
     if (!workspace) return
     setTranslating(true)
     try {
-      await request('skills.translate', { workspace })
-      setSkills((await load(workspace)).skills)
+      await request('skills.translate', { workspace, engine })
     } catch (reason) {
       toast(requestErrorMessage(reason), 'error')
     }
+    // Reload either way: batches that finished before a failure are already saved.
+    try {
+      setSkills((await load(workspace)).skills)
+    } catch (reason) { setError(requestErrorMessage(reason)) }
     setTranslating(false)
   }
 
@@ -101,8 +110,8 @@ export function SkillsSettings() {
           </select>
         )}
         {skills?.some((skill) => skill.translatable) && (
-          <button type="button" className="button" disabled={busy} onClick={() => setConfirmTranslate(true)} title="Claude Haiku で説明を翻訳します">
-            {translating ? <Loader2 size={14} className="spin" /> : <Languages size={14} />} 日本語にする（Claude）
+          <button type="button" className="button" disabled={busy} onClick={() => setConfirmTranslate(true)} title="説明を日本語に翻訳します">
+            {translating ? <Loader2 size={14} className="spin" /> : <Languages size={14} />} 日本語にする
           </button>
         )}
       </div>
@@ -144,7 +153,18 @@ export function SkillsSettings() {
       {confirmTranslate && (
         <ConfirmDialog
           title="説明を日本語にしますか？"
-          body={<p>Claude Code の Haiku を使用します。課金される場合があります。</p>}
+          body={(
+            <>
+              <div className="segmented" role="radiogroup" aria-label="翻訳モデル">
+                {ENGINES.map(({ id, label }) => (
+                  <button key={id} type="button" role="radio" aria-checked={engine === id} className={engine === id ? 'on' : ''} onClick={() => setEngine(id)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p>{ENGINES.find((entry) => entry.id === engine)?.service} を使用します（推論 low）。課金・利用枠を消費する場合があります。</p>
+            </>
+          )}
           confirmLabel="翻訳する"
           onConfirm={() => void translate()}
           onClose={() => setConfirmTranslate(false)}

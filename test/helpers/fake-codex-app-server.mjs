@@ -20,7 +20,7 @@ for await (const line of readline.createInterface({
   } = JSON.parse(line)
   await fs.appendFile(path.join(home, 'mock-methods.jsonl'), JSON.stringify({
     method,
-    ...(['initialize', 'thread/start'].includes(method) ? {
+    ...(['initialize', 'thread/start', 'turn/start'].includes(method) ? {
       params
     } : {})
   }) + '\n')
@@ -110,7 +110,14 @@ for await (const line of readline.createInterface({
       id: 'thread-mock'
     }
   })
-  else if (method === 'turn/start') {
+  else if (method === 'turn/start' && params.outputSchema) {
+    reply({ turn: { id: 'turn-text', status: 'inProgress', items: [] } })
+    notify('item/completed', {
+      threadId: params.threadId,
+      item: { type: 'agentMessage', id: 'message-mock', text: '{"translations":["訳"]}', phase: null }
+    })
+    notify('turn/completed', { threadId: params.threadId, turn: { id: 'turn-text', status: 'completed', items: [] } })
+  } else if (method === 'turn/start') {
     const imageDir = path.join(home, 'generated_images', params.threadId)
     await fs.mkdir(imageDir, {
       recursive: true
