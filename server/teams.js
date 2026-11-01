@@ -1644,17 +1644,28 @@ export class TeamManager extends EventEmitter {
   }
 
   /**
-   * The user changed a running team's settings in its panel: the children's
-   * providers and tiers and how many may be open. Who leads stays (the leader
-   * is its own task). The leader hears what it may use now.
+   * The user changed a running team's settings in its panel. Child choices
+   * are reported to the leader; a TM fallback only affects a later limit.
    */
   updateConfig(teamId, patch, authConfirmation) {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
     if (authConfirmation) return this.#confirmAuth(team, authConfirmation, true, () => this.teams.get(teamId) === team).then(() => this.updateConfig(teamId, patch))
-    const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren', 'toolMode', 'modelMode', 'freeModels'].includes(key)))
+    const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren', 'toolMode', 'modelMode', 'freeModels', ...(!team.execution ? ['leaderFallback', 'fallbackEffort'] : [])].includes(key)))
     const before = this.#tierLines(this.config(team)).join('\n') + this.config(team).maxChildren
     const next = mergeTeamConfig(this.config(team), allowed)
+    const fallbackChanged = next.leaderFallback !== this.config(team).leaderFallback || next.fallbackEffort !== this.config(team).fallbackEffort
+    if (fallbackChanged) {
+      if (this.fallingBack.has(team.id) || team.leaderFallbackPending) throw new Error('リーダーの切り替え中はフォールバックを変更できません')
+      if (team.leaderFallbackUsed) throw new Error('このチームではフォールバックを使用済みです')
+      if (next.leaderFallback) {
+        try { validateAbModel(next.leaderFallback, this.catalog.data) } catch { throw new Error('フォールバック先のモデルを選び直してください') }
+        next.fallbackEffort = workflowEffort(next.fallbackEffort, workflowLevels(this.catalog.data, next.leaderFallback))
+        if (!workflowEffortSupported(next.fallbackEffort, workflowLevels(this.catalog.data, next.leaderFallback))) throw new Error('フォールバック先の推論レベルを選び直してください')
+        const current = team.leaderKind === 'thread' ? this.threads.threads.get(team.leaderId)?.model : `claude:${this.terminals.records.get(team.leaderId)?.model ?? ''}`
+        if (next.leaderFallback === current) throw new Error('フォールバック先はリーダーと別のモデルを選んでください')
+      }
+    }
     if (next.toolMode !== this.config(team).toolMode && this.toolModeBusy(team)) throw new Error('実行中はPTCを変更できません')
     if (team.execution) {
       if (next.modelMode !== 'tiers') throw new Error('ecoは低枠のみ使用できます')

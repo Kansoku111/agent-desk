@@ -3251,6 +3251,52 @@ function failThread(threads, id, message) {
   threads.emit('turn-finished', { threadId: id, title: thread.title, status: 'error' })
 }
 
+test('TM can configure a fallback after creation and use it on a later limit', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  const fallback = '["anthropic","claude-haiku-5-5"]'
+  assert.throws(() => f.manager.updateConfig(f.team.id, { leaderFallback: 'invalid' }), /選び直して/)
+  assert.throws(() => f.manager.updateConfig(f.team.id, { leaderFallback: f.threads.threads.get(f.leader).model }), /別のモデル/)
+  f.manager.updateConfig(f.team.id, { leaderFallback: fallback, fallbackEffort: 'medium' })
+  await f.manager.writes
+  const saved = JSON.parse(await fs.readFile(f.manager.file, 'utf8')).teams[0]
+  assert.equal(saved.config.leaderFallback, fallback)
+  assert.equal(saved.config.fallbackEffort, 'medium')
+  await f.threads.send(f.leader, { text: 'work' })
+  const switched = new Promise((resolve) => f.manager.on('team', function handler(summary) {
+    if (summary.leaderFallbackError || (summary.leaderFallbackUsed && f.threads.threads.get(f.leader).status === 'running')) { f.manager.off('team', handler); resolve() }
+  }))
+  failThread(f.threads, f.leader, 'subscription_sharing_usage_limit_exceeded')
+  await switched
+  await Promise.all([...f.manager.exPending])
+  assert.equal(f.team.leaderFallbackError, undefined)
+  assert.equal(f.threads.threads.get(f.leader).model, fallback)
+  assert.throws(() => f.manager.updateConfig(f.team.id, { leaderFallback: 'claude:sonnet' }), /使用済み/)
+  f.manager.updateConfig(f.team.id, { maxChildren: 2 })
+})
+
+test('TM validates and clears a fallback for an existing Claude leader', async (t) => {
+  const f = await setup(t)
+  assert.throws(() => f.manager.updateConfig(f.team.id, { leaderFallback: 'claude:opus', fallbackEffort: 'low' }), /別のモデル/)
+  assert.throws(() => f.manager.updateConfig(f.team.id, { leaderFallback: 'claude:sonnet', fallbackEffort: 'invalid' }), /推論レベル/)
+  f.manager.updateConfig(f.team.id, { leaderFallback: 'claude:sonnet', fallbackEffort: 'low' })
+  assert.equal(f.team.config.leaderFallback, 'claude:sonnet')
+  f.manager.updateConfig(f.team.id, { leaderFallback: '', fallbackEffort: '' })
+  assert.equal(f.team.config.leaderFallback, '')
+})
+
+test('TM fallback settings cannot change while a switch is in progress', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt', leaderFallback: '["anthropic","claude-haiku-5-5"]', fallbackEffort: 'medium' })
+  await f.threads.send(f.leader, { text: 'work' })
+  let release
+  const blocked = new Promise((resolve) => { release = resolve })
+  const update = f.threads.update
+  f.threads.update = async (...args) => { await blocked; return update(...args) }
+  failThread(f.threads, f.leader, 'subscription_sharing_usage_limit_exceeded')
+  assert.throws(() => f.manager.updateConfig(f.team.id, { leaderFallback: '' }), /切り替え中/)
+  release()
+  await Promise.all([...f.manager.exPending])
+})
+
 for (const mode of ['TM', 'eco']) {
   test(mode + ': dsh leader changes to its configured fallback on exhausted subscription', async (t) => {
     const settings = { leaderProvider: 'gpt', leaderFallback: '["anthropic","claude-haiku-5-5"]', fallbackEffort: 'medium' }

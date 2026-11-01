@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { teamConfig } from '../server/team-config.js'
+import * as workflowEffort from '../shared/workflow-effort.js'
 
 // Exercise the actual start form's callbacks without launching a model.
 const source = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
@@ -82,6 +83,46 @@ test('leader picker selects each provider and stores its own model and effort', 
   h.field().onChange(JSON.stringify(['openai-codex', 'gpt-6-luna']))
   assert.equal(h.draft.leaderProvider, 'gpt')
   assert.deepEqual(h.draft.gptLeader, { model: 'gpt-6-luna', effort: null })
+})
+
+test('existing TM settings save a selected fallback without changing the leader', async () => {
+  const slots = []
+  let cursor = 0
+  const fallbackField = function LeaderFallback() {}
+  const calls = []
+  const config = teamConfig({ leaderProvider: 'gpt', gptLeader: { model: 'gpt-6-luna' }, gpt: { enabled: true } })
+  const current = JSON.stringify(['openai-codex', 'gpt-6-luna'])
+  const target = JSON.stringify(['anthropic', 'claude-haiku-5-5'])
+  const team = { id: 'team', leaderId: 'leader', leaderKind: 'thread', children: [], config }
+  const app = { ...server, catalog: { ...server.catalog, providers: {} }, settings: { ...server.settings, agentTeams: config }, threads: [{ id: 'leader', model: current }], terminals: [] }
+  const dependencies = { ...modules,
+    react: { useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], (value) => { slots[index] = typeof value === 'function' ? value(slots[index]) : value }] } },
+    '../store': { useStore: (select) => select({ server: app }), act: async (name, args) => { calls.push({ name, args }); return { ok: true } } },
+    '../team-auth-consent': { needsClaudeAuth: () => false },
+    './LeaderFallback': { LeaderFallback: fallbackField },
+    '../../../shared/workflow-effort.js': workflowEffort,
+  }
+  const exports = {}
+  new Function('require', 'exports', outputText)((name) => dependencies[name], exports)
+  const render = () => { cursor = 0; return exports.TeamConfigDialog({ team, onClose() {} }) }
+  const field = () => nodes(render(), (node) => node.type === fallbackField)[0].props
+  const save = () => nodes(render(), (node) => node.type === 'button' && node.props.children === '保存')[0].props
+  field().onChange(current, 'low')
+  assert.equal(save().disabled, true)
+  field().onChange(target, 'low')
+  assert.equal(save().disabled, false)
+  await save().onClick()
+  assert.equal(calls[0].name, 'team.update')
+  assert.equal(calls[0].args.patch.leaderFallback, target)
+  assert.equal(calls[0].args.patch.fallbackEffort, 'low')
+  assert.equal('leaderProvider' in calls[0].args.patch, false)
+  team.leaderFallbackUsed = true
+  assert.equal(field().disabled, true)
+  team.leaderFallbackUsed = false
+  field().onChange(current, 'low')
+  team.execution = {}
+  assert.equal(nodes(render(), (node) => node.type === fallbackField).length, 0)
+  assert.equal(save().disabled, false, 'eco settings remain independent of TM fallback validation')
 })
 
 test('a previously selected but unavailable model remains visible without switching billing routes', () => {

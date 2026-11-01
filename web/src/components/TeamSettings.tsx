@@ -480,10 +480,12 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const change: Change = (patch) => setDraft((current) => (current ? applyPatch(current, patch) : current))
   const needsAuth = needsClaudeAuth(draft, team)
   const showAuth = needsAuth || team.children.some((child) => child.kind === 'agent' && child.state !== 'removed')
+  const currentLeader = team.leaderKind === 'thread' ? server.threads.find((entry) => entry.id === team.leaderId)?.model : `claude:${server.terminals.find((entry) => entry.id === team.leaderId)?.model ?? ''}`
+  const fallbackReady = Boolean(team.execution || team.leaderFallbackUsed) || !draft.leaderFallback || (draft.leaderFallback !== currentLeader && modelGroups(server).some((group) => group.models.some((model) => model.value === draft.leaderFallback)) && workflowEffortSupported(draft.fallbackEffort ?? '', workflowLevels(server.catalog, draft.leaderFallback)))
   const save = async () => {
-    if (needsAuth && !auth.ready) return
+    if (!fallbackReady || (needsAuth && !auth.ready)) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, local: draft.local, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, local: draft.local, maxChildren: draft.maxChildren, ...(!team.execution ? { leaderFallback: draft.leaderFallback ?? '', fallbackEffort: draft.fallbackEffort ?? '' } : {}) } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
@@ -500,12 +502,16 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
           <ChildCount config={draft} onChange={change} />
         </section>
         <ChildModels server={server} config={draft} onChange={change} />
+        {!team.execution && <>
+          <LeaderFallback server={server} value={draft.leaderFallback ?? ''} effort={draft.fallbackEffort ?? ''} disabled={saving || Boolean(team.leaderFallbackUsed)} onChange={(leaderFallback, fallbackEffort) => change({ leaderFallback, fallbackEffort })} />
+          {team.leaderFallbackUsed && <p className="muted">このチームではフォールバックを使用済みです。</p>}
+        </>}
         {!anyChildOn(draft) && <p className="team-warning">子に使うモデルを少なくとも一つ選んでください。</p>}
         {showAuth && <ClaudeAuthConsent key={authRevision} workspace={team.workspace} teamId={team.id} onChange={setAuth} />}
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={onClose}>キャンセル</button>
-        <button type="button" className="button primary" disabled={saving || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
+        <button type="button" className="button primary" disabled={saving || !anyChildOn(draft) || !fallbackReady || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
       </div>
     </Modal>
   )
