@@ -2,11 +2,11 @@ import { memo, useEffect, useState } from 'react'
 import {
   ArrowDown, Bot, ChevronDown, Copy, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, RotateCw, SquareTerminal, Trash2,
 } from 'lucide-react'
-import { act, setState, setSubagentPanel, toast, useRemote, useStore } from '../store'
+import { act, isNarrow, setState, setSubagentPanel, toast, useRemote, useStore } from '../store'
 import type { TaskPresetSource, ThreadSummary, Turn } from '../types'
 import { copyText, undoableRestore, workspaceLabel } from '../util'
 import { Composer } from './Composer'
-import { TaskPresetRuns } from './TaskPresets'
+import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
 import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
 import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
@@ -113,7 +113,7 @@ function SubagentToggle({ threadId }: { threadId: string }) {
   )
 }
 
-const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
+const Header = memo(function Header({ thread, presetOpen, onPresetToggle }: { thread: ThreadSummary; presetOpen: boolean; onPresetToggle: () => void }) {
   const sidebarOpen = useStore((state) => state.sidebarOpen)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
@@ -165,6 +165,7 @@ const Header = memo(function Header({ thread }: { thread: ThreadSummary }) {
       </div>
       <div className="header-right">
         {panelTeam && <TeamToggle team={panelTeam} />}
+        <TaskPresetToggle source={{ kind: 'thread', id: thread.id }} open={presetOpen} onToggle={onPresetToggle} />
         <SubagentToggle threadId={thread.id} />
         <OpenInMenu workspace={thread.workspace} task={!panelTeam && !thread.ab && !thread.preset ? { kind: 'thread', id: thread.id } : undefined} />
         <Dropdown
@@ -203,6 +204,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const thread = useStore((state) => state.server?.threads.find((entry) => entry.id === threadId))
   const turns = useStore((state) => state.turns[threadId])
   const panelOpen = useStore((state) => state.subagentPanel)
+  const [presetOpen, setPresetOpen] = useState(() => !isNarrow())
   const team = useLedTeam(threadId)
   // Keep the same team beside its leader and its children.
   const panelTeam = useTeam(thread?.team?.id) ?? team
@@ -220,8 +222,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const scores = turns ? scoresUpTo(turns) : []
   return (
     <div className="thread-view">
-      <Header thread={thread} />
-      <TaskPresetRuns source={{ kind: 'thread', id: thread.id }} />
+      <Header thread={thread} presetOpen={presetOpen} onPresetToggle={() => setPresetOpen((open) => !open)} />
       <div className="thread-body">
         <div className="thread-main">
           <div
@@ -265,6 +266,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           </div>
         </div>
         {panelTeam && teamPanel ? <TeamPanel team={panelTeam} /> : panelOpen && <SubagentPanel thread={thread} />}
+        {presetOpen && <TaskPresetRuns source={{ kind: 'thread', id: thread.id }} onClose={() => setPresetOpen(false)} />}
       </div>
     </div>
   )

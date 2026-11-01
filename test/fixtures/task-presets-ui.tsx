@@ -48,7 +48,7 @@ const root = createRoot(document.getElementById('root')!)
 const tick = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms))
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((entry) => entry.textContent?.trim() === label)!
 const check = (value: unknown, label: string) => { if (!value) throw new Error(label) }
-const render = () => root.render(<div className="app" style={{ padding: 16 }}><main className="main"><header className="main-header"><h1>相談した機能</h1><OpenInMenu workspace="fixture" task={source} /></header><TaskPresetRuns source={source} /><div className="column" style={{ padding: 24 }}>方針が決まった通常タスクの会話（模擬）</div><TaskPresetDialogs /></main></div>)
+const render = () => root.render(<div className="app" style={{ padding: 16 }}><main className="main"><header className="main-header"><h1>相談した機能</h1><OpenInMenu workspace="fixture" task={source} /></header><div className="thread-body"><TaskPresetRuns source={source} onClose={() => {}} /></div><div className="column" style={{ padding: 24 }}>方針が決まった通常タスクの会話（模擬）</div><TaskPresetDialogs /></main></div>)
 const complete = async () => {
   Object.assign(current, { phase: 'completed', updatedAt: current.updatedAt + 1, worker: { kind: 'thread', id: 'worker' }, report: '変更・検証を完了しました。', result: { summary: current.kind === 'review' ? '条件分岐の不具合を修正し、回帰テストを追加しました。検証は成功しました。' : '合意した機能を実装し、テストを確認しました。', remaining: '', blocker: '' }, verification: { status: 'passed', checks: [] }, changedFiles: [{ status: 'M', path: 'src/feature.ts' }, { status: 'A', path: 'test/feature.test.ts' }], record: 'fixture/report.md', patch: 'fixture/changes.patch' })
   publish(); await tick(150)
@@ -67,6 +67,7 @@ const api = {
     check(parentCalls === 1, 'one initial parent call')
     check(requests.find((entry) => entry.type === 'preset.create').instruction === '日本語の追加指示\n範囲を守る', 'multiline instruction preserved')
     await complete(); check(parentCalls === 1 && !requests.some((entry) => entry.type === 'preset.deliver'), 'completion is UI only')
+    check(document.querySelector('aside[aria-label="委託とレビュー"]')?.textContent?.includes('実装モデル'), 'delegate model appears in side panel')
     check(button('本セッションに渡す'), 'explicit return offered')
     check(!requests.some((entry) => entry.type === 'preset.evidence'), 'evidence is lazy')
     ;[...document.querySelectorAll('summary')].find((entry) => entry.textContent === '担当による修正差分')!.click(); await tick(200)
@@ -83,6 +84,7 @@ const api = {
     const call = requests.filter((entry) => entry.type === 'preset.create').at(-1)
     check(call.kind === 'review' && call.review.base === 'turn:implementation', 'review target explicit')
     await complete(); check(parentCalls === 3, 'review completion also one-way')
+    check(document.querySelector('aside[aria-label="委託とレビュー"]')?.textContent?.includes('レビューモデル'), 'review model appears in side panel')
     check(document.documentElement.scrollWidth <= innerWidth, 'no horizontal overflow')
     labels.push('independent review: explicit target, repair contract, no auto-return, no overflow')
     return labels

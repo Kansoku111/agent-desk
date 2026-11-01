@@ -17,7 +17,7 @@ import { ConfirmDialog } from './Modal'
 import { Dropdown, MenuItem } from './Popover'
 import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
 import { OpenInMenu } from './ThreadView'
-import { TaskPresetRuns } from './TaskPresets'
+import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
 import { TerminalChat, useConversation } from './TerminalChat'
 import { TerminalModelPicker } from './TerminalPickers'
 import { Elapsed } from './TurnView'
@@ -110,7 +110,7 @@ function StatusChip({ terminal }: { terminal: TerminalSummary }) {
   )
 }
 
-function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSummary; mode: Mode; onMode: (mode: Mode) => void; onRestart: () => void }) {
+function Header({ terminal, mode, onMode, onRestart, presetOpen, onPresetToggle }: { terminal: TerminalSummary; mode: Mode; onMode: (mode: Mode) => void; onRestart: () => void; presetOpen: boolean; onPresetToggle: () => void }) {
   const sidebarOpen = useStore((state) => state.sidebarOpen)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
@@ -162,6 +162,7 @@ function Header({ terminal, mode, onMode, onRestart }: { terminal: TerminalSumma
       </div>
       <div className="header-right">
         {panelTeam && <TeamToggle team={panelTeam} />}
+        <TaskPresetToggle source={{ kind: 'terminal', id: terminal.id }} open={presetOpen} onToggle={onPresetToggle} />
         <button
           type="button"
           className="icon-button"
@@ -414,6 +415,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
 }
 
 export function TerminalView({ terminalId }: { terminalId: string }) {
+  const [presetOpen, setPresetOpen] = useState(() => !isNarrow())
   const terminal = useStore((state) => state.server?.terminals.find((entry) => entry.id === terminalId))
   const host = useRef<HTMLDivElement>(null)
   const [term, setTerm] = useState<Terminal | null>(null)
@@ -698,8 +700,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
   if (!terminal) return <div className="main-empty">タスクが見つかりません</div>
   return (
     <div className="thread-view terminal-view">
-      <Header terminal={terminal} mode={mode} onMode={chooseMode} onRestart={() => void restart()} />
-      <TaskPresetRuns source={{ kind: 'terminal', id: terminal.id }} />
+      <Header terminal={terminal} mode={mode} onMode={chooseMode} onRestart={() => void restart()} presetOpen={presetOpen} onPresetToggle={() => setPresetOpen((open) => !open)} />
       <div className="thread-body">
         <div className="thread-main">
           {screen && mismatch && (
@@ -760,6 +761,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
           )}
         </div>
         {team && teamPanel && <TeamPanel team={team} />}
+        {presetOpen && <TaskPresetRuns source={{ kind: 'terminal', id: terminal.id }} onClose={() => setPresetOpen(false)} />}
       </div>
     </div>
   )

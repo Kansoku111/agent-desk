@@ -8,9 +8,6 @@
 .preset-form .preset-check { display: flex; align-items: start; gap: 8px; }
 .preset-check code { display: block; overflow-wrap: anywhere; font-size: 12px; color: var(--text-muted); }
 .preset-start-note { font-size: 12px; line-height: 1.7; }
-.preset-runs { border-bottom: 1px solid var(--border); padding: 6px 14px; min-width: 0; }
-.preset-runs > div { display: flex; gap: 8px; overflow-x: auto; }
-.preset-runs .button { flex-shrink: 0; font-size: 12px; }
 .preset-result { overflow-wrap: anywhere; }
 .preset-result-head > .muted { font-size: 12px; }
 .preset-result > p { margin: 0; font-size: 13px; }
@@ -21,6 +18,5 @@
 .preset-evidence { max-height: 360px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; color: var(--text); background: var(--bg-bubble); }
 @media (max-width: 600px) {
   .preset-form .ab-model-grid { grid-template-columns: 1fr; }
-  .preset-runs { padding-inline: 8px; }
   .preset-result-head { align-items: start; flex-direction: column; gap: 4px; }
 }

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import './TaskPresets.css'
-import { CheckCircle2, CornerDownRight, Loader2, Square } from 'lucide-react'
+import { CheckCircle2, ChevronRight, CornerDownRight, Loader2, PanelRight, Square, X } from 'lucide-react'
 import { act, request, setState, useStore } from '../store'
 import type { ExecutionCheck, TaskPresetKind, TaskPresetRun, TaskPresetSource, Turn } from '../types'
-import { effortLabel } from '../util'
+import { effortLabel, parseModel } from '../util'
 import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { ModelField, modelGroups } from './WorkflowModelField'
 import { Modal } from './Modal'
@@ -118,14 +118,46 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
   </Modal>
 }
 
-export function TaskPresetRuns({ source }: { source: TaskPresetSource }) {
+function usePresetRuns(source: TaskPresetSource) {
   const runs = useStore((state) => state.server?.taskPresets)
-  const shown = runs?.filter((run) => run.source.kind === source.kind && run.source.id === source.id) ?? []
-  if (!shown.length) return null
-  return <div className="preset-runs" aria-label="委託とレビュー"><div>{shown.map((run) => <button type="button" key={run.id} className="button ghost" onClick={() => setState({ presetRun: run.id })}>
-    {active(run) ? <Loader2 size={13} className="spin" /> : run.phase === 'completed' ? <CheckCircle2 size={13} /> : <CornerDownRight size={13} />}
-    {LABEL[run.kind]}<span className="muted">{PHASE[run.phase] ?? run.phase}</span>
-  </button>)}</div></div>
+  return runs?.filter((run) => run.source.kind === source.kind && run.source.id === source.id) ?? []
+}
+
+export function TaskPresetToggle({ source, open, onToggle }: { source: TaskPresetSource; open: boolean; onToggle: () => void }) {
+  const runs = usePresetRuns(source)
+  if (!runs.length) return null
+  return <button type="button" className={`button ghost subagent-toggle team-toggle ${open ? 'active' : ''}`}
+    aria-pressed={open} aria-label={open ? '委託のパネルを閉じる' : '委託のパネルを開く'} onClick={onToggle}>
+    <PanelRight size={16} /><span className="team-toggle-label">委託</span><span className="team-toggle-count">{runs.length}</span>
+  </button>
+}
+
+export function TaskPresetRuns({ source, onClose }: { source: TaskPresetSource; onClose: () => void }) {
+  const server = useStore((state) => state.server)
+  const runs = usePresetRuns(source)
+  if (!server || !runs.length) return null
+  return <>
+    <div className="subagent-backdrop" aria-hidden="true" onClick={onClose} />
+    <aside className="subagent-panel team-panel" aria-label="委託とレビュー">
+      <div className="subagent-panel-head"><span className="subagent-panel-title">委託とレビュー</span>
+        <button type="button" className="icon-button small" aria-label="パネルを閉じる" onClick={onClose}><X size={15} /></button>
+      </div>
+      <div className="subagent-list">{runs.map((run) => {
+        const model = run.model.startsWith('claude:')
+          ? server.catalog.models.find((entry) => entry.provider === 'anthropic' && entry.id === run.model.slice(7))?.name ?? run.model.slice(7)
+          : server.catalog.models.find((entry) => entry.value === run.model)?.name ?? parseModel(run.model)?.id ?? run.model
+        const providerId = parseModel(run.model)?.provider
+        const provider = run.model.startsWith('claude:') ? 'Claude Code' : providerId ? server.catalog.providers[providerId] ?? providerId : ''
+        return <button type="button" key={run.id} className={`subagent-card team-card status-${active(run) ? 'running' : run.phase === 'completed' ? 'done' : 'error'}`} onClick={() => setState({ presetRun: run.id })}>
+          <div className="subagent-card-head"><span className="subagent-status">{active(run) ? <Loader2 size={13} className="spin" /> : run.phase === 'completed' ? <CheckCircle2 size={13} /> : <CornerDownRight size={13} />}</span>
+            <span className="team-card-name">{LABEL[run.kind]}</span><span className="subagent-time">{PHASE[run.phase] ?? run.phase}</span></div>
+          <div className="subagent-card-title">{run.title}</div>
+          <div className="subagent-card-activity">{provider ? provider + ' / ' : ''}{model}{run.effort ? '・' + effortLabel(run.effort) : ''}</div>
+          <ChevronRight size={14} className="subagent-card-chev" />
+        </button>
+      })}</div>
+    </aside>
+  </>
 }
 
 function Evidence({ id, kind, index, title }: { id: string; kind: string; index?: number; title: string }) {
