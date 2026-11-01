@@ -197,6 +197,51 @@ test('restoreNoteText names a later request by its first line', () => {
   assert.match(text, /before an earlier request of theirs \("fix the header"\)/)
 })
 
+test('retry after partial restore keeps the original undo and counts only successful files', async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-restore-retry-'))
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  const workspace = path.join(base, 'work')
+  await fs.mkdir(workspace)
+  await fs.writeFile(path.join(workspace, 'notes.txt'), 'before')
+  const { pool } = fakePool(async () => {
+    await fs.writeFile(path.join(workspace, 'notes.txt'), 'after')
+    await fs.writeFile(path.join(workspace, 'locked.txt'), 'new')
+  })
+  const manager = new ThreadManager({
+    paths: { threadsIndex: path.join(base, 'threads.json'), threadsDir: path.join(base, 'threads'), attachmentsDir: path.join(base, 'attachments'), dshHome: path.join(base, 'dsh-home'), runtimeCwd: path.join(base, 'runtime') },
+    pool, catalog: { learn: () => false }, getAccounts: async () => ({}), getTurnUsage: async () => null,
+    checkpoints: new Checkpoints({ root: path.join(base, 'checkpoints') }),
+  })
+  t.after(() => manager.shutdown())
+  const thread = await manager.create({ workspace, model: '[\"test\",\"model\"]', toolMode: 'native' })
+  await manager.send(thread.id, { text: 'edit' })
+  const [turn] = await settled(manager, thread.id)
+  const originalRm = fs.rm.bind(fs)
+  let locked = true
+  const mocked = t.mock.method(fs, 'rm', (file, ...args) => {
+    if (locked && file === path.join(workspace, 'locked.txt')) return Promise.reject(Object.assign(new Error('locked'), { code: 'EACCES' }))
+    return originalRm(file, ...args)
+  })
+  try {
+    const first = await manager.restoreCheckpoint(thread.id, turn.id)
+    assert.equal(first.files, 1)
+    assert.match(first.error, /locked.txt/)
+    const undo = turn.restore.undo
+    assert.equal(turn.restore.files, 1)
+    assert.equal(await fs.readFile(path.join(workspace, 'notes.txt'), 'utf8'), 'before')
+    locked = false
+    const second = await manager.restoreCheckpoint(thread.id, turn.id)
+    assert.deepEqual(second, { files: 1, error: null })
+    assert.equal(turn.restore.undo, undo)
+    assert.equal(turn.restore.files, 2)
+    assert.equal(turn.restore.error, undefined)
+    assert.equal(manager.threads.get(thread.id).restoreNote.previous, undefined)
+    await manager.undoRestore(thread.id, turn.id)
+    assert.equal(await fs.readFile(path.join(workspace, 'notes.txt'), 'utf8'), 'after')
+    assert.equal(await fs.readFile(path.join(workspace, 'locked.txt'), 'utf8'), 'new')
+  } finally { mocked.mock.restore() }
+})
+
 test('a partly failed undo keeps its record, so the undo can be tried again', async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-undo-'))
   t.after(() => fs.rm(base, { recursive: true, force: true }))

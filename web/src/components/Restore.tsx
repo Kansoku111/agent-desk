@@ -13,7 +13,7 @@ interface Preview {
 
 function report(result: { files: number; error: string | null } | null, done: string) {
   if (!result) return
-  if (result.error) toast(`一部のファイルを戻せませんでした。そのファイルを開いているアプリを閉じてから、もう一度試してください（${result.error.split('\n')[0]}）`, 'error')
+  if (result.error) toast(`一部のファイルを戻せませんでした。原因を確認してから再試行してください（${result.error.split('\n')[0]}）`, 'error')
   else toast(result.files ? `${result.files} 個のファイルを${done}` : '変更するファイルはありませんでした', 'success')
 }
 
@@ -115,10 +115,18 @@ export function RestoreControls({ threadId, turn, busy, undoable }: {
       report(await act<{ files: number; error: string | null }>('checkpoint.undo', { threadId, turnId: turn.id }), '戻す前の状態にしました')
       setUndoing(false)
     }
+    const retry = async () => {
+      setUndoing(true)
+      report(await act<{ files: number; error: string | null }>('checkpoint.restore', { threadId, turnId: turn.id }), '戻しました')
+      setUndoing(false)
+    }
     return (
       <div className="restore-done">
         <RotateCcw size={13} />
-        <span>このリクエストの前の状態に戻しました{turn.restore.files > 0 && `（${turn.restore.files} 個のファイル）`}</span>
+        <span>{turn.restore.error ? '一部のファイルを戻せませんでした' : 'このリクエストの前の状態に戻しました'}{turn.restore.files > 0 && `（${turn.restore.files} 個のファイル）`}</span>
+        {undoable && turn.restore.error && (
+          <button type="button" className="link-button" disabled={busy || undoing} onClick={() => void retry()}>再試行</button>
+        )}
         {undoable && (
           <button type="button" className="link-button" disabled={busy || undoing} onClick={() => void undo()}>取り消す</button>
         )}

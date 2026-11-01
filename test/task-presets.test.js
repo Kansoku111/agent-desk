@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { TaskPresets } from '../server/task-presets.js'
+import { Checkpoints } from '../server/checkpoints.js'
 import { TeamManager } from '../server/teams.js'
 import { parsePresetBrief, parsePresetResult, preparePresetPrompt, matchesPresetPrompt, workerPresetInstructions } from '../server/task-preset-protocol.js'
 import { gitPresetReview } from '../server/task-preset-evidence.js'
@@ -58,6 +59,21 @@ async function fixture(t) {
   t.after(async () => { await manager.shutdown(); await fs.rm(root, { recursive: true, force: true }) })
   return { root, workspace, parent, threads, terminals, terminal, agents, teams, manager, source, start, complete, config, options }
 }
+
+test('turn-based review warns and excludes files omitted by the original checkpoint', async (t) => {
+  const f = await fixture(t)
+  f.threads.checkpoints = new Checkpoints({ root: path.join(f.root, 'thread-checkpoints'), maxFileBytes: 4 })
+  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'old')
+  await fs.writeFile(path.join(f.workspace, 'large.bin'), 'large')
+  const before = await f.threads.checkpoints.snapshot(f.workspace, 'task/before')
+  f.threads.turns.get(f.parent.id).push({ id: 'turn', checkpoint: { before: before.commit } })
+  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'new')
+  await fs.writeFile(path.join(f.workspace, 'large.bin'), 'now')
+  const evidence = await f.manager.evidence({ source: f.source, workspace: f.workspace, review: { base: 'turn:turn' } })
+  assert.deepEqual(evidence.files, [{ status: 'M', path: 'source.txt' }])
+  assert.match(evidence.warning, /large\.bin/)
+  assert.doesNotMatch(evidence.patch, /large\.bin/)
+})
 
 test('one-shot envelopes reject wrong run, ambiguous blocks, extra fields and invalid completion', () => {
   const run = { id: 'R', kind: 'review' }

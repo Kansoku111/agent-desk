@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -100,12 +102,111 @@ test('oversized tracked files leave the index and stay untouched by restore', as
   await write('large.bin', 'large')
   const { commit: after } = await checkpoints.snapshot(workspace, 'task/large')
 
-  assert.deepEqual(await checkpoints.changes(workspace, before, after), [{ path: 'large.bin', status: 'D' }])
+  assert.deepEqual(await checkpoints.changes(workspace, before, after), [], 'an omitted file is not a deletion')
   assert.deepEqual(await checkpoints.preview(workspace, before), [])
   const result = await checkpoints.restore(workspace, before)
   assert.deepEqual(result.restored, [])
   assert.deepEqual(result.removed, [])
   assert.equal(await read('large.bin'), 'large')
+})
+
+test('previously omitted files remain protected by restore, undo and review after reload', async (t) => {
+  const { base, workspace, checkpoints, write, read } = await setup(4)
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('large.bin', 'large')
+  await write('small', 'old')
+  const before = await checkpoints.snapshot(workspace, 'task/before')
+  assert.deepEqual(before.omitted, ['large.bin'])
+  await write('large.bin', 'now')
+  await write('small', 'new')
+  const reloaded = new Checkpoints({ root: path.join(base, 'checkpoints'), maxFileBytes: 4 })
+  const after = await reloaded.snapshot(workspace)
+  const evidence = await reloaded.reviewDiff(workspace, before.commit, after.commit)
+  assert.deepEqual(evidence.files, [{ path: 'small', status: 'M' }])
+  assert.match(evidence.warning, /large\.bin/)
+  assert.doesNotMatch(evidence.patch, /large\.bin/)
+  assert.deepEqual(await reloaded.preview(workspace, before.commit), [{ path: 'small', action: 'restore' }])
+  const result = await reloaded.restore(workspace, before.commit, 'task/undo')
+  assert.equal(await read('large.bin'), 'now')
+  assert.equal(await read('small'), 'old')
+  await write('large.bin', 'edit')
+  await reloaded.restore(workspace, result.undo)
+  assert.equal(await read('large.bin'), 'edit', 'undo also preserves protected paths')
+  assert.equal(await read('small'), 'new')
+})
+
+test('omitted paths protect file-directory replacements in both directions', async (t) => {
+  for (const direction of ['file-to-directory', 'directory-to-file']) await t.test(direction, async (t) => {
+    const { base, workspace, checkpoints, write, read } = await setup(4)
+    t.after(() => fs.rm(base, { recursive: true, force: true }))
+    const oldPath = direction === 'file-to-directory' ? 'folder' : 'folder/large'
+    const newPath = direction === 'file-to-directory' ? 'folder/child' : 'folder'
+    await write(oldPath, 'large')
+    const before = await checkpoints.snapshot(workspace)
+    await fs.rm(path.join(workspace, 'folder'), { recursive: true, force: true })
+    await write(newPath, 'new')
+    const after = await checkpoints.snapshot(workspace)
+    const evidence = await checkpoints.reviewDiff(workspace, before.commit, after.commit)
+    assert.deepEqual(evidence.files, [])
+    assert.match(evidence.warning, /folder/)
+    assert.deepEqual(await checkpoints.preview(workspace, before.commit), [])
+    await checkpoints.restore(workspace, before.commit)
+    assert.equal(await read(newPath), 'new')
+  })
+})
+
+test('omitted paths stay protected after a case-only rename on Windows', { skip: process.platform !== 'win32' }, async (t) => {
+  const { base, workspace, checkpoints, write, read } = await setup(4)
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('Large.bin', 'large')
+  const before = await checkpoints.snapshot(workspace)
+  await fs.rename(path.join(workspace, 'Large.bin'), path.join(workspace, 'large.bin'))
+  await write('large.bin', 'new')
+  const after = await checkpoints.snapshot(workspace)
+  assert.deepEqual(await checkpoints.preview(workspace, before.commit), [])
+  assert.deepEqual((await checkpoints.reviewDiff(workspace, before.commit, after.commit)).files, [])
+  await checkpoints.restore(workspace, before.commit)
+  assert.equal(await read('large.bin'), 'new')
+})
+
+test('legacy snapshots fail closed without changing the workspace', async (t) => {
+  const { base, workspace, checkpoints, write, read } = await setup()
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('source', 'before')
+  const before = await checkpoints.snapshot(workspace)
+  const repo = [...checkpoints.repos.values()][0]
+  const env = { ...process.env, GIT_DIR: repo.gitDir, GIT_WORK_TREE: workspace, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.invalid' }
+  const legacy = childProcess.execFileSync('git', ['commit-tree', before.commit + '^{tree}', '-m', 'Agent Desk checkpoint'], { env, encoding: 'utf8' }).trim()
+  await write('source', 'after')
+  const current = await checkpoints.snapshot(workspace)
+  await assert.rejects(checkpoints.preview(workspace, legacy), /古い保存/)
+  await assert.rejects(checkpoints.restore(workspace, legacy, 'task/undo'), /古い保存/)
+  await assert.rejects(checkpoints.reviewDiff(workspace, legacy, current.commit), /古い保存/)
+  assert.equal(await read('source'), 'after')
+})
+
+test('an incomplete snapshot never becomes an undo or restore baseline', async (t) => {
+  const { base, workspace, checkpoints, write, read } = await setup()
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('source', 'before')
+  const before = await checkpoints.snapshot(workspace, 'task/before')
+  await write('source', 'after')
+  const original = childProcess.execFile
+  const mocked = t.mock.method(childProcess, 'execFile', (command, args, options, callback) => {
+    if (command === 'git' && args.includes('add')) {
+      const error = Object.assign(new Error('git add failed'), { code: 1 })
+      setImmediate(() => callback(error, '', 'locked file'))
+      return { stdin: { end() {} } }
+    }
+    return original(command, args, options, callback)
+  })
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(checkpoints.snapshot(workspace, 'task/failed'), /git add failed/)
+    await assert.rejects(checkpoints.preview(workspace, before.commit), /git add failed/)
+    await assert.rejects(checkpoints.restore(workspace, before.commit, 'task/undo'), /git add failed/)
+    assert.equal(await read('source'), 'after')
+  } finally { mocked.mock.restore(); syncBuiltinESMExports() }
 })
 
 test('restore removes files whose names start with two dots', async (t) => {

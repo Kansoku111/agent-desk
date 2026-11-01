@@ -960,14 +960,15 @@ export class ThreadManager extends EventEmitter {
     const { thread, turns, turn } = await this.#checkpointTurn(threadId, turnId)
     this.#available(threadId, thread)
     this.executionGuard?.(thread, { operation: 'restore' })
-    const result = await this.checkpoints.restore(thread.workspace, turn.checkpoint.before, `${thread.id}/${turn.id}/undo`)
+    const retry = turn.restore?.error && isUndoable(turns, turn) ? turn.restore : null
+    const result = await this.checkpoints.restore(thread.workspace, turn.checkpoint.before, `${thread.id}/${turn.id}/undo`, { undo: retry?.undo ?? null })
     const files = result.restored.length + result.removed.length
     // `turns`: how many turns there were, so a message sent afterwards ends the chance to undo.
-    turn.restore = { at: Date.now(), undo: result.undo, files, turns: turns.length }
-    for (const later of turns.slice(turns.indexOf(turn))) later.revertedBy ??= turn.id
+    turn.restore = { at: Date.now(), undo: result.undo, files: (retry?.files ?? 0) + files, turns: turns.length, ...(result.error && { error: result.error }) }
+    if (files || !result.error) for (const later of turns.slice(turns.indexOf(turn))) later.revertedBy ??= turn.id
     // The agent remembers its edits; the next message tells it they are gone.
     // An unsent earlier note is kept underneath, so undoing this restore brings it back.
-    if (files) {
+    if (files && !(retry && thread.restoreNote?.turnId === turn.id)) {
       const previous = thread.restoreNote
       thread.restoreNote = { turnId: turn.id, request: turn.user.text ?? '', first: turns[0] === turn, ...(previous && { previous }) }
     }

@@ -335,7 +335,7 @@ export interface Turn {
   /** Workspace snapshots around the turn; `changed` counts the files the turn changed. */
   checkpoint?: { before?: string; after?: string; changed?: number; error?: string }
   /** Set when the files were put back to before this turn. */
-  restore?: { at: number; undo: string; files: number; turns: number }
+  restore?: { at: number; undo: string; files: number; turns: number; error?: string }
   /** The turn whose restore undid this turn's file changes. */
   revertedBy?: string
 }

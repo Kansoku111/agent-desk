@@ -250,13 +250,15 @@ export class TaskPresets extends EventEmitter {
       const previous = this.require(review.base.slice(4))
       if (sourceKey(previous.source) !== sourceKey(run.source) || previous.workspace !== run.workspace || !previous.baseline?.commit) throw new Error('委託開始前の記録がありません')
       const after = await this.checkpoints.snapshot(run.workspace)
-      return { ...await this.checkpoints.reviewDiff(run.workspace, previous.baseline.commit, after.commit, [...(previous.baseline.omitted ?? []), ...after.omitted]), warning: [previous.baseline.warning, after.warning].filter(Boolean).join('\n') }
+      const diff = await this.checkpoints.reviewDiff(run.workspace, previous.baseline.commit, after.commit, [...(previous.baseline.omitted ?? []), ...after.omitted])
+      return { ...diff, warning: [diff.warning, previous.baseline.warning, after.warning].filter(Boolean).join('\n') }
     }
     const { turns } = await this.threads.get(run.source.id)
     const turn = turns.find((entry) => 'turn:' + entry.id === review.base)
     if (!turn?.checkpoint?.before || !this.threads.checkpoints) throw new Error('実装開始前の記録がありません')
     const after = await this.threads.checkpoints.snapshot(run.workspace)
-    return { ...await this.threads.checkpoints.reviewDiff(run.workspace, turn.checkpoint.before, after.commit, after.omitted), warning: after.warning }
+    const diff = await this.threads.checkpoints.reviewDiff(run.workspace, turn.checkpoint.before, after.commit, after.omitted)
+    return { ...diff, warning: [diff.warning, after.warning].filter(Boolean).join('\n') }
   }
   async captureCheckpoint(run, phase) {
     try { return await this.checkpoints.snapshot(run.workspace, run.id + '/' + phase) }
@@ -273,7 +275,7 @@ export class TaskPresets extends EventEmitter {
     await fs.mkdir(folder, { recursive: true })
     if (run.kind === 'review') {
       const evidence = await this.evidence(run)
-      if (!evidence.files.length) throw new Error('対象の変更がありません。基準コミットまたは対象ファイルを指定してください。')
+      if (!evidence.files.length) throw new Error('対象の変更がありません。基準コミットまたは対象ファイルを指定してください。' + (evidence.warning ? '\n' + evidence.warning : ''))
       run.reviewEvidence = { files: evidence.files, warning: evidence.warning, sha: evidence.sha }
       run.originalPatch = path.join(folder, 'original.patch')
       await writeText(run.originalPatch, evidence.patch)
@@ -348,14 +350,16 @@ export class TaskPresets extends EventEmitter {
     }
     if (!['passed', 'unverified'].includes(verification.status)) throw new Error('検証を確定できません: ' + verification.status + (verification.error ? '\n' + verification.error : ''))
     const after = run.baseline?.commit ? await this.captureCheckpoint(run, 'after') : null
+    let diffWarning = null
     if (after) {
       const diff = await this.checkpoints.reviewDiff(run.workspace, run.baseline.commit, after.commit, [...(run.baseline.omitted ?? []), ...after.omitted])
+      diffWarning = diff.warning
       run.changedFiles = diff.files
       run.patch = path.join(this.dir, 'runs', run.id, 'changes.patch')
       await writeText(run.patch, diff.patch)
       delete run.diffUnavailable
     } else { delete run.changedFiles; delete run.patch }
-    run.warning = [recordingWarning(run), run.reviewEvidence?.warning, run.baseline?.warning, after?.warning].filter(Boolean).join('\n')
+    run.warning = [recordingWarning(run), run.reviewEvidence?.warning, diffWarning, run.baseline?.warning, after?.warning].filter(Boolean).join('\n')
     if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== verification.endHash) throw new Error('検証後にソースが変更されました。再確認が必要です。')
     if (result.status === 'verify') run.result = { ...result, status: 'complete', remaining: '', summary: result.summary + '\n\n登録されたアプリの検証が成功しました。' }
     run.phase = 'completed'

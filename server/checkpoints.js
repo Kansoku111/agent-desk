@@ -15,6 +15,8 @@ const SNAPSHOT_TIMEOUT_MS = 45_000
 const SKIP_MS = 7 * 24 * 60 * 60 * 1000
 // Nested repositories and symlinks are never deleted or rewritten by a restore.
 const UNTOUCHED_MODES = new Set(['160000', '120000'])
+const METADATA_PREFIX = 'Agent Desk checkpoint v2\n'
+const LEGACY_CHECKPOINT = '古い保存には対象外ファイルや保存失敗の情報がないため、安全に使用できません。新しい保存または別の基準を使ってください。'
 
 const EXCLUDES = [
   '# Agent Desk: dependencies, caches and OS files are never snapshotted.',
@@ -63,19 +65,27 @@ export class Checkpoints {
   /** Files that differ between two snapshots, as `{ path, status }` (status A, M, D or T). */
   async changes(workspace, from, to) {
     const repo = await this.#repo(workspace)
-    return this.#exclusive(repo, () => this.#diff(repo, from, to))
+    return this.#exclusive(repo, async () => {
+      const omitted = [...await this.#metadata(repo, from), ...await this.#metadata(repo, to)]
+      return (await this.#diff(repo, from, to)).filter((entry) => !isProtected(entry.path, omitted))
+    })
   }
 
   /** Actual review evidence, including additions, deletions, binary files and links. */
   async reviewDiff(workspace, from, to, omitted = []) {
     const repo = await this.#repo(workspace)
     return this.#exclusive(repo, async () => {
-      const scope = ['--', '.', ...omitted.map((file) => `:(exclude,literal)${file}`)]
+      const excluded = [...new Set([...omitted, ...await this.#metadata(repo, from), ...await this.#metadata(repo, to)])]
+      // A formerly omitted descendant can have become a file at its ancestor path.
+      const changed = (await git(repo, ['diff', '--name-only', '-z', '--no-renames', from, to, '--', '.'])).split('\0').filter(Boolean)
+      const ancestors = changed.filter((file) => excluded.some((item) => pathKey(item).startsWith(pathKey(file) + '/')))
+      const magic = process.platform === 'win32' ? 'exclude,icase,literal' : 'exclude,literal'
+      const scope = ['--', '.', ...new Set([...excluded, ...ancestors].map((file) => `:(${magic})${file}`))]
       const names = (await git(repo, ['diff', '--name-status', '-z', '--no-renames', from, to, ...scope])).split('\0')
       const files = []
       for (let index = 0; index + 1 < names.length; index += 2) files.push({ status: names[index], path: names[index + 1] })
       const patch = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, to, ...scope])
-      return { files, patch }
+      return { files, patch, warning: excluded.length ? '保存対象外のため差分に含まれないファイル: ' + excluded.join(', ') : null }
     })
   }
 
@@ -86,8 +96,10 @@ export class Checkpoints {
   async preview(workspace, target) {
     const repo = await this.#repo(workspace)
     return this.#exclusive(repo, async () => {
-      const { commit } = await this.#snapshot(repo, null)
-      const entries = await withoutLargeCurrentFiles(repo, await this.#diff(repo, target, commit))
+      const targetOmitted = await this.#metadata(repo, target)
+      const { commit, omitted } = await this.#snapshot(repo, null)
+      const protectedPaths = [...targetOmitted, ...omitted]
+      const entries = await withoutLargeCurrentFiles(repo, (await this.#diff(repo, target, commit)).filter((entry) => !isProtected(entry.path, protectedPaths)))
       return entries.map(({ path: file, status }) => ({ path: file, action: actionOf(status) }))
     })
   }
@@ -99,30 +111,39 @@ export class Checkpoints {
    * @param {string} undoRef  name that keeps the state before the restore, to undo it
    * @returns {Promise<{ undo: string, restored: string[], removed: string[], error: string | null }>}
    */
-  async restore(workspace, target, undoRef = null) {
+  async restore(workspace, target, undoRef = null, { undo: originalUndo = null } = {}) {
     const repo = await this.#repo(workspace)
     return this.#exclusive(repo, async () => {
-      const { commit: undo } = await this.#snapshot(repo, undoRef)
-      const entries = await withoutLargeCurrentFiles(repo, await this.#diff(repo, target, undo))
-      const restored = entries.filter((entry) => entry.status !== 'A').map((entry) => entry.path)
-      const removed = entries.filter((entry) => entry.status === 'A').map((entry) => entry.path)
-      const problems = []
-      if (restored.length) {
+      const targetOmitted = await this.#metadata(repo, target)
+      const undoOmitted = originalUndo ? await this.#metadata(repo, originalUndo) : []
+      // A retry snapshots the current state for its diff without replacing the original undo.
+      const current = await this.#snapshot(repo, originalUndo ? null : undoRef, [...targetOmitted, ...undoOmitted])
+      const undo = originalUndo ?? current.commit
+      const protectedPaths = [...targetOmitted, ...undoOmitted, ...current.omitted]
+      const entries = await withoutLargeCurrentFiles(repo, (await this.#diff(repo, target, current.commit)).filter((entry) => !isProtected(entry.path, protectedPaths)))
+      const toRestore = entries.filter((entry) => entry.status !== 'A').map((entry) => entry.path)
+      const toRemove = entries.filter((entry) => entry.status === 'A').map((entry) => entry.path)
+      const restored = [], removed = [], problems = []
+      const checkout = (files) => git(repo, ['checkout', target, '--pathspec-from-file=-', '--pathspec-file-nul'], { input: nulJoin(files), literal: true })
+      if (toRestore.length) {
         try {
-          await git(repo, ['checkout', target, '--pathspec-from-file=-', '--pathspec-file-nul'], {
-            input: nulJoin(restored),
-            literal: true,
-          })
-        } catch (error) {
-          problems.push(firstLines(error.stderr || error.message))
+          await checkout(toRestore)
+          restored.push(...toRestore)
+        } catch {
+          // A batch may partially succeed; retry each path to report actual outcomes.
+          for (const file of toRestore) {
+            try { await checkout([file]); restored.push(file) }
+            catch (error) { problems.push(`${file}: ${firstLines(error.stderr || error.message)}`) }
+          }
         }
       }
       const dirs = new Set()
-      for (const file of removed) {
+      for (const file of toRemove) {
         const full = inside(repo.workspace, file)
         if (!full) continue
         try {
           await fs.rm(full, { force: true })
+          removed.push(file)
           dirs.add(path.dirname(full))
         } catch (error) {
           problems.push(`${file}: ${error.code ?? error.message}`)
@@ -205,13 +226,12 @@ export class Checkpoints {
     return run
   }
 
-  async #snapshot(repo, ref) {
+  async #snapshot(repo, ref, protectedPaths = []) {
     const skipFile = path.join(repo.gitDir, 'skip.json')
     const skip = await fs.readFile(skipFile, 'utf8').then(JSON.parse).catch(() => null)
     if (skip && Date.now() - skip.at < SKIP_MS) throw Object.assign(new Error(skip.reason), { code: 'CHECKPOINT_SNAPSHOT_LIMIT' })
     // A snapshot cut off by a timeout or a crash leaves the index locked.
     await fs.rm(path.join(repo.gitDir, 'index.lock'), { force: true })
-    let warning = null
     let large = []
     try {
       large = await largeFiles(repo)
@@ -222,13 +242,8 @@ export class Checkpoints {
         })
       }
       const pathspecs = ['.', ...large.map((file) => `:(exclude,literal)${file}`)]
-      try {
-        await git(repo, ['add', '--all', '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'], { input: nulJoin(pathspecs) })
-      } catch (error) {
-        // Files another program keeps locked keep their previous snapshot.
-        if (error.killed) throw error
-        warning = firstLines(error.stderr || error.message)
-      }
+      // An incomplete index must never become a restore or undo baseline.
+      await git(repo, ['add', '--all', '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'], { input: nulJoin(pathspecs) })
     } catch (error) {
       if (error.killed) {
         const reason = 'フォルダ内のファイルが多すぎるため、変更を戻すための保存を省略しました。'
@@ -239,9 +254,21 @@ export class Checkpoints {
       throw error
     }
     const tree = (await git(repo, ['write-tree'])).trim()
-    const commit = (await git(repo, ['commit-tree', tree, '-m', 'Agent Desk checkpoint'])).trim()
+    const omitted = [...new Set([...large, ...protectedPaths])].sort()
+    // Keep metadata in the commit itself: refs and garbage collection cannot separate it.
+    const message = METADATA_PREFIX + JSON.stringify({ omitted }) + '\n'
+    const commit = (await git(repo, ['commit-tree', tree], { input: message })).trim()
     if (ref) await git(repo, ['update-ref', `refs/agent-desk/${ref}`, commit])
-    return { commit, warning, omitted: large }
+    return { commit, warning: null, omitted }
+  }
+
+  async #metadata(repo, commit) {
+    const message = await git(repo, ['show', '-s', '--format=%B', commit])
+    if (!message.startsWith(METADATA_PREFIX)) throw new Error(LEGACY_CHECKPOINT)
+    let metadata
+    try { metadata = JSON.parse(message.slice(METADATA_PREFIX.length)) } catch { throw new Error(LEGACY_CHECKPOINT) }
+    if (!Array.isArray(metadata?.omitted) || !metadata.omitted.every((file) => typeof file === 'string' && file.length > 0)) throw new Error(LEGACY_CHECKPOINT)
+    return metadata.omitted
   }
 
   async #diff(repo, from, to) {
@@ -255,6 +282,16 @@ export class Checkpoints {
     }
     return entries
   }
+}
+
+// A file can be replaced with a directory, or an omitted descendant with a file.
+const pathKey = (file) => process.platform === 'win32' ? file.toLowerCase() : file
+function isProtected(file, omitted) {
+  file = pathKey(file)
+  return omitted.some((item) => {
+    item = pathKey(item)
+    return file === item || file.startsWith(item + '/') || item.startsWith(file + '/')
+  })
 }
 
 function actionOf(status) {
