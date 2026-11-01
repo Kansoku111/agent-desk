@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import './TaskPresets.css'
-import { CheckCircle2, ChevronRight, CornerDownRight, Loader2, PanelRight, Square, X } from 'lucide-react'
-import { act, request, setState, useStore } from '../store'
-import type { ExecutionCheck, TaskPresetKind, TaskPresetRun, TaskPresetSource, Turn } from '../types'
-import { effortLabel, parseModel } from '../util'
+import { CheckCircle2, ChevronRight, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, PanelRight, Square, X } from 'lucide-react'
+import { act, isNarrow, loadThread, navigate, request, setState, useStore } from '../store'
+import type { AppState, ExecutionCheck, TaskPresetKind, TaskPresetRun, TaskPresetSource, Turn } from '../types'
+import { effortLabel, parseModel, workspaceLabel } from '../util'
 import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
 import { ModelField, modelGroups } from './WorkflowModelField'
 import { Modal } from './Modal'
 import { Markdown } from './Markdown'
 import { TurnView } from './TurnView'
+import { useConversationScroll } from './useConversationScroll'
 import { UsageCost } from './UsageCost'
 import { FileRef } from './FileRef'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
@@ -86,7 +87,8 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
     setBusy(true); setError('')
     try {
       const result = await request<{ run: TaskPresetRun }>('preset.create', { ...payload, requestId: intent.current.id, authConfirmation: auth.confirmation })
-      setState({ presetStart: null, presetRun: result.run.id })
+      setState({ presetStart: null })
+      navigate({ view: 'preset', id: result.run.id })
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     setBusy(false)
   }
@@ -132,27 +134,40 @@ export function TaskPresetToggle({ source, open, onToggle }: { source: TaskPrese
   </button>
 }
 
+function modelLabel(server: AppState, run: TaskPresetRun) {
+  const model = run.model.startsWith('claude:')
+    ? server.catalog.models.find((entry) => entry.provider === 'anthropic' && entry.id === run.model.slice(7))?.name ?? run.model.slice(7)
+    : server.catalog.models.find((entry) => entry.value === run.model)?.name ?? parseModel(run.model)?.id ?? run.model
+  const providerId = parseModel(run.model)?.provider
+  const provider = run.model.startsWith('claude:') ? 'Claude Code' : providerId ? server.catalog.providers[providerId] ?? providerId : ''
+  return (provider ? provider + ' / ' : '') + model
+}
+
 export function TaskPresetRuns({ source, onClose }: { source: TaskPresetSource; onClose: () => void }) {
   const server = useStore((state) => state.server)
+  const route = useStore((state) => state.route)
   const runs = usePresetRuns(source)
   if (!server || !runs.length) return null
+  const parent = source.kind === 'thread' ? server.threads.find((entry) => entry.id === source.id) : server.terminals.find((entry) => entry.id === source.id)
+  const here = (view: string, id: string) => route.view === view && 'id' in route && route.id === id ? 'page' as const : undefined
   return <>
     <div className="subagent-backdrop" aria-hidden="true" onClick={onClose} />
     <aside className="subagent-panel team-panel" aria-label="委託とレビュー">
       <div className="subagent-panel-head"><span className="subagent-panel-title">委託とレビュー</span>
         <button type="button" className="icon-button small" aria-label="パネルを閉じる" onClick={onClose}><X size={15} /></button>
       </div>
-      <div className="subagent-list">{runs.map((run) => {
-        const model = run.model.startsWith('claude:')
-          ? server.catalog.models.find((entry) => entry.provider === 'anthropic' && entry.id === run.model.slice(7))?.name ?? run.model.slice(7)
-          : server.catalog.models.find((entry) => entry.value === run.model)?.name ?? parseModel(run.model)?.id ?? run.model
-        const providerId = parseModel(run.model)?.provider
-        const provider = run.model.startsWith('claude:') ? 'Claude Code' : providerId ? server.catalog.providers[providerId] ?? providerId : ''
-        return <button type="button" key={run.id} className={`subagent-card team-card status-${active(run) ? 'running' : run.phase === 'completed' ? 'done' : 'error'}`} onClick={() => setState({ presetRun: run.id })}>
+      <div className="subagent-list">
+        {parent && <button type="button" className="subagent-card team-card" aria-current={here(source.kind, source.id)} onClick={() => navigate({ view: source.kind, id: source.id })}>
+          <div className="subagent-card-head"><span className="team-card-name">親</span></div>
+          <div className="subagent-card-title">{parent.title}</div>
+          <ChevronRight size={14} className="subagent-card-chev" />
+        </button>}
+        {runs.map((run) => {
+        return <button type="button" key={run.id} className={`subagent-card team-card status-${active(run) ? 'running' : run.phase === 'completed' ? 'done' : 'error'}`} aria-current={here('preset', run.id)} onClick={() => navigate({ view: 'preset', id: run.id })}>
           <div className="subagent-card-head"><span className="subagent-status">{active(run) ? <Loader2 size={13} className="spin" /> : run.phase === 'completed' ? <CheckCircle2 size={13} /> : <CornerDownRight size={13} />}</span>
             <span className="team-card-name">{LABEL[run.kind]}</span><span className="subagent-time">{PHASE[run.phase] ?? run.phase}</span></div>
           <div className="subagent-card-title">{run.title}</div>
-          <div className="subagent-card-activity">{provider ? provider + ' / ' : ''}{model}{run.effort ? '・' + effortLabel(run.effort) : ''}</div>
+          <div className="subagent-card-activity">{modelLabel(server, run)}{run.effort ? '・' + effortLabel(run.effort) : ''}</div>
           <ChevronRight size={14} className="subagent-card-chev" />
         </button>
       })}</div>
@@ -214,7 +229,7 @@ function ResultDialog({ id }: { id: string }) {
         {run.verification?.checks.map((check, index) => <Evidence key={check.id} id={id} kind="check" index={index} title={check.id + ' · ' + (CHECK[check.status] ?? check.status)} />)}
         {run.record && <Evidence id={id} kind="report" title="報告全文" />}
         {run.brief && <details><summary>親からの指示</summary><Markdown text={run.brief} workspace={run.workspace} /></details>}
-        {detail?.turns.length ? <details><summary>作業記録</summary>{detail.turns.map((turn) => <TurnView key={turn.id} turn={turn} workspace={run.workspace} threadId={run.worker?.id ?? run.source.id} hideUser threadBusy={active(run)} undoable={false} />)}</details> : run.parentReport && <details><summary>親の回答</summary><Markdown text={run.parentReport} workspace={run.workspace} /></details>}
+        {!run.worker && run.parentReport && <details><summary>親の回答</summary><Markdown text={run.parentReport} workspace={run.workspace} /></details>}
         {run.sourceGone && <p className="muted">元タスクは削除済みです。</p>}
         {!active(run) && !hasReport && !run.sourceGone && <p className="muted">{run.worker ? '担当からの報告はまだありません。' : '担当は開始していません。元の会話で依頼を確認し、「開く」から開始し直してください。'}</p>}
         {!active(run) && hasReport && !run.sourceGone && <p className="muted">「本セッションに渡す」を押すと、元のモデルへ送信し、応答を開始します。</p>}
@@ -234,4 +249,74 @@ export function TaskPresetDialogs() {
   const start = useStore((state) => state.presetStart)
   const result = useStore((state) => state.presetRun)
   return <>{start && <StartDialog key={start.source.kind + start.source.id + start.kind} {...start} />}{result && <ResultDialog key={result} id={result} />}</>
+}
+
+/**
+ * A delegated worker shown like a team's child: its own turns, live, with the
+ * runs of the same parent beside it. Details (diff, checks) stay in the dialog.
+ */
+export function PresetView({ id }: { id: string }) {
+  const server = useStore((state) => state.server)
+  const run = useStore((state) => state.server?.taskPresets?.find((entry) => entry.id === id))
+  const worker = run?.worker
+  const turns = useStore((state) => !worker ? undefined : worker.kind === 'thread' ? state.turns[worker.id] : state.agentTurns[worker.id])
+  const sidebarOpen = useStore((state) => state.sidebarOpen)
+  const [panelOpen, setPanelOpen] = useState(() => !isNarrow())
+  const [brief, setBrief] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const loaded = turns !== undefined
+  const { scroller, onScroll } = useConversationScroll('preset:' + id, !!run, turns)
+  useEffect(() => {
+    let alive = true
+    // Live frames only update turns already loaded; a reconnect clears them.
+    if (worker?.kind === 'thread' && !loaded) void loadThread(worker.id)
+    void request<{ run: TaskPresetRun; turns: Turn[] }>('preset.get', { runId: id }).then((value) => {
+      if (!alive) return
+      setBrief(value.run.brief ?? '')
+      if (worker?.kind === 'claude' && !loaded) setState((current) => ({ agentTurns: { ...current.agentTurns, [worker.id]: value.turns } }))
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [id, worker?.kind, worker?.id, loaded])
+  if (!server || !run) return <div className="main-empty">委託が見つかりません</div>
+  const working = active(run)
+  const hasReport = !!(run.worker && (run.report?.trim() || run.result?.summary?.trim()))
+  const action = async (method: string) => {
+    setBusy(true); setError('')
+    try { await request('preset.' + method, { runId: id }) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    setBusy(false)
+  }
+  return <div className="thread-view terminal-view agent-view">
+    <header className="main-header">
+      <div className="header-left">
+        {!sidebarOpen && <button type="button" className="icon-button" aria-label="サイドバーを開く" title="サイドバーを開く (Ctrl+B)" onClick={() => setState({ sidebarOpen: true })}><PanelLeftOpen size={16} /></button>}
+        {run.model.startsWith('claude:') && <span className="cl-mark" aria-hidden="true">CL</span>}
+        <h1 className="thread-heading" title={run.title}>{LABEL[run.kind]}: {run.title}</h1>
+        <span className="header-chip" title={run.workspace}><FolderOpen size={13} />{workspaceLabel(run.workspace, server.app.myPc, server.settings.projectNames)}</span>
+        <span className="header-chip">{modelLabel(server, run)}{run.effort ? '・' + effortLabel(run.effort) : ''}</span>
+        <span className={`header-chip terminal-status ${working ? 'running' : 'idle'}`}>{working && <Loader2 size={12} className="spin" />}{PHASE[run.phase] ?? run.phase}</span>
+      </div>
+      <div className="header-right">
+        <TaskPresetToggle source={run.source} open={panelOpen} onToggle={() => setPanelOpen((open) => !open)} />
+        {working && <button type="button" className="button ghost" disabled={busy || run.phase === 'stopping'} onClick={() => void action('stop')}><Square size={13} /> 止める</button>}
+      </div>
+    </header>
+    <div className="thread-body">
+      <div className="thread-main">
+        <div className="terminal-chat"><div className="scroller" ref={scroller} onScroll={onScroll}><div className="column">
+          {brief && <details className="preset-brief"><summary>親からの指示</summary><Markdown text={brief} workspace={run.workspace} /></details>}
+          {!worker ? <div className="loading-turns">{working ? <><Loader2 size={14} className="spin" /> {PHASE[run.phase]}</> : run.parentReport ? <Markdown text={run.parentReport} workspace={run.workspace} /> : '担当は開始していません'}</div>
+            : !turns ? <div className="loading-turns"><Loader2 size={14} className="spin" /> 読み込み中…</div>
+              : turns.map((turn) => <TurnView key={turn.id} turn={turn} workspace={run.workspace} threadId={worker.id} hideUser threadBusy={working} undoable={false} />)}
+          {(run.error || error) && <p className="team-warning" role="alert">{error || run.error}</p>}
+        </div></div></div>
+        {!working && <div className="preset-view-actions">
+          {run.worker && !run.sourceGone && run.phase !== 'completed' && <button type="button" className="button" disabled={busy} onClick={() => void action('resume')}>同じ担当で続ける</button>}
+          <button type="button" className="button" onClick={() => setState({ presetRun: id })}>詳細</button>
+          {hasReport && <button type="button" className="button primary" disabled={busy || run.sourceGone || !!run.deliveredAt} onClick={() => void action('deliver')}>{run.deliveredAt ? '送信済み' : '本セッションに渡す'}</button>}
+        </div>}
+      </div>
+      {panelOpen && <TaskPresetRuns source={run.source} onClose={() => setPanelOpen(false)} />}
+    </div>
+  </div>
 }

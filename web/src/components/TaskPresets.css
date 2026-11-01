@@ -20,3 +20,6 @@
   .preset-form .ab-model-grid { grid-template-columns: 1fr; }
   .preset-result-head { align-items: start; flex-direction: column; gap: 4px; }
 }
+.preset-brief { margin: 16px 0; font-size: 13px; }
+.preset-brief > summary { cursor: pointer; color: var(--text-muted); }
+.preset-view-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 16px 16px; }

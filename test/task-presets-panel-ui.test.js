@@ -15,24 +15,29 @@ const runs = [
   { id: 'two', source: { kind: 'thread', id: 'parent' }, kind: 'review', title: 'レビュー', model: 'claude:haiku', effort: 'low', phase: 'completed' },
   { id: 'other', source: { kind: 'terminal', id: 'parent' }, kind: 'review', title: '別タスク', model, effort: '', phase: 'stopped' },
 ]
-const server = { taskPresets: runs, catalog: { providers: { 'openai-codex': 'ChatGPT' }, models: [{ value: model, name: '実装モデル' }] } }
+const server = { taskPresets: runs, threads: [{ id: 'parent', title: '元の会話' }], terminals: [], catalog: { providers: { 'openai-codex': 'ChatGPT' }, models: [{ value: model, name: '実装モデル' }] } }
 let state
 const source = await fs.readFile(new URL('../web/src/components/TaskPresets.tsx', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
-const modules = { 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: Symbol('Fragment') }, '../store': { useStore: fn => fn({ server }), setState: patch => { state = patch } }, '../util': { effortLabel, parseModel } }
+const modules = { 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: Symbol('Fragment') }, '../store': { useStore: fn => fn({ server, route: { view: 'preset', id: 'two' } }), setState: patch => { state = patch }, navigate: route => { state = route } }, '../util': { effortLabel, parseModel } }
 const result = {}
 new Function('require', 'exports', outputText)(name => modules[name] ?? {}, result)
 
-test('preset panel shows each source worker, status and saved model and opens its result', () => {
+test('preset panel shows the parent and each worker, and opens the worker view', () => {
   const panel = result.TaskPresetRuns({ source: { kind: 'thread', id: 'parent' }, onClose() {} })
   const aside = nodes(panel, node => node.type === 'aside')[0]
   assert.equal(aside.props['aria-label'], '委託とレビュー')
   const cards = nodes(aside, node => node.type === 'button' && node.props.className?.includes('subagent-card'))
-  assert.equal(cards.length, 2)
-  assert.match(text(cards[0]), /子に委託.*作業中.*ChatGPT \/ 実装モデル.*低/)
-  assert.match(text(cards[1]), /独立レビュー.*完了.*Claude Code \/ haiku.*低/)
-  cards[1].props.onClick()
-  assert.deepEqual(state, { presetRun: 'two' })
+  assert.equal(cards.length, 3)
+  assert.match(text(cards[0]), /親.*元の会話/)
+  assert.match(text(cards[1]), /子に委託.*作業中.*ChatGPT \/ 実装モデル.*低/)
+  assert.match(text(cards[2]), /独立レビュー.*完了.*Claude Code \/ haiku.*低/)
+  assert.equal(cards[2].props['aria-current'], 'page')
+  assert.equal(cards[1].props['aria-current'], undefined)
+  cards[2].props.onClick()
+  assert.deepEqual(state, { view: 'preset', id: 'two' })
+  cards[0].props.onClick()
+  assert.deepEqual(state, { view: 'thread', id: 'parent' })
   const terminal = result.TaskPresetRuns({ source: { kind: 'terminal', id: 'parent' }, onClose() {} })
   assert.match(text(terminal), /別タスク/)
   assert.doesNotMatch(text(terminal), /レビュー完了/)

@@ -204,8 +204,11 @@ test('an allocated worker with no report cannot forward application-only failure
 test('task handoff retains requested creative tools and does not inherit an assistant-only consultation restriction', () => {
   const run = { id: 'R', kind: 'delegate' }
   assert.match(preparePresetPrompt(run), /スキル/)
-  assert.match(preparePresetPrompt(run), /利用者.*制約/)
+  assert.match(preparePresetPrompt(run), /既定は実装/)
+  assert.match(preparePresetPrompt(run), /利用者自身が相談のみ.*最優先/)
   assert.match(workerPresetInstructions(run), /artwork/)
+  assert.match(workerPresetInstructions(run), /Default to implementation.*Explicit user instructions .* take precedence/)
+  assert.doesNotMatch(workerPresetInstructions({ id: 'R', kind: 'review' }), /Default to implementation/)
   assert.doesNotMatch(workerPresetInstructions(run), /running implementation worker/)
 })
 

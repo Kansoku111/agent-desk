@@ -475,6 +475,9 @@ ab.on('notify', (notification) => broadcast('notify', notification))
 
 const presetAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'task-preset-agents'),
   preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
+// Same frames as a team's Claude child: the delegated worker's view shows its turns live.
+presetAgents.on('turn', ({ id, turn }) => broadcast('agentTurn', { id, turn }))
+presetAgents.on('turn-speed', ({ id, turnId, speed }) => broadcast('agentTurnSpeed', { id, turnId, speed }))
 const presets = await new TaskPresets({
   dir: path.join(paths.home, 'task-presets'), threads, terminals, agents: presetAgents, teams,
   catalog: () => catalogState(), settings: getSettings, mcpServers: mcpServersFor,

@@ -10,7 +10,7 @@ import { notificationRoute, notificationText, type TaskNotification } from './no
 import { beginCreateIntent, completeCreateIntent, createIntentFingerprint } from './create-intent'
 export type { QueuedMessage } from './outbox'
 
-type Route = { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string } | { view: 'ab'; id: string }
+type Route = { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string } | { view: 'ab'; id: string } | { view: 'preset'; id: string }
 export type SettingsTab = 'accounts' | 'models' | 'teams' | 'personalize' | 'skills' | 'usage' | 'general' | 'remote' | 'about'
 
 interface Toast {
@@ -124,7 +124,7 @@ function forgetToken() {
 function readRoute(): Route {
   try {
     const saved = JSON.parse(sessionStorage.getItem(ROUTE_KEY) ?? 'null')
-    if (['thread', 'terminal', 'agent', 'ab'].includes(saved?.view) && typeof saved.id === 'string') return saved
+    if (['thread', 'terminal', 'agent', 'ab', 'preset'].includes(saved?.view) && typeof saved.id === 'string') return saved
   } catch {}
   return { view: 'home' }
 }
@@ -330,6 +330,7 @@ function handleFrame(frame: any) {
         || (state.route.view === 'terminal' && !server.terminals.some((terminal) => terminal.id === (state.route as { id: string }).id))
         || (state.route.view === 'agent' && !teamChildOf(server, state.route.id))
         || (state.route.view === 'ab' && !(server.ab ?? []).some((run) => run.id === (state.route as { id: string }).id))
+        || (state.route.view === 'preset' && !(server.taskPresets ?? []).some((run) => run.id === (state.route as { id: string }).id))
         ? { view: 'home' as const }
         : state.route
       setState({ server, connection: 'open', draft, route, turns: {}, agentTurns: {}, subagents: {} })

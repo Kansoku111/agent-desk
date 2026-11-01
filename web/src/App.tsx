@@ -7,7 +7,7 @@ import { ExecutionStartDialog } from './components/ExecutionSettings'
 import { Sidebar } from './components/Sidebar'
 import { AbStartDialog, AbView } from './components/Ab'
 import { ThreadView } from './components/ThreadView'
-import { TaskPresetDialogs } from './components/TaskPresets'
+import { PresetView, TaskPresetDialogs } from './components/TaskPresets'
 import { AgentView } from './components/AgentView'
 import { FileMenuHost } from './components/FileRef'
 import { lazyChunk } from './lazy-chunk'
@@ -89,6 +89,7 @@ export function App() {
     if (route.view === 'terminal') return state.server?.terminals.find((terminal) => terminal.id === route.id)?.title
     if (route.view === 'agent') return state.server && teamChildOf(state.server, route.id)?.child.title
     if (route.view === 'ab') return state.server?.ab?.find((run) => run.id === route.id)?.title
+    if (route.view === 'preset') return state.server?.taskPresets?.find((run) => run.id === route.id)?.title
     return null
   })
 
@@ -147,7 +148,8 @@ export function App() {
           )}
         {route.view === 'thread' ? <ThreadView threadId={route.id} />
           : route.view === 'terminal' ? <Suspense fallback={null}><TerminalView key={route.id} terminalId={route.id} /></Suspense>
-            : route.view === 'agent' ? <AgentView taskId={route.id} /> : route.view === 'ab' ? <AbView key={route.id} id={route.id} /> : <Home />}
+            : route.view === 'agent' ? <AgentView taskId={route.id} /> : route.view === 'ab' ? <AbView key={route.id} id={route.id} />
+              : route.view === 'preset' ? <PresetView key={route.id} id={route.id} /> : <Home />}
       </main>
       {settingsOpen && <Suspense fallback={null}><SettingsDialog tab={settingsOpen} /></Suspense>}
       {projectDialog && <ProjectDialog />}
