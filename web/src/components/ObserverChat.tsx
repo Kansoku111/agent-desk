@@ -7,6 +7,7 @@ import type { AuthConsentState } from '../team-auth-consent'
 import { Modal } from './Modal'
 import { ModelField, modelGroups } from './WorkflowModelField'
 import { TurnView } from './TurnView'
+import { useConversationScroll } from './useConversationScroll'
 
 type Segment = { id: string; kind: 'thread' | 'agent'; turns: Turn[] }
 type Choice = { model: string; effort: string | null }
@@ -43,6 +44,8 @@ export function ObserverChat({ team, onClose }: { team: TeamSummary; onClose: ()
     })
   }, [team.id])
   useEffect(() => { void load(); return () => { loadRevision.current++ } }, [load, team.observer?.id])
+  // 開くたびに最新の発言から読めるよう、読み込み後は末尾へ追従する。
+  const { scroller, onScroll } = useConversationScroll('observer:' + team.id, segments.length > 0, [segments, threadTurns, agentTurns])
   if (!server) return null
   const groups = modelGroups(server)
   const available = Boolean(choice && groups.some((group) => group.models.some((model) => model.value === choice.model)))
@@ -66,7 +69,7 @@ export function ObserverChat({ team, onClose }: { team: TeamSummary; onClose: ()
     else if (claude) { setAuth({ ready: false }); setAuthRevision((n) => n + 1) }
   }
   return <Modal title="観測者" onClose={onClose} width={680} className="observer-modal">
-    <div className="observer-chat">
+    <div className="observer-chat" ref={scroller} onScroll={onScroll}>
       {segments.map((segment) => ((segment.kind === 'thread' ? threadTurns[segment.id] : agentTurns[segment.id]) ?? segment.turns).map((turn) =>
         <TurnView key={segment.id + turn.id} turn={turn} workspace={team.workspace} threadId={segment.id} threadBusy={false} undoable={false} />))}
     </div>

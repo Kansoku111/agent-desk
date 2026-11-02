@@ -43,7 +43,7 @@ test('observer composer requires an available explicit model and saves selection
     '../store': { useStore: (select) => select(state), isTouch: () => touch, setState() {}, act: async (name, args) => { calls.push([name, args]); return {} } },
     '../../../shared/workflow-effort.js': { workflowLevels: () => ['low'] },
     './WorkflowModelField': { ModelField: 'ModelField', modelGroups: () => [{ id: 'gpt', models: [{ value: model, name: 'Luna' }] }] },
-    './Modal': { Modal: 'Modal' }, './TurnView': { TurnView: 'TurnView' }, './ClaudeAuthConsent': { ClaudeAuthConsent: 'Consent' },
+    './Modal': { Modal: 'Modal' }, './useConversationScroll': { useConversationScroll: () => ({ scroller: { current: null }, onScroll() {} }) }, './TurnView': { TurnView: 'TurnView' }, './ClaudeAuthConsent': { ClaudeAuthConsent: 'Consent' },
   }
   const { ObserverChat } = await load('../web/src/components/ObserverChat.tsx', modules)
   const render = () => { stateIndex = 0; state.server.settings.observerModel = savedChoice; return ObserverChat({ team: baseTeam, onClose() {} }) }
