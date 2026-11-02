@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-02
+
 ### Added
 
 - Add the TM observer: a user-only chat at the top of the team panel that answers from the saved team state without waking the leader, reads a child's recent turns only when needed, and sends to or stops the leader or a child only when asked. It starts no session until the first message; its model is chosen once and remembered across teams and restarts. Leaders and children get no tool to reach it; see [エージェントチーム](docs/team.md#観測者).
 - Add UI-element tools to the Windows desktop tool (Settings → 一般 → デスクトップ操作, same switch): `ui_list`, `ui_snapshot`, `ui_find` and `ui_act` read an app's accessibility tree and operate buttons and fields by name and role through [agent-desktop](https://github.com/vercel-labs/agent-desktop) 1.0.2 (Apache-2.0, now a bundled dependency), so no screenshot or pixel coordinates are needed, and no model or billing route is added. Actions use no mouse or focus unless `headed: true` is passed; the screenshot tools stay for apps that expose little. Its snapshots are kept in the new `desktop-ui` folder of the data folder. Saved settings, sessions and the existing desktop tools are unchanged.
 - Add on-demand “子に委託” and independent review-and-fix presets to normal task open menus, with role-specific model/effort settings, isolated workers, guarded writes, saved diffs/checks, and explicit-only “本セッションに渡す”. Completion never automatically prompts the parent; no permanent delegation MCP is added.
 - Show a delegated worker's live work in the main view when its card in the task's side panel is clicked, as with TM/eco children; the panel also links back to the parent. “子に委託” now asks the worker to implement by default instead of consulting, while the user's explicit instructions (e.g. consultation only) still take precedence.
+- Run CI on Ubuntu 24.04 (x86_64) as well as Windows, with Node.js 22 and 24. Ubuntu support is still in progress and not yet guaranteed; setup steps, required packages and what has been verified are in [Ubuntu の検証手順](docs/ubuntu-validation.md).
 - Add Settings → Skills to list the skills available in a project by scope and source folder, mark skills overridden by a same-named one, reveal their files and delete them. On request, translate non-Japanese descriptions with Claude Code (`haiku`, low effort, no tools) under an already confirmed auth mode and cache them in `skill-translations.json`. Skill files are only changed by the delete button, which asks first and permanently removes the skill's folder (never a symlink target or a bundled skill). Saved settings and sessions are unchanged.
 
 ### Changed
@@ -27,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop GPT-6.1 Sol tasks with PTC (AB implementation and judgment, TM/eco children) from having every `run_code` call rejected with “escalation is disabled”: the optional-argument `strict: false` default now also covers tools declared in `additional_tools` input items, so `sandbox_permissions` is no longer sent as a required field.
 - Make skill description translation reliable: Claude Code now returns schema-validated output, descriptions are sent 10 at a time with one retry, and finished batches stay cached when a later one fails. The confirmation dialog also lets you choose Haiku (Claude Code) or Luna (`gpt-6-luna` through Codex), both at low effort; an unavailable Luna is reported, never replaced by another model. Cached translations and saved settings are unchanged.
 - Keep ordinary delegation usable for creative and other non-code tasks in large workspaces: treat bounded recording limits as explicitly unavailable evidence instead of a mandatory task prerequisite, preserve strict requested checks and review requirements, and prevent startup metadata without a worker report from being sent to the parent.
+- On Linux, a missing `xdg-open` no longer crashes the server when opening the browser; opening or revealing a file reports an error instead.
+- On Linux, eco command verification now records files that are created and deleted immediately, using `inotifywait` (package `inotify-tools`). Without it, verification reports an error instead of running unchecked. Windows is unchanged.
+- A Git command that exits before reading its input no longer causes an unhandled pipe error during checkpoints.
 - Prevent task preset workspace conflicts during checkpoint restore, ordinary TM Claude work and concurrent resumes; allow each explicitly resumed result to be delivered once with its own message receipt. Existing sessions, model selections and billing routes are unchanged.
 
 ## [0.1.8] - 2026-10-31
