@@ -159,7 +159,7 @@ test('a new exact-id registry price repairs an open turn from its actual log', a
   await update
   const restored = (await f.manager.get(f.thread.id)).turns[0].usage
   assert.equal(restored.score.priced, 1)
-  assert.equal(formatEquivalentCost(restored.score, { usageCurrency: 'JPY', usdJpyRate: 150 }), '< ¥0.1')
+  assert.equal(formatEquivalentCost(restored.score, { usageCurrency: 'JPY', usdJpyRate: 150 }), '¥0.03')
   assert.equal(restored.cost, null)
 })
 

@@ -38,8 +38,8 @@ export function formatEquivalentCost(score, { usageCurrency = 'USD', usdJpyRate 
   if (jpy && !isUsdJpyRate(usdJpyRate)) return '—'
   const amount = score.points * USD_PER_POINT * (jpy ? usdJpyRate : 1)
   if (!Number.isFinite(amount)) return '—'
-  const options = { style: 'currency', currency: jpy ? 'JPY' : 'USD', minimumFractionDigits: 0, maximumFractionDigits: 1, roundingMode: 'floor' }
-  if (!score.unpriced && amount > 0 && amount < 0.1) return `< ${(0.1).toLocaleString('en-US', options)}`
+  const options = { style: 'currency', currency: jpy ? 'JPY' : 'USD', minimumFractionDigits: 0, maximumFractionDigits: 2, roundingMode: 'floor' }
+  if (!score.unpriced && amount > 0 && amount < 0.01) return `< ${(0.01).toLocaleString('en-US', options)}`
   const value = amount.toLocaleString('en-US', options)
   return `${score.unpriced ? '≥ ' : ''}${value}`
 }
