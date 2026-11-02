@@ -18,6 +18,7 @@ npm run build      # 画面のビルド
 
 - `npm start` の前には `scripts/ensure-build.mjs` が走り、画面のソースが新しければ自動でビルドします。
 - 動作確認でサーバーを起動するときは、`AGENT_DESK_HOME` に一時フォルダを指定してください。普段使いのデータフォルダを避けるためです（詳しくは [開発](docs/development.md) を参照）。
+- Ubuntu の対象は未確定です。WSL2 と通常の Ubuntu での [検証手順](docs/ubuntu-validation.md) を参照してください。
 
 ## コードスタイル
 

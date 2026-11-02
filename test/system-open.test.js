@@ -18,6 +18,14 @@ async function workspace(t) {
   return dir
 }
 
+test('missing xdg-open does not terminate the server process', { skip: process.platform !== 'linux' }, async (t) => {
+  const dir = await workspace(t)
+  const system = new URL('../server/system.js', import.meta.url).href
+  const script = `import { openExternal } from ${JSON.stringify(system)}; openExternal('http://127.0.0.1/');`
+  const { stderr } = await run(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: dir } })
+  assert.match(stderr, /ブラウザを開けませんでした:.*xdg-open.*ENOENT/)
+})
+
 test('open targets no longer advertise Explorer', () => {
   assert.deepEqual(openTargets(), { terminal: ['win32', 'darwin'].includes(process.platform) })
 })

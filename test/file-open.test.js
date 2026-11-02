@@ -21,6 +21,16 @@ async function fixture(t) {
   return { dir, folder, file }
 }
 
+test('missing xdg-open reports a file action error without terminating the process', { skip: process.platform !== 'linux' }, async (t) => {
+  const { dir, file } = await fixture(t)
+  const system = new URL('../server/system.js', import.meta.url).href
+  for (const how of ['open', 'reveal']) {
+    const script = `import { openFile } from ${JSON.stringify(system)}; try { await openFile(${JSON.stringify(file)}, ${JSON.stringify(how)}); process.exitCode = 2; } catch (error) { console.log(error.message); }`
+    const { stdout } = await run(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: dir } })
+    assert.match(stdout, how === 'open' ? /開けませんでした:.*xdg-open.*ENOENT/ : /表示できませんでした:.*xdg-open.*ENOENT/)
+  }
+})
+
 for (const how of ['open', 'reveal']) {
   test('Windows file ' + how + ' waits for the STA launcher and passes the path literally', async (t) => {
     const { file } = await fixture(t)

@@ -18,7 +18,9 @@ export function openExternal(url) {
     // rundll32 avoids cmd.exe parsing of `&` in OAuth URLs.
     spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], { detached: true, stdio: 'ignore' }).unref()
   } else {
-    spawn(isMac ? 'open' : 'xdg-open', [url], { detached: true, stdio: 'ignore' }).unref()
+    const child = spawn(isMac ? 'open' : 'xdg-open', [url], { detached: true, stdio: 'ignore' })
+    child.on('error', (error) => console.error(`ブラウザを開けませんでした: ${error.message}`))
+    child.unref()
   }
 }
 
@@ -102,8 +104,15 @@ export async function openFile(file, how, { platform = process.platform, runComm
     // Preserve the existing detached launch: xdg-open may live as long as the
     // associated app, so it must not inherit the Windows helper's timeout.
     const mac = platform === 'darwin'
-    spawn(mac ? 'open' : 'xdg-open', how === 'reveal'
-      ? (mac ? ['-R', file] : [path.dirname(file)]) : [file], { detached: true, stdio: 'ignore' }).unref()
+    const child = spawn(mac ? 'open' : 'xdg-open', how === 'reveal'
+      ? (mac ? ['-R', file] : [path.dirname(file)]) : [file], { detached: true, stdio: 'ignore' })
+    await new Promise((resolve, reject) => {
+      child.once('error', reject)
+      child.once('spawn', () => { child.unref(); resolve() })
+    }).catch((error) => {
+      const action = how === 'reveal' ? 'ファイルの場所を表示できませんでした' : 'ファイルを開けませんでした'
+      throw new Error(`${action}: ${error.message}`)
+    })
     return
   }
   try {
