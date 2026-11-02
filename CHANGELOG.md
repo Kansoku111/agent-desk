@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 「子に委託」「独立レビュー」の担当画面に、通常タスクと同じ入力欄を追加しました。作業中は割り込み、止まった後や完了後は返信として同じ会話で続けられます。完了後の返信も使え、新しい結果は検証し直して返送できます（意見モードは自動、それ以外は「本セッションに渡す」）。会話だけの返信は完了済みの結果を変えません。アプリが担当へ送る指示は先頭に目印を付けて画面から隠し、利用者の発言だけを表示します。
 - 独立レビューの対象（コミット・リクエスト・基準コミット・ファイル指定）を選ぶ操作を廃止しました。何をレビューするかは元セッションが依頼文で決めるため、Gitのないフォルダーでも使えます。
 
+### Fixed
+
+- Prevent a different concurrent reply to a delegated worker from being acknowledged without being sent. Identical concurrent resume requests still share their result; conflicting replies report that the worker is resuming.
+- Compare conversational worker replies with the files at the start of that reply, so questions after a stop or blocked result do not automatically restart unfinished work. Preserve the previous result and delivery state when the answer changes nothing.
+- Recheck the image-generation switch when a queued request starts, so switching it off while another image is running prevents the waiting request from consuming the ChatGPT allowance. Already-started generation is not cancelled.
+
 ## [0.1.9] - 2026-11-02
 
 ### Added

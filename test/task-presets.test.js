@@ -583,6 +583,27 @@ test('concurrent resumes start only one continuation and keep the original model
   assert.equal(run.model, 'B')
 })
 
+test('concurrent resumes never acknowledge a different reply without sending it', async (t) => {
+  for (const firstReply of ['', '最初の返信']) await t.test(firstReply || 'continue', async (t) => {
+    const f = await fixture(t), run = suspendedClaudeRun(f, 'R')
+    let entered, release
+    const authorizing = new Promise((resolve) => { entered = resolve })
+    const gate = new Promise((resolve) => { release = resolve })
+    f.manager.authorize = async () => { entered(); await gate }
+    const first = f.manager.resume(run.id, firstReply)
+    await authorizing
+    const duplicate = f.manager.resume(run.id, firstReply)
+    assert.equal(duplicate, first, 'identical concurrent requests share their receipt')
+    const rejected = assert.rejects(async () => f.manager.message(run.id, '別の返信'), /再開中/)
+    release()
+    await Promise.all([first, rejected])
+    await Promise.all([...f.manager.pending.values()])
+    assert.equal(f.agents.calls.length, 1)
+    if (firstReply) assert.equal(f.agents.calls[0].text, firstReply)
+    assert.equal(f.manager.resuming.size, 0)
+  })
+})
+
 test('terminal final text alone cannot authorize a worker and exit ends preparation safely', async (t) => {
   const f = await fixture(t)
   const run = await f.start({ source: { kind: 'terminal', id: 'terminal' } })
@@ -744,6 +765,40 @@ test('each resumed result can be delivered once with a new receipt and no automa
     await f.manager.deliver(run.id)
     assert.equal(parentCalls().length, sent + 1, 'the same result is not delivered twice')
   })
+})
+
+test('a conversational reply compares changes with its own start, not an earlier result', async (t) => {
+  for (const phase of ['stopped', 'needs-attention', 'completed']) await t.test(phase, async (t) => {
+    const f = await fixture(t), run = await f.start()
+    await f.complete(f.parent.id, brief(run))
+    if (phase === 'stopped') await f.manager.stop(run.id)
+    else await f.complete(run.worker.id, result(run, phase === 'needs-attention' ? { status: 'blocked', blocker: '環境の確認が必要' } : {}))
+    const previous = structuredClone({ phase: run.phase, error: run.error, report: run.report, result: run.result })
+    // Changes before the question are not changes made by its answer.
+    await fs.writeFile(path.join(f.workspace, 'source.txt'), 'changed before the reply')
+    await f.manager.message(run.id, 'ここまでの状況を教えて')
+    await Promise.all([...f.manager.pending.values()])
+    const sent = f.threads.calls.length
+    await f.complete(run.worker.id, 'ここまでの状況です。作業は再開していません。')
+    assert.equal(f.threads.calls.length, sent, 'a conversational answer must not trigger more work')
+    assert.deepEqual({ phase: run.phase, error: run.error, report: run.report, result: run.result }, previous)
+    assert.equal(run.replying, undefined)
+  })
+})
+
+test('a missing reply snapshot does not drop the message or reuse an old verified hash', async (t) => {
+  const f = await fixture(t), run = await f.start()
+  await f.complete(f.parent.id, brief(run))
+  await f.complete(run.worker.id, result(run))
+  const snapshot = f.manager.snapshot
+  f.manager.snapshot = async () => { throw sourceLimit() }
+  await f.manager.message(run.id, '状況だけ教えて')
+  await Promise.all([...f.manager.pending.values()])
+  assert.equal(f.threads.calls.at(-1).input.text, '状況だけ教えて')
+  assert.equal(run.phase, 'running')
+  assert.equal(run.replying.sourceHash, null)
+  f.manager.snapshot = snapshot
+  assert.equal(await f.manager.unchanged(run), false, 'an unknown reply baseline is not the old verification baseline')
 })
 
 test('resume does not replace delivery state while a previous result is still being sent', async (t) => {

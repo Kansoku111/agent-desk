@@ -273,6 +273,13 @@ export class TaskPresets extends EventEmitter {
   }
   async sendWorker(run, text, { user = false } = {}) {
     this.assertLive(run)
+    if (user && !run.snapshotUnavailable) {
+      // A stopped worker may have no verified result; compare the answer with this reply's start.
+      // Missing recording must not prevent delivery; without a baseline, require a structured result.
+      run.replying.sourceHash = await this.snapshot(run.workspace).then(value => value.hash, () => null)
+      await this.save(run)
+      this.assertLive(run)
+    }
     const body = user ? text : PRESET_PROMPT_MARK + '\n' + text
     if (run.worker.kind === 'claude') this.agents.run(run.worker.id, body)
     else await this.threads.send(run.worker.id, { text: body }, { presetRunId: run.id })
@@ -296,7 +303,7 @@ export class TaskPresets extends EventEmitter {
     if (event.status !== 'done' || event.denials?.length) throw new Error(event.error || '担当が正常に完了していないか、権限不足です。')
     let result
     try { result = parsePresetResult(run.report, run) } catch (error) {
-      // A reply that changed nothing is just conversation: it needs no result block and leaves the finished result as it was.
+      // A reply that changed nothing is just conversation: keep its previous result or unfinished state.
       if (run.replying && await this.unchanged(run)) {
         const { phase, error: earlier } = run.replying
         delete run.replying
@@ -356,7 +363,7 @@ export class TaskPresets extends EventEmitter {
     }
   }
   async unchanged(run) {
-    const end = run.verification?.endHash
+    const end = run.replying?.sourceHash
     return !run.snapshotUnavailable && !!end && (await this.snapshot(run.workspace).then((value) => value.hash, () => null)) === end
   }
   async get(id) {
@@ -412,9 +419,13 @@ export class TaskPresets extends EventEmitter {
     return { run: this.summary(run) }
   }
   resume(id, reply = '') {
-    if (this.resuming.has(id)) return this.resuming.get(id)
+    const pending = this.resuming.get(id)
+    if (pending) {
+      if (pending.reply !== reply) return Promise.reject(new Error('担当を再開中です。再開後にメッセージを送ってください。'))
+      return pending.task
+    }
     const task = this.resumeWork(id, reply).finally(() => this.resuming.delete(id))
-    this.resuming.set(id, task)
+    this.resuming.set(id, { reply, task })
     return task
   }
   async resumeWork(id, reply = '') {

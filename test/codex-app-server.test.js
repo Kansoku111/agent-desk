@@ -47,6 +47,39 @@ async function login(client, method) {
   await done
   return client.account()
 }
+test('queued images recheck image OFF before starting a model turn and the queue recovers', async t => {
+  const { dir, client } = await setup(t)
+  let release, entered, queued
+  const firstStarted = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  const secondQueued = new Promise(resolve => { queued = resolve })
+  const generated = []
+  let useCalls = 0, enabled = true
+  client.use = async work => { useCalls++; return work() }
+  client.generateTurn = async ({ prompt }) => {
+    generated.push(prompt)
+    if (prompt === 'first') { entered(); await gate }
+    return { bytes: Buffer.from('fake image'), format: 'png' }
+  }
+  const generate = prompt => generateImage({ prompt }, { client, workspace: dir, enabled: async () => enabled })
+  const first = generate('first')
+  await firstStarted
+  const enqueue = client.generate.bind(client)
+  client.generate = (...args) => { const task = enqueue(...args); queued(); return task }
+  const second = generate('second')
+  const refused = assert.rejects(second, /画像生成.*無効/)
+  await secondQueued
+  enabled = false
+  release()
+  await Promise.all([first, refused])
+  assert.deepEqual(generated, ['first'])
+  assert.equal(useCalls, 1, 'a disabled queued request must not start the app-server')
+  assert.deepEqual(await fs.readdir(path.join(dir, 'generated-images')), ['first.png'])
+  enabled = true
+  await generate('third')
+  assert.deepEqual(generated, ['first', 'third'])
+})
+
 test('stop during Codex prepare prevents the pending start from spawning', async t => {
   let spawns = 0
   const { client } = await setup(t, {

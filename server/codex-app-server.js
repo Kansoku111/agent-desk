@@ -343,8 +343,12 @@ export class CodexAppServer extends EventEmitter {
       return this.rawRequest('account/rateLimits/read')
     })
   }
-  generate(options) {
-    const task = this.queue.then(() => this.use(() => this.generateTurn(options)))
+  generate(options, { enabled = async () => true } = {}) {
+    const task = this.queue.then(async () => {
+      // A request may wait behind another image while the user switches the tool off.
+      if (!(await enabled())) throw new Error('画像生成は設定で無効になっています。')
+      return this.use(() => this.generateTurn(options))
+    })
     this.queue = task.catch(() => {})
     return task
   }

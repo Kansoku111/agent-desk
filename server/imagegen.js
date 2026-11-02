@@ -75,7 +75,7 @@ export async function generateImage(args, {
     background,
     size: pick(args.size, SIZES, 'auto'),
     quality: pick(args.quality, QUALITIES, 'auto')
-  })
+  }, { enabled })
   const ext = image.format === 'jpeg' ? 'jpg' : image.format
   const dir = path.join(workspace, 'generated-images')
   await fs.mkdir(dir, {
