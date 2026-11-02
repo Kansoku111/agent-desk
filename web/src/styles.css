@@ -4655,8 +4655,25 @@ button.terminal-status.active {
 
 .terminal-dialog-input { margin: 12px 0; }
 .terminal-dialog-input summary { cursor: pointer; }
-.terminal-dialog-input p { font-size: 12px; line-height: 1.6; }
-.terminal-dialog-screen { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.terminal-dialog-question {
+  max-height: 40vh;
+  margin: 10px 0;
+  overflow: auto;
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* column-reverse keeps the bottom in view: the choices sit at the end of the screen. */
+.terminal-dialog-screen {
+  display: flex;
+  flex-direction: column-reverse;
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.terminal-dialog-main { position: sticky; bottom: 0; margin: 8px 0; padding: 6px 0; background: var(--bg-elevated); }
 .terminal-dialog-controls { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
 .terminal-dialog-answer { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .terminal-dialog-answer textarea { width: 100%; resize: vertical; min-height: 72px; }

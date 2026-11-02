@@ -192,7 +192,7 @@ export function DialogCard({ terminalId, onShowScreen }: { terminalId: string; o
         {error && <p role="alert">{error}</p>}
         {notice && <p role="status" className="muted">{notice}</p>}
         {!dialog ? <p className="muted">質問の表示を待っています。自動で読み直します。</p> : <>
-          {dialog.text.length > 1 && <pre className="approval-command">{dialog.text.slice(0, -1).join('\n')}</pre>}
+          {dialog.text.length > 1 && <p className="terminal-dialog-question">{dialog.text.slice(0, -1).join('\n')}</p>}
           {dialog.options.length > 0 ? <div className="terminal-dialog-options">
             {dialog.options.map((option) => (
               <button key={option.key} type="button" disabled={disabled}
@@ -206,9 +206,12 @@ export function DialogCard({ terminalId, onShowScreen }: { terminalId: string; o
               </button>
             ))}
           </div> : <pre className="approval-command terminal-dialog-screen">{dialog.screen}</pre>}
+          <div className="terminal-dialog-controls terminal-dialog-main">
+            <button type="button" className="button primary" disabled={disabled} onClick={() => key('enter')}>確定・次へ</button>
+            <button type="button" className="button" disabled={disabled} onClick={() => key('escape')}>キャンセル（Esc）</button>
+          </div>
           <details className="terminal-dialog-input" open={dialog.options.length === 0 || controlsOpen} onToggle={(event) => setControlsOpen(event.currentTarget.open)}>
-            <summary>自由入力・複数選択などの操作</summary>
-            <p className="muted">自由入力は、先に「自由入力（その他）」を選んでください。複数選択は↑↓で移動し「選択切替」、質問の切替は←→・Tab、送信は「確定・次へ」です。</p>
+            <summary>{dialog.options.length > 0 ? '画面・キー操作・自由入力' : 'キー操作・自由入力'}</summary>
             {dialog.options.length > 0 && <pre className="approval-command terminal-dialog-screen">{dialog.screen}</pre>}
             <div className="terminal-dialog-controls" role="group" aria-label="質問の操作">
               {([['up', '↑'], ['down', '↓'], ['left', '←'], ['right', '→'], ['tab', 'Tab'], ['space', '選択切替']] as const).map(([value, label]) => (
@@ -225,10 +228,6 @@ export function DialogCard({ terminalId, onShowScreen }: { terminalId: string; o
               <button type="button" className="button" disabled={busy || !answer.text} onClick={() => setAnswer({ text: '', dialogId: '' })}>入力を消す</button>
             </div>
           </details>
-          <div className="terminal-dialog-controls">
-            <button type="button" className="button primary" disabled={disabled} onClick={() => key('enter')}>確定・次へ</button>
-            <button type="button" className="button" disabled={disabled} onClick={() => key('escape')}>キャンセル（Esc）</button>
-          </div>
         </>}
         <div className="approval-actions">
           <button type="button" className="button" disabled={busy || refreshing} onClick={() => refresh.current()}>再読み込み</button>
