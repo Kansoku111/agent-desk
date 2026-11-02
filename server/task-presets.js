@@ -7,6 +7,7 @@ import { Checkpoints } from './checkpoints.js'
 import { ExecutionVerifier, normalizeChecks, sourceSnapshot, workspacesOverlap } from './execution.js'
 import { workflowEffort, workflowEffortSupported, workflowLevels } from '../shared/workflow-effort.js'
 import { abClaudeArgs } from './ab-runner.js'
+import { PRESET_PROMPT_MARK } from '../shared/task-preset-mark.js'
 import { PRESET_ACTIVE, PRESET_LABEL, preparePresetPrompt, parsePresetBrief, matchesPresetPrompt, workerPresetInstructions, parsePresetResult } from './task-preset-protocol.js'
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -265,10 +266,11 @@ export class TaskPresets extends EventEmitter {
     const prompt = [run.worker.kind === 'thread' ? workerPresetInstructions(run) : '', '依頼:\n' + run.brief, recordingWarning(run), 'アプリが最後に実行する検証:\n' + JSON.stringify(run.checks) + '\n未選択の場合は検証未実行です。自分で必要な確認は省略しないでください。'].filter(Boolean).join('\n\n')
     await this.sendWorker(run, prompt)
   }
-  async sendWorker(run, text) {
+  async sendWorker(run, text, { user = false } = {}) {
     this.assertLive(run)
-    if (run.worker.kind === 'claude') this.agents.run(run.worker.id, text)
-    else await this.threads.send(run.worker.id, { text }, { presetRunId: run.id })
+    const body = user ? text : PRESET_PROMPT_MARK + '\n' + text
+    if (run.worker.kind === 'claude') this.agents.run(run.worker.id, body)
+    else await this.threads.send(run.worker.id, { text: body }, { presetRunId: run.id })
   }
   async retryWork(run, code, reason) {
     const state = run.snapshotUnavailable ? null : (await this.snapshot(run.workspace)).hash
@@ -282,11 +284,29 @@ export class TaskPresets extends EventEmitter {
   async workerFinished(run, event) {
     if (run.phase !== 'running' || run.cancelled) return
     run.score = event.score ?? run.score
+    const previousReport = run.report
     run.report = event.text ?? ''
     await writeText(run.record, run.report)
     if (event.status !== 'done' || event.denials?.length) throw new Error(event.error || '担当が正常に完了していないか、権限不足です。')
     let result
-    try { result = parsePresetResult(run.report, run) } catch (error) { return this.retryWork(run, 'invalid-result', error.message) }
+    try { result = parsePresetResult(run.report, run) } catch (error) {
+      // A reply that changed nothing is just conversation: it needs no result block and leaves the finished result as it was.
+      if (run.replying && await this.unchanged(run)) {
+        const { phase, error: earlier } = run.replying
+        delete run.replying
+        Object.assign(run, { phase, error: earlier, report: previousReport })
+        await writeText(run.record, previousReport)
+        return this.save(run)
+      }
+      return this.retryWork(run, 'invalid-result', error.message)
+    }
+    if (run.replying) {
+      // The reply produced a new result, which can be delivered once more.
+      delete run.replying
+      delete run.deliveredAt
+      delete run.deliveryAttempted
+      delete run.deliveryMessageId
+    }
     run.result = result
     if (result.status === 'blocked') throw new Error(result.blocker + (result.remaining ? '\n' + result.remaining : ''))
     if (result.status === 'continue') return this.retryWork(run, 'unfinished', result.remaining || '未完了の修正と検証を続けてください')
@@ -326,6 +346,10 @@ export class TaskPresets extends EventEmitter {
     await this.save(run)
     // UI state only. Never send a prompt, append a parent turn, or release its goal gate here.
   }
+  async unchanged(run) {
+    const end = run.verification?.endHash
+    return !run.snapshotUnavailable && !!end && (await this.snapshot(run.workspace).then((value) => value.hash, () => null)) === end
+  }
   async get(id) {
     const run = this.require(id)
     const turns = run.worker?.kind === 'thread' ? (await this.threads.get(run.worker.id)).turns : run.worker ? this.agents.turns(run.worker.id) : []
@@ -364,34 +388,53 @@ export class TaskPresets extends EventEmitter {
     await this.save(run)
     return { run: this.summary(run) }
   }
-  resume(id) {
+  /** What the user writes to the worker: into the running turn, or as a reply once it has stopped. */
+  message(id, text) {
+    const body = typeof text === 'string' ? text.trim() : ''
+    if (!body || body.length > 20_000) throw new Error('メッセージが不正です')
+    const run = this.require(id)
+    if (run.worker && run.phase === 'running') return this.interrupt(run, body)
+    return this.resume(id, body)
+  }
+  async interrupt(run, text) {
+    if (run.cancelled) throw new Error('委託は停止されました')
+    const taken = run.worker.kind === 'claude' ? this.agents.steer(run.worker.id, text) : (await this.threads.steer(run.worker.id, { text }, { presetRunId: run.id })).steered
+    if (!taken) throw new Error('いまは割り込めません。担当の作業が終わってから送ってください。')
+    return { run: this.summary(run) }
+  }
+  resume(id, reply = '') {
     if (this.resuming.has(id)) return this.resuming.get(id)
-    const task = this.resumeWork(id).finally(() => this.resuming.delete(id))
+    const task = this.resumeWork(id, reply).finally(() => this.resuming.delete(id))
     this.resuming.set(id, task)
     return task
   }
-  async resumeWork(id) {
+  async resumeWork(id, reply = '') {
     const run = this.require(id)
-    if (!['needs-attention', 'stopped'].includes(run.phase) || !run.worker) throw new Error('担当の開始前です。元タスクで条件を確認し、新しく開始してください。')
-    await this.source(run.source, true)
+    // Only a reply may follow a finished result; the parent need not be waiting for it.
+    if (!(reply ? ['needs-attention', 'stopped', 'completed'] : ['needs-attention', 'stopped']).includes(run.phase) || !run.worker) throw new Error('担当の開始前です。元タスクで条件を確認し、新しく開始してください。')
+    await this.source(run.source, !reply)
     this.room(run.workspace)
     this.validateModel(run.model)
     await this.authorize({ workspace: run.workspace, model: run.model })
     // Authorization yields: recheck and claim synchronously, just as a new run does.
-    await this.source(run.source, true)
+    await this.source(run.source, !reply)
     if (this.closing) throw new Error('アプリを終了しています')
     if (this.sends.has(id)) throw new Error('結果を送信中です。送信完了後に再開してください。')
     this.room(run.workspace)
+    if (reply) run.replying = { phase: run.phase, error: run.error }
+    else {
+      delete run.replying
+      // A resumed attempt produces a new result, not a retry of the previous delivery.
+      delete run.deliveredAt
+      delete run.deliveryAttempted
+      delete run.deliveryMessageId
+    }
     run.cancelled = false
     run.error = null
     delete run.lastRetryKey
-    // A resumed attempt produces a new result, not a retry of the previous delivery.
-    delete run.deliveredAt
-    delete run.deliveryAttempted
-    delete run.deliveryMessageId
     run.phase = 'running'
     await this.save(run)
-    this.enqueue(run, () => this.sendWorker(run, workerPresetInstructions(run) + '\n依頼を途中から再開し、未完了の修正・検証を完了してください。前回の状態:\n' + JSON.stringify({ error: run.result?.blocker, remaining: run.result?.remaining, verification: run.verification })))
+    this.enqueue(run, () => reply ? this.sendWorker(run, reply, { user: true }) : this.sendWorker(run, workerPresetInstructions(run) + '\n依頼を途中から再開し、未完了の修正・検証を完了してください。前回の状態:\n' + JSON.stringify({ error: run.result?.blocker, remaining: run.result?.remaining, verification: run.verification })))
     return { run: this.summary(run) }
   }
   async deliver(id) {

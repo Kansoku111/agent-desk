@@ -1314,7 +1314,7 @@ export class ThreadManager extends EventEmitter {
    *   this dsh has no steering), so the caller can send it after the turn.
    *   `status: uncertain` must NOT be automatically retried or sent instead.
    */
-  async steer(threadId, input, { userInitiated = false, guard } = {}) {
+  async steer(threadId, input, { userInitiated = false, guard, presetRunId } = {}) {
     const message = normalizeMessage(input)
     return this.#request(threadId, async () => {
       const thread = this.#available(threadId)
@@ -1326,7 +1326,7 @@ export class ThreadManager extends EventEmitter {
       if (this.#goalObjective(thread, message, userInitiated) !== undefined) return { steered: false }
       const active = this.active.get(threadId)
       if (!this.#canSteer(thread, active)) return { steered: false }
-      const delivery = this.#deliverSteer(thread, active, message, userInitiated, guard)
+      const delivery = this.#deliverSteer(thread, active, message, userInitiated, guard, presetRunId)
       active.steers.add(delivery)
       try {
         return await delivery
@@ -1342,9 +1342,9 @@ export class ThreadManager extends EventEmitter {
       && !this.removing.has(thread.id) && active.runtime && thread.sessionId
   }
 
-  async #deliverSteer(thread, active, { text, images, messageId, plan }, userInitiated, guard) {
+  async #deliverSteer(thread, active, { text, images, messageId, plan }, userInitiated, guard, presetRunId) {
     const threadId = thread.id
-    this.executionGuard?.(thread)
+    this.executionGuard?.(thread, { presetRunId })
     const blocks = await this.#promptBlocks({ user: { text, images, plan } })
     if (!this.#canSteer(thread, active)) return { steered: false }
     const receipts = this.receipts.get(threadId)

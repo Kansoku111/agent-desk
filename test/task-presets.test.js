@@ -24,13 +24,17 @@ async function fixture(t) {
   const workspace = path.join(root, 'project')
   await fs.mkdir(workspace)
   await fs.writeFile(path.join(workspace, 'source.txt'), 'before')
-  const threads = Object.assign(new EventEmitter(), { threads: new Map(), active: new Map(), restoring: new Set(), calls: [], waits: [], turns: new Map(),
+  const threads = Object.assign(new EventEmitter(), { threads: new Map(), active: new Map(), restoring: new Set(), calls: [], steers: [], waits: [], turns: new Map(),
     async get(id) { if (!this.threads.has(id)) throw new Error('missing'); return { thread: this.threads.get(id), turns: this.turns.get(id) } },
     async create(input) { const value = { ...input, id: randomUUID(), status: 'idle', sessionId: randomUUID() }; this.threads.set(value.id, value); this.turns.set(value.id, []); return value },
     async send(id, input, context) {
       this.executionGuard?.(this.threads.get(id), context)
       const turn = { id: randomUUID(), user: input, status: 'running', items: [] }
       this.turns.get(id).push(turn); this.threads.get(id).status = 'running'; this.calls.push({ id, input, context }); return { turnId: turn.id }
+    },
+    async steer(id, input, context) {
+      this.executionGuard?.(this.threads.get(id), context)
+      this.steers.push({ id, input, context }); return { steered: !this.noSteer }
     },
     async setGoalWaiting(id, waiting) { this.waits.push({ id, waiting }) },
     async cancel(id) { const record = this.threads.get(id); if (record) record.status = 'idle' },
@@ -39,7 +43,7 @@ async function fixture(t) {
   const terminal = { id: 'terminal', sessionId: 'S', workspace, title: 'CLI相談', state: 'running', activity: 'idle', background: 0 }
   const terminals = Object.assign(new EventEmitter(), { records: new Map([['terminal', terminal]]), calls: [], turns: [], list: () => [terminal], status: () => ({ ready: true }),
     async conversation() { return { turns: this.turns } }, async sendMessage(id, text, context) { this.executionGuard?.(terminal, context); this.calls.push({ id, text }) }, interrupt() {} })
-  const agents = Object.assign(new EventEmitter(), { turns: () => [], live: new Map(), calls: [], run(id, text) { this.calls.push({ id, text }) }, stop() {} })
+  const agents = Object.assign(new EventEmitter(), { turns: () => [], live: new Map(), calls: [], steers: [], run(id, text) { this.calls.push({ id, text }) }, steer(id, text) { this.steers.push({ id, text }); return !this.noSteer }, stop() {} })
   const teams = { teams: new Map(), list() { return [...this.teams.values()] }, teamLedBy: () => null, execution: { checks: () => [] }, guardExecution(record, context) { this.presetGuard?.(record, context) } }
   const config = { taskPresets: { delegate: { model: 'B', effort: 'low' }, review: { model: 'C', effort: 'low' } } }
   const options = { dir: path.join(root, 'state'), threads, terminals, agents, teams, settings: () => config, catalog: () => ({}), validateModel() {}, authorize: async () => {} }
@@ -633,6 +637,84 @@ test('resume does not replace delivery state while a previous result is still be
     assert.equal(run.deliveryMessageId, receipt)
     assert.equal(f.agents.calls.length, 0)
   } finally { f.manager.sends.delete(run.id) }
+})
+
+test('the user can interrupt a running worker and reply after it stops, as in an ordinary task', async (t) => {
+  const f = await fixture(t)
+  const run = await f.start()
+  const pending = () => Promise.all([...f.manager.pending.values()])
+  await f.complete(f.parent.id, brief(run))
+  assert.match(f.threads.calls.at(-1).input.text, /^\[Agent Desk: 委託の指示\]/, 'the app\'s own prompt is marked so the worker view can hide it')
+  const sent = f.threads.calls.length
+  await f.manager.message(run.id, 'テストも直して')
+  assert.deepEqual(f.threads.steers.map((entry) => entry.input.text), ['テストも直して'])
+  assert.equal(f.threads.calls.length, sent, 'a running turn is interrupted, not given a second turn')
+  assert.equal(f.threads.steers[0].context.presetRunId, run.id)
+  f.threads.noSteer = true
+  await assert.rejects(f.manager.message(run.id, '届かない'), /割り込めません/)
+  f.threads.noSteer = false
+
+  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'fixed')
+  await f.complete(run.worker.id, result(run, { summary: '初回の結果' }))
+  assert.equal(run.phase, 'completed')
+  await f.manager.deliver(run.id)
+  const delivered = run.deliveredAt
+  const parentCalls = f.threads.calls.filter((call) => call.id === f.parent.id).length
+
+  // A question that changes nothing: the finished result, its report and its delivery stay as they were.
+  await f.manager.message(run.id, 'この変更の意図は？')
+  await pending()
+  assert.equal(run.phase, 'running')
+  assert.equal(f.threads.calls.at(-1).input.text, 'この変更の意図は？', 'the user\'s words reach the worker unchanged')
+  await f.complete(run.worker.id, '意図は次のとおりです')
+  assert.equal(run.phase, 'completed')
+  assert.equal(run.result.summary, '初回の結果')
+  assert.equal(run.report, result(run, { summary: '初回の結果' }))
+  assert.equal(run.deliveredAt, delivered)
+
+  // A reply that fixes more is a new result: verified again and deliverable once more.
+  await f.manager.message(run.id, 'もう一箇所直して')
+  await pending()
+  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'fixed again')
+  await f.complete(run.worker.id, result(run, { summary: '二回目の結果' }))
+  assert.equal(run.phase, 'completed')
+  assert.equal(run.result.summary, '二回目の結果')
+  assert.equal(run.deliveredAt, undefined)
+  assert.equal(f.threads.calls.filter((call) => call.id === f.parent.id).length, parentCalls, 'a reply never prompts the parent')
+
+  // Changed files without a result block are not accepted as conversation.
+  await f.manager.message(run.id, 'さらに直して')
+  await pending()
+  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'fixed a third time')
+  const turns = f.threads.calls.length
+  await f.complete(run.worker.id, '直しました')
+  assert.equal(run.phase, 'running')
+  assert.equal(f.threads.calls.length, turns + 1)
+  assert.match(f.threads.calls.at(-1).input.text, /同じ作業を完了/)
+})
+
+test('a message is accepted before the worker exists and not while it is being verified', async (t) => {
+  const f = await fixture(t)
+  const run = await f.start()
+  await assert.rejects(f.manager.message(run.id, '先に送る'), /開始前/)
+  for (const text of ['', '   ', 5]) assert.throws(() => f.manager.message(run.id, text), /不正/)
+  await f.complete(f.parent.id, brief(run))
+  run.phase = 'verifying'
+  await assert.rejects(f.manager.message(run.id, '検証中'), /開始前|担当/)
+  assert.equal(f.threads.steers.length, 0)
+})
+
+test('a Claude Code worker takes an interruption and a reply through its own runner', async (t) => {
+  const f = await fixture(t), run = suspendedClaudeRun(f, 'R')
+  run.phase = 'completed'
+  await f.manager.message(run.id, '図を直して')
+  await Promise.all([...f.manager.pending.values()])
+  assert.equal(run.phase, 'running')
+  assert.deepEqual(f.agents.calls, [{ id: 'worker-R', text: '図を直して' }])
+  await f.manager.message(run.id, 'いまの作業に追加')
+  assert.deepEqual(f.agents.steers, [{ id: 'worker-R', text: 'いまの作業に追加' }])
+  f.agents.noSteer = true
+  await assert.rejects(f.manager.message(run.id, '届かない'), /割り込めません/)
 })
 
 test('dedicated patch disables inherited delegate definitions while preserving the base persona', async (t) => {

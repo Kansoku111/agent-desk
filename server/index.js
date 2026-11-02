@@ -805,6 +805,7 @@ const handlers = {
   'preset.evidence': ({ runId, kind, index }) => presets.readEvidence(runId, kind, index),
   'preset.stop': ({ runId }) => presets.stop(runId),
   'preset.resume': ({ runId }) => presets.resume(runId),
+  'preset.message': ({ runId, text }) => presets.message(runId, text),
   'preset.deliver': ({ runId }) => presets.deliver(runId),
 
   'state.get': (_params, client) => fullState(client),

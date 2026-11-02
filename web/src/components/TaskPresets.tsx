@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import './TaskPresets.css'
-import { CheckCircle2, ChevronRight, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, PanelRight, Square, X } from 'lucide-react'
-import { act, isNarrow, loadThread, navigate, request, setState, useStore } from '../store'
+import { CheckCircle2, ChevronRight, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, PanelRight, Send, Square, X } from 'lucide-react'
+import { act, isNarrow, isTouch, loadThread, navigate, request, setState, useStore } from '../store'
+import { getDraft, useDraft, useImeField } from '../drafts'
+import { PRESET_PROMPT_MARK } from '../../../shared/task-preset-mark.js'
 import type { AppState, ExecutionCheck, TaskPresetKind, TaskPresetRun, TaskPresetSource, Turn } from '../types'
 import { effortLabel, parseModel, workspaceLabel } from '../util'
 import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
@@ -252,6 +254,8 @@ export function PresetView({ id }: { id: string }) {
   const [brief, setBrief] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [text, setText] = useDraft('preset:' + id)
+  const ime = useImeField()
   const loaded = turns !== undefined
   const { scroller, onScroll } = useConversationScroll('preset:' + id, !!run, turns)
   useEffect(() => {
@@ -271,6 +275,17 @@ export function PresetView({ id }: { id: string }) {
   const action = async (method: string) => {
     setBusy(true); setError('')
     try { await request('preset.' + method, { runId: id }) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    setBusy(false)
+  }
+  // While the worker works this interrupts it; once it has stopped this replies to it.
+  const submit = async () => {
+    const body = getDraft('preset:' + id).trim()
+    if (!body || busy) return
+    setBusy(true); setError('')
+    try {
+      await request('preset.message', { runId: id, text: body })
+      if (getDraft('preset:' + id).trim() === body) setText('')
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     setBusy(false)
   }
   return <div className="thread-view terminal-view agent-view">
@@ -294,13 +309,28 @@ export function PresetView({ id }: { id: string }) {
           {brief && <details className="preset-brief"><summary>親からの指示</summary><Markdown text={brief} workspace={run.workspace} /></details>}
           {!worker ? <div className="loading-turns">{working ? <><Loader2 size={14} className="spin" /> {PHASE[run.phase]}</> : run.parentReport ? <Markdown text={run.parentReport} workspace={run.workspace} /> : '担当は開始していません'}</div>
             : !turns ? <div className="loading-turns"><Loader2 size={14} className="spin" /> 読み込み中…</div>
-              : turns.map((turn) => <TurnView key={turn.id} turn={turn} workspace={run.workspace} threadId={worker.id} hideUser threadBusy={working} undoable={false} />)}
+              : turns.map((turn, index) => <TurnView key={turn.id} turn={turn} workspace={run.workspace} threadId={worker.id} hideUser={index === 0 || turn.user.text.startsWith(PRESET_PROMPT_MARK)} threadBusy={working} undoable={false} />)}
           {(run.error || error) && <p className="team-warning" role="alert">{error || run.error}</p>}
         </div></div></div>
         {!working && <div className="preset-view-actions">
           {run.worker && !run.sourceGone && run.phase !== 'completed' && <button type="button" className="button" disabled={busy} onClick={() => void action('resume')}>同じ担当で続ける</button>}
           <button type="button" className="button" onClick={() => setState({ presetRun: id })}>詳細</button>
           {hasReport && <button type="button" className="button primary" disabled={busy || run.sourceGone || !!run.deliveredAt} onClick={() => void action('deliver')}>{run.deliveredAt ? '送信済み' : '本セッションに渡す'}</button>}
+        </div>}
+        {worker && !run.sourceGone && <div className="terminal-touch">
+          <div className="terminal-input">
+            <textarea {...ime.fieldProps} value={text} rows={1} placeholder={working ? '作業中の担当に割り込む' : '担当に返信'} aria-label="担当に送るメッセージ"
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return
+                if (event.key === 'Escape' && working) { event.preventDefault(); void action('stop'); return }
+                if (event.key !== 'Enter' || event.shiftKey || isTouch()) return
+                event.preventDefault()
+                void submit()
+              }} />
+            <button type="button" className="terminal-send" aria-label="送信" disabled={busy || !text.trim()}
+              onPointerDown={(event) => { event.preventDefault(); ime.confirm() }} onClick={() => void submit()}><Send size={16} /></button>
+          </div>
         </div>}
       </div>
       {panelOpen && <TaskPresetRuns source={run.source} onClose={() => setPanelOpen(false)} />}
