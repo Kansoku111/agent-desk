@@ -727,6 +727,7 @@ const outbox = new Outbox({
 export async function sendMessage(threadId: string, text: string, images: Attachment[], plan = false) {
   const thread = state.server?.threads.find((entry) => entry.id === threadId)
   if (!thread) return false
+  if (thread.fallbackTo) { toast('切り替え済みのため、切り替え先で続けてください', 'error'); return false }
   try {
     // Keep the composer text unless the durable outbox accepted it. A manual
     // message after a failed turn starts recovery before its old follow-ups.

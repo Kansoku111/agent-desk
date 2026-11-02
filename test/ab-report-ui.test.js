@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import test from 'node:test'
+import * as awaitImportUsageFallback from '../shared/usage-fallback.js'
 import ts from 'typescript'
 
 // Exercise the real components with the same lightweight hooks host used by the AB settings tests.
@@ -44,13 +45,14 @@ function mount(run) {
     '../../../shared/usage-score.js': { scoresUpTo: () => [] },
     './ThreadView': { OpenInMenu: 'OpenInMenu' }, './TurnView': { TurnView: 'TurnView' },
     '../ab-transcript': { abTimeline: (value) => value.jobs.map((job) => ({ kind: 'job', job, key: job.id })) },
+    '../../../shared/usage-fallback.js': awaitImportUsageFallback,
     '../../../shared/workflow-effort.js': {},
     './Modal': { Modal: 'Modal', ConfirmDialog: 'ConfirmDialog' }, '../util': { effortLabel: (value) => value },
     './WorkflowModelField': { CLAUDE_CODE: [], ModelField: 'ModelField' },
     './Markdown': { Markdown: 'Markdown', CopyButton: 'CopyButton' },
     './ClaudeAuthConsent': { ClaudeAuthConsent: 'ClaudeAuthConsent' },
     './AbInput': { AbImages: 'AbImages', AbInput: 'AbInput', useAbDraft: () => ({}) },
-    './PtcToggle': { PtcToggle: 'PtcToggle' }, './LeaderFallback': { LeaderFallback: 'LeaderFallback' },
+    './PtcToggle': { PtcToggle: 'PtcToggle' }, './FallbackSummary': { FallbackSummary: 'FallbackSummary' },
   }
   const { outputText } = ts.transpileModule(source + '\nexport { Report }', {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },

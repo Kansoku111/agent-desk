@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import http from 'node:http'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -50,4 +51,9 @@ test('a prompt is not forwarded, only the team messages it carries', async (t) =
   assert.deepEqual(preset.event.task_preset_marks, [id])
   assert.equal(preset.event.prompt, undefined)
   assert.equal(JSON.stringify(preset).includes('private instructions'), false)
+  assert.equal(own.event.usage_fallback_auto, false)
+  assert.equal(own.event.usage_fallback_hash, createHash('sha256').update('コミット #5140071c を見て').digest('hex'))
+  const fallback = await forward(t, { hook_event_name: 'UserPromptSubmit', prompt: '[Agent Desk 利用上限フォールバック] private history' })
+  assert.equal(fallback.event.usage_fallback_auto, true)
+  assert.equal(JSON.stringify(fallback).includes('private history'), false)
 })

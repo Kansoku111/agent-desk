@@ -22,6 +22,9 @@ import { TOOL_MODE_CONFIG, assertToolMode, assertToolModeApplied, toolModeOption
 import { emptyScore, scoresUpTo } from '../shared/usage-score.js'
 import { assertSessionPolicy } from './session-policy-plugin.js'
 import { goalCommandObjective } from './goal-command.js'
+import { isLeaderUsageLimit } from './leader-usage-limit.js'
+import { fallbackProvider, usageFallbackChoice } from '../shared/usage-fallback.js'
+import { hasGoalHistory } from './normal-fallback-handoff.js'
 export { carryoverText, describeError, isUndoable, restoreNoteText } from './thread-utils.js'
 
 const TURN_EMIT_MS = 60
@@ -56,7 +59,7 @@ export class ThreadManager extends EventEmitter {
    * @param options.checkpointsEnabled - whether turns take snapshots now.
    * @param options.getTurnUsage - reads the finished turn's usage from its session log.
    */
-  constructor({ paths, pool, catalog, getAccounts, getMcpServers = () => [], checkpoints = null, checkpointsEnabled = () => true, getTurnUsage = turnUsage }) {
+  constructor({ paths, pool, catalog, getAccounts, getMcpServers = () => [], checkpoints = null, checkpointsEnabled = () => true, getTurnUsage = turnUsage, usageFallbackRoutes = () => null, validateFallbackModel = () => {}, handoffClaude = null }) {
     super()
     this.paths = paths
     this.pool = pool
@@ -66,6 +69,10 @@ export class ThreadManager extends EventEmitter {
     this.checkpoints = checkpoints
     this.checkpointsEnabled = checkpointsEnabled
     this.getTurnUsage = getTurnUsage
+    this.usageFallbackRoutes = usageFallbackRoutes
+    this.validateFallbackModel = validateFallbackModel
+    this.handoffClaude = handoffClaude
+    this.pendingFallbacks = new Map()
     this.threads = new Map()
     this.turns = new Map()
     this.turnLoads = new Map()
@@ -93,7 +100,10 @@ export class ThreadManager extends EventEmitter {
 
   async load() {
     const index = await readJson(this.paths.threadsIndex, { version: 1, threads: [] })
+    let recoveredHandoff = false
     for (const thread of index.threads ?? []) {
+      if (thread.usageFallbackPreparing) { delete thread.usageFallbackPreparing; recoveredHandoff = true }
+      if (thread.usageFallbackPending) { delete thread.usageFallbackPending; thread.usageFallbackInterrupted = true; recoveredHandoff = true }
       thread.status = 'idle'
       thread.pendingApproval = false
       thread.toolMode ??= 'native'
@@ -111,6 +121,7 @@ export class ThreadManager extends EventEmitter {
       if (!entry.deleted && !this.threads.has(entry.threadId)) throw new Error('初回作成の受領先タスクが見つかりません')
       this.createReceipts.set(entry.createId, entry)
     }
+    if (recoveredHandoff) this.#saveIndex()
   }
 
   #saveIndex() {
@@ -146,6 +157,11 @@ export class ThreadManager extends EventEmitter {
     const turns = doc.turns ?? []
     let interrupted = false
     for (const turn of turns) {
+      if (turn.usageFallback?.status === 'pending' && !this.pendingFallbacks.has(threadId)) {
+        turn.usageFallback.status = 'interrupted'
+        turn.items.push({ type: 'notice', id: 'fallback-interrupted-' + turn.id, level: 'warning', text: '切り替え中にアプリが終了しました。自動再開せず、現在のモデルと作業状態を確認してください。' })
+        interrupted = true
+      }
       if (turn.status === 'running' && !this.active.has(threadId)) {
         if (turn.outputSpeed) delete turn.outputSpeed
         settleTurn(turn, {
@@ -232,8 +248,9 @@ export class ThreadManager extends EventEmitter {
     return request
   }
 
-  #available(threadId, expected) {
+  #available(threadId, expected, allowPending = false) {
     const thread = this.#require(threadId)
+    if (thread.usageFallbackPending && !allowPending) throw new Error('切り替え先を準備中です')
     if (this.stopping) throw new Error('アプリを終了しています')
     if (this.removing.has(threadId) || (expected && thread !== expected)) throw new Error('タスクを削除しています')
     return thread
@@ -296,11 +313,13 @@ export class ThreadManager extends EventEmitter {
   // ---------------------------------------------------------------- views
 
   summary(thread) {
-    return { ...thread, pinned: Boolean(thread.pinned), toolMode: this.teamToolMode?.(thread) ?? thread.toolMode ?? 'native' }
+    const { usageFallbackPreparing, fallbackTo, ...visible } = thread
+    return { ...visible, ...(!usageFallbackPreparing && fallbackTo ? { fallbackTo } : {}), pinned: Boolean(thread.pinned), toolMode: this.teamToolMode?.(thread) ?? thread.toolMode ?? 'native' }
   }
 
   list() {
     return [...this.threads.values()]
+      .filter((thread) => !thread.usageFallbackPending)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .map((thread) => this.summary(thread))
   }
@@ -319,6 +338,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   #emitThread(thread) {
+    if (thread.usageFallbackPending) return
     this.emit('thread', this.summary(thread))
   }
 
@@ -326,7 +346,7 @@ export class ThreadManager extends EventEmitter {
     const key = `${threadId}:${turn.id}`
     const fire = () => {
       this.emitTimers.delete(key)
-      this.emit('turn', { threadId, turn })
+      if (!this.threads.get(threadId)?.usageFallbackPending) this.emit('turn', { threadId, turn })
     }
     if (immediate) {
       clearTimeout(this.emitTimers.get(key))
@@ -347,7 +367,7 @@ export class ThreadManager extends EventEmitter {
       this.#emitTurn(threadId, turn)
       return
     }
-    this.emit('turn-speed', { threadId, turnId: turn.id, speed: turn.outputSpeed ?? null })
+    if (!this.threads.get(threadId)?.usageFallbackPending) this.emit('turn-speed', { threadId, turnId: turn.id, speed: turn.outputSpeed ?? null })
   }
 
   // ---------------------------------------------------------------- commands
@@ -416,7 +436,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   /** `team`: the agent team (teams.js) this task works for as a child, as { id, childId }. */
-  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'ptc', team = null, ab = null, preset = null, createReceipt = null }) {
+  async create({ workspace, model, effort = '', permissionMode = 'workspace-write', toolMode = 'ptc', team = null, ab = null, preset = null, createReceipt = null, usageFallbackFrom = null, usageFallbackPending = false }) {
     if (this.stopping) throw new Error('アプリを終了しています')
     await assertDirectory(workspace)
     if (this.stopping) throw new Error('アプリを終了しています')
@@ -449,13 +469,14 @@ export class ThreadManager extends EventEmitter {
       ...(team ? { team } : {}),
       ...(ab ? { ab } : {}),
       ...(preset ? { preset } : {}),
+      ...(usageFallbackFrom ? { usageFallbackFrom, ...(usageFallbackPending ? { usageFallbackPending: true } : {}) } : {}),
     }
     this.threads.set(thread.id, thread)
     this.turns.set(thread.id, [])
     this.receipts.set(thread.id, new Map())
     if (createReceipt) this.createReceipts.set(createReceipt.createId, { ...createReceipt, threadId: thread.id, deleted: false })
     this.#saveIndex()
-    if (createReceipt) {
+    if (createReceipt || usageFallbackPending) {
       try {
         // The durable key-to-thread mapping must exist before the first send.
         await this.indexWriter.flush()
@@ -463,7 +484,7 @@ export class ThreadManager extends EventEmitter {
         this.threads.delete(thread.id)
         this.turns.delete(thread.id)
         this.receipts.delete(thread.id)
-        this.createReceipts.delete(createReceipt.createId)
+        if (createReceipt) this.createReceipts.delete(createReceipt.createId)
         this.#saveIndex()
         try {
           await this.indexWriter.flush()
@@ -475,6 +496,32 @@ export class ThreadManager extends EventEmitter {
     }
     this.#emitThread(thread)
     return this.summary(thread)
+  }
+
+  /** Check the explicit target before retiring a source on another runtime. */
+  async checkUsageFallbackModel(model) {
+    if (this.stopping) throw new Error('アプリを終了しています')
+    this.validateFallbackModel(model)
+    await this.#assertModelUsable(model)
+    if (this.stopping) throw new Error('アプリを終了しています')
+  }
+
+  /** Only the handoff coordinator may operate an unpublished fallback task. */
+  deliverUsageFallback(threadId, input, fallback, guard) {
+    const message = normalizeMessage(input)
+    return this.#request(threadId, () => this.#send(threadId, message, false, guard, undefined, fallback, true))
+  }
+  stopUsageFallback(threadId) { return this.cancel(threadId, { allowFallbackPending: true }) }
+  discardUsageFallback(threadId) { return this.remove(threadId, { allowFallbackPending: true }) }
+  async revealUsageFallback(threadId) {
+    const thread = this.#require(threadId)
+    if (!thread.usageFallbackPending) return
+    delete thread.usageFallbackPending
+    this.#saveIndex()
+    try { await this.indexWriter.flush() } catch (error) { thread.usageFallbackPending = true; throw error }
+    this.#emitThread(thread)
+    const turn = this.turns.get(threadId)?.at(-1)
+    if (turn) this.#emitTurn(threadId, turn, true)
   }
 
   update(threadId, patch, { guard } = {}) {
@@ -498,6 +545,7 @@ export class ThreadManager extends EventEmitter {
   async #update(threadId, patch) {
     const thread = this.#available(threadId)
     const running = this.active.has(threadId)
+    if (thread.fallbackTo && ['model', 'effort', 'permissionMode', 'toolMode'].some((key) => patch[key] !== undefined)) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
     if (['model', 'effort', 'permissionMode', 'toolMode'].some((key) => patch[key] !== undefined)) this.presetSettingsGuard?.(thread)
     if (patch.toolMode !== undefined) {
       assertToolMode(patch.toolMode)
@@ -529,11 +577,13 @@ export class ThreadManager extends EventEmitter {
       }
     }
     if (patch.model !== undefined && patch.model !== thread.model) {
+      if (running && this.active.get(threadId)) this.active.get(threadId).selectionChanged = true
       thread.model = patch.model
       await this.#applyLive(thread, 'model', patch.model)
       this.#available(threadId, thread)
     }
     if (patch.effort !== undefined && patch.effort !== thread.effort) {
+      if (running && this.active.get(threadId)) this.active.get(threadId).selectionChanged = true
       thread.effort = patch.effort
       await this.#applyLive(thread, 'reasoning_effort', patch.effort)
       this.#available(threadId, thread)
@@ -611,9 +661,10 @@ export class ThreadManager extends EventEmitter {
     this.#learnOptions(thread, options)
   }
 
-  remove(threadId, { forgetCreateReceipt = false } = {}) {
+  remove(threadId, { forgetCreateReceipt = false, allowFallbackPending = false } = {}) {
     if (this.removing.has(threadId)) return this.removing.get(threadId)
     const thread = this.#require(threadId)
+    if (thread.usageFallbackPending && !allowFallbackPending) throw new Error('切り替え先を準備中です')
     // Install the fence synchronously, before any admission can resume.
     const removal = Promise.resolve().then(() => this.#remove(thread, { forgetCreateReceipt }))
     this.removing.set(threadId, removal)
@@ -624,7 +675,7 @@ export class ThreadManager extends EventEmitter {
   async #remove(thread, { forgetCreateReceipt = false } = {}) {
     const threadId = thread.id
     const active = this.active.get(threadId)
-    await this.cancel(threadId)
+    await this.cancel(threadId, { allowFallbackPending: true })
     await this.requests.get(threadId)?.catch(() => {})
     await active?.done
     await this.turnLoads.get(threadId)?.catch(() => {})
@@ -679,7 +730,7 @@ export class ThreadManager extends EventEmitter {
     this.turnWriters.delete(threadId)
     // Garbage collection can queue behind another task's snapshots and take
     // minutes. Notify the UI once deletion commits, not after optional cleanup.
-    this.emit('removed', { threadId })
+    if (!thread.usageFallbackPending) this.emit('removed', { threadId })
     // Optional GC must not hold the removal RPC (or the next bulk removal)
     // behind a long snapshot/git-gc queue after deletion has already committed.
     if (this.checkpoints) void this.checkpoints.forget(thread.workspace, threadId).catch(() => {})
@@ -695,28 +746,36 @@ export class ThreadManager extends EventEmitter {
     return this.#request(threadId, () => this.#send(threadId, message, userInitiated, guard, presetRunId))
   }
 
-  async #send(threadId, message, userInitiated, guard, presetRunId) {
+  async #send(threadId, message, userInitiated, guard, presetRunId, fallback = null, allowPending = false) {
     const { text, images, messageId, plan } = message
-    const thread = this.#available(threadId)
+    const thread = this.#available(threadId, undefined, allowPending)
     if (plan && thread.ab) throw new Error('ABではPlanを使えません')
     const turns = await this.#loadTurns(threadId)
-    this.#available(threadId, thread)
+    this.#available(threadId, thread, allowPending)
     const known = this.#receipt(threadId, message)
     if (known) return known
+    if (thread.fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
     const goalObjective = this.#goalObjective(thread, message, userInitiated)
     this.#assertNotRestoring(thread)
     if (this.active.has(threadId)) throw new Error('このタスクはまだ作業中です')
     if (!thread.model) throw new Error('モデルを選択してください')
     await this.#assertModelUsable(thread.model)
-    this.#available(threadId, thread)
+    this.#available(threadId, thread, allowPending)
     this.#assertNotRestoring(thread)
     if (this.active.has(threadId)) throw new Error('このタスクはまだ作業中です')
     this.executionGuard?.(thread, { presetRunId })
     guard?.()
 
     const turn = newTurn({ id: randomUUID(), text, images })
+    // A desired model may be changed while the previous one is still running.
+    turn.executedModel = null
     if (messageId) turn.user.messageId = messageId
     if (plan) turn.user.plan = true
+    if (fallback) turn.usageFallback = fallback
+    else if (userInitiated && !thread.team && !thread.ab && !thread.preset) {
+      const routes = this.usageFallbackRoutes()
+      if (Array.isArray(routes) && routes.length) turn.usageFallbackRoutes = structuredClone(routes)
+    }
     const previous = { title: thread.title, updatedAt: thread.updatedAt, status: thread.status }
     turns.push(turn)
     if (turns.length === 1) thread.title = titleFrom(text || (images.every((image) => isImageFile(image.file)) ? '画像' : images[0].name || '添付ファイル'))
@@ -801,6 +860,8 @@ export class ThreadManager extends EventEmitter {
       }
       if (restoreNote) prompt.unshift({ type: 'text', text: restoreNoteText(restoreNote) })
       active.phase = 'prompting'
+      // The runtime acknowledgement, not the next-turn picker, names the source route.
+      turn.executedModel = parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? []).currentModel
       const result = active.goalObjective === undefined
         ? await runtime.prompt(thread.sessionId, prompt)
         : await runtime.prompt(thread.sessionId, prompt, active.goalObjective)
@@ -828,6 +889,7 @@ export class ThreadManager extends EventEmitter {
     this.#resolvePermissions(thread.id, null)
     await Promise.allSettled([this.#attachUsage(thread.id, turn, thread.sessionId), this.#finishCheckpoint(thread, turn)])
     settleTurn(turn, outcome)
+    if (active.selectionChanged) turn.selectionChangedDuringRun = true
     thread.score = scoresUpTo(this.turns.get(thread.id) ?? []).at(-1) ?? emptyScore()
     thread.status = outcome.status === 'error' ? 'error' : 'idle'
     thread.pendingApproval = false
@@ -836,9 +898,97 @@ export class ThreadManager extends EventEmitter {
     this.#saveTurns(thread.id)
     this.active.delete(thread.id)
     if (this.pendingUsageRefresh.delete(thread.id)) void this.#refreshLoadedUsage(thread.id).catch(() => {})
+    if (outcome.status === 'error') this.#scheduleUsageFallback(thread, turn)
     this.#emitTurn(thread.id, turn, true)
     this.#emitThread(thread)
-    this.emit('turn-finished', { threadId: thread.id, title: thread.title, status: outcome.status })
+    if (!thread.usageFallbackPending) this.emit('turn-finished', { threadId: thread.id, title: thread.title, status: outcome.status })
+  }
+
+  // Only an explicitly configured target may be tried, once per human turn.
+  // The attempt is persisted before model changes so a crash cannot replay work.
+  #scheduleUsageFallback(thread, turn) {
+    if (thread.team || thread.ab || thread.preset || turn.usageFallback || !isLeaderUsageLimit(turn.error) || !turn.usageFallbackRoutes?.length) return
+    const source = turn.executedModel
+    if (!source || thread.model !== source || turn.selectionChangedDuringRun) {
+      turn.items.push({ type: 'notice', id: 'fallback-source-' + turn.id, level: 'warning', text: !source
+        ? '実際に使用したモデルを確認できないため、自動切り替えしません。'
+        : '実行中にモデルまたは推論レベルが変更されたため、自動切り替えしません。選択と作業状態を確認してください。' })
+      this.#saveTurns(thread.id)
+      return
+    }
+    const choice = usageFallbackChoice(turn.usageFallbackRoutes, source)
+    if (!choice || this.pendingFallbacks.has(thread.id) || this.stopping) return
+    const pending = { cancelled: false }
+    this.pendingFallbacks.set(thread.id, pending)
+    const current = (model) => !pending.cancelled && !this.stopping && !this.removing.has(thread.id)
+      && this.threads.get(thread.id) === thread && !thread.archived && !this.active.has(thread.id)
+      && this.turns.get(thread.id)?.at(-1) === turn && thread.model === model
+    const task = this.#request(thread.id, async () => {
+      if (!current(source)) return
+      if (hasGoalHistory(this.turns.get(thread.id) ?? [])) throw new Error('ゴールの状態を確認できないため自動では切り替えません')
+      if (choice.model.startsWith('claude:')) {
+        if (!this.handoffClaude) throw new Error('Claude Codeへの切り替えを利用できません')
+        this.validateFallbackModel(choice.model)
+        turn.usageFallback = { status: 'pending', model: choice.model, effort: choice.effort }
+        await this.#persistTurns(thread.id)
+        if (!current(source)) return
+        const guard = () => { if (!current(source)) throw new Error('タスクの状態が変わったため切り替えを中止しました') }
+        await this.handoffClaude({ thread, turn, turns: this.turns.get(thread.id), choice, guard, commit: async (id) => {
+          guard()
+          thread.fallbackTo = { kind: 'terminal', id }
+          thread.usageFallbackPreparing = true
+          this.#saveIndex()
+          await this.indexWriter.flush()
+        } })
+        delete thread.usageFallbackPreparing
+        this.#saveIndex()
+        await this.indexWriter.flush()
+        turn.usageFallback.status = 'started'
+        this.#saveTurns(thread.id)
+        this.#emitThread(thread)
+        this.#emitTurn(thread.id, turn, true)
+        return
+      }
+      if (this.turns.get(thread.id)?.some((entry) => entry.user?.images?.some((image) => isImageFile(image.file)))
+        && !['openai-codex', 'anthropic'].includes(fallbackProvider(choice.model))) throw new Error('画像を含む会話をこの接続先へ引き継げません')
+      this.validateFallbackModel(choice.model)
+      await this.#assertModelUsable(choice.model)
+      if (!current(source)) return
+      turn.usageFallback = { status: 'pending', model: choice.model, effort: choice.effort }
+      turn.items.push({ type: 'notice', id: 'fallback-' + turn.id, level: 'info', text: '利用上限のため ' + choice.model + ' に切り替えて続けます。' })
+      await this.#persistTurns(thread.id)
+      if (!current(source)) return
+      await this.#update(thread.id, { model: choice.model, effort: choice.effort })
+      await this.indexWriter.flush()
+      if (!current(choice.model)) return
+      const text = '[Agent Desk] 利用上限のため指定されたモデルへ切り替えました。途中の作業を続けてください。変更済みのファイルや実行済み・完了が不明な外部操作を確認し、重複実行しないでください。\n\n直前の入力:\n' + (turn.user?.text ?? '')
+      await this.#send(thread.id, { text, images: turn.user?.images ?? [], ...(turn.user?.plan ? { plan: true } : {}) }, false, () => {
+        if (!current(choice.model)) throw new Error('タスクの状態が変わったため切り替えを中止しました')
+      }, undefined, { sourceTurnId: turn.id, model: choice.model, effort: choice.effort })
+      turn.usageFallback.status = 'started'
+      this.#saveTurns(thread.id)
+      this.#emitTurn(thread.id, turn, true)
+    }).catch((error) => {
+      if (thread.usageFallbackPreparing && this.threads.get(thread.id) === thread && !this.removing.has(thread.id)) {
+        delete thread.usageFallbackPreparing
+        this.#saveIndex()
+        if (!this.stopping) this.#emitThread(thread)
+      }
+      if (pending.cancelled || this.stopping || this.removing.has(thread.id) || this.threads.get(thread.id) !== thread) return
+      turn.usageFallback = { status: 'failed', model: choice.model, effort: choice.effort }
+      turn.items.push({ type: 'notice', id: 'fallback-error-' + turn.id, level: 'warning', text: 'フォールバックできませんでした: ' + shortMessage(error) })
+      this.#saveTurns(thread.id)
+      this.#emitTurn(thread.id, turn, true)
+    }).finally(() => {
+      if (this.pendingFallbacks.get(thread.id) === pending) this.pendingFallbacks.delete(thread.id)
+      if (turn.usageFallback?.status === 'pending' && this.threads.get(thread.id) === thread && !this.removing.has(thread.id)) {
+        turn.usageFallback.status = 'interrupted'
+        turn.items.push({ type: 'notice', id: 'fallback-interrupted-' + turn.id, level: 'warning', text: '切り替えを中止しました。現在のモデルと作業状態を確認してください。' })
+        this.#saveTurns(thread.id)
+        if (!this.stopping) this.#emitTurn(thread.id, turn, true)
+      }
+    })
+    void task
   }
 
   #checkRun(thread, active) {
@@ -1129,10 +1279,10 @@ export class ThreadManager extends EventEmitter {
       this.#learnOptions(thread, changed)
       parsed = parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? [])
     }
-    if ((thread.preset || thread.ab?.strictModel || this.teamModelGuard?.(thread)) && parsed.currentModel !== thread.model) throw new Error(thread.preset ? '担当モデルの適用を確認できません' : 'フォールバック先モデルの適用を確認できません')
+    if ((thread.preset || thread.ab?.strictModel || turn.usageFallback || this.teamModelGuard?.(thread)) && parsed.currentModel !== thread.model) throw new Error(thread.preset ? '担当モデルの適用を確認できません' : 'フォールバック先モデルの適用を確認できません')
     const wanted = thread.effort ?? ''
-    const strict = thread.preset || (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort
-    const label = thread.preset ? 'タスクのプリセット' : thread.ab ? 'AB' : 'eco'
+    const strict = thread.preset || turn.usageFallback || (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort
+    const label = thread.preset ? 'タスクのプリセット' : thread.ab ? 'AB' : turn.usageFallback ? 'フォールバック先' : 'eco'
     if (strict) assertWorkflowEffort(wanted, parsed, label)
     const target = strict ? wanted : nearestEffort(wanted, parsed.efforts)
     if (target !== wanted) {
@@ -1277,7 +1427,10 @@ export class ThreadManager extends EventEmitter {
     return blocks
   }
 
-  async cancel(threadId) {
+  async cancel(threadId, { allowFallbackPending = false } = {}) {
+    if (this.threads.get(threadId)?.usageFallbackPending && !allowFallbackPending) throw new Error('切り替え先を準備中です')
+    const fallback = this.pendingFallbacks.get(threadId)
+    if (fallback) fallback.cancelled = true
     const active = this.active.get(threadId)
     if (!active) {
       const thread = this.threads.get(threadId)
@@ -1377,7 +1530,7 @@ export class ThreadManager extends EventEmitter {
     })
     this.#emitThread(thread)
     this.#emitTurn(threadId, turn, true)
-    this.emit('approval-needed', { threadId, title: thread.title, tool: item.name })
+    if (!thread.usageFallbackPending) this.emit('approval-needed', { threadId, title: thread.title, tool: item.name })
     return response
   }
 
@@ -1446,7 +1599,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   get busy() {
-    return this.active.size > 0 || this.restoring.size > 0
+    return this.active.size > 0 || this.restoring.size > 0 || this.pendingFallbacks.size > 0
   }
 
   shutdown() {
@@ -1458,7 +1611,7 @@ export class ThreadManager extends EventEmitter {
 
   async #shutdown() {
     const active = [...this.active.values()]
-    await Promise.all([...this.active.keys()].map((threadId) => this.cancel(threadId)))
+    await Promise.all([...this.active.keys()].map((threadId) => this.cancel(threadId, { allowFallbackPending: true })))
     await Promise.allSettled([...this.requests.values(), ...this.removing.values(), ...this.turnLoads.values()])
     await Promise.all(active.map((entry) => entry.done))
     // One failing file must not keep the others from being written.

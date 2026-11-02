@@ -11,11 +11,12 @@ import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { TeamGuides } from './TeamGuides'
 import { AbSettings, ExecutionSettings, ModeSection } from './ModeSections'
 import { PtcToggle } from './PtcToggle'
-import { LeaderFallback } from './LeaderFallback'
+import { FallbackSummary } from './FallbackSummary'
 import { ModelField, modelGroups } from './WorkflowModelField'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 import { workflowEffortSupported, workflowLevels } from '../../../shared/workflow-effort.js'
+import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
 
 const MAX_CHILDREN = 12
 const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'local']
@@ -412,10 +413,14 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
   const close = () => setState({ teamStart: null })
   if (!server || !draft) return null
   const change: Change = (patch) => setDraft((current) => (current ? applyPatch(current, patch) : current))
-  const needsAuth = needsClaudeAuth(draft)
   const leaderModel = draft.leaderProvider === 'claude' ? draft.leader.model : draft.leaderProvider === 'gpt' ? draft.gptLeader.model ?? draft.gpt.mid.model ?? draft.gpt.low.model ?? (draft.modelMode === 'free' ? draft.freeModels?.find((entry) => entry.provider === 'gpt')?.model : null) : draft.dshLeader?.model
-  const leaderValue = leaderModel ? modelValue({ provider: draft.leaderProvider, model: leaderModel }) : ''
-  const fallbackReady = !draft.leaderFallback || (draft.leaderFallback !== leaderValue && teamModelGroups(server).some((group) => group.models.some((model) => model.value === draft.leaderFallback)) && workflowEffortSupported(draft.fallbackEffort ?? '', workflowLevels(server.catalog, draft.leaderFallback)))
+  const leaderValue = leaderModel ? modelValue({ provider: draft.leaderProvider, model: leaderModel }) : draft.leaderProvider === 'claude' ? 'claude:' : ''
+  const shared = Array.isArray(server.settings.usageFallbackRoutes)
+  const target = shared ? usageFallbackChoice(server.settings.usageFallbackRoutes, leaderValue) : null
+  const fallback = shared ? target?.model ?? '' : draft.leaderFallback ?? ''
+  const effort = shared ? target?.effort ?? '' : draft.fallbackEffort ?? ''
+  const needsAuth = needsClaudeAuth({ ...draft, leaderFallback: fallback }) || Boolean(server.settings.usageFallbackRoutes?.some((route) => route.model.startsWith('claude:')))
+  const fallbackReady = !fallback || (fallback !== leaderValue && teamModelGroups(server).some((group) => group.models.some((model) => model.value === fallback)) && workflowEffortSupported(effort, workflowLevels(server.catalog, fallback)))
   const start = async () => {
     if (!fallbackReady || (needsAuth && !auth.ready)) return
     setStarting(true)
@@ -433,7 +438,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
         </p>
         <p className="muted">Claude の自動処理には「Claude（API）」の子を推奨します。選択は自動で変更せず、API 利用は従量課金です。</p>
         <LeaderSection server={server} config={draft} onChange={change} />
-        <LeaderFallback server={server} value={draft.leaderFallback ?? ''} effort={draft.fallbackEffort ?? ''} disabled={starting} onChange={(leaderFallback, fallbackEffort) => change({ leaderFallback, fallbackEffort })} />
+        <FallbackSummary server={server} value={fallback} effort={effort} shared={shared} sourceSelected={Boolean(leaderValue)} disabled={starting} />
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
           <LeanChildrenSwitch config={draft} onChange={change} />
@@ -480,12 +485,14 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const change: Change = (patch) => setDraft((current) => (current ? applyPatch(current, patch) : current))
   const needsAuth = needsClaudeAuth(draft, team)
   const showAuth = needsAuth || team.children.some((child) => child.kind === 'agent' && child.state !== 'removed')
-  const currentLeader = team.leaderKind === 'thread' ? server.threads.find((entry) => entry.id === team.leaderId)?.model : `claude:${server.terminals.find((entry) => entry.id === team.leaderId)?.model ?? ''}`
-  const fallbackReady = Boolean(team.execution || team.leaderFallbackUsed) || !draft.leaderFallback || (draft.leaderFallback !== currentLeader && modelGroups(server).some((group) => group.models.some((model) => model.value === draft.leaderFallback)) && workflowEffortSupported(draft.fallbackEffort ?? '', workflowLevels(server.catalog, draft.leaderFallback)))
+  const currentLeader = team.leaderKind === 'thread' ? server.threads.find((entry) => entry.id === team.leaderId)?.model : 'claude:' + (server.terminals.find((entry) => entry.id === team.leaderId)?.model ?? '')
+  const teamTarget = team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? usageFallbackChoice(team.usageFallbackRoutes, currentLeader) : null
+  const teamFallback = teamTarget?.model ?? (team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? '' : draft.leaderFallback ?? '')
+  const teamFallbackEffort = teamTarget?.effort ?? (team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? '' : draft.fallbackEffort ?? '')
   const save = async () => {
-    if (!fallbackReady || (needsAuth && !auth.ready)) return
+    if (needsAuth && !auth.ready) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, local: draft.local, maxChildren: draft.maxChildren, ...(!team.execution ? { leaderFallback: draft.leaderFallback ?? '', fallbackEffort: draft.fallbackEffort ?? '' } : {}) } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, local: draft.local, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
@@ -502,16 +509,15 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
           <ChildCount config={draft} onChange={change} />
         </section>
         <ChildModels server={server} config={draft} onChange={change} />
-        {!team.execution && <>
-          <LeaderFallback server={server} value={draft.leaderFallback ?? ''} effort={draft.fallbackEffort ?? ''} disabled={saving || Boolean(team.leaderFallbackUsed)} onChange={(leaderFallback, fallbackEffort) => change({ leaderFallback, fallbackEffort })} />
-          {team.leaderFallbackUsed && <p className="muted">このチームではフォールバックを使用済みです。</p>}
-        </>}
+        <FallbackSummary server={server} value={teamFallback} effort={teamFallbackEffort} shared={Boolean(team.sharedFallbackPolicy)}
+          sourceSelected={Boolean(currentLeader)} disabled={saving} frozen />
+        {team.leaderFallbackUsed && <p className="muted">このチームではフォールバックを使用済みです。</p>}
         {!anyChildOn(draft) && <p className="team-warning">子に使うモデルを少なくとも一つ選んでください。</p>}
         {showAuth && <ClaudeAuthConsent key={authRevision} workspace={team.workspace} teamId={team.id} onChange={setAuth} />}
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={onClose}>キャンセル</button>
-        <button type="button" className="button primary" disabled={saving || !anyChildOn(draft) || !fallbackReady || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
+        <button type="button" className="button primary" disabled={saving || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
       </div>
     </Modal>
   )

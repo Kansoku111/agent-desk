@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, Loader2, ShieldQuestion, SquareTerminal } from 'lucide-react'
-import { act, request } from '../store'
+import { request } from '../store'
 import type { TerminalSummary, Turn } from '../types'
 import { TurnView } from './TurnView'
 import { useLedTeam } from './TeamPanel'
@@ -94,77 +94,145 @@ export function useConversation(terminalId: string, terminal: TerminalSummary | 
   return { turns, omitted, loaded, error, poke: () => poke.current() }
 }
 
-type Dialog = { text: string[]; options: { key: string; label: string; detail: string; selected: boolean }[] }
+type Dialog = {
+  dialogId: string
+  text: string[]
+  screen: string
+  options: { key: string; label: string; detail: string; selected: boolean }[]
+}
 
-/**
- * What Claude Code asks while it waits (an approval, a question), read off its
- * screen (server/terminals.js parseDialog), with its choices as buttons. One
- * that cannot be read is answered on the screen.
- */
-function DialogCard({ terminalId, onShowScreen }: { terminalId: string; onShowScreen: () => void }) {
+/** The CLI still owns the question; chat sends only explicit, screen-bound user input. */
+export function DialogCard({ terminalId, onShowScreen }: { terminalId: string; onShowScreen: () => void }) {
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [busy, setBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [controlsOpen, setControlsOpen] = useState(false)
+  const [answer, setAnswer] = useState({ text: '', dialogId: '' })
+  const sending = useRef(false)
+  const readRevision = useRef(0)
+  const refresh = useRef(() => {})
+  const mounted = useRef(false)
 
   useEffect(() => {
+    mounted.current = true
     let stopped = false
     let timer: number | undefined
     const poll = async () => {
+      if (sending.current) { timer = window.setTimeout(() => void poll(), 250); return }
+      const revision = ++readRevision.current
       try {
         const { dialog: next } = await request<{ dialog: Dialog | null }>('terminal.dialog', { terminalId })
-        if (!stopped) setDialog(next)
-      } catch {}
-      // The screen can still be drawing it; it may also change (a second question).
-      if (!stopped) timer = window.setTimeout(() => void poll(), BUSY_MS)
+        if (!stopped && revision === readRevision.current) {
+          setDialog(next)
+          setLoadError('')
+          setRefreshing(false)
+        }
+      } catch (cause) {
+        if (!stopped && revision === readRevision.current) {
+          setLoadError(cause instanceof Error ? cause.message : String(cause))
+          setRefreshing(false)
+        }
+      }
+      // A second question, a checkbox or an input box may replace the numbered list.
+      if (!stopped && revision === readRevision.current) timer = window.setTimeout(() => void poll(), BUSY_MS)
+    }
+    refresh.current = () => {
+      readRevision.current++
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => void poll(), 250)
     }
     void poll()
     return () => {
       stopped = true
+      mounted.current = false
+      readRevision.current++
       window.clearTimeout(timer)
+      refresh.current = () => {}
     }
   }, [terminalId])
 
-  const choose = async (key: string, label: string) => {
+  const respond = async (type: string, params: Record<string, unknown>, text = false) => {
+    if (sending.current || refreshing || loadError || !dialog) return
+    sending.current = true
+    readRevision.current++ // Do not let a read from before the click restore an old question.
     setBusy(true)
-    await act('terminal.choose', { terminalId, key, label })
-    setBusy(false)
+    setError('')
+    setNotice('')
+    try {
+      await request(type, { terminalId, dialogId: dialog.dialogId, ...params })
+      if (!mounted.current) return
+      setRefreshing(true)
+      if (text) {
+        setAnswer({ text: '', dialogId: '' })
+        setNotice('入力を反映しました。「確定・次へ」で回答を送れます。')
+      }
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      sending.current = false
+      if (mounted.current) { setBusy(false); refresh.current() }
+    }
   }
+  const disabled = busy || refreshing || Boolean(loadError)
+  const staleAnswer = Boolean(answer.text && answer.dialogId !== dialog?.dialogId)
+  const key = (value: string) => void respond('terminal.respond', { key: value })
+  const optionLabel = (label: string) => /^Type something\.?$/i.test(label) ? '自由入力（その他）' : /^Chat about this$/i.test(label) ? 'この質問について相談する' : label
 
-  if (!dialog) {
-    return (
-      <div className="terminal-note terminal-chat-note">
-        <span>承認が必要です。画面を開いて選んでください</span>
-        <button type="button" className="button" onClick={onShowScreen}><SquareTerminal size={13} /> 画面を開く</button>
-      </div>
-    )
-  }
-  const question = dialog.text.at(-1)
   return (
     <div className="terminal-dialog">
-      <div className="approval-card" role="alertdialog" aria-label="Claude Code の確認">
+      <div className="approval-card" role="region" aria-label="Claude Code の質問・確認" aria-busy={busy || refreshing}>
         <div className="approval-head">
           <ShieldQuestion size={16} />
-          <span>{question ?? 'Claude Code が確認を求めています'}</span>
+          <span>{dialog?.text.at(-1) ?? 'Claude Code の質問・確認'}</span>
         </div>
-        {dialog.text.length > 1 && <pre className="approval-command">{dialog.text.slice(0, -1).join('\n')}</pre>}
-        <div className="terminal-dialog-options">
-          {dialog.options.map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              disabled={busy}
-              className={`button terminal-dialog-option${option.selected ? ' primary' : ''}`}
-              onClick={() => void choose(option.key, option.label)}
-            >
-              <span className="terminal-dialog-key">{option.key}</span>
-              <span>
-                {option.label}
-                {option.detail && <small className="muted">{option.detail}</small>}
-              </span>
-            </button>
-          ))}
-        </div>
+        {loadError && <p role="alert">質問を読み取れませんでした: {loadError}</p>}
+        {error && <p role="alert">{error}</p>}
+        {notice && <p role="status" className="muted">{notice}</p>}
+        {!dialog ? <p className="muted">質問の表示を待っています。自動で読み直します。</p> : <>
+          {dialog.text.length > 1 && <pre className="approval-command">{dialog.text.slice(0, -1).join('\n')}</pre>}
+          {dialog.options.length > 0 ? <div className="terminal-dialog-options">
+            {dialog.options.map((option) => (
+              <button key={option.key} type="button" disabled={disabled}
+                className={`button terminal-dialog-option${option.selected ? ' primary' : ''}`}
+                onClick={() => {
+                  if (/^Type something\.?$/i.test(option.label)) setControlsOpen(true)
+                  void respond('terminal.choose', { key: option.key, label: option.label })
+                }}>
+                <span className="terminal-dialog-key">{option.key}</span>
+                <span>{optionLabel(option.label)}{option.detail && <small className="muted">{option.detail}</small>}</span>
+              </button>
+            ))}
+          </div> : <pre className="approval-command terminal-dialog-screen">{dialog.screen}</pre>}
+          <details className="terminal-dialog-input" open={dialog.options.length === 0 || controlsOpen} onToggle={(event) => setControlsOpen(event.currentTarget.open)}>
+            <summary>自由入力・複数選択などの操作</summary>
+            <p className="muted">自由入力は、先に「自由入力（その他）」を選んでください。複数選択は↑↓で移動し「選択切替」、質問の切替は←→・Tab、送信は「確定・次へ」です。</p>
+            {dialog.options.length > 0 && <pre className="approval-command terminal-dialog-screen">{dialog.screen}</pre>}
+            <div className="terminal-dialog-controls" role="group" aria-label="質問の操作">
+              {([['up', '↑'], ['down', '↓'], ['left', '←'], ['right', '→'], ['tab', 'Tab'], ['space', '選択切替']] as const).map(([value, label]) => (
+                <button key={value} type="button" className="button" disabled={disabled} title={value === 'space' ? 'Space: チェックを切り替える' : label} aria-label={{ up: '前の選択肢', down: '次の選択肢', left: '前の質問', right: '次の質問', tab: 'Tab で移動', space: '選択切替' }[value]} onClick={() => key(value)}>{label}</button>
+              ))}
+            </div>
+            <label className="terminal-dialog-answer">自由入力の回答
+              <textarea rows={3} maxLength={8000} value={answer.text} disabled={disabled} placeholder="回答を入力（Enter は改行。自動送信しません）"
+                onChange={(event) => setAnswer({ text: event.target.value, dialogId: answer.text ? answer.dialogId : dialog.dialogId })} />
+            </label>
+            {staleAnswer && <p role="status" className="muted">質問の表示が変わったため、入力は送っていません。内容を控えて、入力を消してから書き直してください。</p>}
+            <div className="terminal-dialog-controls">
+              <button type="button" className="button" disabled={disabled || !answer.text.trim() || staleAnswer} onClick={() => void respond('terminal.respond', { text: answer.text, dialogId: answer.dialogId }, true)}>入力を反映</button>
+              <button type="button" className="button" disabled={busy || !answer.text} onClick={() => setAnswer({ text: '', dialogId: '' })}>入力を消す</button>
+            </div>
+          </details>
+          <div className="terminal-dialog-controls">
+            <button type="button" className="button primary" disabled={disabled} onClick={() => key('enter')}>確定・次へ</button>
+            <button type="button" className="button" disabled={disabled} onClick={() => key('escape')}>キャンセル（Esc）</button>
+          </div>
+        </>}
         <div className="approval-actions">
-          <button type="button" className="button" onClick={onShowScreen}><SquareTerminal size={13} /> 画面で選ぶ</button>
+          <button type="button" className="button" disabled={busy || refreshing} onClick={() => refresh.current()}>再読み込み</button>
+          <button type="button" className="button" onClick={onShowScreen}><SquareTerminal size={13} /> 必要なら画面を開く</button>
         </div>
       </div>
     </div>
@@ -219,9 +287,9 @@ export function TerminalChat({ terminal, turns, omitted, loaded, error, onShowSc
         </button>
       )}
       {terminal.state === 'running' && terminal.activity === 'approval' && (
-        <DialogCard terminalId={terminal.id} onShowScreen={onShowScreen} />
+        <DialogCard key={terminal.id} terminalId={terminal.id} onShowScreen={onShowScreen} />
       )}
-      {terminal.state === 'stopped' && (
+      {terminal.state === 'stopped' && !terminal.fallbackTo && (
         <div className="terminal-note terminal-chat-note">
           <span>Claude Code は止まっています</span>
           <button type="button" className="button" onClick={onRestart}>会話を再開</button>

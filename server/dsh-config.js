@@ -38,9 +38,9 @@ export const CONTEXT_PROVIDERS = ['openai-codex', 'anthropic']
  * window is kept so an updated default still produces a dsh override.
  * A larger choice raises the window up to the model's maxContextWindow.
  *
- * dsh compacts a conversation at 80% of the window minus the tokens reserved
- * for the reply (the model's maxTokens, 128K on current models). A smaller
- * window therefore also gets a smaller reply budget — a fifth of the window,
+ * dsh's automatic compaction considers the window fraction and the capacity
+ * left after reply reservation and headroom. A smaller window therefore
+ * also gets a smaller reply budget — a fifth of the window,
  * at least 8K — or nothing would be left for the conversation itself.
  * @param {Record<string, number | null>} limits - chosen size per provider; null uses its default.
  * @param {Record<string, Record<string, { contextWindow: number, maxTokens: number, defaultContextWindow?: number, maxContextWindow?: number }>>} models
@@ -103,6 +103,7 @@ export const INSTRUCTIONS_PLUGIN = new URL('./instructions-plugin.js', import.me
 
 /** The dsh plugin that gives a team's child its standing instructions as a system prompt section. */
 export const TEAM_CHILD_PLUGIN = new URL('./team-child-plugin.js', import.meta.url).href
+export const TEAM_CHILD_COMPACTION_PLUGIN = new URL('./team-child-compaction.js', import.meta.url).href
 
 /** Longest custom instructions the settings accept, in characters. */
 export const INSTRUCTIONS_MAX = 10_000
@@ -275,13 +276,16 @@ const BASE_SUBAGENT_TOOLS = ['tool-subagent', 'tool-subagent-fork', 'tool-subage
  * removes the fixed-model tools that patch adds, with their prompt section.
  * Same options as homePatch (`subagents`, `persona`). The child's standing
  * instructions go in the system prompt ({@link TEAM_CHILD_PLUGIN}), where
- * compaction leaves them be.
+ * compaction leaves them be. The child backend bounds automatic compaction
+ * pressure without changing model capacity, reply caps, or other roles.
  */
 export function teamChildPatch({ subagents = [], persona = null } = {}) {
   const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
   const rows = [
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
     ...pinned.map(({ provider }) => ({ id: `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`, disabled: true })),
+    { id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic', disabled: true },
+    { insert: [{ id: 'agent-desk-child-compaction', name: TEAM_CHILD_COMPACTION_PLUGIN }] },
   ]
   if (pinned.length) {
     const { personaPrefix = '', personaSuffix = '' } = persona ?? {}

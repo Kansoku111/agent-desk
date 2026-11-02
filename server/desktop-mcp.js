@@ -6,12 +6,14 @@
 // on the first tool call and stays up for the session. Screenshots are scaled
 // to fit 1280x800; every coordinate the agent sends is a pixel of the latest
 // screenshot of the current display, mapped back to physical pixels here.
+// The ui_* tools (desktop-ui.js) work on UI elements instead of pixels.
 //
 // Usage: node desktop-mcp.js
 import { spawn } from 'node:child_process'
 import readline from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { displayFor, parseKeys, toScreen, toView, viewFor } from './desktop.js'
+import { createUiTools } from './desktop-ui.js'
 
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
 const helperScript = fileURLToPath(new URL('./desktop-helper.ps1', import.meta.url))
@@ -407,12 +409,16 @@ const TOOLS = [
       return [{ type: 'text', text: `Waited ${seconds}s. ${displayLine(display, list)}` }, await screenshot(display)]
     },
   },
+  // UI-element tools (ui_list, ui_snapshot, ui_find, ui_act): the same switch and the same approval-free access as the pixel tools above.
+  ...createUiTools(),
 ]
 
 const INSTRUCTIONS = 'Controls the user\'s real Windows desktop with mouse and keyboard. Take a screenshot first and after anything '
   + 'that changes the screen; coordinates are pixels of the latest screenshot. Prefer shell or file tools when they can do the job, '
   + 'and use this for apps that have no other interface. The user may be using the PC at the same time: do only what the task needs, '
-  + 'and ask before anything irreversible (sending, purchasing, deleting, changing system settings).'
+  + 'and ask before anything irreversible (sending, purchasing, deleting, changing system settings). '
+  + 'Where an app exposes its UI elements, prefer ui_snapshot / ui_find / ui_act over clicking pixels: they act on elements by name '
+  + 'without moving the mouse. Use the screenshot tools for apps whose elements come back empty or unnamed, and to confirm the result.'
 
 // ------------------------------------------------------------------ MCP over stdio
 

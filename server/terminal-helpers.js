@@ -97,10 +97,9 @@ export function hookSettings(node = process.execPath, script = hookScript, { den
   // SubagentStart / SubagentStop: a turn ends (Stop) while its background agents go on working.
   // StopFailure: a turn that ended on an API error (rate limit, overload) runs no Stop.
   const events = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'StopFailure', 'PostModelSwitch', 'SubagentStart', 'SubagentStop']
-  // Lifecycle reports must finish before Claude can advance: an async Start can
-  // arrive after Stop and resurrect an agent that has already finished (including
-  // a resumed agent, which legitimately reuses its id).
-  const ordered = new Set(['SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'Notification'])
+  // Prompt admission and lifecycle reports must arrive before later failures;
+  // otherwise an old prompt can be mistaken for the turn that hit its limit.
+  const ordered = new Set(['UserPromptSubmit', 'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'Notification'])
   const settings = { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [{ ...command, async: !ordered.has(event) }] }]])) }
   if (deniedAgents.length) settings.permissions = { deny: deniedAgents.map((name) => `Agent(${name})`) }
   return settings

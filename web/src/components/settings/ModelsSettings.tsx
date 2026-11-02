@@ -7,6 +7,7 @@ import { isModelVisible } from '../../model-selection'
 import { effortLabel, pickableEfforts } from '../../util'
 import { CLAUDE_CODE } from '../WorkflowModelField'
 import { TaskPresetModels } from '../TaskPresets'
+import { UsageFallbackSettings } from './UsageFallbackSettings'
 
 function contextLabel(tokens: number) {
   return tokens >= 1_000_000 ? `${tokens / 1_000_000}M` : `${Math.round(tokens / 1000)}K`
@@ -260,8 +261,10 @@ function ModelVisibility() {
 }
 
 export function ModelsSettings({ contextOptions }: { contextOptions: number[] }) {
+  const server = useStore((state) => state.server)
   return (
     <div className="settings-section">
+      {server && <UsageFallbackSettings server={server} />}
       <ModelVisibility />
       <FastMode />
       <ContextSizes contextOptions={contextOptions} />

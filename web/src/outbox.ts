@@ -14,7 +14,7 @@ export interface QueuedMessage {
 }
 type Queues = Record<string, QueuedMessage[]>
 type Receipt = { status: 'accepted'; turnId: string; kind: 'send' | 'steer' } | { status: 'missing' | 'uncertain' }
-type Thread = { status: 'idle' | 'running' | 'error' }
+type Thread = { status: 'idle' | 'running' | 'error'; fallbackTo?: { kind: 'terminal'; id: string } }
 type Options = {
   initial: Queues
   persist(queues: Queues): void
@@ -112,7 +112,8 @@ export class Outbox {
   steer(threadId: string, id: string): Promise<void> {
     return this.exclusive(threadId, async () => {
       const message = this.find(threadId, id)
-      if (!message || message.phase !== 'queued' || !this.canConnect() || this.options.thread(threadId)?.status !== 'running') return
+      const thread = this.options.thread(threadId)
+      if (!message || message.phase !== 'queued' || !this.canConnect() || thread?.fallbackTo || thread?.status !== 'running') return
       this.update(threadId, id, { phase: 'sending', operation: 'steer', error: undefined })
       try {
         const result = await this.options.request('thread.steer', this.params(threadId, message)) as { status?: string; steered?: boolean }
@@ -138,7 +139,7 @@ export class Outbox {
         continue
       }
       const thread = this.options.thread(threadId)
-      if (!thread || (thread.status !== 'idle' && !(allowError && thread.status === 'error')) || message.phase !== 'queued') return
+      if (!thread || thread.fallbackTo || (thread.status !== 'idle' && !(allowError && thread.status === 'error')) || message.phase !== 'queued') return
       this.update(threadId, message.id, { phase: 'sending', operation: 'send', error: undefined })
       try {
         const result = await this.options.request('thread.send', this.params(threadId, message)) as { status?: string; turnId?: string }

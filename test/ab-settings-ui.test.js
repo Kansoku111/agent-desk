@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import test from 'node:test'
+import * as awaitImportUsageFallback from '../shared/usage-fallback.js'
 import ts from 'typescript'
 import * as workflowEffort from '../shared/workflow-effort.js'
 import { claudeCodeModels } from '../web/src/model-selection.ts'
@@ -20,7 +21,7 @@ const compile = (source, modules) => {
   return exports
 }
 const moduleSource = async (file) => fs.readFile(new URL(file, import.meta.url), 'utf8')
-const fallbackSource = await moduleSource('../web/src/components/LeaderFallback.tsx')
+const fallbackSource = await moduleSource('../web/src/components/FallbackSummary.tsx')
 const fieldSource = await moduleSource('../web/src/components/WorkflowModelField.tsx')
 const fieldComponents = compile(fieldSource, {
   react: {}, 'react/jsx-runtime': jsxRuntime, 'lucide-react': { ChevronDown: 'ChevronDown' },
@@ -40,12 +41,12 @@ const inputSource = await moduleSource('../web/src/components/AbInput.tsx')
 const NO_LEVELS = JSON.stringify(['openai-codex', 'no-levels'])
 const LOW_ONLY = JSON.stringify(['openai-codex', 'low-only'])
 
-function mountAbStartDialog({ config, effortsByModel = { [NO_LEVELS]: [], [LOW_ONLY]: [{ value: 'low' }] } } = {}) {
+function mountAbStartDialog({ config, usageFallbackRoutes, effortsByModel = { [NO_LEVELS]: [], [LOW_ONLY]: [{ value: 'low' }] } } = {}) {
   const saved = { a: NO_LEVELS, b: NO_LEVELS, leader: NO_LEVELS, implementer: NO_LEVELS, leaderFallback: '', fallbackEffort: '',
     efforts: { a: 'high', b: 'high', leader: 'high', implementer: 'high' },
     lean: true, delegate: false, review: false, toolMode: 'native', ...config }
   const server = {
-    settings: { modelVisibility: {} },
+    settings: { modelVisibility: {}, usageFallbackRoutes },
     catalog: {
       providers: { 'openai-codex': 'GPT' },
       models: [
@@ -103,12 +104,13 @@ function mountAbStartDialog({ config, effortsByModel = { [NO_LEVELS]: [], [LOW_O
     '../store': store,
     '../model-selection': { isModelVisible: () => true, providerReady: () => true, visibleModels: (server) => server.catalog.models },
     './WorkflowModelField': fieldComponents,
-    './LeaderFallback': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, './WorkflowModelField': fieldComponents, '../../../shared/workflow-effort.js': workflowEffort }),
+    './FallbackSummary': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, '../store': store }),
+    '../../../shared/usage-fallback.js': awaitImportUsageFallback,
     '../../../shared/workflow-effort.js': workflowEffort,
     '../../../shared/usage-score.js': { scoresUpTo: () => [] },
     './Modal': { Modal: ({ children }) => jsx('div', { children }), ConfirmDialog: () => null },
     './PtcToggle': { PtcToggle: () => null },
-    './ClaudeAuthConsent': { ClaudeAuthConsent: () => null },
+    './ClaudeAuthConsent': { ClaudeAuthConsent: () => jsx('span', { 'data-auth-consent': true }) },
     './UsageCost': { UsageCost: () => null },
     './ThreadView': { OpenInMenu: () => null },
     './TurnView': { TurnView: () => null },
@@ -179,15 +181,23 @@ async function click(node) {
   await flush()
 }
 
-test('AB fallback is collapsed and selected model is saved and sent', async () => {
-  const ui = mountAbStartDialog({ config: { a: LOW_ONLY, b: LOW_ONLY, leader: LOW_ONLY, implementer: LOW_ONLY, efforts: { a: 'low', b: 'low', leader: 'low', implementer: 'low' } } })
+test('AB asks for Claude authentication when the shared fallback needs it', async () => {
+  const ui = mountAbStartDialog({
+    usageFallbackRoutes: [{ model: 'claude:haiku', effort: 'low' }],
+    config: { a: LOW_ONLY, b: LOW_ONLY, leader: LOW_ONLY, implementer: LOW_ONLY, efforts: { a: 'low', b: 'low', leader: 'low', implementer: 'low' } },
+  })
   await ui.ready()
-  const details = ui.walk((node) => node.type === 'details')[0]
-  assert.equal(Boolean(details.props.open), false)
-  const fallback = ui.walk((node) => node.type === 'div' && node.props.className === 'ab-field' && node.props.children?.[0]?.props?.children === 'リーダーの切り替え先')[0]
-  find(fallback, (node) => node.type === 'button' && node.props.label === 'レベルなし').props.onSelect()
-  ui.render()
-  await flush()
+  await typeText(ui, '相談')
+  assert.equal(ui.walk((node) => node.props['data-auth-consent'] === true).length, 1)
+  assert.equal(startButton(ui).props.disabled, true)
+  assert.equal(ui.walk((node) => node.type === 'details').length, 0)
+})
+
+test('AB displays the old fallback without editing and preserves it on start', async () => {
+  const ui = mountAbStartDialog({ config: { a: LOW_ONLY, b: LOW_ONLY, leader: LOW_ONLY, implementer: LOW_ONLY, leaderFallback: NO_LEVELS, fallbackEffort: '', efforts: { a: 'low', b: 'low', leader: 'low', implementer: 'low' } } })
+  await ui.ready()
+  assert.equal(ui.walk((node) => node.type === 'button' && node.props.children === '設定 → モデルを開く').length, 1)
+  assert.equal(ui.walk((node) => node.type === 'div' && node.props.className === 'ab-field' && node.props.children?.[0]?.props?.children === 'リーダーの切り替え先').length, 0)
   await typeText(ui, '相談')
   await click(startButton(ui))
   assert.equal(ui.rpcCalls.findLast(({ type }) => type === 'ab.create').params.config.leaderFallback, NO_LEVELS)

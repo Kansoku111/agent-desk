@@ -41,6 +41,9 @@ export interface TaskPresetRun {
 
 export interface ThreadSummary {
   preset?: { runId: string; browser?: boolean }
+  fallbackTo?: { kind: 'terminal'; id: string }
+  usageFallbackFrom?: { kind: 'terminal'; id: string }
+  usageFallbackInterrupted?: boolean
   ab?: { runId: string; jobId: string; writable: boolean; lean: boolean }
   id: string
   title: string
@@ -89,6 +92,10 @@ export interface TerminalSummary {
   /** What Claude Code reports using (its hooks), also after a `/model` typed in the terminal. */
   modelInUse: string | null
   effortInUse: string | null
+  usageFallbackFrom?: { kind: 'thread'; id: string; turnId: string }
+  usageFallbackInterrupted?: boolean
+  fallbackTo?: { kind: 'thread'; id: string }
+  usageFallbackError?: string
   /** An agent team's leader or Claude child (server/teams.js); null for a task of its own. */
   team: { id: string; role: 'leader' | 'child'; childId?: string } | null
 }
@@ -177,7 +184,8 @@ export interface TeamSummary {
   /** The team's own settings: chosen when it started, changed in its panel since. */
   config?: TeamSettings
   toolModeBusy?: boolean
-  leaderFallbackUsed?: boolean; leaderFallbackError?: string
+  leaderFallbackUsed?: boolean; leaderFallbackError?: string; sharedFallbackPolicy?: boolean
+  usageFallbackRoutes?: { model: string; effort: string }[]
   execution?: { leaderModel?: string; planImplement?: boolean; stopped: boolean; metrics: { childTurns: number; parentTurns?: number; parentReports: number; verifications: number; repairs: number } }
   createdAt: number
   updatedAt: number
@@ -424,6 +432,7 @@ export interface Settings extends UsageDisplay {
   theme: Theme
   defaultModel: string | null
   defaultEffort: string
+  usageFallbackRoutes?: { model: string; effort: string }[] | null
   defaultPermissionMode: PermissionMode
   workspaces: string[]
   lastWorkspace: string | null

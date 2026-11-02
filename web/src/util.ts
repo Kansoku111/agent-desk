@@ -265,6 +265,10 @@ const DESKTOP_VERBS: Record<string, string> = {
   list_windows: 'ウィンドウ一覧',
   focus_window: 'ウィンドウを切り替え',
   wait: '待機',
+  ui_list: 'アプリ・ウィンドウ一覧',
+  ui_snapshot: '画面の要素を取得',
+  ui_find: '要素を検索',
+  ui_act: '要素を操作',
 }
 
 const summaries = new WeakMap<ToolItem, { workspace: string | null | undefined; summary: ToolSummary }>()
@@ -304,7 +308,9 @@ function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary 
     const x = input.x ?? input.start_x
     const y = input.y ?? input.start_y
     const at = x !== undefined && y !== undefined ? `(${str(x)}, ${str(y)})` : ''
-    const target = str(input.text ?? input.keys ?? input.title ?? input.direction ?? '') || at
+    // The ui_* tools name an element by ref or app; ui_act also shows its action ("click @s1:e3"), not the text it types.
+    const element = [input.action, input.ref ?? input.app ?? input.name ?? input.role].map((part) => str(part ?? '')).filter(Boolean).join(' ')
+    const target = action.startsWith('ui_') ? element : str(input.text ?? input.keys ?? input.title ?? input.direction ?? '') || at
     return { icon: 'desktop', verb, target: firstLine(target), detail: output ? { kind: 'code', text: output } : null }
   }
 

@@ -4,7 +4,7 @@
 // screen, then the live output. Hooks passed with --settings tell the session
 // id (to resume after a restart) and whether Claude is working, waiting for an
 // approval, or done.
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -15,6 +15,8 @@ import { ClaudeTranscripts } from './claude-transcript.js'
 import { instructionsSection } from './instructions-plugin.js'
 import { readJson, writeJson } from './json-file.js'
 import { sameToken } from './remote.js'
+import { isLeaderUsageLimit } from './leader-usage-limit.js'
+import { usageFallbackChoice } from '../shared/usage-fallback.js'
 import { addScores } from '../shared/usage-score.js'
 import {
   API_KEY_ENV, DEFAULT_TITLE, DIALOG_RULE, EFFORTS, INHERITED_MARKERS, READY_DELAY_MS, READY_FALLBACK_MS, isFile,
@@ -75,7 +77,7 @@ export class TerminalManager extends EventEmitter {
   constructor({
     file, settingsFile, hookUrl, send, pty = null, findClaude: find = () => findClaude(), log = () => {},
     claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null, preflight = null, instructions = () => '',
-    gptSubagent = () => null,
+    gptSubagent = () => null, fallbackPreflight = null, usageFallbackRoutes = () => null, validateFallbackModel = () => {}, handoffThread = null,
   }) {
     super()
     this.file = file
@@ -88,6 +90,12 @@ export class TerminalManager extends EventEmitter {
     this.gptSubagent = gptSubagent
     this.gptMcpDir = path.join(path.dirname(settingsFile), 'claude-gpt-subagent')
     this.preflight = preflight
+    this.fallbackPreflight = fallbackPreflight
+    this.usageFallbackRoutes = usageFallbackRoutes
+    this.validateFallbackModel = validateFallbackModel
+    this.handoffThread = handoffThread
+    this.fallbacks = new Map()
+    this.fallbackTasks = new Set()
     this.hookUrl = hookUrl
     this.send = send
     this.pty = pty
@@ -110,8 +118,16 @@ export class TerminalManager extends EventEmitter {
 
   async load() {
     const saved = await readJson(this.file, { terminals: [] })
+    let interruptedFallback = false
     for (const record of Array.isArray(saved?.terminals) ? saved.terminals : []) {
-      if (typeof record?.id === 'string' && typeof record.workspace === 'string') this.records.set(record.id, record)
+      if (typeof record?.id !== 'string' || typeof record.workspace !== 'string') continue
+      if (record.usageFallbackPreparing) { delete record.usageFallbackPreparing; record.usageFallbackInterrupted = true; interruptedFallback = true }
+      if (record.usageFallbackPending) {
+        delete record.usageFallbackPending
+        record.usageFallbackInterrupted = true
+        interruptedFallback = true
+      }
+      this.records.set(record.id, record)
     }
     this.defaults = {
       model: MODEL_NAME.test(saved?.defaults?.model ?? '') ? saved.defaults.model : null,
@@ -119,18 +135,21 @@ export class TerminalManager extends EventEmitter {
     }
     await writeJson(this.settingsFile, hookSettings())
     await writeJson(this.teamSettingsFile, teamHookSettings())
+    if (interruptedFallback) await this.#save()
     return this
   }
 
-  #save() {
+  #save({ required = false } = {}) {
     const snapshot = { defaults: { ...this.defaults }, terminals: [...this.records.values()].map((record) => structuredClone(record)) }
-    this.writes = this.writes.then(() => writeJson(this.file, snapshot)).catch((error) => this.log('terminals:', error.message))
-    return this.writes
+    const write = this.writes.catch(() => {}).then(() => writeJson(this.file, snapshot))
+    this.writes = write.catch((error) => this.log('terminals:', error.message))
+    return required ? write : this.writes
   }
 
-  #record(id) {
+  #record(id, allowPending = false) {
     const record = this.records.get(id)
     if (!record) throw new Error('Claude Code のタスクが見つかりません')
+    if (record.usageFallbackPending && !allowPending) throw new Error('切り替え先を準備中です')
     return record
   }
 
@@ -160,12 +179,16 @@ export class TerminalManager extends EventEmitter {
       effortInUse: live?.effort ?? null,
       // A team's leader or child (teams.js); null for a task of its own.
       team: record.team ?? null,
+      ...(record.usageFallbackFrom ? { usageFallbackFrom: record.usageFallbackFrom } : {}),
+      ...(record.usageFallbackInterrupted ? { usageFallbackInterrupted: true } : {}),
+      ...(!record.usageFallbackPreparing && record.fallbackTo ? { fallbackTo: record.fallbackTo } : {}),
+      ...(record.usageFallbackError ? { usageFallbackError: record.usageFallbackError } : {}),
       score: record.score ?? null,
     }
   }
 
   list() {
-    return [...this.records.values()].map((record) => this.summary(record)).sort((a, b) => b.updatedAt - a.updatedAt)
+    return [...this.records.values()].filter((record) => !record.usageFallbackPending).map((record) => this.summary(record)).sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
   /**
@@ -173,7 +196,7 @@ export class TerminalManager extends EventEmitter {
    * A turn that ended can leave background agents running: they die with the process.
    */
   get busy() {
-    return this.starting.size > 0
+    return this.starting.size > 0 || this.fallbacks.size > 0
       || [...this.live.values()].some((live) => live.alive && (live.activity === 'running' || this.#background(live) > 0))
   }
 
@@ -213,6 +236,7 @@ export class TerminalManager extends EventEmitter {
   }
 
   #changed(record, input) {
+    if (record.usageFallbackPending || record.usageFallbackPreparing) return
     this.emit('terminal', this.summary(record), input)
   }
 
@@ -225,7 +249,7 @@ export class TerminalManager extends EventEmitter {
    * Starts Claude Code in a folder. A team (teams.js) also gives its role, the
    * model and level, a fixed title, and the first prompt (Claude Code starts on it).
    */
-  async create({ workspace, size, team = null, model, effort, title, prompt = null }) {
+  async create({ workspace, size, team = null, model, effort, title, prompt = null, usageFallbackFrom = null, usageFallbackPending = false, requireDurable = false }) {
     const dir = String(workspace ?? '')
     if (!path.isAbsolute(dir) || !fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`フォルダが見つかりません: ${dir}`)
     if (model != null && !MODEL_NAME.test(String(model))) throw new Error('このモデルは指定できません')
@@ -237,15 +261,21 @@ export class TerminalManager extends EventEmitter {
       createdAt: now, updatedAt: now, archived: false,
       model: model === undefined ? this.defaults.model : model, effort: effort === undefined ? this.defaults.effort : effort,
       ...(team ? { team } : {}),
+      ...(usageFallbackFrom ? { usageFallbackFrom, ...(usageFallbackPending ? { usageFallbackPending: true } : {}) } : {}),
     }
     this.records.set(record.id, record)
     try {
       await this.#start(record, clampSize(size), prompt)
+      await this.#save({ required: requireDurable })
     } catch (error) {
+      const live = this.live.get(record.id)
+      this.live.delete(record.id)
+      if (live?.alive) { try { live.proc.kill() } catch {} }
+      live?.term.dispose()
       this.records.delete(record.id)
+      if (requireDurable) await this.#save()
       throw error
     }
-    await this.#save()
     this.#changed(record)
     return this.summary(record)
   }
@@ -373,7 +403,7 @@ export class TerminalManager extends EventEmitter {
 
   /** `prompt`: a first message Claude Code starts working on (a team's task or report). */
   #start(record, size, prompt = null) {
-    if (!record.team) return this.#startNow(record, size, prompt)
+    if (!record.team && !record.usageFallbackFrom) return this.#startNow(record, size, prompt)
     if (this.starting.has(record.id)) {
       const pending = this.starting.get(record.id)
       if (prompt && pending.prompt && pending.prompt !== prompt) return Promise.reject(new Error('Claude Code は別のメッセージで起動中です。後でもう一度送ってください。'))
@@ -392,8 +422,9 @@ export class TerminalManager extends EventEmitter {
     const claude = this.findClaude()
     const env = { ...process.env }
     for (const name of INHERITED_MARKERS) delete env[name]
-    if (!this.preflight) throw new Error('チームの設定で Claude Code の認証方法を確認してください。')
-    const refusal = await this.preflight({ record, claude, cwd: record.workspace, env })
+    const preflight = record.team ? this.preflight : this.fallbackPreflight
+    if (!preflight) throw new Error('Claude Code の認証方法を確認してください。')
+    const refusal = await preflight({ record, claude, cwd: record.workspace, env })
     if (refusal) throw new Error(refusal)
     if (pending.cancelled || this.records.get(record.id) !== record) throw new Error('Claude Code の起動はキャンセルされました。')
     this.#startNow(record, size, pending.prompt, { claude, env })
@@ -542,6 +573,7 @@ export class TerminalManager extends EventEmitter {
    */
   async attach(id, client, size) {
     const record = this.#record(id)
+    if (!this.live.has(id) && record.fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
     if (!this.live.has(id)) {
       await this.#start(record, clampSize(size))
       this.#changed(record)
@@ -604,6 +636,10 @@ export class TerminalManager extends EventEmitter {
    * only the viewer in control answers, or Claude would get every answer twice.
    */
   input(id, client, data, reply = false) {
+    const record = this.records.get(id)
+    if (record?.usageFallbackPending) throw new Error('切り替え先を準備中です')
+    if (record?.fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
+    if (!reply && this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const live = this.live.get(id)
     if (!live?.alive || typeof data !== 'string' || !data) return false
     if (!reply && data !== '\x1b' && data !== '\x03') this.executionGuard?.(this.records.get(id))
@@ -611,6 +647,7 @@ export class TerminalManager extends EventEmitter {
       if (live.controller && live.controller !== client) return false
     } else {
       live.inputAt = Date.now()
+      live.dialogRevision = (live.dialogRevision ?? 0) + 1
       if (live.controller !== client) this.#control(id, live, client)
     }
     live.proc.write(data)
@@ -640,6 +677,7 @@ export class TerminalManager extends EventEmitter {
    * it is kept for when that viewer types next (another screen is in control).
    */
   resize(id, client, size, claim = true) {
+    if (this.records.get(id)?.usageFallbackPending) throw new Error('切り替え先を準備中です')
     const live = this.live.get(id)
     if (!live) return
     live.sizes.set(client, clampSize(size))
@@ -661,9 +699,14 @@ export class TerminalManager extends EventEmitter {
   }
 
   /** A message typed outside the terminal screen: pasted (keeping its line breaks) and sent with Enter. */
-  async sendMessage(id, text, context) {
+  async sendMessage(id, text, context, guard = () => {}, allowPending = false) {
+    const candidate = this.records.get(id)
+    if (candidate?.usageFallbackPending && !allowPending) throw new Error('切り替え先を準備中です')
+    if (candidate?.fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
+    if (!allowPending && this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const live = await this.#whenReady(id)
-    const record = this.#record(id)
+    guard()
+    const record = this.#record(id, allowPending)
     if (typeof text !== 'string') return
     const current = () => this.records.get(id) === record && this.live.get(id) === live
       && live.alive && !live.stopRequested && !live.replacing && !this.closing
@@ -679,6 +722,7 @@ export class TerminalManager extends EventEmitter {
       let delivered = false
       try {
         if (!current()) throw new Error('Claude Code が動いていません')
+        guard()
         if (live.sendBlocked) throw new Error('前回の送信状態が不明です。再起動してから送信してください。')
         this.executionGuard?.(record, context)
         // A paste marker inside the text would end the paste early and send the rest as typed keys.
@@ -690,6 +734,7 @@ export class TerminalManager extends EventEmitter {
         const wait = SEND_ENTER_MS + Math.min(text.length / 10, SEND_ENTER_MAX_MS)
         await new Promise((resolve) => setTimeout(resolve, wait))
         if (!current()) throw new Error('Claude Code が動いていません')
+        guard()
         live.proc.write('\r')
         delivered = true
         resolveDelivery()
@@ -702,6 +747,7 @@ export class TerminalManager extends EventEmitter {
           await new Promise((resolve) => setTimeout(resolve, SEND_RETRY_MS))
           if (!current() || live.activity !== 'idle') break
           try {
+            guard()
             live.proc.write('\r')
           } catch {
             break
@@ -743,6 +789,8 @@ export class TerminalManager extends EventEmitter {
 
   /** Presses Enter, for a pasted message Claude Code did not take. */
   pressEnter(id) {
+    if (this.#record(id).fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
+    if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const live = this.live.get(id)
     if (live?.alive) live.proc.write('\r')
   }
@@ -767,28 +815,74 @@ export class TerminalManager extends EventEmitter {
    * can be answered from the chat view; null when it waits on none.
    */
   async dialog(id) {
+    if (this.records.get(id)?.usageFallbackPending) throw new Error('切り替え先を準備中です')
     const live = this.live.get(id)
     if (!live?.alive || live.activity !== 'approval') return null
     await new Promise((resolve) => live.term.write('', resolve))
-    return parseDialog(this.#screenLines(live))
+    if (this.live.get(id) !== live || !live.alive || live.activity !== 'approval') return null
+    const lines = this.#screenLines(live)
+    // Input mode and multi-select screens do not always have a numbered list.
+    // Keep them operable in chat without inventing an answer or parsing CLI internals.
+    const parsed = parseDialog(lines)
+    const screen = lines.join('\n').trim()
+    if (!screen) return null
+    const dialogId = createHash('sha256').update(JSON.stringify([live.secret, live.dialogRevision ?? 0, lines])).digest('hex')
+    return { ...(parsed ?? { text: [], options: [] }), screen, dialogId }
   }
 
   /**
    * Picks an entry of that choice by its number, as typing it does. `label` is
    * the entry the user saw: when the screen has moved on, nothing is picked.
    */
-  async choose(id, key, label) {
+  async choose(id, key, label, dialogId) {
+    return this.#respond(id, dialogId, (dialog) => {
+      const option = dialog.options.find((entry) => entry.key === String(key))
+      if (!option || option.label !== label) throw new Error('Claude Code の画面が変わりました。もう一度確かめてください')
+      return option.key
+    }).then(() => ({ chosen: String(key) }))
+  }
+
+  /** Only explicit, screen-bound actions; never use sendMessage's Enter retries in a dialog. */
+  async respond(id, dialogId, { key, text } = {}) {
+    const keys = { up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C', tab: '\t', space: ' ', enter: '\r', escape: '\x1b' }
+    if (typeof dialogId !== 'string' || !dialogId) throw new Error('質問を読み直してください')
+    if ((key === undefined) === (text === undefined)) throw new Error('回答の操作を一つ指定してください')
+    if (key !== undefined && !Object.hasOwn(keys, key)) throw new Error('未対応の質問操作です')
+    if (text !== undefined && (typeof text !== 'string' || !text.trim() || text.length > 8000 || /[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(text))) {
+      throw new Error('回答は制御文字を含まない8000文字以内のテキストにしてください')
+    }
+    await this.#respond(id, dialogId, (_dialog, live) => {
+      if (text === undefined) return keys[key]
+      if (!live.term.modes.bracketedPasteMode && text.includes('\n')) throw new Error('この入力欄には複数行を送れません。一行で回答してください')
+      return live.term.modes.bracketedPasteMode ? '\x1b[200~' + text + '\x1b[201~' : text
+    })
+    return { sent: true }
+  }
+
+  async #respond(id, dialogId, data) {
+    if (this.#record(id).fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
+    if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const live = this.live.get(id)
-    const dialog = await this.dialog(id)
-    const option = dialog?.options.find((entry) => entry.key === String(key))
-    if (!option || option.label !== label) throw new Error('Claude Code の画面が変わりました。もう一度確かめてください')
-    live.inputAt = Date.now()
-    live.proc.write(option.key)
-    return { chosen: option.key }
+    if (!live?.alive || live.dialogResponding) throw new Error('質問への操作中です。表示の更新を待ってください')
+    live.dialogResponding = true
+    try {
+      const dialog = await this.dialog(id)
+      if (!dialog || (dialogId !== undefined && dialog.dialogId !== dialogId)) throw new Error('Claude Code の画面が変わりました。もう一度確かめてください')
+      const input = data(dialog, live)
+      this.executionGuard?.(this.records.get(id))
+      // Consume before writing: two clients clicking the same question cannot both answer it.
+      live.dialogRevision = (live.dialogRevision ?? 0) + 1
+      live.inputAt = Date.now()
+      live.proc.write(input)
+    } finally {
+      live.dialogResponding = false
+    }
   }
 
   /** Types a file's path into Claude Code (an image from a phone, or pasted in the window). */
   async insertPath(id, file) {
+    if (this.#record(id).fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
+    if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const live = await this.#whenReady(id)
     const text = /\s/.test(file) ? `"${file}"` : file
     live.proc.write(live.term.modes.bracketedPasteMode ? `\x1b[200~${text} \x1b[201~` : `${text} `)
@@ -797,6 +891,8 @@ export class TerminalManager extends EventEmitter {
   /** Starts Claude Code again after it ended, resuming its conversation; `prompt` is sent as it starts. */
   restart(id, client, size, { prompt = null } = {}) {
     const record = this.#record(id)
+    if (record.fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
+    if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const current = this.live.get(id)
     if (current?.alive && !current.replacing) return this.summary(record)
     this.#broadcast(id, { event: 'termReset', terminalId: id })
@@ -816,6 +912,8 @@ export class TerminalManager extends EventEmitter {
    */
   async configure(id, client, { model, effort }) {
     const record = this.#record(id)
+    if (record.fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
+    if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const next = {
       model: model === undefined ? record.model ?? null : model,
       effort: effort === undefined ? record.effort ?? null : effort,
@@ -859,7 +957,9 @@ export class TerminalManager extends EventEmitter {
     return this.summary(record)
   }
 
-  stop(id) {
+  stop(id, allowPending = false) {
+    this.#record(id, allowPending)
+    if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const pending = this.starting.get(id)
     if (pending) pending.cancelled = true
     const live = this.live.get(id)
@@ -868,7 +968,7 @@ export class TerminalManager extends EventEmitter {
       live.stopRequested = true
       live.proc.kill()
     }
-    return this.summary(this.#record(id))
+    return this.summary(this.#record(id, allowPending))
   }
 
   async update(id, { title, archived, pinned }) {
@@ -884,8 +984,10 @@ export class TerminalManager extends EventEmitter {
     return this.summary(record)
   }
 
-  async remove(id) {
+  async remove(id, allowPending = false) {
     if (!this.records.has(id)) return { removed: false }
+    this.#record(id, allowPending)
+    if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const live = this.live.get(id)
     this.live.delete(id)
     if (live?.alive) {
@@ -899,6 +1001,18 @@ export class TerminalManager extends EventEmitter {
     await this.#save()
     this.emit('removed', { terminalId: id })
     return { removed: true }
+  }
+
+  /** Only the handoff coordinator can operate an unpublished target. */
+  deliverUsageFallback(id, text, guard) { return this.sendMessage(id, text, undefined, guard, true) }
+  stopUsageFallback(id) { return this.stop(id, true) }
+  discardUsageFallback(id) { return this.remove(id, true) }
+  async revealUsageFallback(id) {
+    const record = this.#record(id, true)
+    if (!record.usageFallbackPending) return
+    delete record.usageFallbackPending
+    try { await this.#save({ required: true }) } catch (error) { record.usageFallbackPending = true; throw error }
+    this.#changed(record)
   }
 
   /** A report from claude-hook.js; false when it does not come from a task's current process. */
@@ -928,6 +1042,14 @@ export class TerminalManager extends EventEmitter {
     if (effect.model) live.model = effect.model
     if (effect.effort) live.effort = effect.effort
     if (input.hook_event_name === 'SessionStart') live.sessionAt = Date.now()
+    if (event === 'UserPromptSubmit') {
+      if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
+      const routes = this.usageFallbackRoutes()
+      live.usageFallbackTurn = { id: randomUUID(), sessionId: record.sessionId,
+        hash: input.usage_fallback_hash, permissionMode: input.permission_mode, automatic: input.usage_fallback_auto === true,
+        routes: Array.isArray(routes) ? structuredClone(routes) : [] }
+      if (record.usageFallbackError) { delete record.usageFallbackError; save = true }
+    }
     const before = live.activity
     live.activity = effect.activity
     if (live.activity === 'running' && (before !== 'running' || event === 'UserPromptSubmit')) live.runningAt = Date.now()
@@ -937,15 +1059,82 @@ export class TerminalManager extends EventEmitter {
     if (save || reported || backgroundChanged || before !== live.activity) this.#changed(record, event === 'UserPromptSubmit' ? input : undefined)
     if (live.activity === 'approval' && before !== 'approval') this.emit('approval-needed', { terminalId: id, title: record.title })
     if (effect.finished) void this.#refreshUsage(id)
-    if (effect.finished && before !== 'idle') this.emit('turn-finished', { terminalId: id, title: record.title, failed: Boolean(effect.failed) })
+    if (effect.finished && before !== 'idle' && !record.usageFallbackPending) this.emit('turn-finished', { terminalId: id, title: record.title, failed: Boolean(effect.failed) })
+    if (event === 'StopFailure') this.#scheduleUsageFallback(record, live, input)
+    if (event === 'Stop') live.usageFallbackTurn = null
     // A team reads the reply a turn ended with (Stop's last_assistant_message) and its errors.
     this.emit('hook', { terminalId: id, input })
     return true
   }
 
+  #scheduleUsageFallback(record, live, input) {
+    const turn = live.usageFallbackTurn
+    const error = JSON.stringify({ error: input.error, error_details: input.error_details, message: input.message })
+    if (record.team || record.fallbackTo || record.usageFallbackPending || !turn || turn.automatic || turn.attempted || this.closing || this.fallbacks.has(record.id) || !isLeaderUsageLimit(error)) return
+    const choice = usageFallbackChoice(turn.routes, 'claude:' + (live.model ?? record.model ?? ''))
+    if (!choice) return
+    turn.attempted = true
+    const pending = { cancelled: false }
+    this.fallbacks.set(record.id, pending)
+    const inputAt = live.inputAt
+    let retired = false
+    const current = () => !pending.cancelled && !this.closing && this.records.get(record.id) === record
+      && this.live.get(record.id) === live && live.usageFallbackTurn === turn && live.inputAt === inputAt
+      && record.sessionId === turn.sessionId && !record.archived && this.#background(live) === 0
+      && (retired ? !live.alive : live.alive && live.activity === 'idle' && !live.replacing && !live.stopRequested)
+    const guard = () => { if (!current()) throw new Error('元のClaude Codeが作業中か状態が変わったため切り替えを中止しました') }
+    const task = Promise.resolve().then(async () => {
+      guard()
+      this.executionGuard?.(record)
+      if (!this.handoffThread) throw new Error('dshへの切り替えを利用できません')
+      if (!['default', 'acceptEdits', 'bypassPermissions', 'dontAsk', 'delegate'].includes(turn.permissionMode)) throw new Error('Claude Codeの権限・Plan状態を安全に引き継げません')
+      if (!/^[a-f0-9]{64}$/.test(turn.hash ?? '')) throw new Error('直前の依頼を確認できません')
+      this.validateFallbackModel(choice.model)
+      const { turns } = await this.conversation(record.id)
+      guard()
+      const lastText = turns.at(-1)?.user?.text
+      if (typeof lastText !== 'string' || createHash('sha256').update(lastText.trim()).digest('hex') !== turn.hash) throw new Error('直前の依頼を履歴で確認できません。会話を確認してから続けてください')
+      await this.handoffThread({ terminal: this.summary(record), turns, choice, guard, commit: async (id) => {
+        guard()
+        this.executionGuard?.(record)
+        record.fallbackTo = { kind: 'thread', id }
+        record.usageFallbackPreparing = true
+        await this.#save({ required: true })
+        guard()
+        retired = true
+        await new Promise((resolve, reject) => {
+          let timer
+          const done = () => { clearTimeout(timer); resolve() }
+          const previous = live.exited
+          live.exited = () => { previous?.(); done() }
+          timer = setTimeout(done, 5000)
+          try { live.stopRequested = true; live.proc.kill() } catch (failure) { clearTimeout(timer); reject(failure) }
+        })
+        if (live.alive) throw new Error('元のClaude Codeの終了を確認できません')
+        guard()
+      } })
+      delete record.usageFallbackPreparing
+      await this.#save({ required: true })
+      this.#changed(record)
+    }).catch((failure) => {
+      if (this.records.get(record.id) !== record) return
+      delete record.usageFallbackPreparing
+      if (!pending.cancelled && !this.closing) record.usageFallbackError = failure instanceof Error ? failure.message : String(failure)
+      void this.#save()
+      if (!this.closing) this.#changed(record)
+    }).finally(() => {
+      if (this.fallbacks.get(record.id) === pending) this.fallbacks.delete(record.id)
+      this.fallbackTasks.delete(task)
+    })
+    this.fallbackTasks.add(task)
+  }
+
+  cancelUsageFallbacks() { for (const pending of this.fallbacks.values()) pending.cancelled = true }
+
   /** Ends every Claude Code process (the app is quitting); their tasks resume on the next start. */
   async shutdown() {
     this.closing = true
+    this.cancelUsageFallbacks()
     for (const pending of this.starting.values()) pending.cancelled = true
     for (const [id, live] of this.live) {
       if (!live.alive) continue
@@ -954,6 +1143,7 @@ export class TerminalManager extends EventEmitter {
         live.proc.kill()
       } catch {}
     }
+    await Promise.allSettled([...this.fallbackTasks])
     await Promise.allSettled([...this.usageReads, ...[...this.live.keys()].filter((id) => this.records.has(id)).map((id) => this.#refreshUsage(id))])
     await this.writes
   }

@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from 'react'
 import {
   ArrowDown, Bot, ChevronDown, Copy, FolderOpen, GitBranch, MoreHorizontal, PanelLeftOpen, Pencil, RotateCw, SquareTerminal, Trash2,
 } from 'lucide-react'
-import { act, isNarrow, setState, setSubagentPanel, toast, useRemote, useStore } from '../store'
+import { act, isNarrow, navigate, setState, setSubagentPanel, toast, useRemote, useStore } from '../store'
 import type { TaskPresetSource, ThreadSummary, Turn } from '../types'
 import { copyText, undoableRestore, workspaceLabel } from '../util'
 import { Composer } from './Composer'
@@ -209,6 +209,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   // Keep the same team beside its leader and its children.
   const panelTeam = useTeam(thread?.team?.id) ?? team
   const teamPanel = useStore((state) => state.teamPanel)
+  const fallbackAvailable = useStore((state) => Boolean(thread?.fallbackTo && state.server?.terminals.some((entry) => entry.id === thread.fallbackTo?.id)))
   const { scroller, showJump, onScroll } = useConversationScroll(threadId, !!thread, turns)
 
   useEffect(() => {
@@ -225,6 +226,10 @@ export function ThreadView({ threadId }: { threadId: string }) {
       <Header thread={thread} presetOpen={presetOpen} onPresetToggle={() => setPresetOpen((open) => !open)} />
       <div className="thread-body">
         <div className="thread-main">
+          {thread.usageFallbackFrom && <div className="terminal-note" role="status">
+            <span>{thread.usageFallbackInterrupted ? '切り替え中にアプリが終了しました。作業状態を確認してください。' : 'Claude Codeから切り替わりました。会話は抜粋で、権限は読み取り専用です。'}</span>
+            <button type="button" className="button" onClick={() => navigate({ view: 'terminal', id: thread.usageFallbackFrom!.id })}>元の会話を開く</button>
+          </div>}
           <div
             className="scroller"
             ref={scroller}
@@ -261,7 +266,12 @@ export function ThreadView({ threadId }: { threadId: string }) {
               </button>
             )}
             <div className="column">
-              <Composer key={thread.id} thread={thread} autoFocus />
+              {thread.fallbackTo && <div className="terminal-note" role="status">
+                <span>利用上限のため Claude Code に切り替えました。元の会話は閲覧用です。送信待ちの入力はここに残っています。</span>
+                <button type="button" className="button" disabled={!fallbackAvailable} onClick={() => navigate({ view: 'terminal', id: thread.fallbackTo!.id })}>切り替え先を開く</button>
+                {!fallbackAvailable && <span>切り替え先を表示できません。タスク一覧と作業状態を確認してください。</span>}
+              </div>}
+              <Composer key={thread.id} thread={thread} autoFocus={!thread.fallbackTo} />
             </div>
           </div>
         </div>

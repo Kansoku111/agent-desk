@@ -45,6 +45,7 @@ import { appPaths, projectRoot } from './paths.js'
 import { PERMISSION_MODES, RuntimePool } from './runtime.js'
 import { openAppWindow, openExternal, openTargets } from './system.js'
 import { ThreadManager } from './threads.js'
+import { handoffClaudeToThread, handoffThreadToClaude } from './normal-fallback-handoff.js'
 import { SubagentTracker } from './subagents.js'
 import { assignProjectColors } from './project-colors.js'
 import { DEFAULT_REMOTE_PORT, RemoteAccess } from './remote.js'
@@ -151,6 +152,10 @@ const terminals = await new TerminalManager({
   instructions: () => effectiveCustomInstructions(settings),
   gptSubagent: () => (settings.subagentsEnabled !== false && settings.subagentModels?.['openai-codex'] ? { model: settings.subagentModels['openai-codex'], home: paths.home } : null),
   preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
+  fallbackPreflight: (context) => teams?.claudeAuth.guard(null, context) ?? AUTH_REQUIRED,
+  usageFallbackRoutes: () => settings.usageFallbackRoutes,
+  validateFallbackModel: (value) => validateAbModel(value, catalogState(), settings.modelVisibility),
+  handoffThread: (options) => handoffClaudeToThread({ ...options, threads }),
   log,
 }).load()
 /** Whether an agent or a Claude Code task is working: the app must not exit or be replaced then. */
@@ -418,6 +423,14 @@ threads = new ThreadManager({
   getMcpServers: mcpServersFor,
   checkpoints: new Checkpoints({ root: paths.checkpoints }),
   checkpointsEnabled: () => settings.checkpoints !== false,
+  usageFallbackRoutes: () => settings.usageFallbackRoutes,
+  validateFallbackModel: (value) => validateAbModel(value, catalogState(), settings.modelVisibility),
+  handoffClaude: async (options) => {
+    const children = await subagents.list(options.thread.id, options.thread.sessionId)
+    options.guard()
+    if (children.some((child) => ['starting', 'running'].includes(child.status))) throw new Error('元タスクのサブエージェントが作業中のため切り替えできません')
+    return handoffThreadToClaude({ ...options, terminals })
+  },
 })
 await threads.load()
 
@@ -442,6 +455,8 @@ teams = await new TeamManager({
   agents,
   catalog,
   getSettings: () => settings.agentTeams,
+  modelVisibility: () => settings.modelVisibility,
+  usageFallbackRoutes: () => settings.usageFallbackRoutes,
   apiUrl: () => `http://127.0.0.1:${server.address().port}/api/team`,
   instructions: () => effectiveCustomInstructions(settings),
   guides: () => ({ policies: settings.teamPolicies, playbooks: settings.teamPlaybooks }),
@@ -453,6 +468,7 @@ const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'
 const abRunner = new AbRunner({ threads, agents: abAgents, attachmentsDir: paths.attachmentsDir, instructions: () => effectiveCustomInstructions(settings),
   guard: (record) => teams.guardExecution(record) })
 const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalog.data,
+  usageFallbackRoutes: () => settings.usageFallbackRoutes,
   validateImages: async (images, config) => {
     const saved = await abImages(paths.attachmentsDir, images)
     if (saved.length) assertAbImageModels(config, catalog.data.models)
@@ -921,6 +937,7 @@ async function shutdown(code = 0) {
   clearInterval(opencodeGoTimer)
   // Request cancellation first, then close the transports as well. A stalled
   // ACP cancellation must not keep shutdown waiting forever for its prompt.
+  terminals.cancelUsageFallbacks()
   const presetsDrained = presets.shutdown().catch((error) => log('preset shutdown:', error.message))
   const abDrained = ab.shutdown().catch((error) => log('AB shutdown:', error.message))
   const drained = threads.shutdown().catch((error) => log('thread shutdown:', error.message))

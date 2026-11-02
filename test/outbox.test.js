@@ -32,6 +32,20 @@ function fixture(options = {}) {
   return { outbox, state }
 }
 
+test('a replaced task retains queued input but can reconcile an already sent receipt', async () => {
+  const calls = []
+  const initial = { task: [
+    { id: ID, text: 'already sent', images: [], phase: 'sending', operation: 'send' },
+    { id: NEXT_ID, text: 'still waiting', images: [], phase: 'queued' },
+  ] }
+  const { outbox } = fixture({ initial, thread: () => ({ status: 'idle', fallbackTo: { kind: 'terminal', id: 'next' } }),
+    request: async (type) => { calls.push(type); return { status: 'accepted', kind: 'send', turnId: 'turn' } } })
+  await outbox.flush('task')
+  await outbox.retry('task', NEXT_ID)
+  assert.deepEqual(calls, ['thread.messageStatus'])
+  assert.deepEqual(outbox.snapshot().task.map((entry) => entry.text), ['still waiting'])
+})
+
 test('a follow-up stays durably in the queue until its acknowledgement', async () => {
   const reply = deferred()
   const called = deferred()

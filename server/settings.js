@@ -10,6 +10,7 @@ import { PERMISSION_MODES } from './runtime.js'
 import { mergeTeamConfig, TEAM_DEFAULTS } from './team-config.js'
 import { parsePlaybooks, parsePolicies } from './team-playbooks.js'
 import { isUsdJpyRate } from '../shared/usage-score.js'
+import { validateUsageFallbackRoutes } from '../shared/usage-fallback.js'
 
 // Idempotent startup migration: GPT fast is not offered by the official SIWC route.
 export function migrateSettings(saved = {}) {
@@ -30,6 +31,8 @@ export const DEFAULT_SETTINGS = {
   usdJpyRate: null,
   defaultModel: null,
   defaultEffort: 'medium',
+  // Null preserves legacy per-mode preferences until the user explicitly configures the shared policy.
+  usageFallbackRoutes: null,
   defaultPermissionMode: 'workspace-write',
   workspaces: [],
   lastWorkspace: null,
@@ -106,6 +109,13 @@ export function planSettingsUpdate(current, patch, now) {
   const next = structuredClone(current)
   const effects = { homePatch: false, fastMode: false, modelCatalog: false, restart: false, channel: false, modelCheck: false }
 
+  if (owns(patch, 'usageFallbackRoutes')) {
+    // A stale editor must not overwrite another window's billing route choices.
+    if (!owns(patch, 'usageFallbackRoutesBase') || !isDeepStrictEqual(patch.usageFallbackRoutesBase, current.usageFallbackRoutes ?? null)) {
+      throw new Error('フォールバック設定が別の画面で更新されました。編集内容を控え、最新の設定を読み直してください。')
+    }
+    next.usageFallbackRoutes = validateUsageFallbackRoutes(patch.usageFallbackRoutes)
+  }
   if (owns(patch, 'modelVisibility')) {
     assertRecord(patch.modelVisibility, 'modelVisibility')
     for (const [value, visible] of Object.entries(patch.modelVisibility)) {

@@ -66,7 +66,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
   const permissionMode = thread ? thread.permissionMode : draft.permissionMode
   const toolMode = (thread ? thread.toolMode : draft.toolMode) ?? 'native'
   const ptcAvailable = !thread?.ab && !thread?.team
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && uploading === 0 && !sending && !changingToolMode && Boolean(model)
+  const canSend = !thread?.fallbackTo && (text.trim().length > 0 || attachments.length > 0) && uploading === 0 && !sending && !changingToolMode && Boolean(model)
 
   const updateText = (value: string) => {
     setText(value)
@@ -246,6 +246,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
               })
             }} />
           )}
+          {!thread?.fallbackTo && <>
           <ModelPicker value={model} onChange={setModel} />
           <EffortPicker model={model} value={effort} onChange={setEffort} />
           <FastModeChip model={model} />
@@ -281,6 +282,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
               PTC {toolMode === 'ptc' ? 'ON' : 'OFF'}
             </button>
           )}
+          </>}
         </div>
         <div className="composer-right">
           {model?.includes('"openai-codex"') && <ChatGptLimitChip />}

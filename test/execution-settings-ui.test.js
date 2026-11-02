@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import test from 'node:test'
 import ts from 'typescript'
 import * as workflowEffort from '../shared/workflow-effort.js'
+import * as usageFallback from '../shared/usage-fallback.js'
 import { claudeCodeModels } from '../web/src/model-selection.ts'
 
 const jsx = (type, props, key) => ({ type, props: { ...props, ...(key === undefined ? {} : { key }) } })
@@ -19,7 +20,7 @@ const compile = (source, modules, localStorage) => {
   return exports
 }
 const moduleSource = async (file) => fs.readFile(new URL(file, import.meta.url), 'utf8')
-const fallbackSource = await moduleSource('../web/src/components/LeaderFallback.tsx')
+const fallbackSource = await moduleSource('../web/src/components/FallbackSummary.tsx')
 const fieldSource = await moduleSource('../web/src/components/WorkflowModelField.tsx')
 const fieldComponents = compile(fieldSource, {
   react: {}, 'react/jsx-runtime': jsxRuntime, 'lucide-react': { ChevronDown: 'ChevronDown' },
@@ -40,7 +41,7 @@ const LEADER_VALUE = JSON.stringify(['openai-codex', 'eco-leader'])
 const UNKNOWN = Symbol('unknown capabilities')
 
 function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', leaderEffort = '', leader = LEADER_VALUE,
-  planImplement = false, legacy = false, modelsStore, browserChoice = null, onSave } = {}) {
+  planImplement = false, legacy = false, modelsStore, browserChoice = null, onSave, usageFallbackRoutes } = {}) {
   const models = {
     leader, provider: 'gpt', model: 'eco-child',
     leaderEffort, childEffort, leaderFallback: '', fallbackEffort: '', toolMode: 'native', planImplement,
@@ -53,7 +54,7 @@ function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', le
     setItem: (_key, value) => { browserValue = value },
   }
   const server = {
-    settings: { agentTeams: {} },
+    settings: { agentTeams: {}, usageFallbackRoutes },
     catalog: {
       providers: { 'openai-codex': 'GPT' },
       models: [
@@ -123,7 +124,8 @@ function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', le
     },
     '../execution-checks': { nextCheckId: () => 'check-1' },
     './WorkflowModelField': fieldComponents,
-    './LeaderFallback': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, './WorkflowModelField': fieldComponents, '../../../shared/workflow-effort.js': workflowEffort }),
+    './FallbackSummary': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, '../store': { setState() {} } }),
+    '../../../shared/usage-fallback.js': usageFallback,
     '../../../shared/workflow-effort.js': workflowEffort,
     './Modal': { Modal: ({ children }) => jsx('div', { children }) },
     './PtcToggle': compile(ptcSource, { react, 'react/jsx-runtime': jsxRuntime }),
@@ -172,17 +174,24 @@ const planToggle = (ui) => ui.walk((node) => node.type === 'button' && node.prop
 const startButton = (ui) => ui.walk((node) => node.type === 'button' && node.props.children === '始める')[0]
 const savedChoices = (ui) => ui.rpcCalls.filter(({ type }) => type === 'execution.setModels')
 
-test('eco fallback is collapsed and saved with the start choice', async () => {
-  const ui = mountExecutionDialog({ childEffort: '' })
+test('eco requires Claude confirmation for the shared fallback', async () => {
+  const ui = mountExecutionDialog({ childEffort: '', usageFallbackRoutes: [{ model: 'claude:haiku', effort: 'low' }] })
   await ui.ready()
-  assert.equal(Boolean(ui.walk((node) => node.type === 'details')[0].props.open), false)
-  const field = ui.walk((node) => node.type === 'div' && node.props.className === 'ab-field' && node.props.children?.[0]?.props?.children === 'リーダーの切り替え先')[0]
-  const menu = []
-  const scan = (node) => { if (Array.isArray(node)) return node.forEach(scan); if (!node || typeof node !== 'object') return; if (node.props?.label === 'Eco child') menu.push(node); scan(node.props?.children) }
-  scan(field)
-  menu[0].props.onSelect()
+  assert.equal(startButton(ui).props.disabled, true)
+  assert.equal(ui.walk((node) => node.type === 'details').length, 0)
+  await click(ui.walk((node) => node.props?.['aria-label'] === 'Claude同意')[0])
   ui.render()
-  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(startButton(ui).props.disabled, false)
+  await click(startButton(ui))
+  assert.equal(ui.teamStarts[0][2].challenge, 'test')
+})
+
+test('eco displays its legacy fallback without editing and preserves it on start', async () => {
+  const saved = { leader: LEADER_VALUE, provider: 'gpt', model: 'eco-child', leaderEffort: '', childEffort: '', leaderFallback: CHILD_VALUE, fallbackEffort: '', toolMode: 'native', planImplement: false }
+  const ui = mountExecutionDialog({ modelsStore: { models: saved } })
+  await ui.ready()
+  assert.equal(ui.walk((node) => node.type === 'button' && node.props.children === '設定 → モデルを開く').length, 1)
+  assert.equal(ui.walk((node) => node.type === 'div' && node.props.className === 'ab-field' && node.props.children?.[0]?.props?.children === 'リーダーの切り替え先').length, 0)
   await click(startButton(ui))
   assert.equal(ui.teamStarts[0][1].leaderFallback, CHILD_VALUE)
   assert.equal(ui.modelsStore.models.leaderFallback, CHILD_VALUE)

@@ -84,6 +84,24 @@ async function setup(t, mode, profile) {
   return { runtime, session, prompt, run, requests, updates, permissions, workspace, home, queue, paths, patches, runtimes, cleanups }
 }
 
+test('real ACP reports the actual model used for fallback decisions', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'danger-full-access')
+  const pool = Object.assign(new EventEmitter(), {
+    get: () => f.runtime.start(), holderOf: (id) => f.runtime.liveSessions.has(id) ? f.runtime : null, status: () => ({}),
+  })
+  const threads = new ThreadManager({ paths: f.paths, pool, catalog: { learn: () => false },
+    getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null })
+  f.cleanups.push(() => threads.shutdown())
+  f.runtime.onUpdate = (id, update) => threads.onUpdate(id, update)
+  const model = '["local-llm","ptc-fixture"]'
+  const thread = await threads.create({ workspace: f.workspace, model, permissionMode: 'danger-full-access', toolMode: 'native' })
+  await threads.send(thread.id, { text: 'fixture request' }, { userInitiated: true })
+  await threads.active.get(thread.id).done
+  const { turns } = await threads.get(thread.id)
+  assert.equal(turns[0].status, 'done')
+  assert.equal(turns[0].executedModel, model)
+})
+
 for (const toolMode of ['native', 'ptc']) {
   test(`a child report admitted during runtime recycling resumes the leader once (${toolMode})`, { timeout: 120_000 }, async (t) => {
     const f = await setup(t, 'danger-full-access')

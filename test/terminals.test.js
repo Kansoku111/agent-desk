@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { fixture, deferred } from './helpers/thread-manager.js'
+import { handoffClaudeToThread } from '../server/normal-fallback-handoff.js'
 import {
   API_KEY_ENV, DEFAULT_TITLE, REDRAW_DELAY_MS, TerminalManager, cleanTitle, findClaude, hookEffect, hookSettings, launchCommand,
   parseDialog, teamHookSettings, unroutedAgents,
@@ -39,7 +42,7 @@ function fakePty() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30))
 
-async function setup({ launch, preflight = () => null, instructions, gptSubagent } = {}) {
+async function setup({ launch, preflight = () => null, fallbackPreflight = () => null, instructions, gptSubagent, usageFallbackRoutes, validateFallbackModel, handoffThread } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-terminals-'))
   const workspace = path.join(dir, 'project')
   const claudeHome = path.join(dir, 'claude')
@@ -54,10 +57,211 @@ async function setup({ launch, preflight = () => null, instructions, gptSubagent
     pty,
     findClaude: () => 'C:\\Tools\\claude.exe',
     claudeHome,
-    launch, preflight, instructions, gptSubagent,
+    launch, preflight, fallbackPreflight, instructions, gptSubagent, usageFallbackRoutes, validateFallbackModel, handoffThread,
   }).load()
   return { dir, workspace, claudeHome, pty, sent, manager }
 }
+
+test('ordinary Claude task uses its saved route once and stops before handoff', async (t) => {
+  const routes = [{ model: '["openai-codex","gpt-6-luna"]', effort: 'low' }]
+  let selected, stoppedAtCommit
+  const { manager, workspace, pty } = await setup({ usageFallbackRoutes: () => routes,
+    handoffThread: async ({ terminal, choice, guard, commit }) => {
+      selected = choice
+      guard()
+      await commit('next-thread')
+      stoppedAtCommit = pty.spawned[0].killed
+      guard()
+      assert.equal(terminal.workspace, workspace)
+    } })
+  t.after(() => manager.shutdown())
+  const terminal = await manager.create({ workspace })
+  manager.conversation = async () => ({ turns: [{ user: { text: 'do work', images: [] }, items: [] }] })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  const hash = createHash('sha256').update('do work').digest('hex')
+  const done = new Promise((resolve) => manager.on('terminal', function listener(view) {
+    if (view.fallbackTo || view.usageFallbackError) { manager.off('terminal', listener); resolve(view) }
+  }))
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit', permission_mode: 'default', usage_fallback_hash: hash })
+  routes.splice(0)
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: 'usage_limit_reached' })
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: 'usage_limit_reached' })
+  const view = await done
+  assert.deepEqual(selected, { model: '["openai-codex","gpt-6-luna"]', effort: 'low' })
+  assert.equal(stoppedAtCommit, true)
+  assert.deepEqual(view.fallbackTo, { kind: 'thread', id: 'next-thread' })
+  assert.equal(view.usageFallbackError, undefined)
+  assert.throws(() => manager.input(terminal.id, {}, 'work'), /切り替え済み/)
+  assert.throws(() => manager.restart(terminal.id), /切り替え済み/)
+})
+
+test('ordinary Claude task hands off to a read-only DSH session', async (t) => {
+  const f = await fixture(t, { getAccounts: async () => ({ chatgpt: { signedIn: true } }) })
+  const target = '["openai-codex","gpt-6-luna"]'
+  const options = () => [
+    { id: 'model', currentValue: target, options: [{ value: target }] },
+    { id: 'reasoning_effort', currentValue: 'low', options: [{ value: 'low' }] },
+  ]
+  f.runtime.newSession = async () => { f.runtime.liveSessions.add('fallback-session'); return { sessionId: 'fallback-session', configOptions: options() } }
+  f.runtime.setOption = async () => options()
+  const completed = deferred(), releasePrompt = deferred(), prompts = []
+  f.runtime.prompt = async (_id, blocks) => { prompts.push(blocks); await releasePrompt.promise; return { stopReason: 'end_turn' } }
+  f.manager.on('turn-finished', ({ threadId }) => { if (threadId !== f.thread.id) completed.resolve(threadId) })
+  const { manager, workspace, pty } = await setup({ usageFallbackRoutes: () => [{ model: target, effort: 'low' }],
+    handoffThread: (input) => handoffClaudeToThread({ ...input, threads: f.manager }) })
+  t.after(() => manager.shutdown())
+  const terminal = await manager.create({ workspace })
+  manager.conversation = async () => ({ turns: [{ user: { text: 'do work', images: [] }, items: [] }] })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  const linked = deferred()
+  manager.on('terminal', (view) => { if (view.fallbackTo || view.usageFallbackError) linked.resolve(view) })
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit', permission_mode: 'default', usage_fallback_hash: createHash('sha256').update('do work').digest('hex') })
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: 'usage_limit_reached' })
+  const source = await linked.promise
+  assert.equal(source.usageFallbackError, undefined)
+  releasePrompt.resolve()
+  const id = await completed.promise
+  assert.equal(source.fallbackTo.id, id)
+  const result = await f.manager.get(id)
+  assert.equal(result.thread.permissionMode, 'read-only')
+  assert.equal(result.thread.model, target)
+  assert.deepEqual(result.thread.usageFallbackFrom, { kind: 'terminal', id: terminal.id })
+  assert.match(prompts[0].map((part) => part.text ?? '').join(' '), /読み取り専用/)
+})
+
+test('Claude stays live if the selected DSH account is unavailable', async (t) => {
+  const f = await fixture(t, { getAccounts: async () => ({ chatgpt: { signedIn: false } }) })
+  const { manager, workspace, pty } = await setup({ usageFallbackRoutes: () => [{ model: '["openai-codex","gpt-6-luna"]', effort: 'low' }],
+    handoffThread: (input) => handoffClaudeToThread({ ...input, threads: f.manager }) })
+  t.after(() => manager.shutdown())
+  const terminal = await manager.create({ workspace })
+  manager.conversation = async () => ({ turns: [{ user: { text: 'work', images: [] }, items: [] }] })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  const failed = deferred()
+  manager.on('terminal', (view) => { if (view.usageFallbackError) failed.resolve(view) })
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit', permission_mode: 'default', usage_fallback_hash: createHash('sha256').update('work').digest('hex') })
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: 'usage_limit_reached' })
+  const view = await failed.promise
+  assert.match(view.usageFallbackError, /ChatGPT/)
+  assert.equal(view.fallbackTo, undefined)
+  assert.equal(pty.spawned[0].killed, false)
+  assert.equal(f.manager.list().length, 1)
+})
+
+test('typing while Claude fallback reads history cancels the handoff', async (t) => {
+  const started = deferred(), release = deferred()
+  let handed = false
+  const { manager, workspace, pty } = await setup({ usageFallbackRoutes: () => [{ model: '["openai-codex","gpt-6-luna"]', effort: 'low' }], handoffThread: async () => { handed = true } })
+  t.after(() => manager.shutdown())
+  const terminal = await manager.create({ workspace })
+  manager.conversation = async () => { started.resolve(); await release.promise; return { turns: [{ user: { text: 'work', images: [] }, items: [] }] } }
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit', permission_mode: 'default', usage_fallback_hash: createHash('sha256').update('work').digest('hex') })
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: 'usage_limit_reached' })
+  await started.promise
+  manager.input(terminal.id, {}, 'x')
+  release.resolve()
+  await Promise.all([...manager.fallbackTasks])
+  assert.equal(handed, false)
+  assert.equal(pty.spawned[0].killed, false)
+  assert.equal(manager.summary(manager.records.get(terminal.id)).fallbackTo, undefined)
+})
+
+test('Claude fallback refuses stale transcripts and preserves the original task', async (t) => {
+  let handoffs = 0
+  const { manager, workspace, pty } = await setup({ usageFallbackRoutes: () => [{ model: '["openai-codex","gpt-6-luna"]', effort: 'low' }],
+    handoffThread: async () => { handoffs++ } })
+  t.after(() => manager.shutdown())
+  const terminal = await manager.create({ workspace })
+  manager.conversation = async () => ({ turns: [{ user: { text: 'old request', images: [] }, items: [] }] })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  const done = new Promise((resolve) => manager.on('terminal', function listener(view) { if (view.usageFallbackError) { manager.off('terminal', listener); resolve(view) } }))
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit', permission_mode: 'default', usage_fallback_hash: createHash('sha256').update('new request').digest('hex') })
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: 'usage_limit_reached' })
+  const view = await done
+  assert.match(view.usageFallbackError, /履歴で確認/)
+  assert.equal(handoffs, 0)
+  assert.equal(pty.spawned[0].killed, false)
+  assert.equal(view.fallbackTo, undefined)
+})
+
+test('automatic Claude handoff turns and transient rate limits never cycle', async (t) => {
+  let handoffs = 0
+  const { manager, workspace, pty } = await setup({ usageFallbackRoutes: () => [{ model: '["openai-codex","gpt-6-luna"]', effort: 'low' }], handoffThread: async () => { handoffs++ } })
+  t.after(() => manager.shutdown())
+  const terminal = await manager.create({ workspace })
+  const secret = pty.spawned[0].options.env.AGENT_DESK_TERMINAL_SECRET
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit', permission_mode: 'default', usage_fallback_auto: true })
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: 'usage_limit_reached' })
+  assert.equal(manager.fallbacks.size, 0)
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit', permission_mode: 'default' })
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: '429 rate limit' })
+  assert.equal(manager.fallbacks.size, 0)
+  manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit', permission_mode: 'default' })
+  manager.hook(terminal.id, secret, { hook_event_name: 'Stop' })
+  manager.hook(terminal.id, secret, { hook_event_name: 'StopFailure', error: 'usage_limit_reached' })
+  assert.equal(manager.fallbacks.size, 0)
+  assert.equal(handoffs, 0)
+})
+
+test('fallback Claude tasks recheck confirmed auth before every launch', async (t) => {
+  let refusal = 'confirmation required', checks = 0
+  const { manager, workspace, pty } = await setup({ fallbackPreflight: async () => { checks++; return refusal } })
+  t.after(() => manager.shutdown())
+  const usageFallbackFrom = { kind: 'thread', id: 'source' }
+  await assert.rejects(manager.create({ workspace, usageFallbackFrom, model: 'haiku', requireDurable: true }), /confirmation required/)
+  assert.equal(pty.spawned.length, 0)
+  refusal = null
+  const terminal = await manager.create({ workspace, usageFallbackFrom, model: 'haiku', requireDurable: true })
+  assert.equal(pty.spawned.length, 1)
+  assert.equal(manager.records.get(terminal.id).usageFallbackFrom.id, 'source')
+  manager.stop(terminal.id)
+  refusal = 'confirmation required'
+  await assert.rejects(manager.restart(terminal.id), /confirmation required/)
+  assert.equal(pty.spawned.length, 1)
+  assert.equal(checks, 3)
+})
+
+test('pending fallback terminal stays hidden and cannot receive user input', async (t) => {
+  const { manager, workspace, pty } = await setup()
+  t.after(() => manager.shutdown())
+  const events = []
+  manager.on('terminal', (record) => events.push(record))
+  const terminal = await manager.create({ workspace, usageFallbackFrom: { kind: 'thread', id: 'source' },
+    usageFallbackPending: true, model: 'haiku', requireDurable: true })
+  assert.equal(manager.list().length, 0)
+  assert.equal(events.length, 0)
+  assert.throws(() => manager.input(terminal.id, {}, 'manual'), /準備中/)
+  await assert.rejects(manager.sendMessage(terminal.id, 'manual'), /準備中/)
+  await assert.rejects(manager.attach(terminal.id, {}, {}), /準備中/)
+  await assert.rejects(manager.remove(terminal.id), /準備中/)
+  assert.deepEqual(pty.spawned[0].written, [])
+  await manager.revealUsageFallback(terminal.id)
+  assert.equal(manager.list().length, 1)
+  assert.equal(events.length, 1)
+})
+
+test('pending fallback terminal is exposed as interrupted after restart without launching', async (t) => {
+  const { manager, workspace, dir, claudeHome } = await setup()
+  t.after(() => manager.shutdown())
+  const terminal = await manager.create({ workspace, usageFallbackFrom: { kind: 'thread', id: 'source' },
+    usageFallbackPending: true, model: 'haiku', requireDurable: true })
+  const restored = await new TerminalManager({ file: path.join(dir, 'terminals.json'), settingsFile: path.join(dir, 'claude-terminal-settings.json'),
+    hookUrl: () => '', send: () => {}, claudeHome }).load()
+  t.after(() => restored.shutdown())
+  assert.equal(restored.records.get(terminal.id).usageFallbackInterrupted, true)
+  assert.equal(restored.list()[0].state, 'stopped')
+})
+
+test('fallback terminal creation fails closed if its record cannot be saved', async (t) => {
+  const { manager, workspace, pty, dir } = await setup()
+  t.after(() => manager.shutdown())
+  manager.file = dir
+  await assert.rejects(manager.create({ workspace, usageFallbackFrom: { kind: 'thread', id: 'source' }, model: 'haiku', requireDurable: true }))
+  assert.equal(pty.spawned.length, 1)
+  assert.equal(pty.spawned[0].killed, true)
+  assert.equal(manager.records.size, 0)
+})
 
 test('interactive Claude parent scores on Stop without a viewer and freezes rates across restart', async (t) => {
   const { manager, workspace, dir, claudeHome } = await setup()
@@ -127,7 +331,7 @@ test('hookSettings runs the hook script for each event, with forward slashes', (
   const [command] = settings.hooks.Stop[0].hooks
   assert.equal(command.command, '"C:/Program Files/nodejs/node.exe" "F:/app/server/claude-hook.js"')
   assert.equal(command.async, false)
-  for (const event of ['SubagentStart', 'SubagentStop', 'Notification']) assert.equal(settings.hooks[event][0].hooks[0].async, false)
+  for (const event of ['UserPromptSubmit', 'SubagentStart', 'SubagentStop', 'Notification']) assert.equal(settings.hooks[event][0].hooks[0].async, false)
   assert.equal(settings.hooks.PostToolUse[0].hooks[0].async, true)
 })
 
@@ -936,4 +1140,81 @@ test('the choice Claude Code waits on is answered from the chat view by its numb
   await assert.rejects(manager.choose(terminal.id, '4', 'Yes'), /画面が変わりました/)
   assert.deepEqual(await manager.choose(terminal.id, '4', 'No'), { chosen: '4' })
   assert.equal(proc.written.at(-1), '4')
+})
+
+async function waitingQuestion(t, lines = ['─'.repeat(50), '回答を入力してください', '❯ ', 'Enter to submit · Esc to cancel']) {
+  const fixture = await setup()
+  t.after(() => fixture.manager.shutdown())
+  const terminal = await fixture.manager.create({ workspace: fixture.workspace })
+  const proc = fixture.pty.spawned[0]
+  const live = fixture.manager.live.get(terminal.id)
+  proc.emit(lines.join('\r\n'))
+  fixture.manager.hook(terminal.id, live.secret, { hook_event_name: 'Notification', notification_type: 'elicitation_dialog' })
+  return { ...fixture, terminal, proc, live }
+}
+
+test('free text stays in chat even when the question no longer has numbered options', async (t) => {
+  const { manager, terminal, proc } = await waitingQuestion(t)
+  const dialog = await manager.dialog(terminal.id)
+  assert.deepEqual(dialog.options, [])
+  assert.match(dialog.screen, /回答を入力してください/)
+  assert.ok(dialog.dialogId)
+  proc.emit('\x1b[?2004h')
+  const input = await manager.dialog(terminal.id)
+  const before = proc.written.length
+  assert.deepEqual(await manager.respond(terminal.id, input.dialogId, { text: '日本語の回答\n二行目' }), { sent: true })
+  // No Enter retry (or implicit approval): the user confirms separately.
+  assert.deepEqual(proc.written.slice(before), ['\x1b[200~日本語の回答\n二行目\x1b[201~'])
+  await assert.rejects(manager.respond(terminal.id, input.dialogId, { key: 'enter' }), /画面が変わりました/)
+  const updated = await manager.dialog(terminal.id)
+  await manager.respond(terminal.id, updated.dialogId, { key: 'enter' })
+  assert.equal(proc.written.at(-1), '\r')
+})
+
+test('question navigation, multi-select and cancel use only whitelisted keys', async (t) => {
+  const { manager, terminal, proc, live } = await waitingQuestion(t, ['質問: 複数選んでください', '❯ [ ] GLB', '  [x] FBX', 'Space to toggle · Enter to submit'])
+  const keys = { up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C', tab: '\t', space: ' ', enter: '\r', escape: '\x1b' }
+  for (const [key, sequence] of Object.entries(keys)) {
+    const dialog = await manager.dialog(terminal.id)
+    await manager.respond(terminal.id, dialog.dialogId, { key })
+    assert.equal(proc.written.at(-1), sequence)
+  }
+  const dialog = await manager.dialog(terminal.id)
+  const before = proc.written.length
+  for (const input of [{ key: 'constructor' }, { key: 'interrupt' }, { text: '' }, { text: 'x'.repeat(8001) }, { text: '\x1b[201~oops' }, { text: 'a\rb' }, { text: 'a\nb' }, { text: 'x', key: 'enter' }, {}]) {
+    await assert.rejects(manager.respond(terminal.id, dialog.dialogId, input))
+  }
+  await assert.rejects(manager.respond(terminal.id, undefined, { key: 'enter' }))
+  assert.equal(proc.written.length, before)
+  manager.executionGuard = () => { throw new Error('execution disabled') }
+  await assert.rejects(manager.respond(terminal.id, dialog.dialogId, { key: 'enter' }), /execution disabled/)
+  assert.equal(proc.written.length, before)
+  live.activity = 'idle'
+  assert.equal(await manager.dialog(terminal.id), null)
+  await assert.rejects(manager.respond(terminal.id, dialog.dialogId, { key: 'enter' }), /画面が変わりました/)
+})
+
+test('a new question with identical labels rejects an old click; duplicate clients cannot both answer', async (t) => {
+  const { manager, terminal, proc } = await waitingQuestion(t, APPROVAL_SCREEN)
+  const first = await manager.dialog(terminal.id)
+  proc.emit('\x1b[2J\x1b[H' + APPROVAL_SCREEN.map((line) => line.replace('Do you want to proceed?', 'A different question?')).join('\r\n'))
+  await assert.rejects(manager.choose(terminal.id, '1', 'Yes', first.dialogId), /画面が変わりました/)
+  const second = await manager.dialog(terminal.id)
+  const before = proc.written.length
+  const results = await Promise.allSettled([
+    manager.choose(terminal.id, '1', 'Yes', second.dialogId),
+    manager.choose(terminal.id, '1', 'Yes', second.dialogId),
+  ])
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
+  assert.deepEqual(proc.written.slice(before), ['1'])
+  await assert.rejects(manager.choose(terminal.id, '1', 'Yes', second.dialogId), /画面が変わりました/)
+})
+
+test('typing in the actual terminal invalidates a chat question snapshot', async (t) => {
+  const { manager, terminal } = await waitingQuestion(t)
+  const dialog = await manager.dialog(terminal.id)
+  manager.input(terminal.id, 'viewer', 'x')
+  await assert.rejects(manager.respond(terminal.id, dialog.dialogId, { text: 'old answer' }), /画面が変わりました/)
+  manager.stop(terminal.id)
+  assert.equal(await manager.dialog(terminal.id), null)
 })

@@ -22,6 +22,7 @@ import { sameToken } from './remote.js'
 import { workflowTeamEfforts, workflowEffort, workflowEffortSupported, workflowLevels } from '../shared/workflow-effort.js'
 import { validateAbModel } from './ab.js'
 import { isLeaderUsageLimit } from './leader-usage-limit.js'
+import { usageFallbackChoice } from '../shared/usage-fallback.js'
 import { carryoverText } from './thread-utils.js'
 import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
@@ -128,7 +129,7 @@ export class TeamManager extends EventEmitter {
    */
   constructor({
     file, dir, threads, terminals, agents, catalog, getSettings, apiUrl, instructions = () => '', guides = () => ({ policies: [], playbooks: [] }), authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
-    node = process.execPath, script = mcpScript, log = () => {}, now = Date.now, gatherMs = REPORT_GATHER_MS,
+    node = process.execPath, script = mcpScript, log = () => {}, now = Date.now, gatherMs = REPORT_GATHER_MS, usageFallbackRoutes = () => null, modelVisibility = () => ({}),
   }) {
     super()
     this.file = file
@@ -140,6 +141,8 @@ export class TeamManager extends EventEmitter {
     this.agents = agents
     this.catalog = catalog
     this.getSettings = getSettings
+    this.usageFallbackRoutes = usageFallbackRoutes
+    this.modelVisibility = modelVisibility
     this.apiUrl = apiUrl
     this.instructions = instructions
     this.guides = guides
@@ -326,6 +329,7 @@ export class TeamManager extends EventEmitter {
       leaderKind: team.leaderKind,
       config: this.config(team),
       toolModeBusy: this.toolModeBusy(team),
+      ...(team.sharedFallbackPolicy ? { sharedFallbackPolicy: true, ...(Array.isArray(team.usageFallbackRoutes) ? { usageFallbackRoutes: structuredClone(team.usageFallbackRoutes) } : {}) } : {}),
       ...(team.leaderFallbackUsed ? { leaderFallbackUsed: true } : {}),
       ...(team.leaderFallbackError ? { leaderFallbackError: team.leaderFallbackError } : {}),
       ...(team.execution ? { execution: { leaderModel: team.execution.leaderModel, stopped: team.execution.stopped, metrics: team.execution.metrics, ...(team.execution.planImplement ? { planImplement: true } : {}) } } : {}),
@@ -529,6 +533,14 @@ export class TeamManager extends EventEmitter {
     if (confirmation) await this.#confirmAuth({ id: randomUUID(), workspace }, confirmation, false)
   }
 
+  async confirmFallbackAuth(workspace, confirmation) {
+    if (typeof workspace !== 'string' || !path.isAbsolute(workspace) || !(await fs.promises.stat(workspace).catch(() => null))?.isDirectory()) throw new Error('作業フォルダが見つかりません')
+    await this.confirmAbAuth(workspace, confirmation)
+    const problem = await this.claudeAuth.guard(null, this.claudeAuth.context(workspace))
+    if (problem) throw new Error(problem)
+    return { confirmed: true }
+  }
+
   guardClaudeLaunch(context) {
     const team = context.record?.team?.id
       ? this.teams.get(context.record.team.id) : this.#byTask(context.record?.id)?.team
@@ -577,11 +589,21 @@ export class TeamManager extends EventEmitter {
       workflowTeamEfforts(config, this.catalog.data, leaderModel, CATALOG_PROVIDER)
       team.execution.strictEffort = true
     }
+    const current = team.execution?.leaderModel ?? (dshLeader ? JSON.stringify([CATALOG_PROVIDER[config.leaderProvider], config.leaderProvider === 'gpt' ? config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels.find((entry) => entry.provider === 'gpt')?.model : null) : config.dshLeader?.model]) : 'claude:' + (config.leader.model ?? ''))
+    const routes = this.usageFallbackRoutes()
+    if (Array.isArray(routes)) {
+      // Freeze the full ordered policy so a later manual leader-model change
+      // still excludes the provider that actually exhausted its limit.
+      team.usageFallbackRoutes = structuredClone(routes)
+      const choice = usageFallbackChoice(team.usageFallbackRoutes, current)
+      config.leaderFallback = choice?.model ?? ''
+      config.fallbackEffort = choice?.effort ?? ''
+      team.sharedFallbackPolicy = true
+    }
     if (config.leaderFallback) {
       try { validateAbModel(config.leaderFallback, this.catalog.data) } catch { throw new Error('フォールバック先のモデルを選び直してください') }
       config.fallbackEffort = workflowEffort(config.fallbackEffort, workflowLevels(this.catalog.data, config.leaderFallback))
       if (!workflowEffortSupported(config.fallbackEffort, workflowLevels(this.catalog.data, config.leaderFallback))) throw new Error('フォールバック先の推論レベルを選び直してください')
-      const current = team.execution?.leaderModel ?? (dshLeader ? JSON.stringify([CATALOG_PROVIDER[config.leaderProvider], config.leaderProvider === 'gpt' ? config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels.find((entry) => entry.provider === 'gpt')?.model : null) : config.dshLeader?.model]) : 'claude:' + config.leader.model)
       if (config.leaderFallback === current) throw new Error('フォールバック先はリーダーと別のモデルを選んでください')
     }
     if (authConfirmation) await this.#confirmAuth(team, authConfirmation, false)
@@ -1656,6 +1678,7 @@ export class TeamManager extends EventEmitter {
     const next = mergeTeamConfig(this.config(team), allowed)
     const fallbackChanged = next.leaderFallback !== this.config(team).leaderFallback || next.fallbackEffort !== this.config(team).fallbackEffort
     if (fallbackChanged) {
+      if (team.sharedFallbackPolicy) throw new Error('このチームのフォールバックは開始時の共通設定で固定されています')
       if (this.fallingBack.has(team.id) || team.leaderFallbackPending) throw new Error('リーダーの切り替え中はフォールバックを変更できません')
       if (team.leaderFallbackUsed) throw new Error('このチームではフォールバックを使用済みです')
       if (next.leaderFallback) {
@@ -1998,7 +2021,7 @@ export class TeamManager extends EventEmitter {
     if (!found.child) {
       // A dsh leader: its state shows in the panel, and an idle one takes the next report.
       const turn = this.threads.turns.get(thread.id)?.at(-1)
-      if (thread.status !== 'running' && !(thread.status === 'error' && found.team.config?.leaderFallback && (found.team.leaderFallbackUsed || isLeaderUsageLimit(turn?.error)))) this.#pump(found.team)
+      if (thread.status !== 'running' && !(thread.status === 'error' && (found.team.config?.leaderFallback || found.team.usageFallbackRoutes?.length) && (found.team.leaderFallbackUsed || isLeaderUsageLimit(turn?.error)))) this.#pump(found.team)
       return this.#emit(found.team)
     }
     // A child can have several concurrent approvals; a direct answer removes only its own request.
@@ -2083,7 +2106,7 @@ export class TeamManager extends EventEmitter {
     }
     if (!found.child) {
       const turn = this.threads.turns.get(threadId)?.at(-1)
-      if (status === 'error' && this.#startLeaderFallback(found.team, turn?.error)) {
+      if (status === 'error' && this.#startLeaderFallback(found.team, turn?.error, turn?.executedModel, turn?.selectionChangedDuringRun)) {
         this.workingLeaders.delete(found.team.id)
         if (found.team.execution) { found.team.execution.metrics.parentTurns = (found.team.execution.metrics.parentTurns ?? 0) + 1; void this.#save() }
         return
@@ -2122,13 +2145,26 @@ export class TeamManager extends EventEmitter {
     this.#emit(team)
   }
 
-  #startLeaderFallback(team, error) {
-    const config = this.config(team)
-    if (!config.leaderFallback || team.leaderFallbackUsed || team.stopped || team.execution?.stopped || this.stopping || this.fallingBack.has(team.id) || !isLeaderUsageLimit(error)) return false
-    this.fallingBack.add(team.id)
+  #startLeaderFallback(team, error, executedModel, selectionChanged) {
+    if (team.leaderFallbackUsed || team.stopped || team.execution?.stopped || this.stopping || this.fallingBack.has(team.id) || !isLeaderUsageLimit(error)) return false
+    if (!team.config?.leaderFallback && !team.usageFallbackRoutes?.length) return false
     const id = team.leaderId
+    const source = team.leaderKind === 'thread' ? this.threads.threads.get(id)?.model : 'claude:' + (this.terminals.records.get(id)?.model ?? '')
+    if (team.leaderKind === 'thread' && (selectionChanged || (executedModel !== undefined && (!executedModel || source !== executedModel)))) {
+      team.leaderFallbackError = selectionChanged || executedModel ? '実行中にモデルまたは推論レベルが変更されたため、自動切り替えしません。選択と作業状態を確認してください。' : '実際に使用したモデルを確認できないため、自動切り替えしません。'
+      void this.#save()
+      this.#emit(team)
+      return false
+    }
+    if (Array.isArray(team.usageFallbackRoutes)) {
+      const choice = usageFallbackChoice(team.usageFallbackRoutes, source)
+      if (!choice) return false
+      team.config = { ...team.config, leaderFallback: choice.model, fallbackEffort: choice.effort }
+    }
+    if (!this.config(team).leaderFallback) return false
+    this.fallingBack.add(team.id)
     const turn = team.leaderKind === 'thread' ? this.threads.turns.get(id)?.at(-1) : null
-    const pending = this.#switchLeader(team, id, turn).catch((failure) => {
+    const pending = this.#switchLeader(team, id, turn, source).catch((failure) => {
       delete team.leaderFallbackPending
       team.leaderFallbackError = failure.message
       this.log(`team ${team.id}: leader fallback failed:`, failure.message)
@@ -2138,13 +2174,17 @@ export class TeamManager extends EventEmitter {
     this.exPending.add(pending)
     return true
   }
-  async #switchLeader(team, id, turn) {
+  async #switchLeader(team, id, turn, source) {
     const config = this.config(team)
     const oldKind = team.leaderKind
     const version = team.stopVersion
-    const current = () => this.teams.get(team.id) === team && team.leaderId === id && team.stopVersion === version && !this.stopping && !this.threads.stopping && (oldKind !== 'thread' || this.threads.turns.get(id)?.at(-1) === turn)
+    let modelSwitched = false
+    const current = () => this.teams.get(team.id) === team && team.leaderId === id && team.stopVersion === version && !this.stopping && !this.threads.stopping && (oldKind !== 'thread' || (this.threads.turns.get(id)?.at(-1) === turn && this.threads.threads.get(id)?.model === (modelSwitched ? config.leaderFallback : source)))
     if (!current() || (oldKind === 'thread' && !turn)) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
     try { validateAbModel(config.leaderFallback, this.catalog.data) } catch { throw new Error('フォールバック先のモデルを選び直してください') }
+    config.fallbackEffort = workflowEffort(config.fallbackEffort, workflowLevels(this.catalog.data, config.leaderFallback))
+    if (!workflowEffortSupported(config.fallbackEffort, workflowLevels(this.catalog.data, config.leaderFallback))) throw new Error('フォールバック先の推論レベルを選び直してください')
+    team.config.fallbackEffort = config.fallbackEffort
     team.leaderFallbackPending = true
     await this.#save({ required: true })
     if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
@@ -2153,6 +2193,7 @@ export class TeamManager extends EventEmitter {
     await this.#save({ required: true })
     if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
     await this.threads.update(id, { model: config.leaderFallback, effort: config.fallbackEffort }, { guard: () => { if (!current()) throw new Error('リーダーの状態が変わりました') } })
+    modelSwitched = true
     if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
     await this.threads.send(id, { text: '[Agent Desk] 利用上限のため指定されたモデルへ切り替えました。途中の作業を続けてください。変更済みのファイルや実行済み・完了が不明な外部操作を確認し、重複実行しないでください。\n\n直前の入力:\n' + (turn.user?.text ?? ''), images: turn.user?.images ?? [] }, { guard: () => { if (!current()) throw new Error('リーダーの状態が変わりました') } })
     delete team.leaderFallbackPending
@@ -2260,7 +2301,7 @@ export class TeamManager extends EventEmitter {
     if (summary.state === 'running' && summary.activity !== 'idle') {
       // A submit hook carries the actual marks and is handled below, after this state event.
       if (input?.hook_event_name !== 'UserPromptSubmit' && this.delivering.has(team.id)) this.#delivered(team)
-    } else if (team.config?.leaderFallback) {
+    } else if (team.config?.leaderFallback || team.usageFallbackRoutes?.length) {
       queueMicrotask(() => this.#pump(team))
     } else {
       this.#pump(team)

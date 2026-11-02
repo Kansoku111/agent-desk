@@ -28,7 +28,8 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
     },
     'terminal.conversation': ({ terminalId, epoch, since }) => terminals.conversation(terminalId, { epoch, since }),
     'terminal.dialog': async ({ terminalId }) => ({ dialog: await terminals.dialog(terminalId) }),
-    'terminal.choose': ({ terminalId, key, label }) => terminals.choose(terminalId, key, label),
+    'terminal.choose': ({ terminalId, key, label, dialogId }) => terminals.choose(terminalId, key, label, dialogId),
+    'terminal.respond': ({ terminalId, dialogId, key, text }) => terminals.respond(terminalId, dialogId, { key, text }),
     'terminal.send': async ({ terminalId, text }) => {
       await terminals.sendMessage(terminalId, text)
       // Something other than null: the page takes null as a failure.
@@ -58,6 +59,7 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
     // Agent teams (TM). `size` is the viewer's terminal, as for terminal.create.
     // `choices`: what the user picked in the start dialog; the next team starts from them.
     'team.claudeAuth': (input) => teams.inspectClaudeAuth(input),
+    'fallback.confirmClaude': ({ workspace, confirmation }) => teams.confirmFallbackAuth(workspace, confirmation),
     'execution.models': async () => ({ models: await teams.execution.modelSelection() }),
     'execution.setModels': async ({ models, onlyIfUnset }) => ({ models: await teams.execution.configureModels(models, onlyIfUnset === true) }),
     'execution.checks': ({ workspace }) => teams.executionChecks(workspace),
@@ -67,7 +69,12 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
       const folder = result.team.workspace
       await mutateSettings(candidate => {
         if (folder !== paths.myPc && !candidate.workspaces.includes(folder)) candidate.workspaces.unshift(folder)
-        if (!execution) candidate.agentTeams = { ...structuredClone(result.team.config), defaultModelMode: candidate.agentTeams.defaultModelMode }
+        if (!execution) {
+          const legacy = { leaderFallback: candidate.agentTeams.leaderFallback, fallbackEffort: candidate.agentTeams.fallbackEffort }
+          candidate.agentTeams = { ...structuredClone(result.team.config), defaultModelMode: candidate.agentTeams.defaultModelMode }
+          // A resolved per-team snapshot is not a new legacy preference.
+          if (result.team.sharedFallbackPolicy) Object.assign(candidate.agentTeams, legacy)
+        }
       })
       return result
     },

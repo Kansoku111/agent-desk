@@ -8,7 +8,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { act, isImageAttachment, isNarrow, isTouch, onHello, onTerminalData, openExternal, request, setState, toast, uploadAttachment, useStore } from '../store'
+import { act, isImageAttachment, isNarrow, isTouch, navigate, onHello, onTerminalData, openExternal, request, setState, toast, uploadAttachment, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import type { Attachment, TerminalSummary } from '../types'
 import { copyText, workspaceLabel } from '../util'
@@ -195,7 +195,7 @@ function Header({ terminal, mode, onMode, onRestart, presetOpen, onPresetToggle 
                     }}
                   />
                 )
-                : <MenuItem icon={<Play size={14} />} label="会話を再開" onSelect={() => { close(); onRestart() }} />}
+                : !terminal.fallbackTo && <MenuItem icon={<Play size={14} />} label="会話を再開" onSelect={() => { close(); onRestart() }} />}
               <MenuItem
                 icon={<Trash2 size={14} />}
                 label={leads ? 'チームを削除' : '削除'}
@@ -417,6 +417,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
 export function TerminalView({ terminalId }: { terminalId: string }) {
   const [presetOpen, setPresetOpen] = useState(() => !isNarrow())
   const terminal = useStore((state) => state.server?.terminals.find((entry) => entry.id === terminalId))
+  const fallbackAvailable = useStore((state) => Boolean(terminal?.fallbackTo && state.server?.threads.some((entry) => entry.id === terminal.fallbackTo?.id)))
   const host = useRef<HTMLDivElement>(null)
   const [term, setTerm] = useState<Terminal | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -703,6 +704,22 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
       <Header terminal={terminal} mode={mode} onMode={chooseMode} onRestart={() => void restart()} presetOpen={presetOpen} onPresetToggle={() => setPresetOpen((open) => !open)} />
       <div className="thread-body">
         <div className="thread-main">
+          {terminal.fallbackTo && <>
+            <div className="terminal-note" role="status">
+              <span>利用上限のため別のタスクへ切り替えました。元の会話は閲覧用です。</span>
+              <button type="button" className="button" disabled={!fallbackAvailable} onClick={() => navigate({ view: 'thread', id: terminal.fallbackTo!.id })}>切り替え先を開く</button>
+              {!fallbackAvailable && <span>切り替え先を表示できません。タスク一覧と作業状態を確認してください。</span>}
+            </div>
+            {getDraft(`terminal:${terminalId}`) && <label className="terminal-note">
+              <span>未送信の入力（自動では移動しません。必要ならコピーしてください）</span>
+              <textarea aria-label="切り替え前の未送信入力" readOnly value={getDraft(`terminal:${terminalId}`)} />
+            </label>}
+          </>}
+          {terminal.usageFallbackError && <div className="terminal-note" role="alert">切り替えできませんでした: {terminal.usageFallbackError}</div>}
+          {terminal.usageFallbackFrom && <div className="terminal-note" role="status">
+            <span>{terminal.usageFallbackInterrupted ? '切り替え中にアプリが終了しました。作業状態を確認してください。' : '利用上限のため別のタスクから切り替わりました。会話は抜粋です。'}</span>
+            <button type="button" className="button" onClick={() => navigate({ view: 'thread', id: terminal.usageFallbackFrom!.id })}>元の会話を開く</button>
+          </div>}
           {screen && mismatch && (
             <div className="terminal-note">
               <span>別の画面のサイズで表示しています</span>
@@ -734,14 +751,14 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
                 onRestart={() => void restart()}
               />
             )}
-          {terminal.state === 'exited' && !(screen && error) && (
+          {terminal.state === 'exited' && !terminal.fallbackTo && !(screen && error) && (
             <div className="terminal-note">
               <span>Claude Code は終了しました{terminal.exitCode ? `（終了コード ${terminal.exitCode}）` : ''}</span>
               <button type="button" className="button" onClick={() => void restart()}><Play size={13} /> 会話を再開</button>
             </div>
           )}
           <div className="terminal-bar">
-            <TerminalModelPicker terminal={terminal} />
+            {!terminal.fallbackTo && <TerminalModelPicker terminal={terminal} />}
             {!screen && terminal.state === 'running' && (
               <button type="button" className={`icon-button terminal-keys-toggle${keysOpen ? ' active' : ''}`} title="キーボードのキーを表示"
                 aria-label="キーボードのキーを表示" aria-pressed={keysOpen} onClick={() => setKeysOpen((open) => !open)}>

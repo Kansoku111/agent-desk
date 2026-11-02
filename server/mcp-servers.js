@@ -22,7 +22,9 @@ export function createMcpServerList({ paths, getSettings, getTeams }) {
     const tools = getTeams()?.toolsFor(thread) ?? true
     if (tools && getSettings().browserTool) servers.push(chromeServer(thread))
     if (tools && getSettings().desktopTool && process.platform === 'win32') {
-      servers.push({ name: 'desktop', command: process.execPath, args: [desktopMcpScript], env: [] })
+      // Keep agent-desktop's snapshots (they hold on-screen text) in Agent Desk's own folder, not the user's home.
+      const env = paths.desktopUiHome ? [{ name: 'AGENT_DESKTOP_HOME', value: paths.desktopUiHome }] : []
+      servers.push({ name: 'desktop', command: process.execPath, args: [desktopMcpScript], env })
     }
     if (tools && getSettings().historyTool === true) {
       servers.push({ name: 'history', command: process.execPath,

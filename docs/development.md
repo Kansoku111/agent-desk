@@ -11,6 +11,8 @@ npm run build      # 画面のビルド（npm start 時は必要なら自動で�
 
 スマホの画面は、Tailscale がなくても `AGENT_DESK_REMOTE_ADDRESSES=127.0.0.2` を付けて起動すれば、PC のブラウザで `http://127.0.0.2:47131/?t=…` を開いて確かめられます（Tailscale の検出の代わりに、指定したアドレスで待ち受けます）。確認のときは `AGENT_DESK_HOME` に別のフォルダを指定してください。
 
+子の文脈予算は `node --test test/team-child-compaction.test.js test/team-child-runtime.test.js test/team-child-compaction-runtime.test.js` で検証します。会社名に依存しない開始目安、従来の早い基準の維持、保持量・再試行設定、古いツール結果の削減、並行ルート・容量変更・再開、実dshローダーでの親子分離を確認します。模擬応答だけを使い、実モデル・利用枠は消費しません。[設計記録](team-context-budget.md)。
+
 主な責務は、設定の検証・保存順序が `server/settings.js`、更新互換性が `server/dsh-compatibility.js`、タスクの受領記録とライフサイクルが `server/threads.js`、ブラウザの送信待ちが `web/src/outbox.ts`、接続ごとのリクエスト管理が `web/src/rpc-client.ts` に分かれています。送信の回帰テストは実モデルを呼ばず、更新の回帰テストも実際の npm 更新を行いません。`test/single-instance-successor.test.js` は一時データフォルダと模擬HTTPサーバーで、旧インスタンス消滅後の後継起動と二重起動の防止を確認します。`test/release-inputs.test.js` は一時コピーで実際にZIPを作り、共有モジュールの同梱とビルド入力・コード指紋の追跡を検査します。
 
 PTCの回帰検証は `node --test test/ptc.test.js test/ptc-runtime.test.js test/dsh-compatibility.test.js test/subagents.test.js test/ab.test.js test/ab-runtime.test.js test/teams.test.js test/execution.test.js` で実行できます。`ptc-runtime.test.js` は一時ホームとローカルの模擬Chat Completions応答で実際のdsh/ACP/PTCを起動します。通常→PTC→通常のツール定義と会話履歴、同一プロセス内の別セッション、再開、内部ツール結果、タイムアウト・キャンセル後の実行プロセス終了と再実行、読み取り専用／ワークスペースの直接Node書き込みと登録ツール書き込みを検査します。AB・チームの実際の実行プロファイルでもPTCを動かし、読み取り専用担当の直接Node書き込み拒否、実装担当の登録ツール書き込み、委任ツールの非公開と通常方式への復帰を確認します。ecoの調査→実装についても通常方式とPTCで同じセッションの調査指示・ツール結果の保持、切り替え後と再起動後の書き込み、別の調査セッションの読み取り専用維持を検査します。マネージャーのテストではAB全段階への継承、TM・eco親子の切り替え・再開・保存、ecoの差し戻しを検査します。`thread-research-transition.test.js` は要約や新規セッションへの退避がないことと、移行・保存・削除時の失敗処理を確認します。外部モデルAPIや権限昇格の承認は使いません。この検証は実モデルによる会話継続やOS全体の完全隔離を保証するものではありません。
@@ -28,6 +30,18 @@ AB・TM・ecoのPTC画面検証は同じViteフィクスチャサーバーの `p
 TM・eco共通の親の自動継続待機は `test/goal-driver-wait.test.js`・`test/goal-patch.test.js`・`test/thread-goal-wait.test.js`・`test/teams.test.js` で、予約前／実行直前の再確認、ターン終了、設定の適用確認、報告の配送順序を検査します。`test/ptc-runtime.test.js` は通常方式・PTCの実dshで、待機中にgoal roundのモデル要求が増えないこと、目標のactive／armed状態と残り回数、明示入力の受領、キャンセル、同一プロセスの通常セッションの自動継続を確認します。`wait` の並行作業指定より質問・停止・未配送の報告を優先すること、送信失敗・重複再送・内部報告が質問待ちを解除しないこと、休止中の親のキャンセル、停止と送信の競合も検査します。実dshでは質問への割り込み受理と待機解除の原子性、終了済みターンへの割り込みが管理外のモデル要求を開始しないことを確認します。`goal-wait` と steering の実フック合成も更新時の互換性ゲートに含みます。
 
 設定の回帰確認は同じフィクスチャサーバーの `settings-bug-audit-ui.html` で `await settingsAudit.run()` を実行します。候補が後から届くClaudeワークスペースの選択・送信と、検証行の削除→追加→保存を実コンポーネントで確認します。`usage-pricing-ui.html` の `await usagePricingTest.run()` は、未算定・一部未算定・非課金・利用なし・既知ゼロをタイル、モデル行、グラフのツールチップで確認します。どちらもRPCは模擬応答で、本番データや実モデルを使いません。
+
+## 利用上限時のフォールバック
+
+回帰確認は node --test test/usage-fallback.test.js test/usage-fallback-settings-ui.test.js test/normal-fallback-handoff.test.js test/thread-usage-fallback.test.js test/ab.test.js test/teams.test.js test/terminals.test.js test/outbox.test.js test/claude-hook.test.js です。模擬ランタイム・PTYで優先順、旧設定、認証、指定モデルの適用、停止・競合・再起動時のフェンスを確認します。実モデル・本番データは使いません。
+
+候補を接続先別に保持するのは、一つのモデルを全ソースの代替にすると、そのモデルの接続先が制限されたときに同じ経路を再選択してしまうためです。起動中に共通設定を書き換えて課金経路を変えないよう、通常はターンごと、AB・TM・ecoは実行ごとに候補を控えます。旧設定を自動で全モードに広げる代替案は、利用者が認めていない課金経路を有効にし得るため採らず、明示保存までは従来設定を残します。実行方式をまたぐときは非公開の対象と元へのリンクを先に保存し、送信結果や中断が不明なら自動再実行しません。詳細・対象外は[利用上限時のフォールバック](usage-fallback.md)を正とします。
+
+## Claude Code の質問カード
+
+回帰確認は `node --test test/terminals.test.js test/terminal-dialog-ui.test.js test/rpc-handlers-terminals.test.js test/terminal-send-regressions.test.js test/terminal-input-delivery.test.js test/claude-login-ui.test.js` です。模擬PTYと実コンポーネントで自由入力・改行・明示的確定・複数選択用キー・古い質問・二重操作・制御文字の拒否・失敗時の入力保持を検査します。ブラウザ検証は `node test/fixtures/serve-ab-ui.mjs` のURLを `terminal-dialog-ui.html` に替え、DevToolsで `await terminalDialogTest.run()` を実行します。375px幅でも確認でき、実モデルや本番データは使いません。実IMEの変換や全CLIバージョンでの動作を保証する検証ではありません。
+
+設計上、質問の決定権は改造していないCLIに残します。既存の画面読み取りを拡張し、選択肢以外の画面にはテキスト表示と明示的なキー／貼り付け操作を用意します。CLI内部のAPIへの依存や質問ツールの置き換えを避けるためです。質問の画面指紋・プロセス固有値・入力世代を含む一時IDを操作前に照合し、同じ選択肢の別質問・別クライアントの操作・再起動後の古い操作を拒否します。自由入力とEnterは別操作で、通常メッセージ送信のEnter再送を流用しません。既存の `terminal.choose` のID省略形式は互換のため維持し、新しいチャットは必ずIDを付けます。新しい `terminal.respond` はID必須です。保存形式・セッション・認証・モデル・課金経路は変更せず、移行操作は不要です。
 
 ## リリース
 

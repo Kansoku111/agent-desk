@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import YAML from 'yaml'
-import { homePatch, TEAM_CHILD_PLUGIN, teamChildPatch } from '../server/dsh-config.js'
+import { homePatch, TEAM_CHILD_PLUGIN, TEAM_CHILD_COMPACTION_PLUGIN, teamChildPatch } from '../server/dsh-config.js'
 import { apply, SECTION_NAME, READ_ONLY_SECTION_NAME, READ_ONLY_PROMPT } from '../server/team-child-plugin.js'
 import { childPrompt } from '../server/teams-prompts.js'
 import { RuntimePool, runtimeKey } from '../server/runtime.js'
 
 test('the team children\'s layer turns every subagent tool off and gives the child instructions', () => {
   const rows = YAML.parse(teamChildPatch())
-  assert.deepEqual(rows.slice(0, -1), ['tool-subagent', 'tool-subagent-fork', 'tool-subagent-control', 'tool-subagent-list-agents'].map((id) => ({ id, disabled: true })))
+  assert.deepEqual(rows.slice(0, -3), ['tool-subagent', 'tool-subagent-fork', 'tool-subagent-control', 'tool-subagent-list-agents'].map((id) => ({ id, disabled: true })))
+  assert.deepEqual(rows.at(-3), { id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic', disabled: true })
+  assert.deepEqual(rows.at(-2), { insert: [{ id: 'agent-desk-child-compaction', name: TEAM_CHILD_COMPACTION_PLUGIN }] })
+  assert.equal(YAML.parse(homePatch()).some((row) => row.id === 'compaction-basic'), false)
   assert.deepEqual(rows.at(-1), { insert: [{ id: 'agent-desk-team-child', name: TEAM_CHILD_PLUGIN, config: { text: childPrompt() } }] })
   assert.match(childPrompt(), /^# Agent Desk team: you are a child agent\n/)
   assert.ok(TEAM_CHILD_PLUGIN.endsWith('/server/team-child-plugin.js'))

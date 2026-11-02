@@ -11,6 +11,7 @@ import { EFFORTS as CLAUDE_EFFORTS } from './terminal-helpers.js'
 import { workflowEffort, workflowEffortSupported, workflowLevels } from '../shared/workflow-effort.js'
 import { addScores, emptyScore } from '../shared/usage-score.js'
 import { isLeaderUsageLimit } from './leader-usage-limit.js'
+import { usageFallbackChoice } from '../shared/usage-fallback.js'
 
 const ROLES = ['a', 'b', 'leader', 'implementer']
 // Raw preferences retain legacy blanks; new-run resolution below materializes medium.
@@ -59,13 +60,14 @@ const RUNNING = new Set(['running', 'stopping'])
 const RETRY_PHASE = { instructions: 'preparing', implementer: 'implementing', direct: 'implementing', reviewer: 'reviewing' }
 
 export class AbManager extends EventEmitter {
-  constructor({ dir, runner, catalog = () => ({ effortsByModel: {} }), validateModel = () => {}, authorize = async () => {}, validateImages = async (images) => { if (images.length) throw new Error('Image attachments not configured'); return [] } }) {
+  constructor({ dir, runner, catalog = () => ({ effortsByModel: {} }), validateModel = () => {}, authorize = async () => {}, usageFallbackRoutes = () => null, validateImages = async (images) => { if (images.length) throw new Error('Image attachments not configured'); return [] } }) {
     super()
     this.dir = dir
     this.runner = runner
     this.catalog = catalog
     this.validateModel = validateModel
     this.authorize = authorize
+    this.usageFallbackRoutes = usageFallbackRoutes
     this.validateImages = validateImages
     this.runs = new Map()
     this.config = { ...AB_DEFAULTS }
@@ -135,6 +137,13 @@ export class AbManager extends EventEmitter {
     if (!Array.isArray(images) || typeof text !== 'string' || (!text.trim() && !images.length) || text.length > 100000) throw new Error('相談文を入力してください（10万文字以内）')
     if (typeof workspace !== 'string' || !path.isAbsolute(workspace) || !(await fs.stat(workspace).catch(() => null))?.isDirectory()) throw new Error('作業フォルダが見つかりません')
     config = abConfig(config)
+    // Snapshot a configured shared policy for this run; old runs retain their own choice.
+    const routes = this.usageFallbackRoutes()
+    if (Array.isArray(routes)) {
+      const choice = usageFallbackChoice(routes, config.leader)
+      config.leaderFallback = choice?.model ?? ''
+      config.fallbackEffort = choice?.effort ?? ''
+    }
     for (const key of ROLES) config.efforts[key] = workflowEffort(config.efforts[key], workflowLevels(this.catalog(), config[key]))
     for (const key of ['a', 'b', 'leader', ...(config.delegate ? ['implementer'] : [])]) this.validateModel(config[key])
     if (config.leaderFallback) {

@@ -7,14 +7,14 @@ import path from 'node:path'
 import { AbManager, abConfig } from '../server/ab.js'
 import { createAbHandlers } from '../server/rpc-handlers-ab.js'
 
-async function setup(t, config = {}) {
+async function setup(t, config = {}, options = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ab-test-'))
   t.after(() => fs.rm(dir, { recursive: true, force: true }))
   const runner = new EventEmitter()
   runner.calls = []
   runner.start = async (input) => { runner.calls.push(input); return input.jobId }
   runner.stop = async () => {}
-  const manager = await new AbManager({ dir, runner, validateModel: (value) => { if (!value) throw new Error('missing model') } }).load()
+  const manager = await new AbManager({ dir, runner, validateModel: (value) => { if (!value) throw new Error('missing model') }, ...options }).load()
   const { run } = await manager.create({ workspace: dir, text: ' 生の相談\nそのまま ', config: { a: 'A', b: 'B', leader: 'L', implementer: 'I', ...config } })
   const finish = async (role, text = `${role} report`, status = 'completed') => {
     const job = manager.require(run.id).jobs.filter((entry) => entry.role === role).at(-1)
@@ -22,6 +22,34 @@ async function setup(t, config = {}) {
   }
   return { dir, runner, manager, id: run.id, finish }
 }
+
+test('new AB runs snapshot the shared choice and authorize the actual destination', async (t) => {
+  const routes = [{ model: 'claude:haiku', effort: 'low' }, { model: '["openai-codex","luna"]', effort: 'low' }]
+  let authorized
+  const f = await setup(t, { leader: 'claude:opus', leaderFallback: 'legacy' }, {
+    usageFallbackRoutes: () => routes, authorize: async ({ config }) => { authorized = structuredClone(config) },
+  })
+  assert.equal(authorized.leaderFallback, routes[1].model)
+  routes.splice(0)
+  await f.finish('a'); await f.finish('b')
+  const job = f.manager.require(f.id).jobs.at(-1)
+  await f.manager.finished({ runId: f.id, jobId: job.id, status: 'error', error: 'usage_limit_reached' })
+  assert.equal(f.runner.calls.at(-1).model, '["openai-codex","luna"]')
+})
+
+test('shared Claude Code fallback cannot bypass authorization', async (t) => {
+  let checked
+  await assert.rejects(setup(t, { leader: '["openai-codex","luna"]' }, {
+    usageFallbackRoutes: () => [{ model: 'claude:haiku', effort: 'low' }],
+    authorize: async ({ config }) => { checked = config.leaderFallback; throw new Error('confirmation required') },
+  }), /confirmation required/)
+  assert.equal(checked, 'claude:haiku')
+})
+
+test('an explicitly empty shared policy disables old AB defaults', async (t) => {
+  const f = await setup(t, { leader: 'claude:opus', leaderFallback: 'legacy' }, { usageFallbackRoutes: () => [] })
+  assert.equal(f.manager.require(f.id).config.leaderFallback, '')
+})
 
 test('AB switches only the leader on explicit exhaustion and keeps its work', async (t) => {
   const { manager, id, finish, runner, dir } = await setup(t, { leaderFallback: 'F', fallbackEffort: 'low' })

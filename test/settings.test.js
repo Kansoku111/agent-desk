@@ -52,6 +52,31 @@ function harness(initial = {}, hooks = {}) {
   return { service, events, writes, published, get live() { return live } }
 }
 
+test('fallback routes are explicit, validated, and survive settings reload', async () => {
+  const legacy = migrateSettings({ agentTeams: { leaderFallback: 'claude:haiku' } })
+  assert.equal(legacy.usageFallbackRoutes, null)
+  assert.equal(legacy.agentTeams.leaderFallback, 'claude:haiku')
+  const h = harness(legacy)
+  const routes = [{ model: '["openai-codex","luna"]', effort: 'low' }]
+  await h.service.update({ usageFallbackRoutes: routes, usageFallbackRoutesBase: null })
+  assert.deepEqual(migrateSettings(h.writes[0]).usageFallbackRoutes, routes)
+  await assert.rejects(h.service.update({ usageFallbackRoutes: [{ model: 'bad', effort: '' }], usageFallbackRoutesBase: routes }), /不正/)
+  await assert.rejects(h.service.update({ usageFallbackRoutes: [], usageFallbackRoutesBase: null }), /別の画面/)
+  await assert.rejects(h.service.update({ usageFallbackRoutes: [] }), /別の画面/)
+  assert.deepEqual(h.live.usageFallbackRoutes, routes)
+})
+
+test('concurrent fallback editors cannot overwrite a newer committed route', async () => {
+  const h = harness()
+  const a = [{ model: 'claude:haiku', effort: 'low' }]
+  const b = [{ model: '["openai-codex","luna"]', effort: 'low' }]
+  const first = h.service.update({ usageFallbackRoutes: a, usageFallbackRoutesBase: null })
+  const second = h.service.update({ usageFallbackRoutes: b, usageFallbackRoutesBase: null })
+  await first
+  await assert.rejects(second, /別の画面/)
+  assert.deepEqual(h.live.usageFallbackRoutes, a)
+})
+
 test('custom instructions switch preserves text, persists, and refreshes runtime configuration', async () => {
   const legacy = migrateSettings({ customInstructions: 'saved instructions' })
   assert.equal(legacy.customInstructionsEnabled, true)

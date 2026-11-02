@@ -8,6 +8,7 @@ import { OpenInMenu } from './ThreadView'
 import { TurnView } from './TurnView'
 import { abTimeline } from '../ab-transcript'
 import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
+import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
 import { Modal, ConfirmDialog } from './Modal'
 import { effortLabel } from '../util'
 import { CLAUDE_CODE, ModelField, modelGroups } from './WorkflowModelField'
@@ -15,7 +16,7 @@ import { Markdown, CopyButton } from './Markdown'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import { AbImages, AbInput, useAbDraft } from './AbInput'
 import { PtcToggle } from './PtcToggle'
-import { LeaderFallback } from './LeaderFallback'
+import { FallbackSummary } from './FallbackSummary'
 import type { AuthConsentState } from '../team-auth-consent'
 
 export const AB_PHASE: Record<string, string> = { consulting: '2社に相談中', judging: '判断中', 'awaiting-approval': '案を確認', preparing: '実装指示を作成中', implementing: '実装中', reviewing: 'レビュー中', completed: '実装担当の報告', reviewed: 'レビュー報告', 'needs-attention': '要確認', stopped: '停止', interrupted: '中断', error: 'エラー' }
@@ -64,6 +65,8 @@ export function useAbConfig() {
 export function AbConfigFields({ server, config, change, busy = false }: { server: AppState; config: AbConfig; change: (patch: Partial<AbConfig>) => void; busy?: boolean }) {
   const groups = modelGroups(server)
   const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
+  const shared = Array.isArray(server.settings.usageFallbackRoutes)
+  const target = shared ? usageFallbackChoice(server.settings.usageFallbackRoutes, config.leader) : null
   return <>
     <div className="ab-model-grid">{FIELDS.map(([key, label]) => (
       <ModelField key={key} label={label} value={valid(config[key]) ? config[key] : ''} groups={groups} disabled={busy}
@@ -71,7 +74,8 @@ export function AbConfigFields({ server, config, change, busy = false }: { serve
         onEffort={(value) => change({ efforts: { ...config.efforts, [key]: value } })}
         onChange={(value) => change({ [key]: value, efforts: { ...config.efforts, [key]: workflowEffort(config.efforts[key], workflowLevels(server.catalog, value), true) } })} />
     ))}</div>
-    <LeaderFallback server={server} value={config.leaderFallback} effort={config.fallbackEffort} disabled={busy} onChange={(leaderFallback, fallbackEffort) => change({ leaderFallback, fallbackEffort })} />
+    <FallbackSummary server={server} value={shared ? target?.model ?? '' : config.leaderFallback} effort={shared ? target?.effort ?? '' : config.fallbackEffort}
+      shared={shared} sourceSelected={Boolean(config.leader)} disabled={busy} />
     <div className="ab-switches"><label><input type="checkbox" checked={config.lean} disabled={busy} onChange={(event) => change({ lean: event.target.checked })} /> 相談モデルのツールを絞る</label></div>
     <ImplementationOptions config={config} change={change} disabled={busy} />
     <PtcToggle mode={config.toolMode} disabled={busy} onChange={(toolMode) => change({ toolMode })} />
@@ -90,10 +94,13 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
   const requiredKeys: ('a' | 'b' | 'leader' | 'implementer')[] = config ? (['a', 'b', 'leader', 'implementer'] as const).filter((key) => key !== 'implementer' || config.delegate) : []
   const required = config ? requiredKeys.map((key) => config[key]) : []
-  const usesClaude = config ? [config.a, config.b, config.leader, config.implementer, config.leaderFallback].some((value) => value?.startsWith('claude:')) : false
+  const sharedFallback = config && Array.isArray(server.settings.usageFallbackRoutes) ? usageFallbackChoice(server.settings.usageFallbackRoutes, config.leader) : null
+  const effectiveFallback = Array.isArray(server.settings.usageFallbackRoutes) ? sharedFallback?.model ?? '' : config?.leaderFallback ?? ''
+  const effectiveFallbackEffort = Array.isArray(server.settings.usageFallbackRoutes) ? sharedFallback?.effort ?? '' : config?.fallbackEffort ?? ''
+  const usesClaude = config ? [config.a, config.b, config.leader, config.implementer, effectiveFallback].some((value) => value?.startsWith('claude:')) : false
   // A strict AB run refuses an effort its model does not offer; block start instead of failing right after it.
   const effortsReady = config ? requiredKeys.every((key) => workflowEffortSupported(config.efforts[key], workflowLevels(server.catalog, config[key]))) : false
-  const fallbackReady = config && (!config.leaderFallback || (valid(config.leaderFallback) && config.leaderFallback !== config.leader && workflowEffortSupported(config.fallbackEffort, workflowLevels(server.catalog, config.leaderFallback))))
+  const fallbackReady = config && (!effectiveFallback || (valid(effectiveFallback) && effectiveFallback !== config.leader && workflowEffortSupported(effectiveFallbackEffort, workflowLevels(server.catalog, effectiveFallback))))
   const ready = config && required.every(valid) && effortsReady && fallbackReady && draft.ready && (!usesClaude || auth.ready)
   const start = () => draft.submit(Boolean(ready), async () => {
     setBusy(true)

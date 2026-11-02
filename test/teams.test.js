@@ -3251,6 +3251,134 @@ function failThread(threads, id, message) {
   threads.emit('turn-finished', { threadId: id, title: thread.title, status: 'error' })
 }
 
+for (const mode of ['TM', 'eco']) for (const source of ['gpt', 'claude']) {
+  test(mode + ' snapshots the shared fallback for ' + source + ' and switches on exhaustion', async (t) => {
+    const routes = [{ model: 'claude:haiku', effort: 'low' }, { model: '["openai-codex","gpt-6-luna"]', effort: 'low' }]
+    const settings = { leaderProvider: source, leaderFallback: '["anthropic","claude-haiku-5-5"]' }
+    const options = { usageFallbackRoutes: () => routes }
+    const f = mode === 'eco' ? await setupExecution(t, options, settings) : await setup(t, settings, options)
+    const expected = source === 'gpt' ? 'claude:haiku' : routes[1].model
+    assert.equal(f.team.sharedFallbackPolicy, true)
+    assert.equal(f.manager.summary(f.team).sharedFallbackPolicy, true)
+    assert.equal(f.team.config.leaderFallback, expected)
+    if (mode === 'TM') assert.throws(() => f.manager.updateConfig(f.team.id, { leaderFallback: '' }), /共通設定/)
+    routes.splice(0)
+    if (source === 'gpt') await f.threads.send(f.leader, { text: '依頼' })
+    const switched = new Promise((resolve) => f.manager.on('team', function onTeam(summary) {
+      if (summary.leaderFallbackError || (summary.leaderFallbackUsed && summary.leaderId !== f.leader &&
+        (source === 'gpt' ? f.terminals.calls.some((c) => c[0] === 'type' && c[1] === summary.leaderId) : f.threads.calls.some((c) => c[0] === 'send' && c[1] === summary.leaderId)))) { f.manager.off('team', onTeam); resolve() }
+    }))
+    if (source === 'gpt') failThread(f.threads, f.leader, 'usage_limit_reached')
+    else f.terminals.emit('hook', { terminalId: f.leader, input: { hook_event_name: 'StopFailure', error_details: "You've hit your limit" } })
+    await switched
+    assert.equal(f.team.leaderFallbackError, undefined)
+    assert.equal(f.team.leaderFallbackUsed, true)
+    if (source === 'gpt') assert.equal(f.terminals.records.get(f.team.leaderId).model, 'haiku')
+    else assert.equal(f.threads.threads.get(f.team.leaderId).model, expected)
+  })
+}
+
+test('TM preserves a next-model choice changed during the failed turn', async (t) => {
+  const api = '["anthropic","claude-haiku-5-5"]'
+  const manual = '["deepseek-official","deepseek-v4-flash"]'
+  const f = await setup(t, { leaderProvider: 'gpt' }, { usageFallbackRoutes: () => [{ model: api, effort: 'medium' }] })
+  await f.threads.send(f.leader, { text: 'work' })
+  const turn = f.threads.turns.get(f.leader).at(-1)
+  turn.executedModel = f.threads.threads.get(f.leader).model
+  await f.threads.update(f.leader, { model: manual })
+  failThread(f.threads, f.leader, 'usage_limit_reached')
+  assert.equal(f.threads.threads.get(f.leader).model, manual)
+  assert.equal(f.team.leaderFallbackUsed, undefined)
+  assert.match(f.team.leaderFallbackError, /実行中にモデルまたは推論レベルが変更/)
+  assert.equal(f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).length, 1)
+})
+
+test('TM preserves a reasoning level changed during the failed turn', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' }, { usageFallbackRoutes: () => [{ model: '["anthropic","claude-haiku-5-5"]', effort: 'medium' }] })
+  await f.threads.send(f.leader, { text: 'work' })
+  const turn = f.threads.turns.get(f.leader).at(-1)
+  turn.executedModel = f.threads.threads.get(f.leader).model
+  turn.selectionChangedDuringRun = true
+  await f.threads.update(f.leader, { effort: 'high' })
+  failThread(f.threads, f.leader, 'usage_limit_reached')
+  assert.equal(f.threads.threads.get(f.leader).effort, 'high')
+  assert.equal(f.team.leaderFallbackUsed, undefined)
+  assert.match(f.team.leaderFallbackError, /推論レベルが変更/)
+})
+
+test('TM stops if the runtime did not report which model was used', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' }, { usageFallbackRoutes: () => [{ model: '["anthropic","claude-haiku-5-5"]', effort: 'medium' }] })
+  await f.threads.send(f.leader, { text: 'work' })
+  f.threads.turns.get(f.leader).at(-1).executedModel = null
+  failThread(f.threads, f.leader, 'usage_limit_reached')
+  assert.match(f.team.leaderFallbackError, /使用したモデルを確認できない/)
+  assert.equal(f.team.leaderFallbackUsed, undefined)
+})
+
+test('TM resolves the saved policy against the actual model after a manual change', async (t) => {
+  const api = '["anthropic","claude-haiku-5-5"]', gpt = '["openai-codex","gpt-6-luna"]'
+  const routes = [{ model: api, effort: 'medium' }, { model: gpt, effort: 'low' }]
+  const f = await setup(t, { leaderProvider: 'gpt' }, { usageFallbackRoutes: () => routes })
+  assert.equal(f.team.config.leaderFallback, api)
+  await f.threads.update(f.leader, { model: api })
+  routes.splice(0)
+  await f.threads.send(f.leader, { text: 'work' })
+  const switched = new Promise((resolve) => f.manager.on('team', function onTeam(summary) {
+    if (summary.leaderFallbackError || (summary.leaderFallbackUsed && f.threads.threads.get(f.leader).status === 'running')) { f.manager.off('team', onTeam); resolve() }
+  }))
+  failThread(f.threads, f.leader, 'usage_limit_reached')
+  await switched
+  assert.equal(f.team.leaderFallbackError, undefined)
+  assert.equal(f.threads.threads.get(f.leader).model, gpt)
+})
+
+test('TM will not overwrite a model changed while shared fallback is pending', async (t) => {
+  const api = '["anthropic","claude-haiku-5-5"]', gpt = '["openai-codex","gpt-6-luna"]'
+  const f = await setup(t, { leaderProvider: 'gpt' }, { usageFallbackRoutes: () => [{ model: api, effort: 'medium' }] })
+  await f.threads.send(f.leader, { text: 'work' })
+  let release, started
+  const gate = new Promise((resolve) => { release = resolve })
+  const waiting = new Promise((resolve) => { started = resolve })
+  const update = f.threads.update
+  f.threads.update = async (...args) => { started(); await gate; return update(...args) }
+  failThread(f.threads, f.leader, 'usage_limit_reached')
+  await waiting
+  f.threads.threads.get(f.leader).model = gpt
+  release()
+  await Promise.all([...f.manager.exPending])
+  assert.equal(f.threads.threads.get(f.leader).model, gpt)
+  assert.match(f.team.leaderFallbackError, /状態が変わ/)
+  assert.equal(f.threads.calls.filter((call) => call[0] === 'send' && call[1] === f.leader).length, 1)
+})
+
+test('TM can use a shared route that was initially the leader provider', async (t) => {
+  const api = '["anthropic","claude-haiku-5-5"]', gpt = '["openai-codex","gpt-6-luna"]'
+  const f = await setup(t, { leaderProvider: 'claudeApi', dshLeader: { provider: 'claudeApi', model: 'claude-haiku-5-5', effort: 'medium' } }, { usageFallbackRoutes: () => [{ model: api, effort: 'medium' }] })
+  assert.equal(f.team.config.leaderFallback, '')
+  await f.threads.update(f.leader, { model: gpt })
+  await f.threads.send(f.leader, { text: 'work' })
+  const switched = new Promise((resolve) => f.manager.on('team', function onTeam(summary) {
+    if (summary.leaderFallbackError || (summary.leaderFallbackUsed && f.threads.threads.get(f.leader).status === 'running')) { f.manager.off('team', onTeam); resolve() }
+  }))
+  failThread(f.threads, f.leader, 'usage_limit_reached')
+  await switched
+  assert.equal(f.team.leaderFallbackError, undefined)
+  assert.equal(f.threads.threads.get(f.leader).model, api)
+})
+
+test('shared fallback confirmation checks a real workspace and current Claude auth', async (t) => {
+  const f = await setup(t)
+  const calls = []
+  f.manager.confirmAbAuth = async (...args) => { calls.push(args) }
+  f.manager.claudeAuth.context = (workspace) => ({ cwd: workspace })
+  f.manager.claudeAuth.guard = async (_team, context) => context.cwd === f.workspace ? null : '認証が必要'
+  assert.deepEqual(await f.manager.confirmFallbackAuth(f.workspace, { challenge: 'test' }), { confirmed: true })
+  assert.equal(calls[0][0], f.workspace)
+  await assert.rejects(f.manager.confirmFallbackAuth('not-absolute', {}), /フォルダ/)
+  f.manager.claudeAuth.guard = async () => '認証が必要'
+  await assert.rejects(f.manager.confirmFallbackAuth(f.workspace), /認証が必要/)
+})
+
 test('TM can configure a fallback after creation and use it on a later limit', async (t) => {
   const f = await setup(t, { leaderProvider: 'gpt' })
   const fallback = '["anthropic","claude-haiku-5-5"]'

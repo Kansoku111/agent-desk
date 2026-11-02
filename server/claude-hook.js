@@ -2,6 +2,7 @@
 // Claude Code runs this for the hooks Agent Desk passes with `--settings` (see
 // terminals.js): it forwards the hook's input to the Agent Desk server that
 // started this Claude. Run any other way (no AGENT_DESK_TERMINAL_* variables), it does nothing.
+import { createHash } from 'node:crypto'
 const url = process.env.AGENT_DESK_TERMINAL_HOOK
 const id = process.env.AGENT_DESK_TERMINAL_ID
 const secret = process.env.AGENT_DESK_TERMINAL_SECRET
@@ -27,6 +28,8 @@ process.stdin.on('end', async () => {
   if (rest.hook_event_name === 'UserPromptSubmit' && typeof prompt === 'string') {
     rest.team_marks = [...prompt.matchAll(/\[Agent Desk チーム\] #([0-9a-f]{8})/g)].map((match) => match[1])
     rest.task_preset_marks = [...prompt.matchAll(/\[Agent Desk: (?:子に委託|独立レビュー) \/ ([a-f0-9-]{36})\]/g)].map((match) => match[1])
+    rest.usage_fallback_auto = prompt.includes('[Agent Desk 利用上限フォールバック]')
+    rest.usage_fallback_hash = createHash('sha256').update(prompt.trim()).digest('hex')
   }
   // A team child's report is the reply its turn ended with; keep it under the server's size limit.
   if (typeof rest.last_assistant_message === 'string' && rest.last_assistant_message.length > MAX_REPLY) {

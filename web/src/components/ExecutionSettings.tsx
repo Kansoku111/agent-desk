@@ -6,9 +6,10 @@ import { executionChildChoice, executionModelSelection } from '../model-selectio
 import { nextCheckId } from '../execution-checks'
 import { ModelField, modelGroups } from './WorkflowModelField'
 import { workflowEffort, workflowEffortSupported, workflowLevels, workflowOptions } from '../../../shared/workflow-effort.js'
+import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
 import { Modal } from './Modal'
 import { PtcToggle } from './PtcToggle'
-import { LeaderFallback } from './LeaderFallback'
+import { FallbackSummary } from './FallbackSummary'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import type { AuthConsentState } from '../team-auth-consent'
 
@@ -136,6 +137,8 @@ export function ExecutionModelFields({ models, starting = false }: { models: Exe
   })).filter((group) => group.models.length)
   const childValue = choice.provider === 'claude' ? (selection.model ? `claude:${selection.model}` : '') : selection.childModels.find((entry) => entry.id === selection.model)?.value ?? ''
   const disabled = !modelsReady || starting
+  const shared = Array.isArray(server.settings.usageFallbackRoutes)
+  const target = shared ? usageFallbackChoice(server.settings.usageFallbackRoutes, selection.leader) : null
   return <>
     <section className="account-card ex-models">
       <ModelField label="親" value={modelsReady ? selection.leader : ''} groups={leaderGroups} disabled={disabled}
@@ -145,7 +148,8 @@ export function ExecutionModelFields({ models, starting = false }: { models: Exe
         effort={choice.childEffort} efforts={workflowOptions(choice.childEffort, levels.child)} onEffort={(childEffort) => changeModels({ childEffort })}
         allowClearUnavailableEffort onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
     </section>
-    <LeaderFallback server={server} value={choice.leaderFallback} effort={choice.fallbackEffort} disabled={disabled} onChange={(leaderFallback, fallbackEffort) => changeModels({ leaderFallback, fallbackEffort })} />
+    <FallbackSummary server={server} value={shared ? target?.model ?? '' : choice.leaderFallback} effort={shared ? target?.effort ?? '' : choice.fallbackEffort}
+      shared={shared} sourceSelected={Boolean(selection.leader)} disabled={disabled} />
     <div className="ex-options">
       <PtcToggle mode={choice.toolMode} disabled={disabled} onChange={(toolMode) => changeModels({ toolMode })} />
       <button type="button" className={`chip plan-implement-chip ${choice.planImplement ? 'on' : ''}`} aria-label="計画 → 実装" aria-pressed={choice.planImplement}
@@ -166,8 +170,12 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const close = () => setState({ executionStart: null })
   if (!server?.settings.agentTeams || !selection) return null
   const groups = modelGroups(server)
-  const fallbackReady = !choice.leaderFallback || (groups.some((group) => group.models.some((entry) => entry.value === choice.leaderFallback)) && choice.leaderFallback !== selection.leader && workflowEffortSupported(choice.fallbackEffort, workflowLevels(server.catalog, choice.leaderFallback)))
-  const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude' || choice.leaderFallback.startsWith('claude:'))
+  const shared = Array.isArray(server.settings.usageFallbackRoutes)
+  const target = shared ? usageFallbackChoice(server.settings.usageFallbackRoutes, selection.leader) : null
+  const fallback = shared ? target?.model ?? '' : choice.leaderFallback
+  const effort = shared ? target?.effort ?? '' : choice.fallbackEffort
+  const fallbackReady = !fallback || (groups.some((group) => group.models.some((entry) => entry.value === fallback)) && fallback !== selection.leader && workflowEffortSupported(effort, workflowLevels(server.catalog, fallback)))
+  const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude' || fallback.startsWith('claude:') || Boolean(server.settings.usageFallbackRoutes?.some((route) => route.model.startsWith('claude:'))))
   const start = async () => {
     const current = { ...latest.current }
     const currentLevels = effortOptions(current)

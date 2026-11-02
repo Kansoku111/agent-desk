@@ -64,6 +64,10 @@ export function createSocketServer({ dev, clients, handlers, fullState, getSetti
       scheduleIdleExit()
     })
     ws.on('message', async (raw) => {
+      // Once the server closes a socket (a new link, remote access off), ws still
+      // delivers frames for up to 30 s while it waits for the peer's close reply;
+      // a phone that never answers must not keep acting with a revoked token.
+      if (ws.readyState !== ws.OPEN) return
       let message
       try {
         message = JSON.parse(String(raw))

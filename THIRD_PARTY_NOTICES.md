@@ -475,6 +475,7 @@ Platform-specific optional packages are installed only for matching operating sy
 | `@xterm/xterm` | 6.0.0 | `MIT` | <https://github.com/xtermjs/xterm.js> | Bundled UI |
 | `agent-base` | 7.1.4 | `MIT` | <https://github.com/TooTallNate/proxy-agents> | Runtime |
 | `agent-base` | 9.0.0 | `MIT` | <https://github.com/TooTallNate/proxy-agents> | Runtime |
+| `agent-desktop` | 1.0.2 | `Apache-2.0` | <https://github.com/vercel-labs/agent-desktop> | Runtime |
 | `ajv` | 8.20.0 | `MIT` | <https://github.com/ajv-validator/ajv> | Runtime |
 | `ansi-regex` | 5.0.1 | `MIT` | <https://github.com/chalk/ansi-regex> | Runtime |
 | `ansi-styles` | 4.3.0 | `MIT` | <https://github.com/chalk/ansi-styles> | Runtime |

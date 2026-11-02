@@ -36,6 +36,9 @@ export function appPaths(home = defaultAppHome()) {
     // The browser tool's own Chrome profile and its debugging-port record.
     chromeProfile: path.join(home, 'chrome-tool-profile'),
     chromeState: path.join(home, 'chrome-tool.json'),
+    // agent-desktop's state (UI snapshots, clipboard images) for the desktop tool. Never create this
+    // folder here: the CLI makes it owner-only and refuses one whose permissions it did not set.
+    desktopUiHome: path.join(home, 'desktop-ui'),
     // Snapshots of task workspaces, for undoing a turn's file changes.
     checkpoints: path.join(home, 'checkpoints'),
     // Which providers run in fast mode, read by each dsh process per request.
