@@ -154,7 +154,7 @@ export function planSettingsUpdate(current, patch, now) {
   if (owns(patch, 'taskPresets')) {
     assertRecord(patch.taskPresets, 'taskPresets')
     next.taskPresets = { ...structuredClone(DEFAULT_SETTINGS.taskPresets), ...current.taskPresets }
-    for (const role of ['delegate', 'review']) {
+    for (const role of ['delegate', 'review', 'reviewDsh', 'reviewClaude']) {
       if (!owns(patch.taskPresets, role)) continue
       const value = patch.taskPresets[role]
       assertRecord(value, 'taskPresets.' + role)
@@ -163,6 +163,7 @@ export function planSettingsUpdate(current, patch, now) {
         if (value[key] !== null && (typeof value[key] !== 'string' || value[key].length > (key === 'model' ? 1000 : 100))) throw new Error('プリセットのモデル・推論設定が不正です')
         choice[key] = value[key]
       }
+      if (choice.model && ((role === 'reviewDsh' && choice.model.startsWith('claude:')) || (role === 'reviewClaude' && !choice.model.startsWith('claude:')))) throw new Error('選択したハーネスのモデルを指定してください')
       next.taskPresets[role] = choice
     }
   }

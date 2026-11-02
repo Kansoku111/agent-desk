@@ -1,5 +1,10 @@
 .preset-form, .preset-result { display: grid; gap: 16px; min-width: 0; }
 .preset-form label { display: grid; gap: 7px; font-size: 13px; }
+.preset-switch { display: flex; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.preset-switch legend { font-size: 13px; margin-bottom: 7px; }
+.preset-form .preset-switch label { display: flex; align-items: center; justify-content: center; flex: 1; min-width: 0; padding: 9px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.preset-form .preset-switch label:has(input:checked) { border-color: var(--accent); background: var(--bg-bubble); }
+.preset-switch input { margin: 0; }
 .preset-form input:not([type="checkbox"]), .preset-form select, .preset-form textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 .preset-model-line, .preset-result-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .preset-model-line > .link-button { margin-left: auto; }

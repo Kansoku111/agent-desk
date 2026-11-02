@@ -1,0 +1,1 @@
+export function reviewModelChoice(settings: { taskPresets?: { review?: { model: string | null; effort: string | null }; reviewDsh?: { model: string | null; effort: string | null }; reviewClaude?: { model: string | null; effort: string | null } } }, harness: 'dsh' | 'claude'): { model: string | null; effort: string | null }

@@ -246,6 +246,127 @@ test('preparation asks questions without launching a worker', async (t) => {
   assert.equal(question.worker, undefined)
 })
 
+test('opinion passes the proposed design without asking for edits and runs DSH read-only', async (t) => {
+  const f = await fixture(t)
+  const run = await f.start({ kind: 'review', harness: 'dsh', reviewMode: 'opinion', expectedModel: 'C', expectedEffort: 'low' })
+  assert.equal(run.reviewMode, 'opinion')
+  assert.equal(run.permissionMode, 'read-only')
+  assert.match(run.preparePrompt, /検討中の案を具体的に渡し/)
+  assert.match(run.preparePrompt, /作成・変更や実装をせず/)
+  assert.doesNotMatch(run.preparePrompt, /不具合・回帰・要件違反を修正/)
+  assert.match(run.preparePrompt, /設計が未決であること自体は質問や起動停止の理由にせず/)
+  await f.complete(f.parent.id, brief(run, { brief: '認証設計の案と制約を独立に評価する' }))
+  assert.equal(f.threads.threads.get(run.worker.id).permissionMode, 'read-only')
+  const prompt = f.threads.calls.at(-1).input.text
+  assert.match(prompt, /認証設計の案と制約/)
+  assert.match(prompt, /Do not create or modify files/)
+  assert.doesNotMatch(prompt, /Fix every actionable bug/)
+  await f.complete(run.worker.id, '結果ブロックが欠落')
+  const retry = f.threads.calls.at(-1).input.text
+  assert.match(retry, /ファイルを変更せず/ )
+  assert.doesNotMatch(retry, /必要な修正・検証/ )
+  await f.complete(run.worker.id, '設計案への意見: 前提と代替案の具体的な根拠\n\n' + result(run, { summary: '設計案への意見' }))
+  assert.equal(run.phase, 'completed')
+  const parentCalls = f.threads.calls.filter((call) => call.id === f.parent.id)
+  assert.equal(parentCalls.length, 2, 'opinion is automatically returned exactly once')
+  assert.match(parentCalls.at(-1).input.text, /前提と代替案の具体的な根拠/)
+  assert.doesNotMatch(parentCalls.at(-1).input.text, /```task-preset/)
+  assert.match(parentCalls.at(-1).input.text, /明示的な依頼なく実装・修正を始めない/)
+  assert.equal(parentCalls.at(-1).context.userInitiated, false, 'automatic delivery does not rearm a parent goal')
+  assert.ok(run.deliveredAt)
+  await f.manager.deliver(run.id)
+  assert.equal(f.threads.calls.filter((call) => call.id === f.parent.id).length, 2)
+})
+
+test('review modes and harness choices validate and preserve legacy settings', async (t) => {
+  const f = await fixture(t)
+  f.config.taskPresets.reviewClaude = { model: 'claude:haiku', effort: 'low' }
+  await assert.rejects(f.start({ kind: 'review', harness: 'other' }), /ハーネス/)
+  await assert.rejects(f.start({ kind: 'review', harness: 'dsh', reviewMode: 'other' }), /レビュー方法/)
+  await assert.rejects(f.start({ kind: 'review', harness: 'dsh', reviewMode: 'opinion', command: 'test' }), /検証コマンド/)
+  await assert.rejects(f.start({ kind: 'review', harness: 'claude', reviewMode: 'opinion', expectedModel: 'C' }), /設定が更新/)
+  let created
+  f.agents.create = async (input) => { created = input; return { id: 'claude-worker' } }
+  const run = await f.start({ kind: 'review', harness: 'claude', reviewMode: 'opinion', expectedModel: 'claude:haiku', expectedEffort: 'low' })
+  await f.complete(f.parent.id, brief(run, { brief: '設計案への意見を報告' }))
+  assert.equal(run.model, 'claude:haiku')
+  assert.equal(run.permissionMode, 'danger-full-access')
+  assert.ok(created.args.includes('--tools'))
+  assert.match(created.args[created.args.indexOf('--tools') + 1], /^Read,Glob,Grep/)
+  assert.doesNotMatch(created.args[created.args.indexOf('--tools') + 1], /Bash|Write|Edit/)
+})
+
+test('opinion auto-delivery reports a busy parent without repeating or losing the result', async (t) => {
+  const f = await fixture(t)
+  const run = await f.start({ kind: 'review', harness: 'dsh', reviewMode: 'opinion' })
+  await f.complete(f.parent.id, brief(run))
+  f.parent.status = 'running'
+  await f.complete(run.worker.id, result(run, { summary: '相談結果' }))
+  assert.equal(run.phase, 'completed')
+  assert.match(run.deliveryError, /自動返送できません/)
+  assert.equal(run.deliveredAt, undefined)
+  assert.equal(f.threads.calls.filter((call) => call.id === f.parent.id).length, 1)
+  f.parent.status = 'idle'
+  await f.manager.deliver(run.id)
+  assert.ok(run.deliveredAt)
+  assert.equal(run.deliveryError, undefined)
+  assert.equal(f.threads.calls.filter((call) => call.id === f.parent.id).length, 2)
+})
+
+test('opinion automatically returns to a Claude Code parent exactly once', async (t) => {
+  const f = await fixture(t)
+  const run = await f.start({ source: { kind: 'terminal', id: f.terminal.id }, kind: 'review', harness: 'dsh', reviewMode: 'opinion' })
+  f.terminals.turns.push({ id: 'prepared', user: { text: run.preparePrompt }, status: 'done', items: [{ type: 'agent', text: brief(run) }] })
+  f.terminals.emit('hook', { terminalId: f.terminal.id, input: { hook_event_name: 'UserPromptSubmit', task_preset_marks: [run.id] } })
+  f.terminals.emit('hook', { terminalId: f.terminal.id, input: { hook_event_name: 'Stop' } })
+  await Promise.all([...f.manager.pending.values()])
+  await f.complete(run.worker.id, result(run, { summary: '別の観点' }))
+  assert.equal(f.terminals.calls.length, 2)
+  assert.match(f.terminals.calls.at(-1).text, /別の観点/)
+  assert.ok(run.deliveredAt)
+  await f.manager.deliver(run.id)
+  assert.equal(f.terminals.calls.length, 2)
+})
+
+test('automatic opinion delivery does not target a replaced parent session', async (t) => {
+  const f = await fixture(t)
+  const run = await f.start({ kind: 'review', harness: 'dsh', reviewMode: 'opinion' })
+  await f.complete(f.parent.id, brief(run))
+  f.parent.sessionId = randomUUID()
+  await f.complete(run.worker.id, result(run, { summary: '相談結果' }))
+  assert.match(run.deliveryError, /元セッションが変更/)
+  assert.equal(f.threads.calls.filter((call) => call.id === f.parent.id).length, 1)
+  assert.equal(run.deliveryAttempted, undefined)
+})
+
+test('uncertain Claude Code automatic delivery is not resent', async (t) => {
+  const f = await fixture(t)
+  const run = await f.start({ source: { kind: 'terminal', id: f.terminal.id }, kind: 'review', harness: 'dsh', reviewMode: 'opinion' })
+  f.terminals.turns.push({ id: 'prepared', user: { text: run.preparePrompt }, status: 'done', items: [{ type: 'agent', text: brief(run) }] })
+  f.terminals.emit('hook', { terminalId: f.terminal.id, input: { hook_event_name: 'UserPromptSubmit', task_preset_marks: [run.id] } })
+  f.terminals.emit('hook', { terminalId: f.terminal.id, input: { hook_event_name: 'Stop' } })
+  await Promise.all([...f.manager.pending.values()])
+  let sends = 0
+  f.terminals.sendMessage = async () => { sends++; throw new Error('受理状態不明') }
+  await f.complete(run.worker.id, result(run))
+  assert.match(run.deliveryError, /受理状態不明/)
+  assert.equal(sends, 1)
+  await assert.rejects(f.manager.deliver(run.id), /送信状態が不明/)
+  assert.equal(sends, 1)
+})
+
+test('legacy reviewer is retained only for its own harness and explicit choices win', async (t) => {
+  const f = await fixture(t)
+  await assert.rejects(f.start({ kind: 'review', harness: 'claude', reviewMode: 'opinion' }), /担当モデルを選択/)
+  f.config.taskPresets.reviewDsh = { model: 'D', effort: 'low' }
+  const run = await f.start({ kind: 'review', harness: 'dsh', reviewMode: 'fix', expectedModel: 'D', expectedEffort: 'low' })
+  assert.equal(run.model, 'D')
+  assert.equal(run.permissionMode, 'workspace-write')
+  assert.match(workerPresetInstructions(run), /Fix every actionable bug/)
+  assert.throws(() => planSettingsUpdate(DEFAULT_SETTINGS, { taskPresets: { reviewDsh: { model: 'claude:haiku' } } }, Date.now()), /ハーネス/)
+  assert.throws(() => planSettingsUpdate(DEFAULT_SETTINGS, { taskPresets: { reviewClaude: { model: 'D' } } }, Date.now()), /ハーネス/)
+})
+
 test('review in a non-Git folder takes its scope from the parent brief and records the reviewer patch', async (t) => {
   const f = await fixture(t)
   const delegated = await f.start()

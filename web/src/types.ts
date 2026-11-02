@@ -33,7 +33,7 @@ export type TaskPresetKind = 'delegate' | 'review'
 export interface TaskPresetRun {
   id: string; source: TaskPresetSource; sourceGone?: boolean; kind: TaskPresetKind; title: string; workspace: string
   model: string; effort: string; permissionMode: PermissionMode; phase: string; updatedAt: number; createdAt: number
-  report: string; error?: string | null; warning?: string; deliveredAt?: number; brief?: string; parentReport?: string; score?: UsageScore
+  report: string; error?: string | null; warning?: string; deliveryError?: string; deliveredAt?: number; brief?: string; parentReport?: string; score?: UsageScore
   worker?: { kind: 'thread' | 'claude'; id: string }; result?: { summary: string; remaining: string; blocker: string }
   verification?: { status: string; record: string; checks: { id: string; status: string; log: string }[] }
   changedFiles?: { path: string; status: string }[]; patch?: string; originalPatch?: string; record?: string
@@ -453,7 +453,7 @@ export interface Settings extends UsageDisplay {
   projectColors: Record<string, number>
   contextLimits: Record<'openai-codex' | 'anthropic', number | null>
   /** Global subagent switch; older saves default to enabled. */
-  taskPresets?: Record<TaskPresetKind, { model: string | null; effort: string | null }>
+  taskPresets?: Record<TaskPresetKind, { model: string | null; effort: string | null }> & Partial<Record<'reviewDsh' | 'reviewClaude', { model: string | null; effort: string | null }>>
   subagentsEnabled?: boolean
   /** Model of each fixed-model subagent tool; null leaves the tool out. */
   subagentModels: Record<'openai-codex' | 'anthropic', string | null>

@@ -7,8 +7,8 @@ const delegate = JSON.stringify(['openai-codex', 'fixture-implementer'])
 const reviewer = JSON.stringify(['openai-codex', 'fixture-reviewer'])
 let store: any, current: any, parentCalls = 0, sequence = 0
 const server: any = {
-  app: { myPc: 'fixture', remote: false }, openTargets: { terminal: true }, taskPresets: [],
-  settings: { taskPresets: { delegate: { model: delegate, effort: 'low' }, review: { model: reviewer, effort: 'low' } }, modelVisibility: {}, projectNames: {}, usageCurrency: 'USD' },
+  app: { myPc: 'fixture', remote: false }, openTargets: { terminal: true }, taskPresets: [], threads: [{ id: 'parent', title: '相談した機能' }], terminals: [],
+  settings: { taskPresets: { delegate: { model: delegate, effort: 'low' }, review: { model: reviewer, effort: 'low' }, reviewClaude: { model: 'claude:haiku', effort: 'low' } }, modelVisibility: {}, projectNames: {}, usageCurrency: 'USD' },
   accounts: { chatgpt: { signedIn: true }, claude: { configured: false }, deepseek: { configured: false } },
   catalog: { providers: { 'openai-codex': 'ChatGPT' }, models: [
     { provider: 'openai-codex', id: 'fixture-implementer', value: delegate, name: '実装モデル' },
@@ -26,9 +26,10 @@ class Socket {
     const input = JSON.parse(body); requests.push(input)
     let result: any = {}
     if (input.type === 'preset.inspect') result = { workspace: 'fixture', title: '相談した機能', checks: [] }
+    if (input.type === 'team.claudeAuth') result = { descriptor: { version: 1, mode: 'subscription', authMethod: 'fixture', apiProvider: '' }, challenge: null, confirmed: true }
     if (input.type === 'preset.create') {
       parentCalls++
-      current = { id: 'run-' + ++sequence, source, kind: input.kind, model: server.settings.taskPresets[input.kind].model, effort: 'low', title: '相談した機能', workspace: 'fixture', phase: 'preparing', createdAt: sequence, updatedAt: sequence, report: '', brief: '要件・範囲・完了条件・検証方法', permissionMode: 'workspace-write' }
+      current = { id: 'run-' + ++sequence, source, kind: input.kind, reviewMode: input.reviewMode, model: server.settings.taskPresets[input.kind].model, effort: 'low', title: '相談した機能', workspace: 'fixture', phase: 'preparing', createdAt: sequence, updatedAt: sequence, report: '', brief: '要件・範囲・完了条件・検証方法', permissionMode: 'workspace-write' }
       server.taskPresets = [...server.taskPresets, current]; result = { run: current }; publish()
     }
     if (input.type === 'preset.evidence') result = { text: input.kind === 'patch' ? '--- source.cjs\n+++ source.cjs\n+ fixed arithmetic sum' : 'verification passed', truncated: false, file: 'fixture/changes.patch' }
@@ -51,6 +52,7 @@ const check = (value: unknown, label: string) => { if (!value) throw new Error(l
 const render = () => root.render(<div className="app" style={{ padding: 16 }}><main className="main"><header className="main-header"><h1>相談した機能</h1><OpenInMenu workspace="fixture" task={source} /></header><div className="thread-body"><TaskPresetRuns source={source} onClose={() => {}} /></div><div className="column" style={{ padding: 24 }}>方針が決まった通常タスクの会話（模擬）</div><TaskPresetDialogs /></main></div>)
 const complete = async () => {
   Object.assign(current, { phase: 'completed', updatedAt: current.updatedAt + 1, worker: { kind: 'thread', id: 'worker' }, report: '変更・検証を完了しました。', result: { summary: current.kind === 'review' ? '条件分岐の不具合を修正し、回帰テストを追加しました。検証は成功しました。' : '合意した機能を実装し、テストを確認しました。', remaining: '', blocker: '' }, verification: { status: 'passed', checks: [] }, changedFiles: [{ status: 'M', path: 'src/feature.ts' }, { status: 'A', path: 'test/feature.test.ts' }], record: 'fixture/report.md', patch: 'fixture/changes.patch' })
+  if (current.reviewMode === 'opinion') { parentCalls++; current.deliveredAt = Date.now() }
   publish(); await tick(150)
 }
 const api = {
@@ -66,7 +68,7 @@ const api = {
     button('始める').click(); await tick(200)
     check(parentCalls === 1, 'one initial parent call')
     check(requests.find((entry) => entry.type === 'preset.create').instruction === '日本語の追加指示\n範囲を守る', 'multiline instruction preserved')
-    await complete(); check(parentCalls === 1 && !requests.some((entry) => entry.type === 'preset.deliver'), 'completion is UI only')
+    await complete(); store.setState({ presetRun: current.id }); await tick(200); check(parentCalls === 1 && !requests.some((entry) => entry.type === 'preset.deliver'), 'completion is UI only')
     check(document.querySelector('aside[aria-label="委託とレビュー"]')?.textContent?.includes('実装モデル'), 'delegate model appears in side panel')
     check(button('本セッションに渡す'), 'explicit return offered')
     check(!requests.some((entry) => entry.type === 'preset.evidence'), 'evidence is lazy')
@@ -79,14 +81,22 @@ const api = {
     check(button('送信済み')?.disabled, 'already sent is disabled'); button('閉じる').click(); await tick()
     labels.push('manual return sends once and becomes sent')
     button('開く').click(); await tick(); button('独立レビュー').click(); await tick(200)
-    check(document.body.textContent?.includes('指摘箇所の修正'), 'review is explicitly review-and-fix')
+    check(document.querySelectorAll('fieldset.preset-switch').length === 2, 'exactly two review selectors')
+    check(document.body.textContent?.includes('Claude Code / Haiku'), 'Claude harness shows its configured model')
+    check(!document.querySelector('textarea') && !document.querySelector('select'), 'no extra instruction or scope controls')
+    check((document.querySelector('input[name="review-mode"][value="opinion"]') as HTMLInputElement)?.checked, 'opinion is the default')
+    ;(document.querySelector('input[name="review-harness"][value="dsh"]') as HTMLInputElement).click()
+    ;(document.querySelector('input[name="review-mode"][value="fix"]') as HTMLInputElement).click(); await tick()
+    check((document.querySelector('input[name="review-mode"][value="fix"]') as HTMLInputElement).checked && document.body.textContent?.includes('作業フォルダーに書き込み'), 'fix switch changes permission')
+    ;(document.querySelector('input[name="review-mode"][value="opinion"]') as HTMLInputElement).click(); await tick()
+    check(document.body.textContent?.includes('読み取り専用'), 'opinion switch restores read-only')
     button('始める').click(); await tick(200)
     const call = requests.filter((entry) => entry.type === 'preset.create').at(-1)
-    check(call.kind === 'review' && !('review' in call) && !document.querySelector('select[aria-label="対象"], input[placeholder*="コミット"]'), 'review scope is left to the parent: no target to choose')
-    await complete(); check(parentCalls === 3, 'review completion also one-way')
+    check(call.kind === 'review' && call.harness === 'dsh' && call.reviewMode === 'opinion' && !('instruction' in call), 'review uses selected harness and opinion with no typed input')
+    await complete(); store.setState({ presetRun: current.id }); await tick(200); check(parentCalls === 4 && button('送信済み')?.disabled, 'opinion is automatically returned once')
     check(document.querySelector('aside[aria-label="委託とレビュー"]')?.textContent?.includes('レビューモデル'), 'review model appears in side panel')
     check(document.documentElement.scrollWidth <= innerWidth, 'no horizontal overflow')
-    labels.push('independent review: no target to choose, repair contract, no auto-return, no overflow')
+    labels.push('independent review: two selectors, opinion default, automatic return, no overflow')
     return labels
   },
   async failures() {

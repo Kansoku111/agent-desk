@@ -6,6 +6,7 @@ import { readJson, writeJson, writeText } from './json-file.js'
 import { Checkpoints } from './checkpoints.js'
 import { ExecutionVerifier, normalizeChecks, sourceSnapshot, workspacesOverlap } from './execution.js'
 import { workflowEffort, workflowEffortSupported, workflowLevels } from '../shared/workflow-effort.js'
+import { reviewModelChoice } from '../shared/task-preset-models.js'
 import { abClaudeArgs } from './ab-runner.js'
 import { PRESET_PROMPT_MARK } from '../shared/task-preset-mark.js'
 import { PRESET_ACTIVE, PRESET_LABEL, preparePresetPrompt, parsePresetBrief, matchesPresetPrompt, workerPresetInstructions, parsePresetResult } from './task-preset-protocol.js'
@@ -141,17 +142,21 @@ export class TaskPresets extends EventEmitter {
     this.creating = task
     return task
   }
-  async start({ requestId, source, kind, instruction = '', permissionMode = 'workspace-write', browser = false, checkIds = [], command = '', expectedModel, expectedEffort, authConfirmation }) {
+  async start({ requestId, source, kind, instruction = '', permissionMode = 'workspace-write', browser = false, checkIds = [], command = '', expectedModel, expectedEffort, authConfirmation, harness, reviewMode }) {
     if (this.closing) throw new Error('アプリを終了しています')
     if (typeof requestId !== 'string' || !/^[a-f0-9-]{36}$/i.test(requestId) || !Object.hasOwn(PRESET_LABEL, kind)) throw new Error('委託の要求が不正です')
     if (typeof instruction !== 'string' || instruction.length > 8000 || typeof browser !== 'boolean' || !['workspace-write', 'danger-full-access'].includes(permissionMode)) throw new Error('委託の設定が不正です')
-    const payload = { source, kind, instruction, permissionMode, browser, checkIds, command, expectedModel, expectedEffort }
+    if (harness !== undefined && (kind !== 'review' || !['dsh', 'claude'].includes(harness))) throw new Error('ハーネスの選択が不正です')
+    if (reviewMode !== undefined && (kind !== 'review' || !['opinion', 'fix'].includes(reviewMode))) throw new Error('レビュー方法が不正です')
+    if (reviewMode === 'opinion' && (browser || checkIds?.length || command)) throw new Error('意見を聞く場合は検証コマンドを指定できません')
+    const payload = { source, kind, instruction, permissionMode, browser, checkIds, command, expectedModel, expectedEffort, harness, reviewMode }
     const fingerprint = hash(payload)
     const known = [...this.runs.values()].find((run) => run.requestId === requestId)
     if (known) { if (known.fingerprint !== fingerprint) throw new Error('同じ要求IDに異なる設定は使えません'); return { run: this.summary(known) } }
     const record = await this.source(source, true)
-    const config = this.settings().taskPresets?.[kind]
+    const config = kind === 'review' && harness ? reviewModelChoice(this.settings(), harness) : this.settings().taskPresets?.[kind]
     if (!config?.model) throw new Error('設定 → モデルで担当モデルを選択してください')
+    if (harness && config.model.startsWith('claude:') !== (harness === 'claude')) throw new Error('選択したハーネスのモデルを設定してください')
     this.validateModel(config.model)
     const levels = workflowLevels(this.catalog(), config.model)
     const effort = workflowEffort(config.effort ?? '', levels)
@@ -170,7 +175,7 @@ export class TaskPresets extends EventEmitter {
     await this.source(source, true)
     this.room(record.workspace)
     const now = Date.now()
-    const run = { id: randomUUID(), requestId, fingerprint, source: { ...source }, sourceSession: record.sessionId, sourceModel: record.modelInUse ?? record.model, kind, title: record.title, workspace: record.workspace, model: config.model, effort, permissionMode: config.model.startsWith('claude:') ? 'danger-full-access' : permissionMode, browser, instruction, checks, phase: 'preparing', createdAt: now, updatedAt: now, report: '', sourceGone: false }
+    const run = { id: randomUUID(), requestId, fingerprint, source: { ...source }, sourceSession: record.sessionId, sourceModel: record.modelInUse ?? record.model, kind, title: record.title, workspace: record.workspace, model: config.model, effort, permissionMode: config.model.startsWith('claude:') ? 'danger-full-access' : reviewMode === 'opinion' ? 'read-only' : permissionMode, browser, instruction, checks, ...(reviewMode ? { reviewMode } : {}), phase: 'preparing', createdAt: now, updatedAt: now, report: '', sourceGone: false }
     // Reserve before any filesystem/model await; completion never releases the parent's goal gate.
     this.runs.set(run.id, run)
     this.held.add(sourceKey(source))
@@ -249,7 +254,7 @@ export class TaskPresets extends EventEmitter {
     this.assertLive(run)
     this.validateModel(run.model)
     if (run.model.startsWith('claude:')) {
-      let args = abClaudeArgs({ writable: true, instructions: workerPresetInstructions(run) + '\n\n' + this.instructions() })
+      let args = abClaudeArgs({ writable: run.reviewMode !== 'opinion', instructions: workerPresetInstructions(run) + '\n\n' + this.instructions() })
       if (run.browser) {
         const servers = this.mcpServers({ workspace: run.workspace, preset: { browser: true } })
         args.push('--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(servers.map((server) => [server.name, { command: server.command, args: server.args, env: Object.fromEntries(server.env.map(({ name, value }) => [name, value])) }])) }))
@@ -279,7 +284,8 @@ export class TaskPresets extends EventEmitter {
     run.lastRetryKey = key
     run.phase = 'running'
     await this.save(run)
-    await this.sendWorker(run, 'この同じ作業を完了してください。親への報告や別担当への委託で終えません。\n' + reason + '\n元の範囲・受け入れ条件を変えず、必要な修正・検証を行い、指定の最終JSONを返してください。requestId: ' + run.id)
+    const instruction = run.reviewMode === 'opinion' ? 'ファイルを変更せず、元の対象について意見を報告してください。' : '親への報告や別担当への委託で終えず、元の範囲・受け入れ条件を変えずに必要な修正・検証を行ってください。'
+    await this.sendWorker(run, 'この同じ作業を完了してください。\n' + reason + '\n' + instruction + '指定の最終JSONを返してください。requestId: ' + run.id)
   }
   async workerFinished(run, event) {
     if (run.phase !== 'running' || run.cancelled) return
@@ -344,7 +350,10 @@ export class TaskPresets extends EventEmitter {
     run.phase = 'completed'
     run.error = null
     await this.save(run)
-    // UI state only. Never send a prompt, append a parent turn, or release its goal gate here.
+    if (run.reviewMode === 'opinion' && !run.sourceGone) {
+      try { await this.deliver(run.id, { automatic: true }) }
+      catch (error) { run.deliveryError = '自動返送できませんでした: ' + error.message; await this.save(run) }
+    }
   }
   async unchanged(run) {
     const end = run.verification?.endHash
@@ -434,26 +443,32 @@ export class TaskPresets extends EventEmitter {
     delete run.lastRetryKey
     run.phase = 'running'
     await this.save(run)
-    this.enqueue(run, () => reply ? this.sendWorker(run, reply, { user: true }) : this.sendWorker(run, workerPresetInstructions(run) + '\n依頼を途中から再開し、未完了の修正・検証を完了してください。前回の状態:\n' + JSON.stringify({ error: run.result?.blocker, remaining: run.result?.remaining, verification: run.verification })))
+    const continuation = run.reviewMode === 'opinion' ? '依頼を途中から再開し、ファイルを変更せず意見の報告を完了してください。' : '依頼を途中から再開し、未完了の修正・検証を完了してください。'
+    this.enqueue(run, () => reply ? this.sendWorker(run, reply, { user: true }) : this.sendWorker(run, workerPresetInstructions(run) + '\n' + continuation + '前回の状態:\n' + JSON.stringify({ error: run.result?.blocker, remaining: run.result?.remaining, verification: run.verification })))
     return { run: this.summary(run) }
   }
-  async deliver(id) {
+  async deliver(id, { automatic = false } = {}) {
     const run = this.require(id)
     if (PRESET_ACTIVE.has(run.phase)) throw new Error('担当が終了してから送信してください')
     if (!run.worker || !(run.report?.trim() || run.result?.summary?.trim())) throw new Error('担当からの報告はまだありません。結果画面で開始状況を確認してください。')
     if (run.deliveredAt) return { sent: true }
     if (this.sends.has(id)) return this.sends.get(id)
     const task = (async () => {
-      await this.source(run.source, true)
+      const source = await this.source(run.source, true)
+      if (automatic && run.sourceSession && source.sessionId !== run.sourceSession) throw new Error('元セッションが変更されました。結果を確認してください。')
       this.room(run.workspace)
       if (run.deliveryAttempted && run.source.kind === 'terminal') throw new Error('前回の送信状態が不明です。元の会話を確認してください。自動では再送しません。')
       run.deliveryAttempted = true
       run.deliveryMessageId ??= randomUUID()
       await this.save(run)
-      const text = '[Agent Desk: ' + PRESET_LABEL[run.kind] + 'の結果 / ' + run.id + ']\n状態: ' + run.phase + '\n検証: ' + (run.verification?.status ?? '未実行') + (run.warning ? '\n注意: ' + run.warning : '') + '\n' + (run.result?.summary ?? run.report ?? '').slice(0, 5000) + '\n未完了: ' + (run.error || run.result?.remaining || 'なし') + '\n資料: ' + (run.record ?? '担当開始前') + (run.patch ? '\n修正差分: ' + run.patch : '') + '\nこれは担当の報告です。未検証事項を成功とみなさず、必要に応じて確認してください。'
-      if (run.source.kind === 'thread') await this.threads.send(run.source.id, { text, messageId: run.deliveryMessageId }, { userInitiated: true })
+      const opinionReport = run.reviewMode === 'opinion' ? (run.report ?? '').replace(/```task-preset\s*[\s\S]*?```/g, '').trim() : ''
+      const report = opinionReport || run.result?.summary || run.report || ''
+      const limit = run.reviewMode === 'opinion' ? 12000 : 5000
+      const text = '[Agent Desk: ' + PRESET_LABEL[run.kind] + 'の結果 / ' + run.id + ']\n状態: ' + run.phase + '\n検証: ' + (run.verification?.status ?? '未実行') + (run.warning ? '\n注意: ' + run.warning : '') + '\n' + report.slice(0, limit) + (report.length > limit ? '\n（報告を省略。全文は資料を参照）' : '') + '\n未完了: ' + (run.error || run.result?.remaining || 'なし') + '\n資料: ' + (run.record ?? '担当開始前') + (run.patch ? '\n修正差分: ' + run.patch : '') + (run.reviewMode === 'opinion' ? '\nこれは別担当の意見です。会話の文脈に沿って検討し、利用者の明示的な依頼なく実装・修正を始めないでください。' : '\nこれは担当の報告です。未検証事項を成功とみなさず、必要に応じて確認してください。')
+      if (run.source.kind === 'thread') await this.threads.send(run.source.id, { text, messageId: run.deliveryMessageId }, { userInitiated: !automatic })
       else await this.terminals.sendMessage(run.source.id, text)
       run.deliveredAt = Date.now()
+      delete run.deliveryError
       await this.save(run)
       return { sent: true }
     })().finally(() => this.sends.delete(id))
