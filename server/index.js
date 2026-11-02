@@ -59,7 +59,7 @@ import { createAbHandlers } from './rpc-handlers-ab.js'
 import { claimDataFolder } from './single-instance.js'
 import { createRequestHandler, listenWithRetry } from './http-routes.js'
 import { createSocketServer } from './websocket.js'
-import { createMcpServerList } from './mcp-servers.js'
+import { claudeMcpServer, createMcpServerList, imageMcpServer } from './mcp-servers.js'
 import { createThreadHandlers } from './rpc-handlers-threads.js'
 import { createWorkspaceHandlers } from './rpc-handlers-workspaces.js'
 import { createAccountHandlers } from './rpc-handlers-accounts.js'
@@ -140,6 +140,7 @@ const codexApp = new CodexAppServer({ home: paths.codexHome, openUrl: openExtern
 // Agent teams (teams.js) give their leader's Claude Code its flags.
 let teams = null
 let threads = null
+const claudeImageMcp = (workspace) => settings.imageTool ? claudeMcpServer(imageMcpServer(paths, workspace)) : null
 // Claude Code tasks: the user's own `claude` CLI in a terminal (see terminals.js).
 const terminals = await new TerminalManager({
   file: path.join(paths.home, 'terminals.json'),
@@ -150,6 +151,7 @@ const terminals = await new TerminalManager({
   },
   launch: (record) => teams?.launchFor(record) ?? null,
   instructions: () => effectiveCustomInstructions(settings),
+  imageMcp: claudeImageMcp,
   gptSubagent: () => (settings.subagentsEnabled !== false && settings.subagentModels?.['openai-codex'] ? { model: settings.subagentModels['openai-codex'], home: paths.home } : null),
   preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
   fallbackPreflight: (context) => teams?.claudeAuth.guard(null, context) ?? AUTH_REQUIRED,
@@ -456,6 +458,7 @@ teams = await new TeamManager({
   agents,
   catalog,
   getSettings: () => settings.agentTeams,
+  imageMcp: claudeImageMcp,
   modelVisibility: () => settings.modelVisibility,
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
   apiUrl: () => `http://127.0.0.1:${server.address().port}/api/team`,

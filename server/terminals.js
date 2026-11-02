@@ -77,7 +77,7 @@ export class TerminalManager extends EventEmitter {
   constructor({
     file, settingsFile, hookUrl, send, pty = null, findClaude: find = () => findClaude(), log = () => {},
     claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null, preflight = null, instructions = () => '',
-    gptSubagent = () => null, fallbackPreflight = null, usageFallbackRoutes = () => null, validateFallbackModel = () => {}, handoffThread = null,
+    gptSubagent = () => null, imageMcp = () => null, fallbackPreflight = null, usageFallbackRoutes = () => null, validateFallbackModel = () => {}, handoffThread = null,
   }) {
     super()
     this.file = file
@@ -88,6 +88,7 @@ export class TerminalManager extends EventEmitter {
     this.instructions = instructions
     this.instructionsFile = path.join(path.dirname(settingsFile), 'claude-instructions.md')
     this.gptSubagent = gptSubagent
+    this.imageMcp = imageMcp
     this.gptMcpDir = path.join(path.dirname(settingsFile), 'claude-gpt-subagent')
     this.preflight = preflight
     this.fallbackPreflight = fallbackPreflight
@@ -430,20 +431,22 @@ export class TerminalManager extends EventEmitter {
     this.#startNow(record, size, pending.prompt, { claude, env })
   }
 
-  /** Writes the task's `subagent_gpt` MCP config (gpt-subagent-mcp.js); null when no GPT subagent model is set. */
-  #writeGptMcp(record) {
+  /** Writes the ordinary task's MCP config; team leaders supply their own. */
+  #writeTaskMcp(record) {
     const gpt = this.gptSubagent()
-    if (!gpt) return null
+    const image = this.imageMcp(record.workspace)
+    if (!gpt && !image) return null
     const file = path.join(this.gptMcpDir, `${record.id}.json`)
     fs.mkdirSync(this.gptMcpDir, { recursive: true })
     fs.writeFileSync(file, JSON.stringify({
       mcpServers: {
-        [GPT_MCP_SERVER]: {
+        ...(gpt ? { [GPT_MCP_SERVER]: {
           type: 'stdio',
           command: process.execPath,
           args: [gptSubagentScript, '--workspace', record.workspace, '--name', gpt.model],
           env: { AGENT_DESK_HOME: gpt.home },
-        },
+        } } : {}),
+        ...(image ? { imagegen: image } : {}),
       },
     }, null, 2), { encoding: 'utf8', mode: 0o600 })
     return file
@@ -466,7 +469,7 @@ export class TerminalManager extends EventEmitter {
     const settings = extra ? teamHookSettings(undefined, undefined, { deniedAgents }) : hookSettings(undefined, undefined, { deniedAgents })
     fs.writeFileSync(extra ? this.teamSettingsFile : this.settingsFile, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 })
     // A team's leader hands work to its children instead.
-    const gptMcp = record.team ? null : this.#writeGptMcp(record)
+    const gptMcp = record.team ? null : this.#writeTaskMcp(record)
     const command = launchCommand(claude, [
       ...(resume ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
       // Flags apply to this session only; `/model` typed in Claude Code would change the user's default everywhere.

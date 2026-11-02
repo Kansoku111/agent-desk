@@ -42,7 +42,7 @@ function fakePty() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30))
 
-async function setup({ launch, preflight = () => null, fallbackPreflight = () => null, instructions, gptSubagent, usageFallbackRoutes, validateFallbackModel, handoffThread } = {}) {
+async function setup({ launch, preflight = () => null, fallbackPreflight = () => null, instructions, gptSubagent, imageMcp, usageFallbackRoutes, validateFallbackModel, handoffThread } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-terminals-'))
   const workspace = path.join(dir, 'project')
   const claudeHome = path.join(dir, 'claude')
@@ -57,7 +57,7 @@ async function setup({ launch, preflight = () => null, fallbackPreflight = () =>
     pty,
     findClaude: () => 'C:\\Tools\\claude.exe',
     claudeHome,
-    launch, preflight, fallbackPreflight, instructions, gptSubagent, usageFallbackRoutes, validateFallbackModel, handoffThread,
+    launch, preflight, fallbackPreflight, instructions, gptSubagent, imageMcp, usageFallbackRoutes, validateFallbackModel, handoffThread,
   }).load()
   return { dir, workspace, claudeHome, pty, sent, manager }
 }
@@ -370,6 +370,31 @@ test('a task gets subagent_gpt on the chosen GPT model; a team\'s leader does no
   assert.ok(!pty.spawned[2].args.includes('--mcp-config'))
   await manager.remove(terminal.id)
   await assert.rejects(fs.stat(file))
+})
+
+test('ordinary Claude tasks get image MCP alongside GPT; the next start reflects settings', async (t) => {
+  let enabled = true, gpt = true
+  const image = { type: 'stdio', command: 'node', args: ['imagegen-mcp.js'], env: {} }
+  const { workspace, pty, manager } = await setup({ imageMcp: () => enabled ? image : null,
+    gptSubagent: () => gpt ? { model: 'gpt-6-luna', home: 'app-home' } : null })
+  t.after(() => manager.shutdown())
+  await manager.create({ workspace })
+  let args = pty.spawned[0].args
+  let servers = JSON.parse(await fs.readFile(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers
+  assert.deepEqual(servers.imagegen, image)
+  assert.ok(servers['agent-desk-gpt'])
+  enabled = false
+  await manager.create({ workspace })
+  args = pty.spawned[1].args
+  servers = JSON.parse(await fs.readFile(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers
+  assert.equal(servers.imagegen, undefined)
+  assert.ok(servers['agent-desk-gpt'])
+  enabled = true
+  gpt = false
+  await manager.create({ workspace })
+  args = pty.spawned[2].args
+  servers = JSON.parse(await fs.readFile(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers
+  assert.deepEqual(servers, { imagegen: image })
 })
 
 test('hookEffect follows a turn: prompt, approval, tool, stop', () => {

@@ -45,11 +45,12 @@ ${section}` : prompt
  * The flags a team leader's Claude Code starts with (TerminalManager's
  * `launch`). The files are written each time: the server's port may have changed.
  */
-export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, instructions = '', guides = NO_GUIDES }) {
+export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, instructions = '', guides = NO_GUIDES, imageMcp = null }) {
   // Policy and playbooks belong to TM, not eco (including previously saved teams).
   if (team.execution) guides = NO_GUIDES
   const mcp = writeFile(dir, 'mcp.json', JSON.stringify({
     mcpServers: {
+      ...(imageMcp ? { imagegen: imageMcp } : {}),
       [MCP_SERVER]: {
         type: 'stdio',
         command: node,
@@ -111,11 +112,13 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
  * Any other child gets Claude in Chrome, which `-p` leaves out without `--chrome`
  * (and `--strict-mcp-config` keeps when it is asked for).
  */
-export function childTurnArgs({ child, dir, instructions = '', lean = false }) {
+export function childTurnArgs({ child, dir, instructions = '', lean = false, imageMcp = null }) {
+  const mcp = imageMcp && !lean ? writeFile(dir, `${child.id}-image-mcp.json`, JSON.stringify({ mcpServers: { imagegen: imageMcp } })) : null
   const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name, { background: true }), instructions))
   return [
     '--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt,
     ...(child.execution?.mode === 'research' ? ['--tools', 'Read,Glob,Grep'] : []),
+    ...(mcp ? ['--mcp-config', mcp] : []),
     ...(lean ? ['--strict-mcp-config', '--no-chrome'] : ['--chrome']),
   ]
 }

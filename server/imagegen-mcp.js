@@ -43,7 +43,7 @@ const TOOL = {
   name: 'generate_image',
   description: 'Generate an image with OpenAI\'s image model (GPT on the user\'s ChatGPT subscription) and save it in the workspace. '
     + 'Use it whenever the user asks for an illustration, picture, icon, photo-like image or other raster artwork, '
-    + 'including when they ask for GPT to draw it: call it yourself, since subagents cannot. '
+    + 'including when they ask for GPT to draw it: call it yourself. '
     + 'Write a detailed prompt in English (subject, style, composition, colors, any text to draw). '
     + 'Pass reference_images to edit an existing image or keep a subject consistent. One call makes one image and takes 20-90 seconds. '
     + 'The result gives the saved path; open it with an image-reading tool if you need to check it.',

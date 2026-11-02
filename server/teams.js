@@ -132,7 +132,7 @@ export class TeamManager extends EventEmitter {
    */
   constructor({
     file, dir, threads, terminals, agents, catalog, getSettings, apiUrl, instructions = () => '', guides = () => ({ policies: [], playbooks: [] }), authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
-    node = process.execPath, script = mcpScript, log = () => {}, now = Date.now, gatherMs = REPORT_GATHER_MS, usageFallbackRoutes = () => null, modelVisibility = () => ({}),
+    node = process.execPath, script = mcpScript, log = () => {}, now = Date.now, gatherMs = REPORT_GATHER_MS, usageFallbackRoutes = () => null, modelVisibility = () => ({}), imageMcp = () => null,
   }) {
     super()
     this.file = file
@@ -144,6 +144,7 @@ export class TeamManager extends EventEmitter {
     this.agents = agents
     this.catalog = catalog
     this.getSettings = getSettings
+    this.imageMcp = imageMcp
     this.usageFallbackRoutes = usageFallbackRoutes
     this.modelVisibility = modelVisibility
     this.observerRequests = new Set()
@@ -691,14 +692,17 @@ export class TeamManager extends EventEmitter {
     if (!team || record.team.role !== 'leader' || team.retiredLeaders?.some((entry) => entry.id === record.id)) return null
     return leaderLaunch({
       team, config: this.config(team), models: this.catalog.data.models, dir: this.#teamDir(team),
-      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(), guides: this.#guides(team),
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(), guides: this.#guides(team), imageMcp: this.imageMcp(team.workspace),
     })
   }
 
   /** The flags of every turn of a Claude child: no approvals, no tools that wait for a person (teams-launch.js). */
   #agentArgs(team, child) {
     this.guardExecution({ id: team.leaderId, workspace: team.workspace })
-    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions(), lean: this.#lean(team, child) })
+    const lean = this.#lean(team, child)
+    // Image output writes to the workspace, so do not add it to research-only children.
+    const imageMcp = !lean && child.execution?.mode !== 'research' ? this.imageMcp(team.workspace) : null
+    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions(), lean, imageMcp })
   }
 
   /** A child without the browser, desktop and image tools (its MCP servers): the team keeps children lean and its spawn did not ask for them. */

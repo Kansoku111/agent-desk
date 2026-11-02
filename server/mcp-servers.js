@@ -9,6 +9,21 @@ const desktopMcpScript = fileURLToPath(new URL('./desktop-mcp.js', import.meta.u
 const imagegenMcpScript = fileURLToPath(new URL('./imagegen-mcp.js', import.meta.url))
 const historyMcpScript = fileURLToPath(new URL('./history-mcp.js', import.meta.url))
 
+/** The same isolated Codex image server for dsh and Claude Code sessions. */
+export function imageMcpServer(paths, workspace) {
+  return {
+    name: 'imagegen', command: process.execPath,
+    args: [imagegenMcpScript, '--codex-home', paths.codexHome, '--settings', paths.settings, '--workspace', workspace, '--previews', paths.attachmentsDir],
+    // dsh otherwise stops MCP calls at 60 seconds; Claude Code ignores this entry.
+    env: [{ name: TIMEOUT_ENV, value: String(IMAGE_TIMEOUT_MS + 60_000) }],
+  }
+}
+
+/** Convert an ACP stdio server to Claude Code's MCP config format. */
+export function claudeMcpServer(server) {
+  return { type: 'stdio', command: server.command, args: server.args, env: Object.fromEntries(server.env.map(({ name, value }) => [name, value])) }
+}
+
 /** Builds `mcpServersFor(thread)`; `getSettings` and `getTeams` read index.js's current state. */
 export function createMcpServerList({ paths, getSettings, getTeams }) {
   /** MCP servers mounted into a task's session; ACP stdio servers need an absolute command. */
@@ -37,14 +52,7 @@ export function createMcpServerList({ paths, getSettings, getTeams }) {
         args: [historyMcpScript, '--home', paths.home, '--settings', paths.settings, '--workspace', thread.workspace], env: [] })
     }
     if (tools && getSettings().imageTool) {
-      servers.push({
-        name: 'imagegen',
-        command: process.execPath,
-        args: [imagegenMcpScript, '--codex-home', paths.codexHome, '--settings', paths.settings, '--workspace', thread.workspace, '--previews', paths.attachmentsDir],
-        // A high-quality image takes longer than dsh's 60-second tool limit;
-        // imagegen-mcp.js gives up on its own after IMAGE_TIMEOUT_MS.
-        env: [{ name: TIMEOUT_ENV, value: String(IMAGE_TIMEOUT_MS + 60_000) }],
-      })
+      servers.push(imageMcpServer(paths, thread.workspace))
     }
     // A GPT team leader's tools (teams.js); no other task gets them.
     const team = getTeams()?.mcpServerFor(thread)

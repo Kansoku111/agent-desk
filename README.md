@@ -84,7 +84,7 @@ npm start
 
 公式 SIWC は `127.0.0.1` のローカルコールバックで完了します。戻らない場合はキャンセルして再試行してください。Codex 接続にはデバイスコードの代替手段があります。Codex は同梱の `@openai/codex` **0.166.0** の公式 app-server を使い、データを Agent Desk の `codex-home` に分離します。ユーザーの PATH にある codex や `~/.codex` は使いません。
 
-画像生成は既定でオンですが、Codex の別接続が必要です。GPT の高速モードは公式 SIWC 経路では利用できません（Claude の高速モードは従来どおり）。Codex の週間・5時間上限と SIWC のアプリ別使用枠は異なります。正確な使用枠は [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage) で確認してください。認証情報はローカルに保存し、チャット/検索/画像の依頼は該当する OpenAI サービスへ送信されます。SIWC 利用に有料版の購入は必要ありません。
+画像生成は既定でオンで、Claude Code からも利用できますが、Codex の別接続が必要です。[利用範囲と設定変更の反映](docs/features.md)。GPT の高速モードは公式 SIWC 経路では利用できません（Claude の高速モードは従来どおり）。Codex の週間・5時間上限と SIWC のアプリ別使用枠は異なります。正確な使用枠は [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage) で確認してください。認証情報はローカルに保存し、チャット/検索/画像の依頼は該当する OpenAI サービスへ送信されます。SIWC 利用に有料版の購入は必要ありません。
 
 ## ドキュメント
 

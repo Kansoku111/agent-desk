@@ -3227,6 +3227,34 @@ test('lean children start without the extra tools unless spawn asks for them', a
   assert.equal(manager.toolsFor({ id: 'plain' }), true)
 })
 
+test('Claude team leader and eligible children receive image MCP without weakening lean mode', async (t) => {
+  let enabled = true
+  const imageMcp = (workspace) => enabled ? { type: 'stdio', command: 'node', args: ['imagegen', workspace], env: {} } : null
+  const { tool, agents, terminals, leader, workspace } = await setup(t, { leanChildren: true }, { imageMcp })
+  const leaderArgs = terminals.records.get(leader).launch.args
+  const servers = JSON.parse(await fs.readFile(leaderArgs[leaderArgs.indexOf('--mcp-config') + 1], 'utf8')).mcpServers
+  assert.deepEqual(servers.imagegen, imageMcp(workspace))
+  assert.ok(servers['agent-team'])
+  await tool('spawn', { title: 'lean', task: 'x', tier: 'low', provider: 'claude' })
+  await tool('spawn', { title: 'tools', task: 'x', tier: 'low', provider: 'claude', tools: true })
+  enabled = false
+  await tool('spawn', { title: 'disabled', task: 'x', tier: 'low', provider: 'claude', tools: true })
+  const [lean, full, disabled] = agents.calls.filter((call) => call[0] === 'create').map((call) => call[1].args)
+  assert.ok(lean.includes('--strict-mcp-config'))
+  assert.ok(!lean.includes('--mcp-config'))
+  assert.ok(!disabled.includes('--mcp-config'))
+  const config = JSON.parse(await fs.readFile(full[full.indexOf('--mcp-config') + 1], 'utf8'))
+  assert.deepEqual(config.mcpServers.imagegen.args, ['imagegen', workspace])
+})
+
+test('eco Claude research children do not receive the writing image tool', async (t) => {
+  const f = await setupExecution(t, { imageMcp: () => ({ type: 'stdio', command: 'node', args: [], env: {} }) })
+  await f.tool('spawn', { ...exTask, mode: 'research', provider: 'claude' })
+  const args = f.agents.calls.find((call) => call[0] === 'create')[1].args
+  assert.ok(args.includes('--tools'))
+  assert.ok(!args.includes('--mcp-config'))
+})
+
 test('children keep every tool by default, and report how they checked their work', async (t) => {
   const { tool, team, manager, agents, terminals, leader } = await setup(t)
   const args = terminals.records.get(leader).launch.args
