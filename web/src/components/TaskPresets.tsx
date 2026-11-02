@@ -18,7 +18,7 @@ const LABEL = { delegate: '子に委託', review: '独立レビュー' }
 const PHASE: Record<string, string> = { preparing: '親が指示を作成中', running: '作業中', verifying: '検証中', stopping: '停止中', completed: '完了', 'needs-attention': '要確認', stopped: '停止' }
 const CHECK: Record<string, string> = { passed: '成功', failed: '失敗', unverified: 'コマンド未選択', cancelled: '中断', invalidated: '再検証が必要', error: '取得できません' }
 const active = (run: TaskPresetRun) => ['preparing', 'running', 'verifying', 'stopping'].includes(run.phase)
-interface Inspection { workspace: string; title: string; bases: { id: string; label: string }[]; checks: ExecutionCheck[] }
+interface Inspection { workspace: string; title: string; checks: ExecutionCheck[] }
 
 export function TaskPresetModels() {
   const server = useStore((state) => state.server)
@@ -51,9 +51,6 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
   const [inspection, setInspection] = useState<Inspection | null>(null)
   const [error, setError] = useState('')
   const [instruction, setInstruction] = useState('')
-  const [scope, setScope] = useState('')
-  const [ref, setRef] = useState('')
-  const [files, setFiles] = useState('')
   const [browser, setBrowser] = useState(false)
   const [permission, setPermission] = useState('workspace-write')
   const [checkIds, setChecks] = useState<string[]>([])
@@ -64,10 +61,7 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
   const close = () => setState({ presetStart: null })
   useEffect(() => {
     let alive = true
-    request<Inspection>('preset.inspect', { source }).then((value) => {
-      if (!alive) return
-      setInspection(value); setScope(value.bases[0]?.id ?? 'git')
-    }).catch((cause) => { if (alive) setError(cause.message) })
+    request<Inspection>('preset.inspect', { source }).then((value) => { if (alive) setInspection(value) }).catch((cause) => { if (alive) setError(cause.message) })
     return () => { alive = false }
   }, [source.id, source.kind])
   if (!server) return null
@@ -80,8 +74,7 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
   const ready = selected && workflowEffortSupported(effort, workflowLevels(server.catalog, model))
   const start = async () => {
     if (!inspection || busy) return
-    const review = kind !== 'review' ? null : scope === 'git' ? { mode: 'git', ref: ref.trim() } : scope === 'files' ? { mode: 'files', files: files.split('\n').map((file) => file.trim()).filter(Boolean) } : { base: scope }
-    const payload = { source, kind, instruction, browser, permissionMode: cli ? 'danger-full-access' : permission, review, checkIds, command, expectedModel: model, expectedEffort: effort }
+    const payload = { source, kind, instruction, browser, permissionMode: cli ? 'danger-full-access' : permission, checkIds, command, expectedModel: model, expectedEffort: effort }
     const fingerprint = JSON.stringify(payload)
     if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: crypto.randomUUID() }
     setBusy(true); setError('')
@@ -96,12 +89,6 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
     <div className="modal-body preset-form">
       <div className="preset-model-line"><strong>{selected ? selectedGroup!.heading + ' / ' + selected.name : model ? '設定済みの担当モデルを利用できません' : '担当モデルが未設定です'}</strong><span className="muted">{effort ? effortLabel(effort) : '推論指定なし'} · {cli || permission === 'danger-full-access' ? 'フルアクセス' : '作業フォルダーに書き込み'}</span>
         <button type="button" className="link-button" disabled={busy} onClick={() => { close(); setState({ settingsOpen: 'models' }) }}>設定</button></div>
-      {kind === 'review' && <label>対象<select value={scope} disabled={busy || !inspection} onChange={(event) => setScope(event.target.value)}>
-        {inspection?.bases.map((base) => <option value={base.id} key={base.id}>{base.label}</option>)}
-        <option value="git">基準コミットから現在まで</option><option value="files">ファイル指定（過去の差分なし）</option>
-      </select></label>}
-      {kind === 'review' && scope === 'git' && <label>基準コミット<input placeholder="例: HEAD~1（未コミット変更も含む）" value={ref} maxLength={200} disabled={busy} onChange={(event) => setRef(event.target.value)} /></label>}
-      {kind === 'review' && scope === 'files' && <label>対象ファイル<textarea rows={3} placeholder="プロジェクト内の相対パスを1行ずつ" value={files} disabled={busy} onChange={(event) => setFiles(event.target.value)} /></label>}
       <textarea aria-label="追加指示" rows={3} maxLength={8000} placeholder="追加指示（任意）" value={instruction} disabled={busy} onChange={(event) => setInstruction(event.target.value)} />
       <details><summary>実行設定</summary><div className="preset-options">
         {cli ? <p className="muted">Claude Codeはフルアクセスで実行します。</p> : <label>権限<select value={permission} disabled={busy} onChange={(event) => setPermission(event.target.value)}><option value="workspace-write">作業フォルダーへの書き込み</option><option value="danger-full-access">フルアクセス</option></select></label>}
@@ -115,7 +102,7 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
       {error && <p className="team-warning" role="alert">{error}</p>}
       <div className="preset-start-note muted">{kind === 'review' ? '別モデルが指摘箇所の修正・検証まで行います。' : '現在のモデルが指示を作り、子が実作業と確認を行います。'} 完了後、親には自動送信しません。</div>
       <div className="modal-actions"><button type="button" className="button" disabled={busy} onClick={close}>キャンセル</button>
-        <button type="button" className="button primary" disabled={busy || !inspection || !ready || (cli && !auth.ready) || (kind === 'review' && ((scope === 'git' && !ref.trim()) || (scope === 'files' && !files.trim())))} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
+        <button type="button" className="button primary" disabled={busy || !inspection || !ready || (cli && !auth.ready)} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
     </div>
   </Modal>
 }

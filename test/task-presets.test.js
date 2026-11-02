@@ -5,12 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
 import { TaskPresets } from '../server/task-presets.js'
-import { Checkpoints } from '../server/checkpoints.js'
 import { TeamManager } from '../server/teams.js'
 import { parsePresetBrief, parsePresetResult, preparePresetPrompt, matchesPresetPrompt, workerPresetInstructions } from '../server/task-preset-protocol.js'
-import { gitPresetReview } from '../server/task-preset-evidence.js'
 import { createMcpServerList } from '../server/mcp-servers.js'
 import { runtimeKey } from '../server/runtime.js'
 import { sourceSnapshot } from '../server/execution.js'
@@ -60,21 +57,6 @@ async function fixture(t) {
   return { root, workspace, parent, threads, terminals, terminal, agents, teams, manager, source, start, complete, config, options }
 }
 
-test('turn-based review warns and excludes files omitted by the original checkpoint', async (t) => {
-  const f = await fixture(t)
-  f.threads.checkpoints = new Checkpoints({ root: path.join(f.root, 'thread-checkpoints'), maxFileBytes: 4 })
-  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'old')
-  await fs.writeFile(path.join(f.workspace, 'large.bin'), 'large')
-  const before = await f.threads.checkpoints.snapshot(f.workspace, 'task/before')
-  f.threads.turns.get(f.parent.id).push({ id: 'turn', checkpoint: { before: before.commit } })
-  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'new')
-  await fs.writeFile(path.join(f.workspace, 'large.bin'), 'now')
-  const evidence = await f.manager.evidence({ source: f.source, workspace: f.workspace, review: { base: 'turn:turn' } })
-  assert.deepEqual(evidence.files, [{ status: 'M', path: 'source.txt' }])
-  assert.match(evidence.warning, /large\.bin/)
-  assert.doesNotMatch(evidence.patch, /large\.bin/)
-})
-
 test('one-shot envelopes reject wrong run, ambiguous blocks, extra fields and invalid completion', () => {
   const run = { id: 'R', kind: 'review' }
   assert.equal(parsePresetBrief(brief(run), run).status, 'ready')
@@ -118,7 +100,6 @@ test('large plain-folder creative delegation prepares the parent and finishes wi
     assert.equal(JSON.parse(await fs.readFile(run.verification.record, 'utf8')).endHash, null)
     assert.equal(run.patch, undefined, 'unavailable is not an empty diff')
     assert.equal(reads, 1, 'do not repeat an unsupported global scan')
-    assert.equal((await f.manager.inspect(f.source)).bases.length, 0, 'do not offer a nonexistent review baseline')
     assert.equal(f.threads.calls.filter((call) => call.id === f.parent.id).length, 1, 'completion still never wakes the parent')
     await f.manager.deliver(run.id)
     assert.match(f.threads.calls.at(-1).input.text, /注意:.*全体/s)
@@ -126,11 +107,10 @@ test('large plain-folder creative delegation prepares the parent and finishes wi
   } finally { mocked.mock.restore() }
 })
 
-test('recording fallback never bypasses permission errors, selected checks, or review requirements', async (t) => {
+test('recording fallback never bypasses permission errors or selected checks', async (t) => {
   const cases = [
     { name: 'permissions', error: Object.assign(new Error('access denied'), { code: 'EACCES' }), input: {} },
     { name: 'explicit checks', error: sourceLimit(), input: { command: 'node check.cjs' } },
-    { name: 'review', error: sourceLimit(), input: { kind: 'review', review: { mode: 'files', files: ['source.txt'] } } },
   ]
   for (const item of cases) await t.test(item.name, async (t) => {
     const f = await fixture(t)
@@ -210,6 +190,8 @@ test('task handoff retains requested creative tools and does not inherit an assi
   assert.match(workerPresetInstructions(run), /Default to implementation.*Explicit user instructions .* take precedence/)
   assert.doesNotMatch(workerPresetInstructions({ id: 'R', kind: 'review' }), /Default to implementation/)
   assert.match(preparePresetPrompt({ id: 'R', kind: 'review' }), /報告や修正方針の相談だけで止める依頼にせず.*利用者自身が指摘の報告のみ.*最優先/)
+  assert.match(preparePresetPrompt({ id: 'R', kind: 'review' }), /レビューの対象.*あなたが判断して依頼に明記/)
+  assert.match(workerPresetInstructions({ id: 'R', kind: 'review' }), /scope named in the brief.*only if the project has it/)
   assert.match(workerPresetInstructions({ id: 'R', kind: 'review' }), /do not stop to ask whether to fix them\. Explicit user instructions .* take precedence/)
   assert.doesNotMatch(workerPresetInstructions(run), /running implementation worker/)
 })
@@ -277,23 +259,47 @@ test('preparation refuses changed sources and asks questions without launching a
   assert.equal(question.worker, undefined)
 })
 
-test('review fixes actual changes in a fresh worker and records original versus reviewer patch', async (t) => {
+test('review in a non-Git folder takes its scope from the parent brief and records the reviewer patch', async (t) => {
   const f = await fixture(t)
   const delegated = await f.start()
   await f.complete(f.parent.id, brief(delegated))
   await fs.writeFile(path.join(f.workspace, 'source.txt'), 'bug')
   await f.complete(delegated.worker.id, result(delegated))
-  const run = await f.start({ requestId: randomUUID(), kind: 'review', review: { base: 'run:' + delegated.id } })
-  await f.complete(f.parent.id, brief(run))
+  const run = await f.start({ requestId: randomUUID(), kind: 'review' })
+  await f.complete(f.parent.id, brief(run, { brief: 'source.txt の直近の修正をレビューし、問題を直す' }))
   assert.equal(run.phase, 'running')
   assert.notEqual(run.worker.id, delegated.worker.id)
-  assert.match(await fs.readFile(run.originalPatch, 'utf8'), /bug/)
-  assert.doesNotMatch(f.threads.calls.at(-1).input.text, /修正と関連確認を完了/)
+  const prompt = f.threads.calls.at(-1).input.text
+  assert.match(prompt, /source\.txt の直近の修正をレビュー/)
+  assert.doesNotMatch(prompt, /修正と関連確認を完了/)
+  assert.equal(run.originalPatch, undefined, 'the app no longer decides or pre-computes the review scope')
   await fs.writeFile(path.join(f.workspace, 'source.txt'), 'fixed')
   await f.complete(run.worker.id, result(run))
   assert.equal(run.phase, 'completed')
   assert.match(await fs.readFile(run.patch, 'utf8'), /-bug/)
   assert.match(await fs.readFile(run.patch, 'utf8'), /\+fixed/)
+})
+
+test('independent review rejects a model that already worked on the task', async (t) => {
+  const f = await fixture(t)
+  f.config.taskPresets.review.model = 'A'
+  await assert.rejects(f.start({ requestId: randomUUID(), kind: 'review' }), /別のモデル/)
+  const delegated = await f.start({ requestId: randomUUID() })
+  await f.complete(f.parent.id, brief(delegated))
+  await f.complete(delegated.worker.id, result(delegated))
+  f.config.taskPresets.review.model = 'B'
+  await assert.rejects(f.start({ requestId: randomUUID(), kind: 'review' }), /別のモデル/)
+  f.config.taskPresets.review.model = 'C'
+  assert.equal((await f.start({ requestId: randomUUID(), kind: 'review' })).phase, 'preparing')
+})
+
+test('review needs no whole-folder evidence, so a folder too large to record does not block it', async (t) => {
+  const f = await fixture(t)
+  f.manager.snapshot = async () => { throw sourceLimit() }
+  const run = await f.start({ kind: 'review' })
+  assert.equal(run.phase, 'preparing')
+  assert.ok(run.snapshotUnavailable)
+  assert.equal(f.threads.calls.length, 1)
 })
 
 test('report-only findings continue in the same worker; repeated lack of progress is not completion', async (t) => {
@@ -356,23 +362,6 @@ test('preset settings have no runtime restart effect; dedicated workers mount no
   assert.deepEqual(servers({ preset: {}, workspace: '.' }), [])
   assert.equal(servers({ preset: { browser: true }, workspace: '.' }).length, 1)
   assert.equal(runtimeKey({ preset: {}, permissionMode: 'workspace-write' }), 'preset:workspace-write')
-})
-
-test('Git review includes committed, staged, unstaged and untracked changes without touching index/HEAD', async (t) => {
-  const f = await fixture(t)
-  const git = (...args) => execFileSync('git', args, { cwd: f.workspace, encoding: 'utf8' })
-  git('init', '-q'); git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base')
-  const base = git('rev-parse', 'HEAD').trim()
-  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'committed change')
-  git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'implementation')
-  await fs.writeFile(path.join(f.workspace, 'new file.txt'), 'untracked')
-  const head = git('rev-parse', 'HEAD'), index = git('diff', '--cached')
-  const evidence = await gitPresetReview(f.workspace, base)
-  assert.match(evidence.patch, /committed change/)
-  assert.match(evidence.patch, /untracked/)
-  assert.equal(git('rev-parse', 'HEAD'), head)
-  assert.equal(git('diff', '--cached'), index)
-  await assert.rejects(gitPresetReview(f.workspace, '--output=other'))
 })
 
 test('registered verification failure returns to the same worker until repaired', async (t) => {

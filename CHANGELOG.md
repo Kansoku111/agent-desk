@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 独立レビューの対象（コミット・リクエスト・基準コミット・ファイル指定）を選ぶ操作を廃止しました。何をレビューするかは元セッションが依頼文で決めるため、Gitのないフォルダーでも使えます。
+
 ## [0.1.9] - 2026-11-02
 
 ### Added

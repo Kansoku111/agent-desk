@@ -8,7 +8,6 @@ import { ExecutionVerifier, normalizeChecks, sourceSnapshot, workspacesOverlap }
 import { workflowEffort, workflowEffortSupported, workflowLevels } from '../shared/workflow-effort.js'
 import { abClaudeArgs } from './ab-runner.js'
 import { PRESET_ACTIVE, PRESET_LABEL, preparePresetPrompt, parsePresetBrief, matchesPresetPrompt, workerPresetInstructions, parsePresetResult } from './task-preset-protocol.js'
-import { gitPresetReview, presetFileScope } from './task-preset-evidence.js'
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const finalText = (turn) => (turn?.items ?? []).filter((item) => item.type === 'agent').at(-1)?.text ?? ''
@@ -100,14 +99,7 @@ export class TaskPresets extends EventEmitter {
   }
   async inspect(source) {
     const record = await this.source(source)
-    let bases = []
-    const previous = [...this.runs.values()].filter((run) => sourceKey(run.source) === sourceKey(source) && run.kind === 'delegate' && run.baseline?.commit && run.phase === 'completed').at(-1)
-    if (previous) bases.push({ id: 'run:' + previous.id, label: '直前の委託開始前', model: previous.model })
-    if (source.kind === 'thread') {
-      const { turns } = await this.threads.get(source.id)
-      bases.push(...turns.filter((turn) => turn.status === 'done' && turn.checkpoint?.before && turn.checkpoint.changed > 0).reverse().map((turn) => ({ id: 'turn:' + turn.id, label: (turn.user.text ?? '').slice(0, 70), model: record.model })))
-    }
-    return { workspace: record.workspace, title: record.title, model: record.model, bases, checks: this.teams.execution.checks(record.workspace) }
+    return { workspace: record.workspace, title: record.title, model: record.model, checks: this.teams.execution.checks(record.workspace) }
   }
   guard(record, context) {
     if (!record?.workspace) return
@@ -147,11 +139,11 @@ export class TaskPresets extends EventEmitter {
     this.creating = task
     return task
   }
-  async start({ requestId, source, kind, instruction = '', permissionMode = 'workspace-write', browser = false, review = null, checkIds = [], command = '', expectedModel, expectedEffort, authConfirmation }) {
+  async start({ requestId, source, kind, instruction = '', permissionMode = 'workspace-write', browser = false, checkIds = [], command = '', expectedModel, expectedEffort, authConfirmation }) {
     if (this.closing) throw new Error('アプリを終了しています')
     if (typeof requestId !== 'string' || !/^[a-f0-9-]{36}$/i.test(requestId) || !Object.hasOwn(PRESET_LABEL, kind)) throw new Error('委託の要求が不正です')
     if (typeof instruction !== 'string' || instruction.length > 8000 || typeof browser !== 'boolean' || !['workspace-write', 'danger-full-access'].includes(permissionMode)) throw new Error('委託の設定が不正です')
-    const payload = { source, kind, instruction, permissionMode, browser, review, checkIds, command, expectedModel, expectedEffort }
+    const payload = { source, kind, instruction, permissionMode, browser, checkIds, command, expectedModel, expectedEffort }
     const fingerprint = hash(payload)
     const known = [...this.runs.values()].find((run) => run.requestId === requestId)
     if (known) { if (known.fingerprint !== fingerprint) throw new Error('同じ要求IDに異なる設定は使えません'); return { run: this.summary(known) } }
@@ -164,17 +156,11 @@ export class TaskPresets extends EventEmitter {
     if (!workflowEffortSupported(effort, levels)) throw new Error('担当モデルの推論レベルを選び直してください')
     if ((expectedModel !== undefined && expectedModel !== config.model) || (expectedEffort !== undefined && expectedEffort !== effort)) throw new Error('担当の設定が更新されました。表示を確認し、新しく開始してください。')
     const details = await this.inspect(source)
-    let base = null
     if (kind === 'review') {
-      if (!review || typeof review !== 'object') throw new Error('レビュー対象を指定してください')
-      base = details.bases.find((entry) => entry.id === review.base)
-      if (!base && review.mode !== 'git' && review.mode !== 'files') throw new Error('レビュー開始点を選び直してください')
-      if ((base?.model ?? record.model) === config.model || (source.kind === 'terminal' && config.model === 'claude:' + record.model)) throw new Error('独立レビューには実装とは別のモデルを選択してください')
-      if (review.mode === 'files') review = { mode: 'files', files: await presetFileScope(record.workspace, review.files) }
-      if (review.mode === 'git') {
-        const validated = await gitPresetReview(record.workspace, review.ref)
-        review = { mode: 'git', ref: validated.sha, label: review.ref }
-      }
+      // The parent's brief decides what is reviewed, so there is no scope to validate. Independence only means
+      // not reusing a model that already worked on this task: the source itself or one of its delegates.
+      const worked = [record.model, source.kind === 'terminal' ? 'claude:' + record.model : null, ...[...this.runs.values()].filter((run) => sourceKey(run.source) === sourceKey(source) && run.kind === 'delegate' && run.phase === 'completed').map((run) => run.model)]
+      if (worked.includes(config.model)) throw new Error('独立レビューには実装とは別のモデルを選択してください')
     }
     if (!Array.isArray(checkIds) || checkIds.length > 30 || typeof command !== 'string' || command.length > 4000) throw new Error('検証の選択が不正です')
     const checks = normalizeChecks([...checkIds.map((id) => { const check = details.checks.find((entry) => entry.id === id); if (!check) throw new Error('検証IDが見つかりません'); return { ...check, autoRepair: true } }), ...(command.trim() ? [{ id: 'preset-check', command: command.trim(), cwd: '.', timeoutMs: 300000, autoRepair: true }] : [])])
@@ -182,7 +168,7 @@ export class TaskPresets extends EventEmitter {
     await this.source(source, true)
     this.room(record.workspace)
     const now = Date.now()
-    const run = { id: randomUUID(), requestId, fingerprint, source: { ...source }, sourceSession: record.sessionId, sourceModel: record.modelInUse ?? record.model, kind, title: record.title, workspace: record.workspace, model: config.model, effort, permissionMode: config.model.startsWith('claude:') ? 'danger-full-access' : permissionMode, browser, instruction, review, checks, phase: 'preparing', createdAt: now, updatedAt: now, report: '', sourceGone: false }
+    const run = { id: randomUUID(), requestId, fingerprint, source: { ...source }, sourceSession: record.sessionId, sourceModel: record.modelInUse ?? record.model, kind, title: record.title, workspace: record.workspace, model: config.model, effort, permissionMode: config.model.startsWith('claude:') ? 'danger-full-access' : permissionMode, browser, instruction, checks, phase: 'preparing', createdAt: now, updatedAt: now, report: '', sourceGone: false }
     // Reserve before any filesystem/model await; completion never releases the parent's goal gate.
     this.runs.set(run.id, run)
     this.held.add(sourceKey(source))
@@ -191,11 +177,11 @@ export class TaskPresets extends EventEmitter {
     try {
       const conversation = source.kind === 'thread' ? await this.threads.get(source.id) : await this.terminals.conversation(source.id)
       run.parentTurnIds = conversation.turns.map((turn) => turn.id)
-      try { run.parentBefore = (await this.snapshot(run.workspace, run.kind === 'delegate' && !run.checks.length ? { timeoutMs: 10_000 } : undefined)).hash }
+      try { run.parentBefore = (await this.snapshot(run.workspace, run.checks.length ? undefined : { timeoutMs: 10_000 })).hash }
       catch (error) {
         // Optional recording must not turn an unrelated asset library into a task prerequisite.
-        // Explicit checks and independent review still require their original evidence.
-        if (run.kind !== 'delegate' || run.checks.length || error.code !== 'SOURCE_SNAPSHOT_LIMIT') throw error
+        // Explicit checks still require their original evidence.
+        if (run.checks.length || error.code !== 'SOURCE_SNAPSHOT_LIMIT') throw error
         run.snapshotUnavailable = error.message
         run.warning = recordingWarning(run)
       }
@@ -242,28 +228,10 @@ export class TaskPresets extends EventEmitter {
     if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== run.parentBefore) throw new Error('指示の作成中にソースが変更されました。内容を確認して再度開始してください。')
     await this.launch(run)
   }
-  async evidence(run) {
-    const review = run.review
-    if (review.mode === 'git') return gitPresetReview(run.workspace, review.ref)
-    if (review.mode === 'files') return { files: review.files.map((file) => ({ path: file })), patch: '', warning: '過去の基準点がないファイルレビューです。実装差分は不明です。' }
-    if (review.base.startsWith('run:')) {
-      const previous = this.require(review.base.slice(4))
-      if (sourceKey(previous.source) !== sourceKey(run.source) || previous.workspace !== run.workspace || !previous.baseline?.commit) throw new Error('委託開始前の記録がありません')
-      const after = await this.checkpoints.snapshot(run.workspace)
-      const diff = await this.checkpoints.reviewDiff(run.workspace, previous.baseline.commit, after.commit, [...(previous.baseline.omitted ?? []), ...after.omitted])
-      return { ...diff, warning: [diff.warning, previous.baseline.warning, after.warning].filter(Boolean).join('\n') }
-    }
-    const { turns } = await this.threads.get(run.source.id)
-    const turn = turns.find((entry) => 'turn:' + entry.id === review.base)
-    if (!turn?.checkpoint?.before || !this.threads.checkpoints) throw new Error('実装開始前の記録がありません')
-    const after = await this.threads.checkpoints.snapshot(run.workspace)
-    const diff = await this.threads.checkpoints.reviewDiff(run.workspace, turn.checkpoint.before, after.commit, after.omitted)
-    return { ...diff, warning: [diff.warning, after.warning].filter(Boolean).join('\n') }
-  }
   async captureCheckpoint(run, phase) {
     try { return await this.checkpoints.snapshot(run.workspace, run.id + '/' + phase) }
     catch (error) {
-      if (run.kind !== 'delegate' || error.code !== 'CHECKPOINT_SNAPSHOT_LIMIT') throw error
+      if (error.code !== 'CHECKPOINT_SNAPSHOT_LIMIT') throw error
       run.diffUnavailable = error.message
       run.warning = recordingWarning(run)
       return null
@@ -273,13 +241,6 @@ export class TaskPresets extends EventEmitter {
     this.assertLive(run)
     const folder = path.join(this.dir, 'runs', run.id)
     await fs.mkdir(folder, { recursive: true })
-    if (run.kind === 'review') {
-      const evidence = await this.evidence(run)
-      if (!evidence.files.length) throw new Error('対象の変更がありません。基準コミットまたは対象ファイルを指定してください。' + (evidence.warning ? '\n' + evidence.warning : ''))
-      run.reviewEvidence = { files: evidence.files, warning: evidence.warning, sha: evidence.sha }
-      run.originalPatch = path.join(folder, 'original.patch')
-      await writeText(run.originalPatch, evidence.patch)
-    }
     run.baseline = run.snapshotUnavailable ? null : await this.captureCheckpoint(run, 'before')
     run.record = path.join(folder, 'report.md')
     run.contract = path.join(folder, 'instructions.md')
@@ -303,7 +264,7 @@ export class TaskPresets extends EventEmitter {
     this.assertLive(run)
     run.phase = 'running'
     await this.save(run)
-    const prompt = [run.worker.kind === 'thread' ? workerPresetInstructions(run) : '', '依頼:\n' + run.brief, run.reviewEvidence ? 'レビュー対象（アプリ取得）:\n' + JSON.stringify(run.reviewEvidence) + '\n差分全文: ' + run.originalPatch : '', recordingWarning(run), 'アプリが最後に実行する検証:\n' + JSON.stringify(run.checks) + '\n未選択の場合は検証未実行です。自分で必要な確認は省略しないでください。'].filter(Boolean).join('\n\n')
+    const prompt = [run.worker.kind === 'thread' ? workerPresetInstructions(run) : '', '依頼:\n' + run.brief, recordingWarning(run), 'アプリが最後に実行する検証:\n' + JSON.stringify(run.checks) + '\n未選択の場合は検証未実行です。自分で必要な確認は省略しないでください。'].filter(Boolean).join('\n\n')
     await this.sendWorker(run, prompt)
   }
   async sendWorker(run, text) {
@@ -359,7 +320,7 @@ export class TaskPresets extends EventEmitter {
       await writeText(run.patch, diff.patch)
       delete run.diffUnavailable
     } else { delete run.changedFiles; delete run.patch }
-    run.warning = [recordingWarning(run), run.reviewEvidence?.warning, diffWarning, run.baseline?.warning, after?.warning].filter(Boolean).join('\n')
+    run.warning = [recordingWarning(run), diffWarning, run.baseline?.warning, after?.warning].filter(Boolean).join('\n')
     if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== verification.endHash) throw new Error('検証後にソースが変更されました。再確認が必要です。')
     if (result.status === 'verify') run.result = { ...result, status: 'complete', remaining: '', summary: result.summary + '\n\n登録されたアプリの検証が成功しました。' }
     run.phase = 'completed'

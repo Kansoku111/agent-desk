@@ -25,7 +25,7 @@ class Socket {
   send(body: string) {
     const input = JSON.parse(body); requests.push(input)
     let result: any = {}
-    if (input.type === 'preset.inspect') result = { workspace: 'fixture', title: '相談した機能', bases: [{ id: 'turn:implementation', label: '直前の実装リクエスト' }], checks: [] }
+    if (input.type === 'preset.inspect') result = { workspace: 'fixture', title: '相談した機能', checks: [] }
     if (input.type === 'preset.create') {
       parentCalls++
       current = { id: 'run-' + ++sequence, source, kind: input.kind, model: server.settings.taskPresets[input.kind].model, effort: 'low', title: '相談した機能', workspace: 'fixture', phase: 'preparing', createdAt: sequence, updatedAt: sequence, report: '', brief: '要件・範囲・完了条件・検証方法', permissionMode: 'workspace-write' }
@@ -82,11 +82,11 @@ const api = {
     check(document.body.textContent?.includes('指摘箇所の修正'), 'review is explicitly review-and-fix')
     button('始める').click(); await tick(200)
     const call = requests.filter((entry) => entry.type === 'preset.create').at(-1)
-    check(call.kind === 'review' && call.review.base === 'turn:implementation', 'review target explicit')
+    check(call.kind === 'review' && !('review' in call) && !document.querySelector('select[aria-label="対象"], input[placeholder*="コミット"]'), 'review scope is left to the parent: no target to choose')
     await complete(); check(parentCalls === 3, 'review completion also one-way')
     check(document.querySelector('aside[aria-label="委託とレビュー"]')?.textContent?.includes('レビューモデル'), 'review model appears in side panel')
     check(document.documentElement.scrollWidth <= innerWidth, 'no horizontal overflow')
-    labels.push('independent review: explicit target, repair contract, no auto-return, no overflow')
+    labels.push('independent review: no target to choose, repair contract, no auto-return, no overflow')
     return labels
   },
   async failures() {
