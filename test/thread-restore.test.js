@@ -52,7 +52,6 @@ async function settled(manager, threadId) {
 
 test('a turn can be undone, the agent is told, and the undo can be taken back', async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-restore-'))
-  t.after(() => fs.rm(base, { recursive: true, force: true }))
   const workspace = path.join(base, 'work')
   await fs.mkdir(workspace)
   await fs.writeFile(path.join(workspace, 'notes.txt'), 'original')
@@ -78,7 +77,8 @@ test('a turn can be undone, the agent is told, and the undo can be taken back', 
     getTurnUsage: async () => null,
     checkpoints: new Checkpoints({ root: path.join(base, 'checkpoints') }),
   })
-  t.after(() => manager.shutdown())
+  // Hooks run in registration order: remove the folder only after the manager's last writes.
+  t.after(async () => { await manager.shutdown(); await fs.rm(base, { recursive: true, force: true }) })
 
   const thread = await manager.create({ workspace, model: '["test","model"]', toolMode: 'native' })
   await manager.send(thread.id, { text: 'edit' })
@@ -199,7 +199,6 @@ test('restoreNoteText names a later request by its first line', () => {
 
 test('retry after partial restore keeps the original undo and counts only successful files', async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-restore-retry-'))
-  t.after(() => fs.rm(base, { recursive: true, force: true }))
   const workspace = path.join(base, 'work')
   await fs.mkdir(workspace)
   await fs.writeFile(path.join(workspace, 'notes.txt'), 'before')
@@ -212,7 +211,8 @@ test('retry after partial restore keeps the original undo and counts only succes
     pool, catalog: { learn: () => false }, getAccounts: async () => ({}), getTurnUsage: async () => null,
     checkpoints: new Checkpoints({ root: path.join(base, 'checkpoints') }),
   })
-  t.after(() => manager.shutdown())
+  // Hooks run in registration order: remove the folder only after the manager's last writes.
+  t.after(async () => { await manager.shutdown(); await fs.rm(base, { recursive: true, force: true }) })
   const thread = await manager.create({ workspace, model: '[\"test\",\"model\"]', toolMode: 'native' })
   await manager.send(thread.id, { text: 'edit' })
   const [turn] = await settled(manager, thread.id)
@@ -244,7 +244,6 @@ test('retry after partial restore keeps the original undo and counts only succes
 
 test('a partly failed undo keeps its record, so the undo can be tried again', async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-undo-'))
-  t.after(() => fs.rm(base, { recursive: true, force: true }))
   const { pool } = fakePool(async () => {})
   const undos = []
   const checkpoints = {
@@ -274,7 +273,8 @@ test('a partly failed undo keeps its record, so the undo can be tried again', as
     getTurnUsage: async () => null,
     checkpoints,
   })
-  t.after(() => manager.shutdown())
+  // Hooks run in registration order: remove the folder only after the manager's last writes.
+  t.after(async () => { await manager.shutdown(); await fs.rm(base, { recursive: true, force: true }) })
 
   const thread = await manager.create({ workspace: base, model: '["test","model"]', toolMode: 'native' })
   await manager.send(thread.id, { text: 'edit' })
