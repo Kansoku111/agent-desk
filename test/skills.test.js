@@ -92,7 +92,8 @@ test('Codex and Claude roots preserve precedence, metadata and safe discovery bo
   const candidate = candidates.find((s) => s.name === 'project-codex')
   const loaded = await provider.get(candidate, { cwd: nested })
   assert.equal(loaded.content, 'Fixture body')
-  assert.equal(loaded.resourceBase.path, await fs.realpath(codexDir))
+  // dsh keeps the discovered spelling, which can be an 8.3 short name on Windows (e.g. CI's RUNNER~1 TEMP).
+  assert.equal(await fs.realpath(loaded.resourceBase.path), await fs.realpath(codexDir))
   assert.equal(candidates.find((s) => s.name === 'model-only').invocation.userInvocable, false)
   assert.equal(candidates.find((s) => s.name === 'manual-only').invocation.modelInvocable, false)
   const isolated = new AgentDeskSkillProvider({ get: () => undefined, logger: console },
