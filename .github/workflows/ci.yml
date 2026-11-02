@@ -9,9 +9,6 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    env:
-      AGENT_DESK_HOME: ${{ runner.temp }}/agent-desk-home
-      TMPDIR: ${{ runner.temp }}
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +16,12 @@ jobs:
         node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
+      # The runner context is not available in job-level env, so export it from a step.
+      - name: Isolate test data
+        shell: bash
+        run: |
+          echo "AGENT_DESK_HOME=$RUNNER_TEMP/agent-desk-home" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Install Linux test dependencies
         if: runner.os == 'Linux'
         run: |
