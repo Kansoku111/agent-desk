@@ -2227,6 +2227,31 @@ test('what the user writes to a working Claude child waits, then goes as one tur
   assert.throws(() => manager.messageChild(team.id, 'no-such-child', 'x'), /見つかりません/)
 })
 
+test('observer tries only its own Claude followup and reports an unconfirmed steer', async (t) => {
+  const { agents, tool, team, manager } = await setup(t)
+  await tool('spawn', { title: 'job', task: 'a', tier: 'mid', provider: 'claude', name: 'S' })
+  const child = team.children[0]
+  manager.messageChild(team.id, child.id, 'existing')
+  assert.deepEqual(manager.observerMessageAgent(team.id, child.id, 'observer'), { delivery: 'uncertain' })
+  assert.deepEqual(agents.calls.at(-1), ['steer', child.taskId, 'observer'])
+  assert.deepEqual(child.followups.map((item) => item.text), ['existing'])
+
+  agents.sessions.get(child.taskId).steerable = false
+  assert.deepEqual(manager.observerMessageAgent(team.id, child.id, 'later'), { delivery: 'queued' })
+  assert.deepEqual(child.followups.map((item) => [item.text, item.source]), [['existing', undefined], ['later', 'observer']])
+
+  agents.finish(child.taskId, 'done')
+  assert.deepEqual(agents.calls.at(-1), ['run', child.taskId, 'existing\n\nlater'])
+  agents.finish(child.taskId, 'done again')
+  child.awaiting = true
+  assert.deepEqual(manager.observerMessageAgent(team.id, child.id, 'awaiting'), { delivery: 'queued' })
+  assert.deepEqual(child.followups.map((item) => item.text), ['awaiting'])
+  manager.dropFollowup(team.id, child.id, child.followups[0].id)
+  child.awaiting = false
+  assert.deepEqual(manager.observerMessageAgent(team.id, child.id, 'idle'), { delivery: 'sent' })
+  assert.deepEqual(agents.calls.at(-1), ['run', child.taskId, 'idle'])
+})
+
 test('the leader\'s message reaches a working Claude child at its next step, or waits for the turn to end when it cannot', async (t) => {
   const { agents, tool, team, manager } = await setup(t)
   await tool('spawn', { title: 'job', task: 'a', tier: 'mid', provider: 'claude', name: 'S' })

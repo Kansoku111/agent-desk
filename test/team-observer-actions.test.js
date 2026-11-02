@@ -16,7 +16,7 @@ function fixture(kind = 'thread') {
     async observerQueueThread(id, childId, text) { calls.push(['queue', id, childId, text]) },
     async observerCancelPending() {},
     async observerUserChild(id, childId, action) { const entry = this.teams.get(id).children.find((c) => c.id === childId); if (entry.closed) entry.closed = false; return action() },
-    messageChild(id, childId, text, options) { calls.push(['messageChild', id, childId, text, options]) },
+    observerMessageAgent(id, childId, text) { calls.push(['observerMessageAgent', id, childId, text]); return { delivery: this.agents.running() ? 'uncertain' : child.awaiting ? 'queued' : 'sent' } },
     stopChild(id, childId) { calls.push(['stopChild', id, childId]) },
     terminals: { async sendMessage(id, text) { calls.push(['terminalSend', id, text]) }, interrupt(id, client) { calls.push(['interrupt', id, client]); return true } },
   }
@@ -33,16 +33,60 @@ test('messages address the requested leader or dsh child as user input', async (
   assert.equal(calls[0][3].userInitiated, true)
   manager.threads.threads.get('leader').status = 'running'
   const leader = await observerSend(manager, 'team', 'leader', '続行')
-  assert.equal(leader.delivery, 'queued')
-  assert.deepEqual(calls[1].slice(0, 3), ['queue', 'team', null])
+  assert.equal(leader.delivery, 'sent')
+  assert.equal(leader.method, 'steer')
+  assert.deepEqual(calls[1].slice(0, 2), ['steer', 'leader'])
 })
-test('a busy dsh child gets a queued user instruction, not a leader send', async () => {
+test('a busy dsh child receives a user instruction by steer', async () => {
   const { manager, calls } = fixture()
   manager.threads.threads.get('task').status = 'running'
-  const result = await observerSend(manager, 'team', 'child', '待ってから')
-  assert.equal(result.delivery, 'queued')
+  const result = await observerSend(manager, 'team', 'child', '作業を区切って')
+  assert.equal(result.delivery, 'sent')
+  assert.equal(result.method, 'steer')
+  assert.equal(calls[0][0], 'steer')
+  assert.match(calls[0][2].text, /ユーザーからの指示/)
+  assert.ok(calls[0][2].messageId)
+  assert.equal(calls[0][3].userInitiated, true)
+})
+
+test('unavailable steer queues the instruction and uncertain steer never retries', async () => {
+  const { manager, calls } = fixture()
+  manager.threads.threads.get('task').status = 'running'
+  manager.threads.steer = async () => ({ steered: false })
+  assert.equal((await observerSend(manager, 'team', 'child', '待機')).delivery, 'queued')
   assert.equal(calls[0][0], 'queue')
-  assert.match(calls[0][3], /ユーザーからの指示/)
+  calls.length = 0
+  for (const result of [{ status: 'uncertain', steered: true }, { status: 'uncertain' }]) {
+    manager.threads.steer = async () => result
+    assert.equal((await observerSend(manager, 'team', 'child', '確認')).delivery, 'uncertain')
+    assert.deepEqual(calls, [])
+  }
+  manager.threads.steer = async () => ({})
+  await assert.rejects(observerSend(manager, 'team', 'child', '確認'), /受領結果を確認できません/)
+  assert.deepEqual(calls, [])
+})
+
+test('steer fallback checks that the recipient did not change', async () => {
+  const { manager, child, calls } = fixture()
+  manager.threads.threads.get('task').status = 'running'
+  manager.threads.steer = async () => { child.taskId = 'other'; return { steered: false } }
+  await assert.rejects(observerSend(manager, 'team', 'child', '確認'), /宛先が変更/)
+  assert.deepEqual(calls, [])
+})
+
+test('stopping during a rejected steer prevents a later queued send', async () => {
+  for (const stopAll of [false, true]) {
+    const { manager, team, calls } = fixture()
+    manager.threads.threads.get('task').status = 'running'
+    let release
+    manager.threads.steer = () => new Promise((resolve) => { release = resolve })
+    const sending = observerSend(manager, 'team', 'child', '区切って')
+    if (stopAll) team.stopVersion = (team.stopVersion ?? 0) + 1
+    else await observerStop(manager, 'team', 'child')
+    release({ steered: false })
+    await assert.rejects(sending, /停止されたため/)
+    assert.equal(calls.some((call) => call[0] === 'queue'), false)
+  }
 })
 
 test('leader messages wait while fallback is in progress', async () => {
@@ -59,16 +103,17 @@ test('an awaiting child is queued even before its runtime starts', async () => {
     child.awaiting = true
     const result = await observerSend(manager, 'team', 'child', '後から')
     assert.equal(result.delivery, 'queued')
-    assert.equal(calls[0][0], kind === 'thread' ? 'queue' : 'messageChild')
+    assert.equal(calls[0][0], kind === 'thread' ? 'queue' : 'observerMessageAgent')
   }
 })
 
-test('Claude child uses direct-message queue, terminal leader uses direct send', async () => {
+test('Claude child reports an attempted steer as uncertain, terminal leader uses direct send', async () => {
   const { manager, team, calls } = fixture('agent')
   manager.agents.running = () => true
-  assert.equal((await observerSend(manager, 'team', 'child', '確認')).delivery, 'queued')
-  assert.equal(calls[0][0], 'messageChild')
-  assert.deepEqual(calls[0][4], { source: 'observer' })
+  const result = await observerSend(manager, 'team', 'child', '確認')
+  assert.equal(result.delivery, 'uncertain')
+  assert.equal(result.method, 'steer')
+  assert.equal(calls[0][0], 'observerMessageAgent')
   team.leaderKind = 'terminal'
   await observerSend(manager, 'team', 'leader', '指示')
   assert.equal(calls[1][0], 'terminalSend')

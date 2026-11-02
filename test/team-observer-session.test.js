@@ -17,6 +17,7 @@ async function fixture(t) {
     async create(options) { calls.push(['thread-create', options]); const item = { ...options, id: 'observer-thread', status: 'idle' }; this.threads.set(item.id, item); this.turns.set(item.id, []); return item },
     async update(id, patch) { calls.push(['thread-update', id, patch]); Object.assign(this.threads.get(id), patch) },
     async send(id, input, options = {}) { options.guard?.(); calls.push(['thread-send', id, input, options.userInitiated]); this.turns.get(id).push({ id: 'turn', user: { text: input.text }, items: [] }); return { status: 'accepted', kind: 'send' } },
+    async steer() { return { steered: false } },
     async get(id) { return { turns: this.turns.get(id) } },
     async cancel(id) { calls.push(['cancel', id]) },
     async setGoalWaiting() {},
@@ -27,6 +28,7 @@ async function fixture(t) {
     async create(options) { calls.push(['agent-create', options]); const item = { ...options, id: 'observer-agent', state: 'idle', turns: [] }; this.records.set(item.id, item); return item },
     get(id) { return this.records.get(id) }, turns(id) { return this.records.get(id)?.turns }, running(id) { return this.records.get(id)?.state === 'running' },
     stop(id) { calls.push(['agent-stop', id]); this.records.get(id).state = 'idle'; return true },
+    steer() { return false },
     async setArgs(id, args) { calls.push(['set-args', id, args]) },
     async configure(id, choice) { calls.push(['configure', id, choice]) },
     run(id, text, options) { calls.push(['agent-run', id, text, options]); this.records.get(id).turns.push({ id: 'claude-turn', user: { text }, items: [] }) },
@@ -117,7 +119,24 @@ test('a reopened child reports a direct user request as an additional report', a
   assert.equal(team.queue[0].text, '結果')
 })
 
-test('busy dsh child receives queued user message after its current report', async (t) => {
+test('busy dsh child receives observer instruction during the active turn', async (t) => {
+  const { manager, team, threads } = await fixture(t)
+  const child = { id: 'child', name: '子1', kind: 'thread', taskId: 'child-task', closed: false, awaiting: true, pending: [] }
+  team.children.push(child)
+  team.observer = { id: 'observer', kind: 'thread', secret: 'observer-secret' }
+  threads.threads.set('child-task', { id: 'child-task', status: 'running' })
+  let received
+  threads.steer = async (id, input, options) => { options.guard(); received = { id, input, userInitiated: options.userInitiated }; return { status: 'accepted', steered: true } }
+  const result = JSON.parse(await manager.observerCall('t', 'observer-secret', 'send', { target: 'child', message: '作業を区切って' }))
+  assert.equal(result.delivery, 'sent')
+  assert.equal(result.method, 'steer')
+  assert.equal(received.id, 'child-task')
+  assert.equal(received.userInitiated, true)
+  assert.match(received.input.text, /作業を区切って/)
+  assert.equal((team.observerOutbox ?? []).length, 0)
+})
+
+test('busy dsh child receives queued user message after its current report when steer is unavailable', async (t) => {
   const { manager, team, threads } = await fixture(t)
   const child = { id: 'child', name: '子1', title: '作業', kind: 'thread', taskId: 'child-task', closed: false, awaiting: true, reports: [], pending: [], followups: [], provider: 'gpt', model: 'gpt-6-luna', createdAt: 1, updatedAt: 1 }
   team.children.push(child)
@@ -180,6 +199,22 @@ test('stop all discards queued observer instructions without starting them', asy
   threads.emit('turn-finished', { threadId: 'child-task', status: 'cancelled' })
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(calls.filter((entry) => entry[0] === 'thread-send' && entry[1] === 'child-task').length, 0)
+})
+
+test('observer attempts to steer a working Claude child without claiming receipt', async (t) => {
+  const { manager, team, agents } = await fixture(t)
+  const child = { id: 'child', name: '子1', title: '作業', kind: 'agent', taskId: 'child-agent', closed: false, awaiting: true, reports: [], pending: [], followups: [], provider: 'claude', model: 'haiku', createdAt: 1, updatedAt: 1 }
+  team.children.push(child)
+  agents.records.set('child-agent', { id: 'child-agent', state: 'running', turns: [] })
+  team.observer = { id: 'observer', kind: 'thread', secret: 'observer-secret' }
+  let attempted
+  agents.steer = (id, text) => { attempted = { id, text }; return true }
+  const result = JSON.parse(await manager.observerCall('t', 'observer-secret', 'send', { target: 'child', message: '作業を区切って' }))
+  assert.equal(result.delivery, 'uncertain')
+  assert.equal(result.method, 'steer')
+  assert.equal(attempted.id, 'child-agent')
+  assert.match(attempted.text, /作業を区切って/)
+  assert.deepEqual(child.followups, [])
 })
 
 test('stopping a Claude child cancels only its observer-origin followup', async (t) => {

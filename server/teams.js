@@ -1779,15 +1779,26 @@ export class TeamManager extends EventEmitter {
     if (team.execution) throw new Error('ecoの子への指示は親に伝えてください。検証と判定を迂回できません')
     const body = String(text ?? '').trim()
     if (!body) throw new Error('送る内容を書いてください')
+    let followupId
     if (this.agents.running(child.taskId) || (source === 'observer' && child.awaiting)) {
       // While the child works the message waits for its turn to end (or `steerFollowup` gives it at once).
-      child.followups = [...(child.followups ?? []), { id: randomUUID(), text: body, at: this.now(), ...(source === 'observer' ? { source } : {}) }]
+      const item = { id: randomUUID(), text: body, at: this.now(), ...(source === 'observer' ? { source } : {}) }
+      followupId = item.id
+      child.followups = [...(child.followups ?? []), item]
       void this.#save()
       this.#emit(team)
     } else {
       this.agents.run(child.taskId, body)
     }
-    return { team: this.summary(team) }
+    return { team: this.summary(team), ...(source === 'observer' && followupId ? { followupId } : {}) }
+  }
+
+  /** Try the direct-user interrupt path; a steer is not a Claude receipt. */
+  observerMessageAgent(teamId, childId, text) {
+    const { followupId } = this.messageChild(teamId, childId, text, { source: 'observer' })
+    if (!followupId) return { delivery: 'sent' }
+    const { steered } = this.steerFollowup(teamId, childId, followupId)
+    return { delivery: steered ? 'uncertain' : 'queued' }
   }
 
   /** Gives a message the user left waiting to the turn that is running now, which reads it at its next step. */
