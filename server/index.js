@@ -453,6 +453,7 @@ agents.on('rateLimits', (reading) => {
 teams = await new TeamManager({
   file: path.join(paths.home, 'teams.json'),
   dir: path.join(paths.home, 'teams'),
+  attachmentsDir: paths.attachmentsDir,
   threads,
   terminals,
   agents,

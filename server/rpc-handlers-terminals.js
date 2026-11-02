@@ -80,7 +80,7 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
     },
     'team.update': ({ teamId, patch, authConfirmation }) => teams.updateConfig(teamId, patch, authConfirmation),
     'team.observerTurns': ({ teamId }) => teams.observerTurns(teamId),
-    'team.observerMessage': ({ teamId, model, effort, text, authConfirmation }) => teams.observerMessage(teamId, { model, effort, text, authConfirmation }),
+    'team.observerMessage': ({ teamId, model, effort, text, images, authConfirmation }) => teams.observerMessage(teamId, { model, effort, text, images, authConfirmation }),
     'team.approve': ({ teamId, approvalId, allow }) => teams.approveById(teamId, approvalId, allow === true),
     'team.dismissAsk': ({ teamId, askId }) => teams.dismissAsk(teamId, askId),
     'team.deliver': ({ teamId }) => teams.retryDelivery(teamId),

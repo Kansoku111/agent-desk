@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { act, isTouch, setState, useStore } from '../store'
-import type { TeamSummary, Turn } from '../types'
+import { Loader2, Paperclip, X } from 'lucide-react'
+import { act, isImageAttachment, isTouch, setState, toast, uploadAttachment, useStore } from '../store'
+import type { Attachment, TeamSummary, Turn } from '../types'
 import { workflowLevels } from '../../../shared/workflow-effort.js'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
 import type { AuthConsentState } from '../team-auth-consent'
@@ -23,6 +24,10 @@ export function ObserverChat({ team, onClose }: { team: TeamSummary; onClose: ()
   const [sending, setSending] = useState(false)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const [authRevision, setAuthRevision] = useState(0)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [uploading, setUploading] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
   const loadRevision = useRef(0)
   const load = useCallback(async () => {
     const revision = ++loadRevision.current
@@ -59,13 +64,26 @@ export function ObserverChat({ team, onClose }: { team: TeamSummary; onClose: ()
     setSaving(false)
     if (!result) setChoice(server.settings.observerModel ?? null)
   }
+  const addFiles = async (files: File[]) => {
+    if (sending) return
+    const images = files.filter((file) => ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type))
+    if (images.length !== files.length) toast('観測者には PNG、JPEG、GIF、WebP 画像のみ添付できます', 'error')
+    if (!images.length) return
+    setUploading((count) => count + 1)
+    try {
+      for (const file of images) {
+        const saved = await uploadAttachment(file)
+        if (saved && isImageAttachment(saved)) setAttachments((list) => [...list, saved])
+      }
+    } finally { setUploading((count) => count - 1) }
+  }
+  const canSend = Boolean(choice && available && effortValid && (text.trim() || attachments.length) && !uploading && !saving && !sending && !running && (!claude || auth.ready))
   const submit = async () => {
-    if (!choice || !available || !effortValid || !text.trim() || saving || sending || running || (claude && !auth.ready)) return
+    if (!choice || !canSend) return
     setSending(true)
-    const body = text.trim()
-    const result = await act('team.observerMessage', { teamId: team.id, model: choice.model, effort: choice.effort, text: body, ...(claude && auth.confirmation ? { authConfirmation: auth.confirmation } : {}) })
+    const result = await act('team.observerMessage', { teamId: team.id, model: choice.model, effort: choice.effort, text: text.trim(), images: attachments.map(({ file, mimeType, name }) => ({ file, mimeType, name })), ...(claude && auth.confirmation ? { authConfirmation: auth.confirmation } : {}) })
     setSending(false)
-    if (result) { setText(''); await load() }
+    if (result) { setText(''); setAttachments([]); await load() }
     else if (claude) { setAuth({ ready: false }); setAuthRevision((n) => n + 1) }
   }
   return <Modal title="観測者" onClose={onClose} width={680} className="observer-modal">
@@ -73,7 +91,11 @@ export function ObserverChat({ team, onClose }: { team: TeamSummary; onClose: ()
       {segments.map((segment) => ((segment.kind === 'thread' ? threadTurns[segment.id] : agentTurns[segment.id]) ?? segment.turns).map((turn) =>
         <TurnView key={segment.id + turn.id} turn={turn} workspace={team.workspace} threadId={segment.id} threadBusy={false} undoable={false} />))}
     </div>
-    <div className="observer-compose">
+    <div className="observer-compose" onDragOver={(event) => {
+      if ([...event.dataTransfer.types].includes('Files')) { event.preventDefault(); setDragging(true) }
+    }} onDragLeave={() => setDragging(false)} onDrop={(event) => {
+      event.preventDefault(); setDragging(false); void addFiles([...event.dataTransfer.files])
+    }}>
       <ModelField label="モデル" value={choice?.model ?? ''} groups={groups} disabled={saving || sending || running}
         effort={choice?.effort ?? ''} efforts={levels} allowDefaultEffort allowClearUnavailableEffort
         onChange={(model) => void select({ model, effort: null })}
@@ -81,11 +103,28 @@ export function ObserverChat({ team, onClose }: { team: TeamSummary; onClose: ()
       {choice && !available && <p role="alert" className="team-warning">保存されたモデルは利用できません。選び直してください。</p>}
       {!effortValid && <p role="alert" className="team-warning">推論レベルを選び直してください。</p>}
       {claude && <ClaudeAuthConsent key={authRevision} workspace={team.workspace} teamId={team.id} observer onChange={setAuth} />}
-      <textarea aria-label="観測者へのメッセージ" value={text} disabled={sending} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => {
+      {(attachments.length > 0 || uploading > 0) && <div className="attachments">
+        {attachments.map((attachment) => <div key={attachment.file} className="attachment" title={attachment.name}>
+          <img src={attachment.previewUrl} alt={attachment.name || '添付画像'} />
+          <button type="button" className="attachment-remove" aria-label="添付を外す" disabled={sending} onClick={() => setAttachments((list) => list.filter((entry) => entry.file !== attachment.file))}><X size={12} /></button>
+        </div>)}
+        {uploading > 0 && <div className="attachment loading"><Loader2 size={16} className="spin" /></div>}
+      </div>}
+      <textarea aria-label="観測者へのメッセージ" value={text} disabled={sending} onChange={(event) => setText(event.target.value)} onPaste={(event) => {
+        const files = [...event.clipboardData.files]
+        if (files.length) { event.preventDefault(); void addFiles(files) }
+      }} onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.keyCode === 229) return
         if (event.key === 'Enter' && !event.shiftKey && !isTouch()) { event.preventDefault(); void submit() }
       }} />
-      <button type="button" className="button primary" disabled={!text.trim() || !available || !effortValid || saving || sending || running || (claude && !auth.ready)} onClick={() => void submit()}>送信</button>
+      <div className="composer-bar">
+        <button type="button" className="icon-button" title="画像を添付" aria-label="画像を添付" disabled={sending} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>
+        <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={(event) => {
+          void addFiles([...(event.target.files ?? [])]); event.target.value = ''
+        }} />
+        <button type="button" className="button primary" disabled={!canSend} onClick={() => void submit()}>送信</button>
+      </div>
+      {dragging && <div>ドロップして画像を添付</div>}
     </div>
   </Modal>
 }

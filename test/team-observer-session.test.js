@@ -7,10 +7,13 @@ import { test } from 'node:test'
 import { TeamManager } from '../server/teams.js'
 import { TEAM_DEFAULTS } from '../server/team-config.js'
 import { restoreTeams } from '../server/teams-store.js'
+import { createTerminalHandlers } from '../server/rpc-handlers-terminals.js'
+import { MAX_ATTACHMENT_BYTES } from '../server/attachments.js'
 
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'observer-session-'))
   const workspace = path.join(dir, 'workspace'); await fs.mkdir(workspace)
+  const attachmentsDir = path.join(dir, 'attachments'); await fs.mkdir(attachmentsDir)
   const calls = []
   const threads = Object.assign(new EventEmitter(), { threads: new Map([['leader', { id: 'leader', status: 'idle' }]]), turns: new Map(), removing: new Map(),
     async checkUsageFallbackModel(model) { calls.push(['check', model]) },
@@ -36,13 +39,45 @@ async function fixture(t) {
   })
   const model = JSON.stringify(['openai-codex', 'gpt-6-luna'])
   const catalog = { data: { models: [{ value: model, provider: 'openai-codex', id: 'gpt-6-luna' }] } }
-  const manager = new TeamManager({ file: path.join(dir, 'teams.json'), dir: path.join(dir, 'teams'), threads, terminals, agents, catalog, getSettings: () => TEAM_DEFAULTS, apiUrl: () => 'http://127.0.0.1:1000/api/team' })
+  const manager = new TeamManager({ file: path.join(dir, 'teams.json'), dir: path.join(dir, 'teams'), attachmentsDir, threads, terminals, agents, catalog, getSettings: () => TEAM_DEFAULTS, apiUrl: () => 'http://127.0.0.1:1000/api/team' })
   manager.claudeAuth = { context: () => ({}), guard: async () => null }
   const team = { id: 't', workspace, leaderId: 'leader', leaderKind: 'thread', secret: 'leader-secret', config: TEAM_DEFAULTS, children: [], queue: [], asks: [] }
   manager.teams.set('t', team)
   t.after(async () => { await manager.writes; await fs.rm(dir, { recursive: true, force: true }) })
-  return { manager, team, calls, model, threads, agents }
+  return { manager, team, calls, model, threads, agents, attachmentsDir }
 }
+
+test('observer RPC forwards images to dsh and Claude, including image-only prompts', async (t) => {
+  const { manager, calls, model, attachmentsDir } = await fixture(t)
+  const file = 'abc-123.png'
+  await fs.writeFile(path.join(attachmentsDir, file), Buffer.from('image data'))
+  const handlers = createTerminalHandlers({ teams: manager })
+  const images = [{ file, mimeType: 'forged', name: 'photo.png' }]
+  await handlers['team.observerMessage']({ teamId: 't', model, effort: 'low', images })
+  const sent = calls.find((entry) => entry[0] === 'thread-send')[2]
+  assert.deepEqual(sent, { text: '', images: [{ file, mimeType: 'image/png', name: 'photo.png' }] })
+  await handlers['team.observerMessage']({ teamId: 't', model: 'claude:haiku', effort: 'low', text: '説明', images })
+  const run = calls.find((entry) => entry[0] === 'agent-run')
+  assert.deepEqual(run[3].images, sent.images)
+  assert.equal(run[3].blocks[0].type, 'text')
+  assert.deepEqual(run[3].blocks[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: Buffer.from('image data').toString('base64') } })
+})
+
+test('observer rejects invalid attachments and unsupported models before creating a session', async (t) => {
+  const { manager, calls, model, attachmentsDir } = await fixture(t)
+  const unsupported = JSON.stringify(['deepseek-official', 'example'])
+  manager.catalog.data.models.push({ value: unsupported, provider: 'deepseek-official', id: 'example' })
+  const send = (images, selected = model) => manager.observerMessage('t', { model: selected, text: '確認', images })
+  await assert.rejects(send({ file: 'abc.png' }), /モデルとメッセージ/)
+  await assert.rejects(send([{ file: '../secret.png' }]), /参照が不正/)
+  await assert.rejects(send([{ file: 'abcdef.png' }]), /見つからない/)
+  await assert.rejects(send(Array(21).fill({ file: 'abc.png' })), /20件/)
+  await assert.rejects(send([{ file: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/file.txt' }]), /画像以外/)
+  await fs.writeFile(path.join(attachmentsDir, 'abc.png'), Buffer.alloc(MAX_ATTACHMENT_BYTES + 1))
+  await assert.rejects(send([{ file: 'abc.png' }]), /サイズ/)
+  await assert.rejects(send([{ file: 'abc.png' }], unsupported), /Claude \/ ChatGPT/)
+  assert.equal(calls.some((entry) => entry[0].endsWith('create')), false)
+})
 
 test('opening observer creates nothing; a user prompt creates only its own thread', async (t) => {
   const { manager, team, calls, model, threads } = await fixture(t)

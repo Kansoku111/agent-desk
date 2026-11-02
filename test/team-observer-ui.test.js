@@ -85,3 +85,69 @@ test('observer composer requires an available explicit model and saves selection
   assert.equal(prevented, true)
   assert.equal(calls.length, before)
 })
+
+test('observer accepts, previews, removes and sends images without text', async () => {
+  const values = [], calls = [], notices = [], uploads = []
+  let index = 0, resolveUpload
+  const state = { server: { settings: { observerModel: { model, effort: null } }, catalog: {} }, turns: {}, agentTurns: {} }
+  const modules = {
+    react: {
+      useState: (initial) => { const i = index++; if (!(i in values)) values[i] = typeof initial === 'function' ? initial() : initial; return [values[i], (next) => { values[i] = typeof next === 'function' ? next(values[i]) : next }] },
+      useEffect() {}, useCallback: (fn) => fn, useRef: (value) => ({ current: value }),
+    },
+    'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {},
+    '../store': {
+      useStore: (select) => select(state), isTouch: () => false, setState() {},
+      isImageAttachment: (image) => image.mimeType.startsWith('image/'),
+      toast: (message) => notices.push(message),
+      uploadAttachment: (file) => { uploads.push(file); return new Promise((resolve) => { resolveUpload = resolve }) },
+      act: async (name, args) => { calls.push([name, args]); return name === 'team.observerTurns' ? { segments: [], running: false } : {} },
+    },
+    '../../../shared/workflow-effort.js': { workflowLevels: () => ['low'] },
+    './WorkflowModelField': { ModelField: 'ModelField', modelGroups: () => [{ models: [{ value: model }] }] },
+    './Modal': { Modal: 'Modal' }, './useConversationScroll': { useConversationScroll: () => ({ scroller: { current: null }, onScroll() {} }) }, './TurnView': { TurnView: 'TurnView' }, './ClaudeAuthConsent': { ClaudeAuthConsent: 'Consent' },
+  }
+  const { ObserverChat } = await load('../web/src/components/ObserverChat.tsx', modules)
+  const render = () => { index = 0; return ObserverChat({ team: baseTeam, onClose() {} }) }
+  const find = (tree, type, label) => nodes(tree, (node) => node.type === type && (!label || node.props['aria-label'] === label || text(node) === label))[0]
+  const image = { name: 'image.png', type: 'image/png' }, other = { name: 'file.txt', type: 'text/plain' }
+  const saved = { file: 'image.png', name: 'image.png', mimeType: 'image/png', previewUrl: '/preview' }
+  let tree = render()
+  assert.equal(find(tree, 'button', '送信').props.disabled, true)
+  const input = find(tree, 'input')
+  assert.equal(input.props.accept, 'image/png,image/jpeg,image/gif,image/webp')
+  const target = { files: [image], value: 'chosen' }
+  input.props.onChange({ target })
+  assert.equal(target.value, '')
+  assert.equal(find(render(), 'button', '送信').props.disabled, true)
+  resolveUpload(saved)
+  await new Promise((resolve) => setImmediate(resolve))
+  tree = render()
+  assert.equal(find(tree, 'img').props.src, '/preview')
+  assert.equal(find(tree, 'button', '送信').props.disabled, false)
+  find(tree, 'button', '添付を外す').props.onClick()
+  assert.equal(find(render(), 'button', '送信').props.disabled, true)
+  let prevented = false
+  find(render(), 'textarea').props.onPaste({ clipboardData: { files: [other] }, preventDefault() { prevented = true } })
+  assert.equal(prevented, true)
+  assert.equal(notices.length, 1)
+  assert.equal(uploads.length, 1)
+  tree = render()
+  const compose = nodes(tree, (node) => node.props?.className === 'observer-compose')[0]
+  compose.props.onDrop({ dataTransfer: { files: [other, image] }, preventDefault() {} })
+  assert.equal(notices.length, 2)
+  resolveUpload(saved)
+  await new Promise((resolve) => setImmediate(resolve))
+  find(render(), 'button', '送信').props.onClick()
+  await new Promise((resolve) => setImmediate(resolve))
+  const sent = calls.find(([name]) => name === 'team.observerMessage')[1]
+  assert.equal(sent.text, '')
+  assert.deepEqual(sent.images, [{ file: saved.file, name: saved.name, mimeType: saved.mimeType }])
+  assert.equal(find(render(), 'img'), undefined)
+  prevented = false
+  find(render(), 'textarea').props.onPaste({ clipboardData: { files: [image] }, preventDefault() { prevented = true } })
+  assert.equal(prevented, true)
+  resolveUpload(saved)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(find(render(), 'img').props.alt, 'image.png')
+})
