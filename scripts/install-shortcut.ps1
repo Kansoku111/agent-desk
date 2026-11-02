@@ -42,9 +42,9 @@ function New-AgentDeskIcon {
     $pen = New-Object System.Drawing.Pen ([System.Drawing.ColorTranslator]::FromHtml('#2E3142')), ([Math]::Max(1.5, 5 * $s))
     $pen.StartCap = 'Round'; $pen.EndCap = 'Round'; $pen.LineJoin = 'Round'
     $g.DrawLines($pen, [System.Drawing.PointF[]]@(
-      (New-Object System.Drawing.PointF (18 * $s), (22 * $s)),
-      (New-Object System.Drawing.PointF (28 * $s), (32 * $s)),
-      (New-Object System.Drawing.PointF (38 * $s), (22 * $s))))
+      (New-Object System.Drawing.PointF (18 * $s), (32 * $s)),
+      (New-Object System.Drawing.PointF (28 * $s), (22 * $s)),
+      (New-Object System.Drawing.PointF (38 * $s), (32 * $s))))
     $g.DrawLine($pen, (33 * $s), (43 * $s), (46 * $s), (43 * $s))
     $g.Dispose()
     $stream = New-Object System.IO.MemoryStream
