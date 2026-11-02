@@ -14,6 +14,12 @@ export function createMcpServerList({ paths, getSettings, getTeams }) {
   /** MCP servers mounted into a task's session; ACP stdio servers need an absolute command. */
   function mcpServersFor(thread) {
     const servers = []
+    // Fail closed: observer sessions never inherit ordinary task or leader MCPs.
+    if (thread.team?.role === 'observer') {
+      const server = getTeams()?.observerMcpFor(thread)
+      if (!server) throw new Error('観測者のセッションを確認できません')
+      return [server]
+    }
     if (thread.preset) return thread.preset.browser ? [chromeServer(thread)] : servers
     // Consultation cannot use browser/desktop tools to bypass its read-only sandbox.
     // WebSearch/WebFetch are native tools in the non-lean AB runtime.

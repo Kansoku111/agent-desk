@@ -45,6 +45,7 @@ export function appPaths(home = defaultAppHome()) {
     fastMode: path.join(home, 'fast-mode.json'),
     // The extra dsh layer of agent teams' children (dsh-config.js teamChildPatch).
     teamChildPatch: path.join(home, 'team-child.patch.yml'),
+    observerPatch: path.join(home, 'team-observer.patch.yml'),
     abLeanPatch: path.join(home, 'ab-lean.patch.yml'),
     abResearchPatch: path.join(home, 'ab-research.patch.yml'),
     abWritePatch: path.join(home, 'ab-write.patch.yml'),

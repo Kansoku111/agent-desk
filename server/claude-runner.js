@@ -240,6 +240,17 @@ export class ClaudeRunner extends EventEmitter {
     await this.#save(record)
   }
 
+  /** Set the model for a later turn without replacing the saved conversation. */
+  async configure(id, { model, effort }) {
+    const record = this.records.get(id)
+    if (!record) throw new Error('このセッションは見つかりません')
+    if (this.live.has(id)) throw new Error('作業中です。終わってから変更してください')
+    record.model = model ?? null
+    record.effort = effort ?? null
+    await this.#save(record)
+    this.emit('session', this.summary(record))
+  }
+
   /** Starts a turn on `text`. Throws when the session is working already. */
   run(id, text, { images = [], blocks = [] } = {}) {
     const record = this.records.get(id)

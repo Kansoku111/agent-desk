@@ -1,4 +1,9 @@
 /* Agent Desk – Codex-style desktop UI. Tokens first, then layout, then parts. */
+.team-observer-entry { margin-bottom: 12px; }
+.observer-modal { display: flex; flex-direction: column; max-height: min(85vh, 850px); }
+.observer-chat { overflow: auto; min-height: 80px; padding: 12px 20px; flex: 1; }
+.observer-compose { display: grid; gap: 10px; overflow: auto; min-height: 0; padding: 12px 20px; border-top: 1px solid var(--border); }
+.observer-compose textarea { width: 100%; min-height: 64px; resize: vertical; }
 .ab-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .ab-header { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
 .ab-header h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; margin: 0; }

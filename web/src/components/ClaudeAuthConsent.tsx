@@ -13,11 +13,12 @@ const MODE_LABEL = {
 const CLOUD_LABEL: Record<string, string> = { bedrock: 'Amazon Bedrock', vertex: 'Google Cloud Vertex AI', foundry: 'Microsoft Foundry' }
 
 /** Inspects CLI metadata without making a model request; never prechecks consent. */
-export function ClaudeAuthConsent({ workspace, teamId, taskPreset = false, fallback = false, onChange }: {
+export function ClaudeAuthConsent({ workspace, teamId, taskPreset = false, fallback = false, observer = false, onChange }: {
   workspace: string
   teamId?: string
   taskPreset?: boolean
   fallback?: boolean
+  observer?: boolean
   onChange: (state: AuthConsentState) => void
 }) {
   const [inspection, setInspection] = useState<ClaudeAuthInspection | null>(null)
@@ -52,7 +53,7 @@ export function ClaudeAuthConsent({ workspace, teamId, taskPreset = false, fallb
     <details className="account-card claude-auth-consent" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)} aria-label="Claude Code の課金方式の確認">
       <summary>Claude Code の課金方式<span className="muted">{loading ? '確認中…' : inspection?.confirmed ? '確認済み' : '確認が必要'}</span></summary>
       <div className="claude-auth-consent-body">
-      <p className="muted">{fallback ? '利用上限時の切り替え先が使う' : taskPreset ? 'この担当が使う' : 'このチームのリーダー・子が使う'} Claude Code 自身の認証です。Agent Desk に登録した API キーとは別です。確認ではモデルへの依頼を送りません。</p>
+      <p className="muted">{fallback ? '利用上限時の切り替え先が使う' : taskPreset ? 'この担当が使う' : observer ? '観測者が使う' : 'このチームのリーダー・子が使う'} Claude Code 自身の認証です。Agent Desk に登録した API キーとは別です。確認ではモデルへの依頼を送りません。</p>
       <p role="status">{loading ? '認証方式を確認しています…' : descriptor ? MODE_LABEL[descriptor.mode] : '確認に失敗しました。再確認してください。'}
         {descriptor?.mode === 'cloud' && CLOUD_LABEL[descriptor.apiProvider] && ` — ${CLOUD_LABEL[descriptor.apiProvider]}`}
       </p>

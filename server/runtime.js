@@ -23,7 +23,7 @@ export { dshEnv }
 export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access']
 
 /** The runtime a thread's session runs in: its mode's, or the team children's of that mode. */
-export const runtimeKey = (thread) => thread.preset ? 'preset:' + thread.permissionMode : thread.ab ? (thread.ab.writable ? 'ab:write' : thread.ab.lean ? 'ab:lean' : 'ab:research') : (thread.team?.childId ? `team:${thread.permissionMode}` : thread.permissionMode)
+export const runtimeKey = (thread) => thread.team?.role === 'observer' ? 'team:observer' : thread.preset ? 'preset:' + thread.permissionMode : thread.ab ? (thread.ab.writable ? 'ab:write' : thread.ab.lean ? 'ab:lean' : 'ab:research') : (thread.team?.childId ? `team:${thread.permissionMode}` : thread.permissionMode)
 
 const STDERR_TAIL = 16_000
 
@@ -276,6 +276,12 @@ export class RuntimePool extends EventEmitter {
       if (!patch) continue
       const runtime = new AcpRuntime({ mode, paths, patches: [patch], onUpdate, onPermission })
       runtime.on('exit', (info) => this.emit('exit', { mode, key, ...info }))
+      this.runtimes.set(key, runtime)
+    }
+    if (paths.observerPatch) {
+      const key = 'team:observer'
+      const runtime = new AcpRuntime({ mode: 'read-only', paths, patches: [paths.observerPatch], onUpdate, onPermission })
+      runtime.on('exit', (info) => this.emit('exit', { mode: 'read-only', key, ...info }))
       this.runtimes.set(key, runtime)
     }
     if (paths.taskPresetPatch) for (const mode of ['workspace-write', 'danger-full-access']) {

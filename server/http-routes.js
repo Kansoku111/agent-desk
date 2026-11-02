@@ -132,6 +132,20 @@ export function createRequestHandler({ appVersion, codeStamp, busy, countClients
           return send(res, 200, JSON.stringify({ ok: false, error: error.message }), 'application/json')
         }
       }
+      // Observer capability is separate from the leader's MCP secret and local only.
+      if (url.pathname === '/api/team-observer' && !ctx.remote) {
+        if (req.method !== 'POST') return send(res, 405, 'method not allowed')
+        const body = await readBody(req, 1024 * 1024)
+        if (body === null) return send(res, 413, 'too large')
+        const call = parseJson(body)
+        try {
+          const text = await teams.observerCall(call?.teamId, call?.secret, call?.tool, call?.args)
+          return send(res, 200, JSON.stringify({ ok: true, text }), 'application/json')
+        } catch (error) {
+          if (error.status === 403) return send(res, 403, 'forbidden')
+          return send(res, 200, JSON.stringify({ ok: false, error: error.message }), 'application/json')
+        }
+      }
       // Lets a page tell a token that no longer works (a new link was made) from a server that is down.
       if (url.pathname === '/api/auth') {
         return send(res, authorized ? 200 : 403, authorized ? 'ok' : 'forbidden', 'text/plain; charset=utf-8', { 'cache-control': 'no-store' })

@@ -11,6 +11,7 @@ import { TeamConfigDialog } from './TeamSettings'
 import { PtcToggle } from './PtcToggle'
 import { ExecutionChecksDialog } from './ExecutionSettings'
 import { claudeModelName } from './TerminalPickers'
+import { ObserverChat } from './ObserverChat'
 
 const STATE_LABEL: Record<TeamChildState, string> = {
   running: '作業中',
@@ -282,6 +283,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
   const route = useStore((state) => state.route)
   const target = leaderRoute(team)
   const status = leaderState(leader)
+  const [observerOpen, setObserverOpen] = useState(false)
   const [diagram, setDiagram] = useState(false)
   const [editing, setEditing] = useState(false)
   const [usage, setUsage] = useState(false)
@@ -325,6 +327,9 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
           <Notices team={team} />
           {team.leaderFallbackUsed && <p role="status" className="muted">利用上限のためリーダーを切り替えました{leader ? `（${leaderModel(server, leader)}）` : ''}。</p>}
           {team.leaderFallbackError && <p role="alert" className="error-text">切り替えできませんでした: {team.leaderFallbackError}</p>}
+          {!team.execution && <button type="button" className="subagent-card team-card team-observer-entry" onClick={() => setObserverOpen(true)}>
+            <div className="subagent-card-head"><span className="team-card-name">観測者</span>{team.observer?.running && <Loader2 size={13} className="spin" />}<ChevronRight size={14} className="subagent-card-chev" /></div>
+          </button>}
           <button
             type="button"
             className={`subagent-card team-card state-${status}`}
@@ -352,6 +357,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
           ))}
         </div>
       </aside>
+      {observerOpen && !team.execution && <ObserverChat team={team} onClose={() => setObserverOpen(false)} />}
       {diagram && <TeamDiagram team={team} onClose={() => setDiagram(false)} />}
       {editing && (team.execution ? <ExecutionChecksDialog workspace={team.workspace} onClose={() => setEditing(false)} /> : <TeamConfigDialog team={team} onClose={() => setEditing(false)} />)}
       {usage && <UsageDialog onClose={() => setUsage(false)} />}

@@ -741,14 +741,15 @@ export class ThreadManager extends EventEmitter {
    * working in the background and reports through `turn` events. An optional
    * UUID messageId deduplicates across send/steer and application restarts.
    */
-  async send(threadId, input, { userInitiated = false, guard, presetRunId } = {}) {
+  async send(threadId, input, { userInitiated = false, guard, presetRunId, observerContext } = {}) {
     const message = normalizeMessage(input)
-    return this.#request(threadId, () => this.#send(threadId, message, userInitiated, guard, presetRunId))
+    return this.#request(threadId, () => this.#send(threadId, message, userInitiated, guard, presetRunId, null, false, observerContext))
   }
 
-  async #send(threadId, message, userInitiated, guard, presetRunId, fallback = null, allowPending = false) {
+  async #send(threadId, message, userInitiated, guard, presetRunId, fallback = null, allowPending = false, observerContext = null) {
     const { text, images, messageId, plan } = message
     const thread = this.#available(threadId, undefined, allowPending)
+    if (observerContext && (thread.team?.role !== 'observer' || typeof observerContext !== 'string' || observerContext.length > 12000)) throw new Error('観測者の会話引き継ぎが不正です')
     if (plan && thread.ab) throw new Error('ABではPlanを使えません')
     const turns = await this.#loadTurns(threadId)
     this.#available(threadId, thread, allowPending)
@@ -783,7 +784,7 @@ export class ThreadManager extends EventEmitter {
     thread.status = 'running'
     let resolveDone
     const active = {
-      turn, goalObjective, runtime: null, cancelled: false, phase: 'starting', steers: new Set(),
+      turn, goalObjective, observerContext, runtime: null, cancelled: false, phase: 'starting', steers: new Set(),
       done: new Promise((resolve) => { resolveDone = resolve }),
     }
     this.active.set(threadId, active)
@@ -851,6 +852,7 @@ export class ThreadManager extends EventEmitter {
       await snapshot
       this.#checkRun(thread, active)
       const prompt = await this.#promptBlocks(turn)
+      if (active.observerContext) prompt.unshift({ type: 'text', text: active.observerContext })
       this.#checkRun(thread, active)
       const { carryover, restoreNote } = thread
       if (carryover) {
@@ -1279,10 +1281,10 @@ export class ThreadManager extends EventEmitter {
       this.#learnOptions(thread, changed)
       parsed = parseConfigOptions(this.liveOptions.get(thread.sessionId) ?? [])
     }
-    if ((thread.preset || thread.ab?.strictModel || turn.usageFallback || this.teamModelGuard?.(thread)) && parsed.currentModel !== thread.model) throw new Error(thread.preset ? '担当モデルの適用を確認できません' : 'フォールバック先モデルの適用を確認できません')
+    if ((thread.preset || thread.ab?.strictModel || turn.usageFallback || this.teamModelGuard?.(thread)) && parsed.currentModel !== thread.model) throw new Error(thread.team?.role === 'observer' ? '観測者のモデルを利用できません。選び直してください' : thread.preset ? '担当モデルの適用を確認できません' : 'フォールバック先モデルの適用を確認できません')
     const wanted = thread.effort ?? ''
-    const strict = thread.preset || turn.usageFallback || (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort
-    const label = thread.preset ? 'タスクのプリセット' : thread.ab ? 'AB' : turn.usageFallback ? 'フォールバック先' : 'eco'
+    const strict = thread.preset || turn.usageFallback || (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort || (thread.team?.role === 'observer' && Boolean(wanted))
+    const label = thread.team?.role === 'observer' ? '観測者' : thread.preset ? 'タスクのプリセット' : thread.ab ? 'AB' : turn.usageFallback ? 'フォールバック先' : 'eco'
     if (strict) assertWorkflowEffort(wanted, parsed, label)
     const target = strict ? wanted : nearestEffort(wanted, parsed.efforts)
     if (target !== wanted) {

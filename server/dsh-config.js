@@ -354,6 +354,16 @@ export function abPatch({ subagents = [], persona = null, writable = false, lean
     { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable } }] },
   ])
 }
+/** A read-only observer has no native file, shell, web, goal or delegation tools. */
+export function observerPatch(options = {}) {
+  const rows = YAML.parse(abPatch({ ...options, writable: false, lean: true }))
+    .filter((row) => !row.insert?.some((item) => item.id === 'agent-desk-ab-policy') && row.id !== 'tool-fs')
+  rows.push({ id: 'tool-fs', disabled: true })
+  rows.push({ insert: [{ id: 'agent-desk-observer-policy', name: new URL('./team-observer-policy.js', import.meta.url).href }] })
+  return YAML.stringify(rows)
+}
+export async function writeObserverPatch(file, options) { return writePatch(file, observerPatch(options)) }
+
 export async function writeTaskPresetPatch(file, options) {
   const rows = YAML.parse(abPatch({ ...options, writable: true }))
   const policy = rows.find((row) => row.insert)?.insert[0]

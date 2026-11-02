@@ -16,7 +16,7 @@ import { Checkpoints } from './checkpoints.js'
 import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF,
 } from './credentials.js'
-import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch } from './dsh-config.js'
+import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
 import { createAppRestarter } from './app-restart.js'
@@ -381,7 +381,8 @@ async function applyHomePatch() {
   await writeGptSubagentPatch(paths.gptSubagentPatch, { subagents, persona, subagentsEnabled: settings.subagentsEnabled !== false })
   const abChanged = await writeAbPatches(paths, { subagents, persona })
   const presetsChanged = await writeTaskPresetPatch(paths.taskPresetPatch, { subagents, persona })
-  return home || children || abChanged || presetsChanged
+  const observerChanged = await writeObserverPatch(paths.observerPatch, { subagents, persona })
+  return home || children || abChanged || presetsChanged || observerChanged
 }
 await applyHomePatch()
 

@@ -63,7 +63,7 @@ export interface ThreadSummary {
   pendingApproval: boolean
   /** Set when the task is a child of an agent team (server/teams.js). */
   /** The agent team this task works for: as a child ({ id, childId }), or as a GPT leader ({ id, role: 'leader' }). */
-  team?: { id: string; childId?: string; role?: 'leader' }
+  team?: { id: string; childId?: string; role?: 'leader' | 'observer' }
 }
 
 /** A Claude Code task ("CL"): the user's own `claude` CLI in a terminal (server/terminals.js). */
@@ -181,6 +181,7 @@ export interface TeamSummary {
   score?: UsageScore
   /** `terminal`: Claude Code leads; `thread`: a dsh task leads. */
   leaderKind: 'terminal' | 'thread'
+  observer?: { id: string; kind: 'thread' | 'agent'; model: string; effort: string | null; running: boolean; history: { id: string; kind: 'thread' | 'agent' }[] }
   /** The team's own settings: chosen when it started, changed in its panel since. */
   config?: TeamSettings
   toolModeBusy?: boolean
@@ -432,6 +433,7 @@ export interface Settings extends UsageDisplay {
   theme: Theme
   defaultModel: string | null
   defaultEffort: string
+  observerModel: { model: string; effort: string | null } | null
   usageFallbackRoutes?: { model: string; effort: string }[] | null
   defaultPermissionMode: PermissionMode
   workspaces: string[]

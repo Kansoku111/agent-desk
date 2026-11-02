@@ -31,6 +31,8 @@ export const DEFAULT_SETTINGS = {
   usdJpyRate: null,
   defaultModel: null,
   defaultEffort: 'medium',
+  // Separate from normal-task defaults; null requires an explicit first choice.
+  observerModel: null,
   // Null preserves legacy per-mode preferences until the user explicitly configures the shared policy.
   usageFallbackRoutes: null,
   defaultPermissionMode: 'workspace-write',
@@ -136,6 +138,18 @@ export function planSettingsUpdate(current, patch, now) {
       next.contextLimits[provider] = value
     }
     effects.homePatch = true
+  }
+  if (owns(patch, 'observerModel')) {
+    const choice = patch.observerModel
+    if (choice === null) next.observerModel = null
+    else {
+      assertRecord(choice, 'observerModel')
+      if (typeof choice.model !== 'string' || !choice.model.trim() || choice.model.length > 1000
+        || (choice.effort !== null && (typeof choice.effort !== 'string' || choice.effort.length > 100))) {
+        throw new Error('観測者のモデル・推論設定が不正です')
+      }
+      next.observerModel = { model: choice.model, effort: choice.effort }
+    }
   }
   if (owns(patch, 'taskPresets')) {
     assertRecord(patch.taskPresets, 'taskPresets')
