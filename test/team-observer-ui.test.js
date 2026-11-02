@@ -35,11 +35,12 @@ test('observer composer requires an available explicit model and saves selection
   let savedChoice = null
   let initialText = ''
   let stateIndex = 0
+  let touch = false
   const state = { server: { settings: { observerModel: savedChoice }, catalog: {} }, turns: {}, agentTurns: {} }
   const modules = {
     react: { useState: (initial) => { const index = stateIndex++; let value = typeof initial === 'function' ? initial() : initial; if (index === 2) value = initialText; return [value, () => {}] }, useEffect() {}, useCallback: (fn) => fn, useRef: (value) => ({ current: value }) },
     'react/jsx-runtime': { jsx, jsxs: jsx },
-    '../store': { useStore: (select) => select(state), setState() {}, act: async (name, args) => { calls.push([name, args]); return {} } },
+    '../store': { useStore: (select) => select(state), isTouch: () => touch, setState() {}, act: async (name, args) => { calls.push([name, args]); return {} } },
     '../../../shared/workflow-effort.js': { workflowLevels: () => ['low'] },
     './WorkflowModelField': { ModelField: 'ModelField', modelGroups: () => [{ id: 'gpt', models: [{ value: model, name: 'Luna' }] }] },
     './Modal': { Modal: 'Modal' }, './TurnView': { TurnView: 'TurnView' }, './ClaudeAuthConsent': { ClaudeAuthConsent: 'Consent' },
@@ -62,4 +63,25 @@ test('observer composer requires an available explicit model and saves selection
   nodes(tree, (node) => node.type === 'button' && text(node) === '送信')[0].props.onClick()
   assert.equal(calls.at(-1)[0], 'team.observerMessage')
   assert.equal(calls.at(-1)[1].model, model)
+  const onKeyDown = nodes(tree, (node) => node.type === 'textarea')[0].props.onKeyDown
+  const press = (extra = {}) => {
+    let prevented = false
+    const before = calls.length
+    onKeyDown({ key: 'Enter', shiftKey: false, keyCode: 13, nativeEvent: { isComposing: false }, preventDefault: () => { prevented = true }, ...extra })
+    return { prevented, sent: calls.length > before }
+  }
+  assert.deepEqual(press(), { prevented: true, sent: true })
+  assert.deepEqual(press({ shiftKey: true }), { prevented: false, sent: false })
+  assert.deepEqual(press({ nativeEvent: { isComposing: true } }), { prevented: false, sent: false })
+  assert.deepEqual(press({ keyCode: 229 }), { prevented: false, sent: false })
+  touch = true
+  assert.deepEqual(press(), { prevented: false, sent: false })
+  touch = false
+  savedChoice = { model: 'unavailable', effort: null }
+  tree = render()
+  let prevented = false
+  const before = calls.length
+  nodes(tree, (node) => node.type === 'textarea')[0].props.onKeyDown({ key: 'Enter', shiftKey: false, keyCode: 13, nativeEvent: { isComposing: false }, preventDefault: () => { prevented = true } })
+  assert.equal(prevented, true)
+  assert.equal(calls.length, before)
 })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { act, setState, useStore } from '../store'
+import { act, isTouch, setState, useStore } from '../store'
 import type { TeamSummary, Turn } from '../types'
 import { workflowLevels } from '../../../shared/workflow-effort.js'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
@@ -78,7 +78,10 @@ export function ObserverChat({ team, onClose }: { team: TeamSummary; onClose: ()
       {choice && !available && <p role="alert" className="team-warning">保存されたモデルは利用できません。選び直してください。</p>}
       {!effortValid && <p role="alert" className="team-warning">推論レベルを選び直してください。</p>}
       {claude && <ClaudeAuthConsent key={authRevision} workspace={team.workspace} teamId={team.id} observer onChange={setAuth} />}
-      <textarea aria-label="観測者へのメッセージ" value={text} disabled={sending} onChange={(event) => setText(event.target.value)} />
+      <textarea aria-label="観測者へのメッセージ" value={text} disabled={sending} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return
+        if (event.key === 'Enter' && !event.shiftKey && !isTouch()) { event.preventDefault(); void submit() }
+      }} />
       <button type="button" className="button primary" disabled={!text.trim() || !available || !effortValid || saving || sending || running || (claude && !auth.ready)} onClick={() => void submit()}>送信</button>
     </div>
   </Modal>
