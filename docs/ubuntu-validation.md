@@ -72,7 +72,7 @@ node test/manual/ubuntu-smoke.mjs
 | 実 DSH を使う PTC 権限テスト | 全体テスト内で読み取り専用と workspace-write の両ケースが成功。許可された読み書きと禁止書き込み・範囲外書き込みの拒否を検査 |
 | Windows 11、Node.js 24.22.1 | 型検査・ビルドに成功。変更関連 7 ファイルのテストは 66 成功、失敗 0、4 スキップ |
 | Windows の全体検証 | 不合格。後述の失敗とワーカー残留があり、正常完走ではない。失敗した 3 ファイルは単独実行で 27 件成功 |
-| GitHub Actions、Node.js 22 | CI の設定・YAML を確認したのみ。実際の CI と Node.js 22 のローカル検証は未実施 |
+| GitHub Actions（Windows・Ubuntu 24.04 × Node.js 22・24） | 4 ジョブとも型検査・ビルド・全テストに成功（v0.1.9 リリース後の main） |
 
 Windows の通常の `npm test` は長時間停滞したため中断しました。続く `node --test --test-timeout=180000 "test/**/*.test.js"` では、`runtime-restart.test.js` の残留ワーカーとその子プロセスを所有確認後に強制終了し、1,782 成功・6 失敗・4 スキップという集計を回収しました。成功した全テスト実行とは扱いません。失敗は `account-catalog.test.js` の 2 件（SQLite の EBUSY、カタログ収束待ち）、`local-llm.test.js` の 1 件（SQLite の EBUSY）、`runtime-restart.test.js` の 3 件（ACP 接続切断、起動期限）です。同じ 3 ファイルを `a5b823b` 上で単独実行すると 27 件すべて成功しました。今回の変更（Linux 専用の監視、Git の stdin、テスト 3 件）はこれらの領域に触れていないため、今回の回帰ではなく、全体を並列実行したときの負荷・競合による既存の不安定さと判断しています。原因の修正は未着手です。
 
