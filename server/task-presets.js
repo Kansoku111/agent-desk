@@ -108,15 +108,16 @@ export class TaskPresets extends EventEmitter {
       const ownWorker = run.worker?.id === record.id && record.preset?.runId === run.id
       const ownParent = run.phase === 'preparing' && run.source.id === record.id
       if (context?.presetRunId === run.id && (ownWorker && run.phase === 'running' || ownParent)) continue
-      // Model read-only permissions do not make checkpoint restore/undo read-only.
-      if (record.permissionMode === 'read-only' && context?.operation !== 'restore' && run.source.id !== record.id && !ownWorker) continue
+      // Independent ordinary conversations may run alongside a preset; restores remain guarded.
+      const ordinary = !record.team && !record.ab && !record.preset && !this.teams.teamLedBy?.(record.id) &&
+        (this.threads.threads.get(record.id) === record || this.terminals.records?.get(record.id) === record)
+      if (context?.operation !== 'restore' && run.source.id !== record.id && !ownWorker && (ordinary || record.permissionMode === 'read-only')) continue
       throw new Error(PRESET_LABEL[run.kind] + 'が実行中です（' + run.title + ' / ' + run.id + ' / ' + run.workspace + '）')
     }
     if (record.preset && context?.presetRunId !== record.preset.runId) throw new Error('委託の担当には結果画面から操作してください')
   }
   room(workspace) {
-    for (const record of this.threads.threads.values()) if ((record.status === 'running' && record.permissionMode !== 'read-only' || this.threads.restoring.has(record)) && workspacesOverlap(workspace, record.workspace)) throw new Error('同じフォルダーで別タスクが作業・復元中です: ' + record.title)
-    for (const record of this.terminals.list()) if ((record.activity !== 'idle' || record.background > 0) && workspacesOverlap(workspace, record.workspace)) throw new Error('同じフォルダーでClaude Codeが作業中です: ' + record.title)
+    for (const record of this.threads.restoring) if (workspacesOverlap(workspace, record.workspace)) throw new Error('同じフォルダーで別タスクが復元中です: ' + record.title)
     // Stored children have no state; summaries include starting and still-stopping workers.
     for (const team of this.teams.list()) {
       if (!workspacesOverlap(workspace, team.workspace)) continue
@@ -177,7 +178,7 @@ export class TaskPresets extends EventEmitter {
     try {
       const conversation = source.kind === 'thread' ? await this.threads.get(source.id) : await this.terminals.conversation(source.id)
       run.parentTurnIds = conversation.turns.map((turn) => turn.id)
-      try { run.parentBefore = (await this.snapshot(run.workspace, run.checks.length ? undefined : { timeoutMs: 10_000 })).hash }
+      try { await this.snapshot(run.workspace, run.checks.length ? undefined : { timeoutMs: 10_000 }) }
       catch (error) {
         // Optional recording must not turn an unrelated asset library into a task prerequisite.
         // Explicit checks still require their original evidence.
@@ -225,7 +226,6 @@ export class TaskPresets extends EventEmitter {
     const result = parsePresetBrief(run.parentReport, run)
     run.brief = result.brief
     if (result.status === 'needs_input') { run.phase = 'needs-attention'; run.error = result.questions; return this.save(run) }
-    if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== run.parentBefore) throw new Error('指示の作成中にソースが変更されました。内容を確認して再度開始してください。')
     await this.launch(run)
   }
   async captureCheckpoint(run, phase) {
@@ -245,8 +245,6 @@ export class TaskPresets extends EventEmitter {
     run.record = path.join(folder, 'report.md')
     run.contract = path.join(folder, 'instructions.md')
     await writeText(run.contract, run.brief)
-    this.assertLive(run)
-    if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== run.parentBefore) throw new Error('担当の起動前にソースが変更されました。対象を確認し、再度開始してください。')
     this.assertLive(run)
     this.validateModel(run.model)
     if (run.model.startsWith('claude:')) {

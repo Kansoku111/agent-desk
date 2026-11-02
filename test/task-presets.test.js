@@ -126,18 +126,6 @@ test('recording fallback never bypasses permission errors or selected checks', a
   })
 })
 
-test('a new snapshot limit during parent preparation still fails closed', async (t) => {
-  const f = await fixture(t)
-  let calls = 0
-  f.manager.snapshot = async () => { if (++calls > 1) throw sourceLimit(); return { hash: 'original' } }
-  const run = await f.start()
-  await f.complete(f.parent.id, brief(run))
-  assert.equal(run.phase, 'needs-attention')
-  assert.equal(run.worker, undefined)
-  assert.equal(run.snapshotUnavailable, undefined)
-  await assert.rejects(f.manager.deliver(run.id), /報告|開始/)
-})
-
 test('checkpoint budget does not block delegated work, but its missing diff remains explicit', async (t) => {
   for (const when of ['before', 'after']) await t.test(when, async (t) => {
     const f = await fixture(t)
@@ -246,14 +234,9 @@ test('a stale displayed model or effort never routes a newly started run to a di
   assert.equal(f.manager.runs.size, 0)
 })
 
-test('preparation refuses changed sources and asks questions without launching a worker', async (t) => {
+test('preparation asks questions without launching a worker', async (t) => {
   const f = await fixture(t)
-  const run = await f.start()
-  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'parent unexpectedly edited')
-  await f.complete(f.parent.id, brief(run))
-  assert.equal(run.phase, 'needs-attention')
-  assert.equal(run.worker, undefined)
-  const question = await f.start({ requestId: randomUUID() })
+  const question = await f.start()
   await f.complete(f.parent.id, brief(question, { status: 'needs_input', brief: '', questions: '仕様を確認してください' }))
   assert.equal(question.error, '仕様を確認してください')
   assert.equal(question.worker, undefined)
@@ -315,7 +298,54 @@ test('report-only findings continue in the same worker; repeated lack of progres
   assert.match(run.error, /進捗/)
 })
 
-test('overlapping writers and parent sends are blocked in both directions; stop prevents late launches', async (t) => {
+test('a preset can start while an independent ordinary conversation is running', async (t) => {
+  const f = await fixture(t)
+  const other = await f.threads.create({ workspace: f.workspace, model: 'A', permissionMode: 'workspace-write', title: '別の会話' })
+  await f.threads.send(other.id, { text: '別の作業' })
+  f.terminal.activity = 'running'
+  const run = await f.start()
+  assert.equal(run.phase, 'preparing')
+  await f.complete(f.parent.id, brief(run))
+  assert.equal(run.phase, 'running')
+  await f.complete(run.worker.id, result(run))
+  assert.equal(run.phase, 'completed')
+})
+
+test('an independent ordinary conversation can start during preparation and delegated work', async (t) => {
+  const f = await fixture(t)
+  const run = await f.start()
+  const other = await f.threads.create({ workspace: f.workspace, model: 'A', permissionMode: 'workspace-write', title: '別の会話' })
+  await f.threads.send(other.id, { text: '別の相談' })
+  assert.doesNotThrow(() => f.manager.guard(f.terminal))
+  await fs.writeFile(path.join(f.workspace, 'source.txt'), 'parallel work')
+  await f.complete(f.parent.id, brief(run))
+  assert.equal(run.phase, 'running')
+  await f.threads.send(other.id, { text: '続ける' })
+  assert.throws(() => f.manager.guard(f.parent), /実行中/)
+  assert.throws(() => f.manager.guard(f.threads.threads.get(run.worker.id)), /実行中/)
+  await f.complete(run.worker.id, result(run))
+  assert.equal(run.phase, 'completed')
+})
+
+test('real thread creation accepts the first message during a preset run', async (t) => {
+  const f = await threadFixture(t)
+  const terminals = Object.assign(new EventEmitter(), { records: new Map(), list: () => [] })
+  const agents = Object.assign(new EventEmitter(), { live: new Map() })
+  const manager = new TaskPresets({ dir: path.join(f.base, 'presets'), threads: f.manager, terminals, agents, teams: {}, settings: () => ({}), catalog: () => ({}), authorize: async () => {}, validateModel() {} })
+  manager.runs.set('writer', { id: 'writer', source: { kind: 'thread', id: f.thread.id }, workspace: f.base, phase: 'running', kind: 'delegate', title: '委託中' })
+  f.manager.executionGuard = (record, context) => manager.guard(record, context)
+  t.after(async () => { manager.runs.clear(); await manager.shutdown() })
+  const created = await f.manager.createWithFirstMessage({
+    createId: randomUUID(), payloadHash: 'a'.repeat(64),
+    options: { workspace: f.base, model: '["test","model"]', toolMode: 'native' }, message: { text: '新しい会話' },
+  })
+  await f.started.promise
+  assert.notEqual(created.thread.id, f.thread.id)
+  assert.equal(f.calls.prompts.length, 1)
+  await assert.rejects(f.manager.send(f.thread.id, { text: '親への入力' }), /実行中/)
+})
+
+test('other guarded operations and parent sends are blocked; stop prevents late launches', async (t) => {
   const f = await fixture(t)
   const run = await f.start()
   assert.throws(() => f.manager.guard(f.parent), /実行中/)
