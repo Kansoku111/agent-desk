@@ -268,24 +268,30 @@ test('RemoteAccess recheck asks Tailscale again while a refresh is still waiting
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-remote-'))
   const noop = () => {}
   let installed = false
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let starting
   const remote = await new RemoteAccess({
     file: path.join(dir, 'remote.json'), onRequest: noop, onUpgrade: noop, firewall,
     interfaces: () => ({}),
     status: async () => {
       const before = installed
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      if (!before) { entered.resolve(); await release.promise }
       return before ? { running: false, ips: [], dnsName: null } : null
     },
   }).load()
   try {
-    const starting = remote.start()
-    // The start's refresh is waiting for the Tailscale CLI, which is installed meanwhile.
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    starting = remote.start()
+    // Wait for the CLI check, not a wall-clock guess that also races token persistence.
+    await Promise.race([entered.promise, starting])
     installed = true
-    await remote.recheck()
+    const rechecking = remote.recheck()
+    release.resolve()
+    await rechecking
     assert.equal(remote.snapshot().phase, 'stopped')
     await starting
   } finally {
+    release.resolve()
+    await starting
     await remote.close()
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }

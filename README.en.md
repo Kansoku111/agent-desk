@@ -29,7 +29,7 @@ Agent Desk is a Codex-style desktop agent app built on DeepSeek Harness (`dsh`).
 ## Requirements
 
 - Node.js 22.19 or later, or 24 or later
-- Windows 10/11. Testing and CI run on Windows only; macOS and Linux are untested and some features may not work there.
+- Windows 10/11. Ubuntu 24.04 LTS x86_64 support is in progress ([validation steps and limitations](docs/ubuntu-validation.md), in Japanese). CI targets Windows and Ubuntu 24.04, but Ubuntu support is not yet verified. macOS is untested.
 - Microsoft Edge or Google Chrome for the app window (if neither is installed, the default browser is used)
 
 ## Install and launch

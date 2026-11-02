@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
+import { PassThrough } from 'node:stream'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -196,7 +197,7 @@ test('an incomplete snapshot never becomes an undo or restore baseline', async (
     if (command === 'git' && args.includes('add')) {
       const error = Object.assign(new Error('git add failed'), { code: 1 })
       setImmediate(() => callback(error, '', 'locked file'))
-      return { stdin: { end() {} } }
+      return { stdin: new PassThrough() }
     }
     return original(command, args, options, callback)
   })
@@ -205,6 +206,35 @@ test('an incomplete snapshot never becomes an undo or restore baseline', async (
     await assert.rejects(checkpoints.snapshot(workspace, 'task/failed'), /git add failed/)
     await assert.rejects(checkpoints.preview(workspace, before.commit), /git add failed/)
     await assert.rejects(checkpoints.restore(workspace, before.commit, 'task/undo'), /git add failed/)
+    assert.equal(await read('source'), 'after')
+  } finally { mocked.mock.restore(); syncBuiltinESMExports() }
+})
+
+test('an early Git exit reports its command failure instead of an unhandled stdin EPIPE', async (t) => {
+  const { base, workspace, checkpoints, write, read } = await setup()
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('source', 'before')
+  await checkpoints.snapshot(workspace)
+  await write('source', 'after')
+  const original = childProcess.execFile
+  const mocked = t.mock.method(childProcess, 'execFile', (command, args, options, callback) => {
+    if (command === 'git' && args.includes('add')) {
+      const stdin = new PassThrough()
+      setImmediate(() => {
+        stdin.destroy(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+        setImmediate(() => callback(Object.assign(new Error('git add failed'), { code: 1 }), '', 'index locked'))
+      })
+      return { stdin }
+    }
+    return original(command, args, options, callback)
+  })
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(checkpoints.snapshot(workspace), (error) => {
+      assert.equal(error.message, 'git add failed')
+      assert.equal(error.stderr, 'index locked')
+      return true
+    })
     assert.equal(await read('source'), 'after')
   } finally { mocked.mock.restore(); syncBuiltinESMExports() }
 })

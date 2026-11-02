@@ -41,9 +41,9 @@ function fakePty() {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function until(check, timeoutMs = 4000) {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!check()) {
-    if (Date.now() >= deadline) throw new Error('timed out waiting for the fake PTY')
+    if (performance.now() >= deadline) throw new Error('timed out waiting for the fake PTY')
     await sleep(5)
   }
 }
@@ -129,7 +129,10 @@ test('exit, replacement, and deletion reject a message before its Enter', async 
     const terminal = await createReady(manager, workspace)
     const proc = pty.spawned.at(-1)
     const text = 'pending-' + action
-    cases.push({ action, terminal, proc, text, send: manager.sendMessage(terminal.id, text) })
+    const send = manager.sendMessage(terminal.id, text)
+    // A send may reject while another terminal is still being prepared or restarted.
+    void send.catch(() => {})
+    cases.push({ action, terminal, proc, text, send })
   }
   await until(() => cases.every(({ proc, text }) => proc.written.includes(text)))
 

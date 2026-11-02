@@ -7,6 +7,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readJson, writeJson } from './json-file.js'
 import { assertToolMode } from './ptc.js'
+import { watchSource } from './source-watcher.js'
 
 const exec = promisify(execFile)
 const hash = (value) => createHash('sha256').update(value).digest('hex')
@@ -235,16 +236,15 @@ export class ExecutionVerifier {
       const unknown = new Set()
       let changes = 0
       let uncertain = false
-      watcher = fs.watch(folder, { recursive: true }, (event, name) => {
+      watcher = await watchSource(folder, (event, name, directory) => {
         if (!name) { uncertain = true; return }
         const file = String(name).replaceAll('\\', '/')
         if (known.has(file) || (event === 'rename' && knownDirs.has(file))) changes++
         else if (!(before.git && (file === '.git' || file.startsWith('.git/')))) {
           if (!unknown.has(file) && unknown.size >= 100_000) uncertain = true
-          else unknown.add(file)
+          else unknown.add(directory ? file + '/' : file)
         }
-      })
-      watcher.on('error', () => { uncertain = true })
+      }, () => { uncertain = true }, entry.controller.signal)
       const collectUnknown = async () => {
         // A directory event is not itself a source file. Descendant events also
         // identify short-lived directories that no longer exist by this point.

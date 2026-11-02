@@ -387,6 +387,8 @@ function git(repo, args, { input = '', literal = false, timeout = SNAPSHOT_TIMEO
       error.stderr = stderr
       reject(error)
     })
+    // Git can exit before consuming stdin; report the command's status, not an unhandled pipe error.
+    child.stdin.on('error', () => {})
     child.stdin.end(input)
   })
 }
