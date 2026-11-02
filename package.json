@@ -33,7 +33,7 @@
     "build": "vite build --config web/vite.config.ts",
     "typecheck": "tsc -p web/tsconfig.json",
     "dev": "node scripts/dev.mjs",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test --test-concurrency=2 \"test/**/*.test.js\""
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
