@@ -5,6 +5,7 @@ export function providerReady(server: AppState, provider: string) {
   if (provider === 'anthropic') return server.accounts.claude.configured
   if (provider === 'deepseek-official') return server.accounts.deepseek.configured
   if (provider === 'opencode-go') return Boolean(server.accounts.opencodeGo?.configured)
+  if (provider === 'command-code' || provider === 'command-code-claude') return Boolean(server.accounts.commandCode?.configured)
   if (provider === 'local-llm') return Boolean(server.accounts.localLlm?.configured)
   return false
 }
@@ -28,7 +29,7 @@ export function claudeCodeModels(server: AppState) {
     .filter((model) => isModelVisible(server, model))
 }
 
-const EXECUTION_ROUTES: Partial<Record<TeamProvider, string>> = { claudeApi: 'anthropic', gpt: 'openai-codex', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' }
+const EXECUTION_ROUTES: Partial<Record<TeamProvider, string>> = { claudeApi: 'anthropic', gpt: 'openai-codex', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' }
 
 /** Translate a picker value to EX's persisted provider/model pair, without changing routes. */
 export function executionChildChoice(server: AppState, value: string): { provider: TeamProvider; model: string } | null {
@@ -65,7 +66,10 @@ export function pickDefaultModel(server: AppState, current: string | null): stri
     if (usable(server.settings.defaultModel)) return server.settings.defaultModel
     const preferred = ['["openai-codex","gpt-6.1-sol"]', '["openai-codex","gpt-5.5"]', '["anthropic","claude-sonnet-5-5"]', '["anthropic","claude-sonnet-5"]']
     for (const value of preferred) if (usable(value)) return value
-    return models.find((model) => providerReady(server, model.provider) && (allowRetired || !model.retired))?.value ?? null
+    // The public Command Code inventory includes models outside the user's plan.
+    // Require an explicit choice rather than silently selecting a potentially billed model.
+    return models.find((model) => !['command-code', 'command-code-claude'].includes(model.provider)
+      && providerReady(server, model.provider) && (allowRetired || !model.retired))?.value ?? null
   }
   return pick(false) ?? pick(true)
 }

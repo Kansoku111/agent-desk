@@ -3013,6 +3013,21 @@ test('an OpenCode Go child is a full-access dsh task on an OpenCode Go model', a
   await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'low', provider: 'opencodeGo' }), /OpenCode Goの低枠はユーザーがオフ/)
 })
 
+for (const [provider, route, id] of [
+  ['commandCode', 'command-code', 'deepseek/flash'],
+  ['commandCodeClaude', 'command-code-claude', 'claude-test'],
+]) {
+  test('a ' + provider + ' child preserves the Command Code billing route', async (t) => {
+    const { threads, tool, team, manager } = await setup(t, {
+      [provider]: { enabled: true, low: { enabled: true, model: id, effort: null }, mid: { enabled: false, model: null, effort: null } },
+    })
+    await tool('spawn', { title: 'work', task: 'inspect', tier: 'low', provider, name: 'C' })
+    const [, options] = threads.calls.find((call) => call[0] === 'create')
+    assert.equal(options.model, JSON.stringify([route, id]))
+    assert.equal(manager.summary(team).children[0].provider, provider)
+  })
+}
+
 test('a Claude (API) child is a full-access dsh task on an Anthropic model, not a Claude Code run; it is off until turned on', async (t) => {
   assert.equal(teamConfig({}).claudeApi.enabled, false)
   assert.equal(mergeTeamConfig(undefined, { claudeApi: { enabled: true, low: { model: 'claude-haiku-5-5' } } }).claudeApi.low.model, 'claude-haiku-5-5')
@@ -3065,6 +3080,8 @@ for (const [provider, catalogProvider, model, effort] of [
   ['claudeApi', 'anthropic', 'claude-haiku-5-5', 'low'],
   ['deepseek', 'deepseek-official', 'deepseek-v4-flash', 'medium'],
   ['opencodeGo', 'opencode-go', 'glm-5.3', null],
+  ['commandCode', 'command-code', 'deepseek/flash', null],
+  ['commandCodeClaude', 'command-code-claude', 'claude-test', null],
   ['local', 'local-llm', 'org/qwen:8b', 'low'],
 ]) {
   test(`a ${provider} leader keeps its model, effort, billing route and team tools`, async (t) => {

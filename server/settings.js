@@ -66,6 +66,7 @@ export const DEFAULT_SETTINGS = {
   customInstructionsEnabled: true,
   // A local OpenAI-compatible server and the models it listed (see local-llm.js).
   localLlm: { baseURL: null, models: [] },
+  commandCodeZdr: false,
   // 設定 → エージェントチーム (see team-config.js).
   agentTeams: structuredClone(TEAM_DEFAULTS),
   // What team leaders read (see team-playbooks.js): a team's chosen policy, and the playbooks by name.
@@ -75,7 +76,7 @@ export const DEFAULT_SETTINGS = {
 
 const BOOLEAN_SETTINGS = [
   'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool',
-  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'customInstructionsEnabled',
+  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'customInstructionsEnabled', 'commandCodeZdr',
 ]
 const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool']
 const ENUM_SETTINGS = {
@@ -278,6 +279,7 @@ export function planSettingsUpdate(current, patch, now) {
   effects.modelCatalog = (next.modelAutoUpdate !== false) !== (current.modelAutoUpdate !== false)
   effects.homePatch ||= effects.modelCatalog || next.subagentsEnabled !== current.subagentsEnabled
     || next.customInstructionsEnabled !== current.customInstructionsEnabled
+    || next.commandCodeZdr !== current.commandCodeZdr
   effects.modelCheck = effects.modelCatalog && next.modelAutoUpdate !== false
   // The local route joins the catalog signature and the home patch; it fetches nothing.
   if (localChanged) {

@@ -108,6 +108,10 @@ export function describeError(error, thread, runtime) {
     message = provider === 'openai-codex'
       ? 'ChatGPT のサインイン情報が見つかりません。設定から再度サインインしてください。'
       : '必要な API キーが見つかりません。設定で API キーを登録してください。'
+  } else if (['command-code', 'command-code-claude'].includes(provider) && /upgrade_required|Go plan.{0,100}(?:doesn.t|does not|without).{0,50}API access/i.test(raw)) {
+    message = 'Command Code の Go プランは Provider API 非対応です。GOAT・Provider など API 対応プランとキーを確認してください。'
+  } else if (['command-code', 'command-code-claude'].includes(provider) && /cmd_zdr_no_providers/i.test(raw)) {
+    message = 'このモデルには ZDR 対応の接続先がありません。別のモデルを選ぶか、設定で ZDR を見直してください。'
   } else if (/anthropic-workspace-id|Workspace `?wrkspc_/i.test(raw)) {
     message = 'この Claude API キーでは、使うワークスペースの指定が必要です。設定 → アカウントの Claude 欄でワークスペースを選んでください。'
   } else if (/\b401\b|unauthori[sz]ed|invalid.{0,20}(api.?key|token)|authentication/i.test(raw)) {

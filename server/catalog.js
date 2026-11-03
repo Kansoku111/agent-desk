@@ -8,6 +8,8 @@ export const PROVIDER_LABELS = {
   anthropic: 'Claude',
   'deepseek-official': 'DeepSeek',
   'opencode-go': 'OpenCode Go',
+  'command-code': 'Command Code',
+  'command-code-claude': 'Command Code（Claude）',
   'local-llm': 'ローカル LLM',
 }
 
@@ -35,6 +37,14 @@ function matchesSignature(signature, models) {
     const actual = models.filter((model) => model.provider === 'opencode-go').map((model) => model.id).sort()
     // parseConfigOptions omits dated aliases from the UI catalog.
     const expected = [...new Set(requirements.opencodeGoModels)].filter((id) => !/-\d{8}$/.test(id)).sort()
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) return false
+  }
+  if (Array.isArray(requirements.commandCode)) {
+    const expected = requirements.commandCode
+      .filter((entry) => Array.isArray(entry) && entry.length === 3 && !/-\d{8}$/.test(entry[1]))
+      .map(([endpoint, id, name]) => JSON.stringify([endpoint === 'messages' ? 'command-code-claude' : 'command-code', id, name])).sort()
+    const actual = models.filter((model) => ['command-code', 'command-code-claude'].includes(model.provider))
+      .map((model) => JSON.stringify([model.provider, model.id, model.name])).sort()
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return false
   }
   return true
@@ -78,6 +88,13 @@ export class Catalog {
     let changed = false
     const models = parsed.models.filter((model) => PROVIDER_LABELS[model.provider])
     const current = models.length > 0 && matchesSignature(this.signature, models)
+    // Command Code inventory does not describe reasoning controls; both routes explicitly disable them.
+    if (current) for (const model of models.filter((entry) => ['command-code', 'command-code-claude'].includes(entry.provider))) {
+      if (JSON.stringify(this.data.effortsByModel[model.value]) !== '[]') {
+        this.data.effortsByModel[model.value] = []
+        changed = true
+      }
+    }
     // A pending restart can leave old sessions emitting config options. They
     // must neither replace an existing list nor mark the new signature current.
     if (!current && this.data.models.length) return false

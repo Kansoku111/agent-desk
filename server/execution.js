@@ -142,7 +142,7 @@ function parentDirectories(files) {
 }
 
 export function normalizeExecutionModels(value) {
-  const providers = ['claude', 'claudeApi', 'gpt', 'deepseek', 'opencodeGo', 'local']
+  const providers = ['claude', 'claudeApi', 'gpt', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
   if (!value || typeof value !== 'object' || !providers.includes(value.provider)
     || typeof value.leader !== 'string' || value.leader.length > 500
     || typeof value.model !== 'string' || value.model.length > 200) throw new Error('ecoのモデル選択が不正です')

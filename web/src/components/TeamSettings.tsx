@@ -19,12 +19,12 @@ import { workflowEffortSupported, workflowLevels } from '../../../shared/workflo
 import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
 
 const MAX_CHILDREN = 12
-const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'local']
-const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', local: 'ローカル LLM' }
-type DshProvider = 'gpt' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'local'
+const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
+const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
+type DshProvider = 'gpt' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
 /** Each dsh provider's models in the model list. */
-const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' } as const
-const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'local-llm': 'local' }
+const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' } as const
+const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'command-code': 'commandCode', 'command-code-claude': 'commandCodeClaude', 'local-llm': 'local' }
 const teamModelGroups = (server: AppState) => modelGroups(server).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
 const modelValue = (entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? `claude:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
 function pickerChoice(value: string): TeamModelChoice | null {
@@ -60,6 +60,8 @@ function fullConfig(saved: Config): Config {
     claudeApi: saved.claudeApi ?? OFF_PROVIDER,
     deepseek: saved.deepseek ?? OFF_PROVIDER,
     opencodeGo: saved.opencodeGo ?? OFF_PROVIDER,
+    commandCode: saved.commandCode ?? OFF_PROVIDER,
+    commandCodeClaude: saved.commandCodeClaude ?? OFF_PROVIDER,
     local: saved.local ?? OFF_PROVIDER,
   }
 }
@@ -177,6 +179,8 @@ const PROVIDER_NOTE: Record<TeamProvider, string> = {
   claudeApi: 'Anthropic API（従量課金）',
   deepseek: 'DeepSeek API（従量課金）',
   opencodeGo: 'OpenCode Go サブスクリプション',
+  commandCode: 'Command Code Provider API',
+  commandCodeClaude: 'Command Code Provider API',
   local: '課金なし。小さく明確な作業向け',
 }
 
@@ -185,6 +189,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
   const signedOut = provider === 'gpt' && !server.accounts.chatgpt.signedIn
   const noKey = (provider === 'deepseek' && !server.accounts.deepseek.configured) || (provider === 'claudeApi' && !server.accounts.claude.configured)
     || (provider === 'opencodeGo' && !server.accounts.opencodeGo?.configured)
+    || (['commandCode', 'commandCodeClaude'].includes(provider) && !server.accounts.commandCode?.configured)
     || (provider === 'local' && !server.accounts.localLlm?.configured)
   return (
     <section className={`account-card team-provider-card ${on ? '' : 'off'}`}>
@@ -492,7 +497,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const save = async () => {
     if (needsAuth && !auth.ready) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, local: draft.local, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }

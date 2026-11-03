@@ -834,6 +834,9 @@ export class ThreadManager extends EventEmitter {
     if (provider === 'opencode-go' && !accounts.opencodeGo?.configured) {
       throw new Error('OpenCode Go のモデルを使うには、設定で OpenCode Go の API キーを登録してください。')
     }
+    if (['command-code', 'command-code-claude'].includes(provider) && !accounts.commandCode?.configured) {
+      throw new Error('Command Code を使うには、設定 → アカウントで API キーを登録してください。')
+    }
     if (provider === 'local-llm' && !accounts.localLlm?.configured) {
       throw new Error('ローカル LLM を使うには、設定 → アカウントでサーバーの URL を登録してください。')
     }

@@ -101,7 +101,7 @@ export interface TerminalSummary {
 }
 
 /** Who a team's children run on (Claude (API), DeepSeek, OpenCode Go and local: as a dsh task on the user's API key or own server). */
-export type TeamProvider = 'gpt' | 'claude' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'local'
+export type TeamProvider = 'gpt' | 'claude' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
 /** A Claude Code or dsh model can lead a team. */
 export type TeamLeaderProvider = TeamProvider
 export type TeamTier = 'low' | 'mid'
@@ -237,6 +237,8 @@ export interface TeamSettings {
   deepseek?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   /** Older saves lack it (off). */
   opencodeGo?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
+  commandCode?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
+  commandCodeClaude?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   /** Older saves lack it (off). */
   local?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   maxChildren: number
@@ -421,6 +423,7 @@ export interface Accounts {
   deepseek: { configured: boolean; masked: string | null }
   /** Older servers lack it. */
   opencodeGo?: { configured: boolean; masked: string | null }
+  commandCode?: { configured: boolean; masked: string | null; modelsCheckedAt: number | null; modelsFailed: boolean; modelsSkipped: number }
   /** configured: a server URL with models; keyed: a key is stored for it. Older servers lack it. */
   localLlm?: { configured: boolean; keyed: boolean; masked: string | null }
   claudeAdmin: { configured: boolean; masked: string | null }
@@ -430,6 +433,7 @@ export interface Accounts {
 export type FastProvider = 'openai-codex' | 'anthropic'
 
 export interface Settings extends UsageDisplay {
+  commandCodeZdr?: boolean
   theme: Theme
   defaultModel: string | null
   defaultEffort: string

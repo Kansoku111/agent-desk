@@ -35,7 +35,7 @@ export function Home() {
   const onPc = draft.workspace === server.app.myPc
   const suggestions = onPc ? PC_SUGGESTIONS : SUGGESTIONS
   const noAccount = !accounts.chatgpt.signedIn && !accounts.claude.configured && !accounts.deepseek.configured
-    && !accounts.opencodeGo?.configured
+    && !accounts.opencodeGo?.configured && !accounts.commandCode?.configured
     && !accounts.localLlm?.configured
 
   return (
@@ -62,7 +62,7 @@ export function Home() {
               <Sparkles size={16} />
               <div>
                 <strong>モデルを接続してください</strong>
-                <p>ChatGPT のサブスクリプションでサインインするか、Claude の API キーを登録すると使い始められます。</p>
+                <p>ChatGPT にサインインするか、使うサービスの API キーを登録してください。</p>
               </div>
             </div>
             <button type="button" className="button primary" onClick={() => setState({ settingsOpen: 'accounts' })}>

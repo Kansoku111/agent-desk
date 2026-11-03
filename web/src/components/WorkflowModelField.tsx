@@ -33,6 +33,7 @@ function selectedName(groups: ModelGroup[], value: string | null) {
   if (!model) return 'モデルを選択'
   if (value?.startsWith('claude:')) return model.name === 'Claude Code の既定' ? model.name : `Claude Code / ${model.name}`
   if (parseModel(value)?.provider === 'anthropic') return `Claude（API） / ${model.name}`
+  if (['command-code', 'command-code-claude'].includes(parseModel(value)?.provider ?? '')) return `Command Code / ${model.name}`
   return model.name
 }
 

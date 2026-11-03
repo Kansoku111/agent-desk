@@ -67,7 +67,7 @@ function ClaudeWorkspace({ current, choices, onDone }: {
 }
 
 function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hint }: {
-  provider: 'anthropic' | 'deepseek' | 'opencodeGo'
+  provider: 'anthropic' | 'deepseek' | 'opencodeGo' | 'commandCode'
   title: string
   description: string
   consoleUrl: string
@@ -76,6 +76,8 @@ function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hin
 }) {
   const account = useStore((state) => (provider === 'anthropic' ? state.server?.accounts.claude : state.server?.accounts[provider]))
   const workspaceId = useStore((state) => state.server?.accounts.claude.workspaceId ?? null)
+  const commandAccount = useStore((state) => state.server?.accounts.commandCode)
+  const commandZdr = useStore((state) => state.server?.settings.commandCodeZdr ?? false)
   const [key, setKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -117,6 +119,7 @@ function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hin
       } else if (result.check.status === 'valid') toast(`${title} の API キーを保存しました`, 'success')
       else if (result.check.status === 'unreachable') setWarning('キーは保存しましたが、確認のための接続ができませんでした。ネットワークを確認してください。')
       else if (result.check.status === 'unknown') setWarning(`キーは保存しましたが、確認で予期しない応答（${result.check.httpStatus}）がありました。`)
+      else if (result.check.status === 'unverified') setWarning('キーを保存しました。認証とプランはモデルの初回利用時に確認されます。')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -201,6 +204,16 @@ function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hin
           </button>
         </div>
       )}
+      {provider === 'commandCode' && account?.configured && <div className="account-subsection">
+        <button type="button" className="button" onClick={() => void act('commandCode.refresh')}>モデル一覧を更新</button>
+        {commandAccount?.modelsFailed && <p className="form-warning">モデル一覧を更新できませんでした。取得済みの一覧があれば使用します。</p>}
+        {!!commandAccount?.modelsSkipped && <p className="form-warning">対応形式を確認できないモデルを {commandAccount.modelsSkipped} 件除外しました。</p>}
+        <label className="setting compact">
+          <span>ゼロデータ保持（ZDR）</span>
+          <span className="switch"><input type="checkbox" checked={commandZdr} onChange={(event) => void act('settings.update', { patch: { commandCodeZdr: event.target.checked } })} /><span /></span>
+        </label>
+        <p className="fine-print">作業終了後に反映。未対応モデルはエラーになります。</p>
+      </div>}
       <button type="button" className="link-button" onClick={() => openExternal(consoleUrl)}>
         <ExternalLink size={12} /> API キーを発行する
       </button>
@@ -293,6 +306,14 @@ export function AccountsSettings() {
         description="API キー（定額制）"
         consoleUrl="https://opencode.ai/auth"
         placeholder="sk-…"
+      />
+      <ApiKeyCard
+        provider="commandCode"
+        title="Command Code（任意）"
+        description="Provider API キー（GOAT・Provider など）"
+        consoleUrl="https://commandcode.ai/studio"
+        placeholder="API キー"
+        hint="Go は API 非対応。一覧には契約対象外モデルも含まれます。キー・プランと請求は Command Code で確認してください。"
       />
       <LocalLlmCard />
     </div>

@@ -75,7 +75,7 @@ test('old OpenCode Go snapshots cannot complete or undo a model-list refresh', a
  * discovery, with no provider requests or real credentials: only the free
  * key-validation endpoint is mocked.
  */
-async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false }, savedUpdates = null, afterAdded = null, registryBody = null }) {
+async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false }, savedUpdates = null, afterAdded = null, afterRemoved = null, registryBody = null, expectedCheck = 'valid' }) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-account-catalog-'))
   const hook = path.join(home, 'offline-fetch.mjs')
   await fs.writeFile(hook, `globalThis.fetch = async (url) => {
@@ -147,7 +147,7 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
   const initial = await waitFor((state) => state.catalog.models.length > 0)
   assert.equal(models(initial).length, 0)
   const saved = await request('account.setKey', { provider, key: 'sk-test-only-not-a-real-key' })
-  assert.equal(saved.check.status, 'valid')
+  assert.equal(saved.check.status, expectedCheck)
   const added = await waitFor((state) => models(state).length > 0)
   assert.equal(added.accounts[account].configured, true)
   assert.ok(models(added).every((model) => model.id && model.value))
@@ -155,6 +155,7 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
   await request('account.removeKey', { provider })
   const removed = await waitFor((state) => models(state).length === 0)
   assert.equal(removed.accounts[account].configured, false)
+  if (afterRemoved) await afterRemoved({ request, waitFor, removed })
   assert.ok(removed.catalog.models.some((model) => model.provider === 'openai-codex'))
   return added
 }
@@ -170,6 +171,22 @@ test('saving and removing an OpenCode Go key adds and removes its catalog models
   // The models are pi-ai's opencode-go catalog, served through dsh.
   const ids = added.catalog.models.filter((model) => model.provider === 'opencode-go').map((model) => model.id)
   for (const id of ['glm-5.3', 'kimi-k3', 'qwen3.8-max']) assert.ok(ids.includes(id), ids.join(', '))
+})
+
+test('Command Code saves an unverified key and loads both official protocol routes', { timeout: 60_000 }, async (t) => {
+  const body = { data: [
+    { id: 'provider/fixture', name: 'Fixture', context_length: 100000, supported_endpoints: ['/chat/completions'] },
+    { id: 'claude-fixture', name: 'Claude Fixture', context_length: 100000, supported_endpoints: ['/messages'] },
+  ] }
+  await keyRefreshesCatalog(t, {
+    provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code',
+    probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify(body), expectedCheck: 'unverified',
+    afterAdded: async ({ added }) => {
+      assert.ok(added.catalog.models.some((model) => model.provider === 'command-code-claude' && model.id === 'claude-fixture'))
+      assert.ok(added.catalog.models.some((model) => model.provider === 'command-code' && model.id === 'provider/fixture'))
+    },
+    afterRemoved: async ({ removed }) => assert.ok(removed.catalog.models.every((model) => model.provider !== 'command-code-claude')),
+  })
 })
 
 test('new OpenCode models reach the real picker and auto-sync off/on restores the correct catalogs', { timeout: 60_000 }, async (t) => {

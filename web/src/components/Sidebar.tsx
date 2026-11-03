@@ -742,6 +742,7 @@ export function Sidebar() {
     accounts?.claude.configured && 'Claude',
     accounts?.deepseek.configured && 'DeepSeek',
     accounts?.opencodeGo?.configured && 'OpenCode Go',
+    accounts?.commandCode?.configured && 'Command Code',
     accounts?.localLlm?.configured && 'ローカル LLM',
   ].filter(Boolean)
   const archivedCount = threads.filter((thread) => thread.archived && !thread.team?.childId && thread.team?.role !== 'observer').length

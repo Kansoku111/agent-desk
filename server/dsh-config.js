@@ -135,6 +135,7 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
 # Claude uses an Anthropic API key
 # (refs/${ANTHROPIC_REF}). DeepSeek stays available through the shipped route.
 # OpenCode Go (pi-ai's catalog route) is added while refs/${OPENCODE_GO_REF} is set.
+# Command Code uses its official Provider API while its key and model inventory are present.
 # The ACP bridge decides once, at startup and from its default model, whether
 # prompts may carry images; the shipped default (deepseek-v4-flash) is text
 # only, so it is set to an image-capable model. Tasks still pick their own.
@@ -166,10 +167,11 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  * @param {boolean} [options.opencodeGo] - whether an OpenCode Go key is saved.
  * @param {string[] | null} [options.opencodeGoModels] - the catalog models OpenCode still
  *   serves (opencode-go-models.js); null serves the whole catalog.
+ * @param {object} [options.commandCodeRoutes] - explicitly configured official Provider API routes.
  */
 export function homePatch({
   anthropicWorkspaceId = null, modelOverrides = {}, catalogModels = {},
-  subagents = [], subagentsEnabled = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null,
+  subagents = [], subagentsEnabled = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null, commandCodeRoutes = {},
 } = {}) {
   // dsh's default (5 tries, 10 s at most) gives up within about 15 s, shorter
   // than the minute-long upstream hiccups ChatGPT's backend has.
@@ -214,6 +216,7 @@ export function homePatch({
             ...(opencodeGoModels?.length ? { models: opencodeGoModels.map((id) => ({ id })) } : {}),
           } } : {}),
           ...(localRoute ? { [LOCAL_PROVIDER]: localRoute } : {}),
+          ...commandCodeRoutes,
         },
       },
     },

@@ -16,7 +16,10 @@ import type { AuthConsentState } from '../team-auth-consent'
 const providers: { id: TeamProvider; name: string; catalog?: string }[] = [
   { id: 'claude', name: 'Claude Code' }, { id: 'claudeApi', name: 'Claude（API）', catalog: 'anthropic' },
   { id: 'gpt', name: 'GPT', catalog: 'openai-codex' }, { id: 'deepseek', name: 'DeepSeek', catalog: 'deepseek-official' },
-  { id: 'opencodeGo', name: 'OpenCode Go', catalog: 'opencode-go' }, { id: 'local', name: 'ローカル LLM', catalog: 'local-llm' },
+  { id: 'opencodeGo', name: 'OpenCode Go', catalog: 'opencode-go' },
+  { id: 'commandCode', name: 'Command Code', catalog: 'command-code' },
+  { id: 'commandCodeClaude', name: 'Command Code（Claude）', catalog: 'command-code-claude' },
+  { id: 'local', name: 'ローカル LLM', catalog: 'local-llm' },
 ]
 
 const CHOICE_KEY = 'agent-desk.execution-models'

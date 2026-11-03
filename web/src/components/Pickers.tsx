@@ -11,19 +11,23 @@ import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { openProjectDialog } from './ProjectDialog'
 import { useWheelSelect } from './useWheelSelect'
 
-export const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'local-llm']
+export const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'command-code', 'command-code-claude', 'local-llm']
 export const providerHeading = (server: AppState, provider: string) => provider === 'anthropic' ? 'Claude（API）' : server.catalog.providers[provider] ?? provider
 export const PROVIDER_NOTE: Record<string, string> = {
   'openai-codex': 'ChatGPT サブスクリプション',
   anthropic: 'Anthropic API キー',
   'deepseek-official': 'DeepSeek API キー',
   'opencode-go': 'OpenCode Go サブスクリプション',
+  'command-code': 'API・プラン対象を確認',
+  'command-code-claude': 'API・プラン対象を確認',
   'local-llm': 'このネットワークのサーバー',
 }
 
 function modelName(server: AppState | null, value: string | null) {
   if (!value) return null
-  return server?.catalog.models.find((model) => model.value === value)?.name ?? null
+  const model = server?.catalog.models.find((entry) => entry.value === value)
+  if (!model) return null
+  return ['command-code', 'command-code-claude'].includes(model.provider) ? `Command Code / ${model.name}` : model.name
 }
 
 /** Version a model id carries (gpt-6.1-sol → [6, 1], claude-sonnet-5-5 → [5, 5]). */

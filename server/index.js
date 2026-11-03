@@ -14,7 +14,7 @@ import { codeStamp, uiBuild } from './code-stamp.js'
 import { ChatGptLogin } from './chatgpt-login.js'
 import { Checkpoints } from './checkpoints.js'
 import {
-  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF,
+  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF,
 } from './credentials.js'
 import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
@@ -23,6 +23,7 @@ import { createAppRestarter } from './app-restart.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
 import { createSettingsService, DEFAULT_SETTINGS, effectiveCustomInstructions, migrateSettings } from './settings.js'
 import { localLlmSettings, localRoute } from './local-llm.js'
+import { CommandCodeModels, commandCodeRoutes } from './command-code.js'
 import { teamConfig } from './team-config.js'
 import { readJson, UnmovableFileError, writeJson } from './json-file.js'
 import { catalogModelLimits, configuredModelCatalog, readOpenCodeCatalog } from './model-catalog.js'
@@ -182,6 +183,10 @@ async function accounts() {
     claudeAdmin: { configured: Boolean(snapshot.refs[ANTHROPIC_ADMIN_REF]), masked: maskSecret(snapshot.refs[ANTHROPIC_ADMIN_REF]) },
     deepseek: { configured: Boolean(snapshot.refs[DEEPSEEK_REF]), masked: maskSecret(snapshot.refs[DEEPSEEK_REF]) },
     opencodeGo: { configured: Boolean(snapshot.refs[OPENCODE_GO_REF]), masked: maskSecret(snapshot.refs[OPENCODE_GO_REF]) },
+    commandCode: {
+      configured: Boolean(snapshot.refs[COMMAND_CODE_REF]), masked: maskSecret(snapshot.refs[COMMAND_CODE_REF]),
+      modelsCheckedAt: commandCodeModels.checkedAt, modelsFailed: commandCodeModels.failed, modelsSkipped: commandCodeModels.skipped,
+    },
     localLlm: {
       configured: Boolean(localRoute(settings.localLlm)),
       keyed: Boolean(snapshot.refs[LOCAL_LLM_REF]),
@@ -236,6 +241,7 @@ const equivalentPricing = await new EquivalentPricing({
   },
 }).load()
 setEquivalentPricing(equivalentPricing.rates)
+const commandCodeModels = await new CommandCodeModels({ file: path.join(paths.home, 'command-code-models.json') }).load()
 const opencodeRegistry = await new OpenCodeGoRegistry({
   file: path.join(paths.home, 'opencode-go-definitions.json'),
   base: () => readOpenCodeCatalog(modelUpdater.fetched), registry: modelRegistry,
@@ -339,6 +345,7 @@ const catalogSignature = async (result) => JSON.stringify({
     ? opencodeGoServed() ?? [...(await installedModels(openCodeFetched())).keys()].sort()
     : [],
   local: localLlmSettings(settings.localLlm),
+  commandCode: (await accounts()).commandCode.configured ? commandCodeModels.models.map(({ id, endpoint, name }) => [endpoint, id, name]) : [],
 })
 
 const getSettings = () => settings
@@ -377,6 +384,7 @@ async function applyHomePatch() {
     localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
     opencodeGo: (await accounts()).opencodeGo.configured,
     opencodeGoModels: opencodeGoServed(),
+    commandCodeRoutes: (await accounts()).commandCode.configured ? commandCodeRoutes(commandCodeModels.models, { zdr: settings.commandCodeZdr }) : {},
   })
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
   // Read by each subagent_gpt call, so no runtime restarts for it.
@@ -675,7 +683,11 @@ function updateModelCatalog(options = {}) {
   modelCatalogQueue = task.catch(() => {})
   return task
 }
-async function performModelCatalogUpdate({ deferRuntimeEffects = false, forceOpenCode = false } = {}) {
+async function performModelCatalogUpdate({ deferRuntimeEffects = false, forceOpenCode = false, forceCommandCode = false } = {}) {
+  if ((await accounts()).commandCode.configured && (forceCommandCode || settings.modelAutoUpdate !== false)) {
+    await commandCodeModels.refresh({ maxAgeMs: forceCommandCode ? 0 : 60_000 })
+    broadcast('accounts', { accounts: await accounts() })
+  }
   await opencodeGoModels.refresh(await opencodeGoKey(), { maxAgeMs: forceOpenCode ? 0 : 60_000 })
   const result = await syncModelCatalog()
   resetPricing()
@@ -931,7 +943,7 @@ function scheduleIdleExit() {
 
 let shuttingDown = false
 let codexModelsTimer = null
-let opencodeGoTimer = null
+let providerModelsTimer = null
 async function shutdown(code = 0) {
   if (shuttingDown) return
   shuttingDown = true
@@ -940,7 +952,7 @@ async function shutdown(code = 0) {
   modelUpdater.stop()
   const pricingDrained = equivalentPricing.stop()
   clearInterval(codexModelsTimer)
-  clearInterval(opencodeGoTimer)
+  clearInterval(providerModelsTimer)
   // Request cancellation first, then close the transports as well. A stalled
   // ACP cancellation must not keep shutdown waiting forever for its prompt.
   terminals.cancelUsageFallbacks()
@@ -991,14 +1003,15 @@ void refreshClaudeCost({ maxAgeMs: 30 * 60_000 })
 void refreshCodexModels()
 codexModelsTimer = setInterval(() => void refreshCodexModels(), 6 * 60 * 60 * 1000)
 codexModelsTimer.unref()
-// OpenCode Go withdraws and renames models too: read its list the same way.
-const refreshOpenCodeGoModels = async () => {
-  if (!(await accounts()).opencodeGo.configured) return
-  await updateModelCatalog().catch((error) => log('OpenCode Go models:', error.message))
+// Refresh the configured public provider inventories at startup and periodically.
+const refreshProviderModels = async () => {
+  const current = await accounts()
+  if (!current.opencodeGo.configured && !current.commandCode.configured) return
+  await updateModelCatalog().catch((error) => log('provider models:', error.message))
 }
-void refreshOpenCodeGoModels()
-opencodeGoTimer = setInterval(() => void refreshOpenCodeGoModels(), 6 * 60 * 60 * 1000)
-opencodeGoTimer.unref()
+void refreshProviderModels()
+providerModelsTimer = setInterval(() => void refreshProviderModels(), 6 * 60 * 60 * 1000)
+providerModelsTimer.unref()
 
 // Boot the default runtime early and learn the model list in the background.
 threads.warmCatalog().catch((error) => log('model catalog warm-up failed:', error.message.split('\n')[0]))

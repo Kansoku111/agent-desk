@@ -46,9 +46,10 @@ test('EX rejects hidden, retired, removed and wrong-provider saved choices', () 
 
 test('Eco picker selections preserve the exact provider route and round-trip saved pairs', () => {
   const state = server({})
-  const routes = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', local: 'local-llm' }
+  const routes = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' }
   state.accounts.deepseek.configured = true
   state.accounts.opencodeGo = { configured: true }
+  state.accounts.commandCode = { configured: true }
   state.accounts.localLlm = { configured: true }
   // The same model id on different routes must never switch billing routes.
   state.catalog.models = Object.values(routes).map((provider) => model(provider, 'shared-id'))
@@ -138,6 +139,20 @@ test('default selection requires a connected provider and never resurrects a hid
   assert.equal(pickDefaultModel(state, terra.value), deepseek.value)
   state.catalog.models = []
   assert.equal(pickDefaultModel(state, terra.value), null)
+})
+
+test('Command Code needs an explicit choice because inventory is not plan-filtered', () => {
+  const state = server({})
+  const chat = model('command-code', 'provider/flash')
+  const messages = model('command-code-claude', 'claude-test')
+  state.catalog.models = [chat, messages]
+  state.accounts.commandCode = { configured: true }
+  assert.equal(pickDefaultModel(state, null), null)
+  assert.equal(pickDefaultModel(state, chat.value), chat.value)
+  state.settings.defaultModel = messages.value
+  assert.equal(pickDefaultModel(state, null), messages.value)
+  state.accounts.commandCode.configured = false
+  assert.equal(pickDefaultModel(state, messages.value), null)
 })
 
 test('possibly retired models are hidden by default, including when no other model remains', () => {

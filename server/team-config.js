@@ -7,15 +7,15 @@ import { assertToolMode } from './ptc.js'
 /**
  * Teams' children by provider: GPT, Claude (API), DeepSeek, OpenCode Go and
  * the local server run as dsh tasks (on the ChatGPT subscription, the user's
- * Anthropic, DeepSeek and OpenCode Go API keys, and their own machine), Claude
+ * Anthropic, DeepSeek, OpenCode Go and Command Code API keys, and their own machine), Claude
  * as a Claude Code task.
  */
-export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'local']
+export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
 /** Claude Code leads in a terminal; the other providers lead as dsh tasks. */
 export const LEADER_PROVIDERS = TEAM_PROVIDERS
-const EXTRA_DSH_LEADERS = ['claudeApi', 'deepseek', 'opencodeGo', 'local']
+const EXTRA_DSH_LEADERS = ['claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
 export const TEAM_TIERS = ['low', 'mid']
-export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', local: 'ローカル LLM' }
+export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
 export const MAX_CHILDREN_LIMIT = 12
 export const MAX_TEAM_MODELS = 12
 export const TEAM_MODEL_MODES = ['tiers', 'free']
@@ -60,6 +60,9 @@ export const TEAM_DEFAULTS = {
   deepseek: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // Their OpenCode Go subscription (open models, with usage limits instead of a per-token bill).
   opencodeGo: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
+  // Command Code Provider API routes share a key and the user's plan usage.
+  commandCode: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
+  commandCodeClaude: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // A model server on the user's machine or network (設定 → アカウント → ローカル LLM).
   local: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   maxChildren: 6,
@@ -99,6 +102,8 @@ export function teamConfig(saved) {
     claudeApi: provider('claudeApi'),
     deepseek: provider('deepseek'),
     opencodeGo: provider('opencodeGo'),
+    commandCode: provider('commandCode'),
+    commandCodeClaude: provider('commandCodeClaude'),
     local: provider('local'),
     maxChildren: Number.isInteger(value.maxChildren) ? value.maxChildren : TEAM_DEFAULTS.maxChildren,
     policy: typeof value.policy === 'string' && ENTRY_ID.test(value.policy) ? value.policy : null,
@@ -131,7 +136,7 @@ export function mergeTeamConfig(current, patch) {
     const seen = new Set()
     next.freeModels = patch.freeModels.map((entry) => {
       if (!isRecord(entry) || !TEAM_PROVIDERS.includes(entry.provider)) throw new Error('子のモデルのプロバイダーが不正です')
-      const model = choice(entry.model, entry.provider === 'claude' ? CLAUDE_MODEL : entry.provider === 'local' ? LOCAL_MODEL : DSH_MODEL, '子のモデル')
+      const model = choice(entry.model, entry.provider === 'claude' ? CLAUDE_MODEL : ['local', 'commandCode', 'commandCodeClaude'].includes(entry.provider) ? LOCAL_MODEL : DSH_MODEL, '子のモデル')
       if (!model) throw new Error('子のモデルを選んでください')
       const effort = choice(entry.effort ?? null, EFFORT, '子の推論レベル')
       const key = JSON.stringify([entry.provider, model, effort])
@@ -168,7 +173,7 @@ export function mergeTeamConfig(current, patch) {
     else {
       const entry = patch.dshLeader
       if (!isRecord(entry) || !EXTRA_DSH_LEADERS.includes(entry.provider)) throw new Error('リーダーのプロバイダーが不正です')
-      const model = choice(entry.model, entry.provider === 'local' ? LOCAL_MODEL : DSH_MODEL, 'リーダーのモデル')
+      const model = choice(entry.model, ['local', 'commandCode', 'commandCodeClaude'].includes(entry.provider) ? LOCAL_MODEL : DSH_MODEL, 'リーダーのモデル')
       if (!model) throw new Error('リーダーのモデルを選んでください')
       next.dshLeader = { provider: entry.provider, model, effort: choice(entry.effort ?? null, EFFORT, 'リーダーの推論レベル') }
     }
@@ -198,7 +203,7 @@ export function mergeTeamConfig(current, patch) {
         next[provider][tier].enabled = part[tier].enabled
       }
       if (Object.hasOwn(part[tier], 'model')) {
-        next[provider][tier].model = choice(part[tier].model, provider === 'claude' ? CLAUDE_MODEL : provider === 'local' ? LOCAL_MODEL : DSH_MODEL, `${label}のモデル`)
+        next[provider][tier].model = choice(part[tier].model, provider === 'claude' ? CLAUDE_MODEL : ['local', 'commandCode', 'commandCodeClaude'].includes(provider) ? LOCAL_MODEL : DSH_MODEL, `${label}のモデル`)
       }
       if (Object.hasOwn(part[tier], 'effort')) next[provider][tier].effort = choice(part[tier].effort, EFFORT, `${label}の推論レベル`)
     }
@@ -224,6 +229,6 @@ export function assertChildrenOn(config) {
     return
   }
   if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled)) {
-    throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek・OpenCode Go・ローカル LLM の少なくとも一つをオンにしてください')
+    throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek・OpenCode Go・Command Code・ローカル LLM の少なくとも一つをオンにしてください')
   }
 }
