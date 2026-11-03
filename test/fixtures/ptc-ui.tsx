@@ -82,6 +82,35 @@ const api = {
     server.catalog.effortsByModel[model] = ['low', 'medium', 'high', 'max'].map((value) => ({ value, name: value }))
     await render('tm-start')
   },
+  async runCommandTeam() {
+    const specs = [
+      ['deepseek/deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', ['low', 'high', 'max'], '高', 'high'],
+      ['Qwen/Qwen3.8-27B', 'Qwen 3.8 27B', ['low', 'medium', 'xhigh'], '最高', 'xhigh'],
+      ['z-ai/glm-5.3-flash', 'GLM-5.3 Flash', ['low', 'high', 'max'], '最大', 'max'],
+    ] as const
+    server.accounts.commandCode = { configured: true }
+    for (const [id, name, levels] of specs) {
+      const value = JSON.stringify(['command-code', id])
+      server.catalog.models.push({ value, id, provider: 'command-code', name })
+      server.catalog.effortsByModel[value] = ['', ...levels].map((entry) => ({ value: entry, name: entry }))
+    }
+    Object.assign(teamConfig, { defaultModelMode: 'free', modelMode: 'free', freeModels: specs.map(([id]) => ({ provider: 'commandCode', model: id, effort: null })) })
+    team.config = { ...teamConfig }
+    await render('tm-start')
+    for (let index = 0; index < specs.length; index++) {
+      const effort = document.querySelector<HTMLButtonElement>(`button[aria-label^="モデル ${index + 1}の推論レベル:"]`)
+      check(effort && !effort.disabled && effort.textContent?.includes('既定'), 'Command Code effort is selectable')
+      effort!.click(); await tick()
+      const target = [...document.querySelectorAll<HTMLButtonElement>('[role=menuitem]')].find((item) => item.textContent?.trim() === specs[index][3])
+      check(target, 'model-specific effort choice exists')
+      target!.click(); await tick()
+    }
+    button('始める').click(); await tick(); await tick()
+    const created = requests.filter((item) => item.type === 'team.create').at(-1)?.choices.freeModels
+    check(JSON.stringify(created?.map((entry: any) => [entry.model, entry.effort])) === JSON.stringify(specs.map(([id, , , , level]) => [id, level])), 'Command Code model and effort payload')
+    return ['DeepSeek high', 'Qwen xhigh', 'GLM max', 'team start payload']
+  },
+
   async runTeamFree() {
     await this.setupTeamFree()
     const duplicate = (index: number) => document.querySelector<HTMLButtonElement>(`button[aria-label="モデル ${index}を別の推論レベルで追加"]`)!

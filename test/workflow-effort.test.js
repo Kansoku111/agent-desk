@@ -117,6 +117,6 @@ test('catalog remembers empty live capabilities instead of retaining stale reaso
   cache.learn([model])
   assert.deepEqual(cache.snapshot().effortsByModel[value], [])
   assert.equal(workflowEffort('', workflowLevels(cache.snapshot(), value)), '')
-  // Let the catalog's async writes settle before temporary-directory cleanup.
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  // Drain catalog writes before temporary-directory cleanup.
+  await cache.flush()
 })

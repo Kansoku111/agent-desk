@@ -23,7 +23,7 @@ Planの回帰検証は `node --test test/plan.test.js` と `node --test --test-n
 
 累計API換算額の画面検証は `node test/fixtures/serve-ab-ui.mjs` を起動し、表示URLの `ab-ui.html` を `usage-score-ui.html` に替えて開きます。DevToolsで `await usageScoreTest.run('USD')` と `await usageScoreTest.run('JPY')` を実行すると、通常・TM・Eco・Claude親・AB、小額・既知のゼロ・未算定・旧履歴を検証し、実際に開いた詳細の課金額・手動レート・フォーカス復帰も確認します。`await usageScoreTest.runCommand()` では Command Code の既定・明示レベルの切り替え、未確認モデルの扱いと利用量詳細も確認します。`await usageScoreTest.renderSettings()` で一般設定、`usageScoreTest.failSave()` で次の保存失敗を再現できます。375px幅でも実行でき、実モデルや本番データは使いません。
 
-AB・TM・ecoのPTC画面検証は同じViteフィクスチャサーバーの `ptc-ui.html` を開き、DevToolsで `await ptcTest.run()` を実行します。各開始画面の選択・設定保存・送信値、既存AB／チームの保存失敗・二重操作防止・実行中の無効化・通知後の表示更新を確認します。同じ画面で `await ptcTest.runTeamFree()` を実行すると、TM自由モードの推論レベル別の追加、開始・保存・再表示、選択解除とフォーカスを確認できます。375px幅でも実行でき、本番データや実モデルは使いません。
+AB・TM・ecoのPTC画面検証は同じViteフィクスチャサーバーの `ptc-ui.html` を開き、DevToolsで `await ptcTest.run()` を実行します。各開始画面の選択・設定保存・送信値、既存AB／チームの保存失敗・二重操作防止・実行中の無効化・通知後の表示更新を確認します。同じ画面で `await ptcTest.runTeamFree()` を実行すると、TM自由モードの推論レベル別の追加、開始・保存・再表示、選択解除とフォーカスを確認できます。`await ptcTest.runCommandTeam()` では Command Code の3モデルの推論レベルと開始時の送信値を確認します。375px幅でも実行でき、本番データや実モデルは使いません。
 
 `/goal` の回帰確認は `node --test test/goal-command.test.js` と `node --test --test-name-pattern="explicit /goal" test/ptc-runtime.test.js` です。初回作成・通常送信・予約・重複排除、人間の入力と内部報告の区別、未対応の役割やPlanの拒否を確認します。通常方式／PTCの実dshとローカル模擬応答で、モデル呼び出し前の直接登録、既存目標の保護、待機、再起動後の保持と自動継続解除、明示再開、実goal roundによる完了、停止を確認します。外部モデルや本番データは使いません。専用メタデータはアプリが受理した人間のコマンドだけに付け、ACPの初期応答でフックの対応を確認できなければ呼び出しません。会話への指示追加だけではgoal登録を保証できないため、既存フックでdshのgoalドメインを直接使っています。保存形式は変更せず、既存セッションの移行も不要です。
 

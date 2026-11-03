@@ -17,8 +17,9 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 50))
 
 test('catalog does not accept a runtime snapshot that predates a key change', async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-catalog-signature-'))
+  let catalog
   t.after(async () => {
-    await tick()
+    await catalog?.flush()
     await fs.rm(home, { recursive: true, force: true })
   })
   const signature = (deepseek) => JSON.stringify({ deepseek, added: [] })
@@ -29,7 +30,7 @@ test('catalog does not accept a runtime snapshot that predates a key change', as
       ...(withDeepSeek ? [{ group: 'deepseek-official', options: [{ value: '["deepseek-official","deepseek-chat"]', name: 'DeepSeek Chat' }] }] : []),
     ],
   }]
-  const catalog = await new Catalog(path.join(home, 'catalog.json'), signature(true)).load()
+  catalog = await new Catalog(path.join(home, 'catalog.json'), signature(true)).load()
   catalog.learn(options(false))
   assert.equal(catalog.stale, true)
   assert.ok(catalog.data.models.some((model) => model.provider === 'openai-codex'))
@@ -47,13 +48,14 @@ test('catalog does not accept a runtime snapshot that predates a key change', as
 
 test('old OpenCode Go snapshots cannot complete or undo a model-list refresh', async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-go-signature-'))
+  let catalog
   t.after(async () => {
-    await tick()
+    await catalog?.flush()
     await fs.rm(home, { recursive: true, force: true })
   })
   const signature = (ids) => JSON.stringify({ opencodeGo: true, opencodeGoModels: ids })
   const options = (ids) => [{ id: 'model', options: [{ group: 'opencode-go', options: ids.map((id) => ({ value: JSON.stringify(['opencode-go', id]), name: id })) }] }]
-  const catalog = await new Catalog(path.join(home, 'catalog.json'), signature(['glm-5.3', 'space-bunny'])).load()
+  catalog = await new Catalog(path.join(home, 'catalog.json'), signature(['glm-5.3', 'space-bunny'])).load()
   catalog.learn(options(['space-bunny', 'glm-5.3']))
   catalog.setSignature(signature(['glm-5.3']))
   catalog.learn(options(['glm-5.3', 'space-bunny']))
@@ -286,6 +288,66 @@ test('a failed effort discovery stays unapplied and a manual retry learns it', {
       const recovered = await waitFor((state) => state.modelUpdate.commandCode.applied)
       assert.equal(recovered.modelUpdate.commandCode.applyError, false)
       assert.deepEqual(recovered.catalog.effortsByModel[JSON.stringify(['command-code', model])].map((entry) => entry.value).filter(Boolean), ['low', 'high', 'max'])
+    },
+  })
+})
+
+test('a failed Command Code effort discovery retries while another task keeps running', { timeout: 90_000 }, async (t) => {
+  const started = Promise.withResolvers(), release = Promise.withResolvers()
+  const warmStarted = Promise.withResolvers(), warmRelease = Promise.withResolvers()
+  let interrupted = false, finished = false, warmCalls = 0
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/v1/warm-gate') { warmCalls++; warmStarted.resolve(); await warmRelease.promise; return res.end('ok') }
+    if (req.url === '/v1/models') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'local-fixture' }] }))
+    if (req.url !== '/v1/chat/completions') return res.writeHead(404).end()
+    for await (const _chunk of req) {}
+    res.on('close', () => { if (!finished) interrupted = true })
+    const base = { id: 'fixture', object: 'chat.completion.chunk', created: 0, model: 'local-fixture' }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: 'working' }, finish_reason: null }] }) + '\n\n')
+    started.resolve()
+    await release.promise
+    if (res.destroyed) return
+    finished = true
+    res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\n')
+    res.end('data: [DONE]\n\n')
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(async () => { warmRelease.resolve(); release.resolve(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)) })
+  const localBase = 'http://127.0.0.1:' + server.address().port + '/v1'
+  const model = 'deepseek/deepseek-v4.1-flash'
+  const entry = (id) => ({ id, name: id, context_length: 100000, supported_endpoints: ['/chat/completions'] })
+  await keyRefreshesCatalog(t, {
+    provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code', injectRuntimeFailure: true, localBase,
+    probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data: [entry('first')] }), expectedCheck: 'unverified',
+    afterAdded: async ({ request, waitFor, probeFile, home, faultFile }) => {
+      const workspace = path.join(home, 'project')
+      await fs.mkdir(workspace)
+      await request('localLlm.set', { baseURL: localBase })
+      const before = await waitFor((state) => state.catalog.models.some((item) => item.provider === 'local-llm') && state.modelUpdate.commandCode.applied)
+      const local = before.catalog.models.find((item) => item.provider === 'local-llm')
+      await fs.writeFile(faultFile, 'effort')
+      await fs.writeFile(probeFile, JSON.stringify({ data: [entry(model)] }))
+      await request('modelUpdate.check')
+      const failed = await waitFor((state) => state.modelUpdate.commandCode.applyError)
+      assert.deepEqual(failed.catalog.effortsByModel[JSON.stringify(['command-code', model])], [])
+      const { thread } = await request('thread.create', { workspace, model: local.value, effort: '', permissionMode: 'read-only', text: 'run fixture' })
+      await started.promise
+      await fs.writeFile(faultFile, 'hold')
+      const check = await request('modelUpdate.check')
+      assert.equal(check.busy, true)
+      await warmStarted.promise
+      const second = await request('modelUpdate.check')
+      assert.equal(second.busy, true)
+      assert.equal(warmCalls, 1, 'concurrent checks share the same discovery')
+      warmRelease.resolve()
+      const restored = await waitFor((state) => state.catalog.effortsByModel[JSON.stringify(['command-code', model])]?.some((effort) => effort.value === 'max'))
+      assert.equal(warmCalls, 1)
+      assert.deepEqual(restored.catalog.effortsByModel[JSON.stringify(['command-code', model])].map((effort) => effort.value).filter(Boolean), ['low', 'high', 'max'])
+      assert.equal((await request('thread.get', { threadId: thread.id })).thread.status, 'running')
+      assert.equal(interrupted, false)
+      release.resolve()
     },
   })
 })

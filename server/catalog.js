@@ -1,6 +1,6 @@
 // The model catalog the composer shows before a thread has a live session.
 // It is learned from ACP session config options and cached on disk.
-import { readJson, writeJson } from './json-file.js'
+import { debouncedWriter, readJson } from './json-file.js'
 import { parseConfigOptions } from './transcript.js'
 
 export const PROVIDER_LABELS = {
@@ -61,6 +61,7 @@ export class Catalog {
    */
   constructor(file, signature = null) {
     this.file = file
+    this.writer = debouncedWriter(file, 10)
     this.signature = signature
     this.data = { models: [], effortsByModel: {}, updatedAt: null, signature: null }
   }
@@ -94,11 +95,15 @@ export class Catalog {
     // A pending restart can leave old sessions emitting config options. They
     // must neither replace an existing list nor mark the new signature current.
     if (!current && this.data.models.length) return false
-    // Reset old Command Code capabilities once per signature; warmCatalog learns
-    // each model's actual ACP options without erasing previously learned ones.
-    if (current && this.data.signature !== this.signature) for (const model of models.filter((entry) => ['command-code', 'command-code-claude'].includes(entry.provider))) {
-      this.data.effortsByModel[model.value] = []
-      changed = true
+    // Preserve choices across unrelated catalog changes. A new runtime version,
+    // capability revision or route still requires fresh ACP discovery.
+    if (current && this.data.signature !== this.signature) {
+      const reusable = reusableCommandCodeModels(this.data.signature, this.signature)
+      for (const model of models.filter((entry) => ['command-code', 'command-code-claude'].includes(entry.provider))) {
+        if (reusable.has(model.value)) continue
+        this.data.effortsByModel[model.value] = []
+        changed = true
+      }
     }
     if (models.length && JSON.stringify(models) !== JSON.stringify(this.data.models)) {
       this.data.models = models
@@ -117,9 +122,14 @@ export class Catalog {
     }
     if (changed) {
       this.data.updatedAt = Date.now()
-      void writeJson(this.file, this.data).catch(() => {})
+      this.writer.schedule(this.data)
     }
     return changed
+  }
+
+  /** Finish any queued catalog write before the app exits. */
+  flush() {
+    return this.writer.flush()
   }
 
   snapshot() {
@@ -130,4 +140,18 @@ export class Catalog {
       fallbackEfforts: FALLBACK_EFFORTS,
     }
   }
+}
+
+/** Only an unchanged runtime/capability generation may reuse old ACP choices. */
+function reusableCommandCodeModels(previous, current) {
+  let before, after
+  try { before = JSON.parse(previous); after = JSON.parse(current) } catch { return new Set() }
+  if (!before || !after || typeof before.dsh !== 'string' || before.dsh !== after.dsh
+    || !Number.isSafeInteger(before.commandCodeLearn) || before.commandCodeLearn !== after.commandCodeLearn
+    || !Array.isArray(before.commandCode) || !Array.isArray(after.commandCode)) return new Set()
+  return new Set(before.commandCode.flatMap((entry) => {
+    if (!Array.isArray(entry) || entry.length !== 3 || !['chat', 'messages'].includes(entry[0])
+      || typeof entry[1] !== 'string' || !entry[1]) return []
+    return [JSON.stringify([entry[0] === 'messages' ? 'command-code-claude' : 'command-code', entry[1]])]
+  }))
 }

@@ -692,11 +692,17 @@ threads.on('approval-needed', (info) => {
 // dsh reads the home patch at startup, so a changed patch restarts the
 // runtimes once no turn is running. Threads resume their sessions afterwards.
 let restartPending = false
+let shuttingDown = false
 async function restartRuntimesWhenIdle() {
   // A dsh update stops the runtimes itself; new ones read the current patch.
   if (pool.paused) return
   if (threads.busy) {
     restartPending = true
+    // The Command Code route may already be current even if another provider
+    // needs a recycle. Learn its missing ACP options in a separate session.
+    if (commandCodeRuntimeSignature === commandCodeDefinitionSignature() && await commandCodeNeedsWarm()) {
+      void warmCatalogAndReport('Command Code model catalog refresh')
+    }
     return
   }
   restartPending = false
@@ -715,22 +721,31 @@ async function restartRuntimesWhenIdle() {
 }
 
 /** Report failure only for the inventory that this asynchronous warm actually tried. */
+let catalogWarmTask = null
 async function warmCatalogAndReport(label) {
+  while (catalogWarmTask) {
+    await catalogWarmTask
+    if (shuttingDown || (!catalog.stale && !(await commandCodeNeedsWarm()))) return
+  }
+  if (shuttingDown) return
   const signature = catalog.signature
   const runtimeSignature = commandCodeRuntimeSignature
   const definitionSignature = commandCodeDefinitionSignature()
-  const triedCurrent = () => catalog.signature === signature && runtimeSignature === definitionSignature
+  const triedCurrent = () => !restartPending && catalog.signature === signature && runtimeSignature === definitionSignature
     && commandCodeRuntimeSignature === runtimeSignature && commandCodeDefinitionSignature() === definitionSignature
-  try {
-    await threads.warmCatalog({ force: await commandCodeNeedsWarm() })
-    if (triedCurrent() && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
-  } catch (error) {
-    if (triedCurrent() && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
-    log(label + ' failed:', error.message.split('\n')[0])
-  } finally {
-    if (commandCodeApplied()) commandCodeApplyFailed = false
-    broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
-  }
+  catalogWarmTask = (async () => {
+    try {
+      await threads.warmCatalog({ force: await commandCodeNeedsWarm() })
+      if (triedCurrent() && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
+    } catch (error) {
+      if (triedCurrent() && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
+      log(label + ' failed:', error.message.split('\n')[0])
+    } finally {
+      if (commandCodeApplied()) commandCodeApplyFailed = false
+      broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
+    }
+  })().finally(() => { catalogWarmTask = null })
+  return catalogWarmTask
 }
 
 let modelCatalogQueue = Promise.resolve()
@@ -1004,7 +1019,6 @@ function scheduleIdleExit() {
 
 // ------------------------------------------------------------------ lifecycle
 
-let shuttingDown = false
 let codexModelsTimer = null
 let providerModelsTimer = null
 async function shutdown(code = 0) {
@@ -1032,6 +1046,8 @@ async function shutdown(code = 0) {
   await teams.stop().catch((error) => log('team shutdown:', error.message))
   await terminals.shutdown().catch((error) => log('terminal shutdown:', error.message))
   await agents.shutdown().catch((error) => log('team agents shutdown:', error.message))
+  await catalogWarmTask?.catch((error) => log('catalog warm shutdown:', error.message))
+  await catalog.flush().catch((error) => log('catalog shutdown:', error.message))
   await codexApp.stop().catch(() => {})
   await remote.close().catch(() => {})
   await fsp.rm(serverInfoFile, { force: true }).catch(() => {})

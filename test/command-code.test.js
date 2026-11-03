@@ -133,8 +133,8 @@ test('a dated official ID must be present before the inventory is applied', () =
 
 test('a stale runtime cannot replace either route and no effort is offered', async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-catalog-'))
-  t.after(async () => { assert.equal(path.dirname(home), os.tmpdir()); await fs.rm(home, { recursive: true, force: true }) })
   const catalog = await new Catalog(path.join(home, 'catalog.json'), JSON.stringify({ commandCode: [['chat', 'deepseek/flash', 'deepseek/flash'], ['messages', 'claude-test', 'claude-test']] })).load()
+  t.after(async () => { await catalog.flush(); assert.equal(path.dirname(home), os.tmpdir()); await fs.rm(home, { recursive: true, force: true }) })
   const options = (groups) => [{ id: 'model', options: groups.map(([provider, id, name = id]) => ({ group: provider, options: [{ value: JSON.stringify([provider, id]), name }] })) }]
   catalog.learn(options([['command-code', 'deepseek/flash']]))
   assert.equal(catalog.stale, true)
@@ -153,15 +153,15 @@ test('a stale runtime cannot replace either route and no effort is offered', asy
 
 test('learning Command Code efforts preserves other models and resets only on a new signature', async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-efforts-'))
+  let catalog
   t.after(async () => {
-    // Catalog writes are asynchronous; let the atomic writes settle before removing their directory.
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await catalog?.flush()
     assert.equal(path.dirname(home), os.tmpdir())
     await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
   const entries = [['command-code', 'deepseek/flash'], ['command-code', 'Qwen/test']]
   const signature = (version) => JSON.stringify({ commandCode: entries.map(([, id]) => ['chat', id, id]), commandCodeLearn: version })
-  const catalog = await new Catalog(path.join(home, 'catalog.json'), signature(1)).load()
+  catalog = await new Catalog(path.join(home, 'catalog.json'), signature(1)).load()
   const value = (i) => JSON.stringify(entries[i])
   const options = (i, levels) => [
     { id: 'model', currentValue: value(i), options: entries.map(([provider, id]) => ({ group: provider, options: [{ value: JSON.stringify([provider, id]), name: id }] })) },
@@ -178,6 +178,90 @@ test('learning Command Code efforts preserves other models and resets only on a 
   catalog.learn(options(1, ['medium']))
   assert.deepEqual(catalog.data.effortsByModel[value(0)].map((entry) => entry.value), ['low', 'high'])
   assert.deepEqual(catalog.data.effortsByModel[value(1)].map((entry) => entry.value), ['medium'])
+})
+
+test('unrelated catalog changes keep known Command Code effort choices', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-effort-stability-'))
+  let catalog
+  t.after(async () => {
+    await catalog?.flush()
+    assert.equal(path.dirname(home), os.tmpdir())
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
+  const models = [['command-code', 'deepseek/deepseek-v4.1-flash'], ['command-code', 'Qwen/Qwen3.8-27B']]
+  const signature = (localUrl, version = 3, dsh = 'fixture-v1') => JSON.stringify({ dsh, commandCodeLearn: version, commandCode: models.map(([provider, id]) => [provider === 'command-code-claude' ? 'messages' : 'chat', id, id]), local: { url: localUrl, models: [] } })
+  catalog = await new Catalog(path.join(home, 'catalog.json'), signature('http://before')).load()
+  const key = (i) => JSON.stringify(models[i])
+  const options = (i, levels) => [
+    { id: 'model', currentValue: key(i), options: models.map(([provider, id]) => ({ group: provider, options: [{ value: JSON.stringify([provider, id]), name: id }] })) },
+    { id: 'reasoning_effort', options: levels.map((value) => ({ value, name: value })) },
+  ]
+  catalog.learn(options(0, ['', 'low', 'high', 'max']))
+  catalog.learn(options(1, ['', 'low', 'medium', 'xhigh']))
+  catalog.setSignature(signature('http://after'))
+  catalog.learn(options(0, ['', 'low', 'high', 'max']))
+  assert.deepEqual(catalog.data.effortsByModel[key(1)].map((e) => e.value), ['', 'low', 'medium', 'xhigh'])
+  models.push(['command-code', 'z-ai/glm-5.3-flash'])
+  catalog.data.effortsByModel[key(2)] = [{ value: 'stale', name: 'stale' }]
+  catalog.setSignature(signature('http://after'))
+  catalog.learn(options(0, ['', 'low', 'high', 'max']))
+  assert.deepEqual(catalog.data.effortsByModel[key(1)].map((e) => e.value), ['', 'low', 'medium', 'xhigh'])
+  assert.deepEqual(catalog.data.effortsByModel[key(2)], [], 'a newly added model is learned afresh')
+  catalog.learn(options(2, ['', 'low', 'high', 'max']))
+  models[1][0] = 'command-code-claude'
+  catalog.data.effortsByModel[key(1)] = [{ value: 'stale', name: 'stale' }]
+  catalog.setSignature(signature('http://after'))
+  catalog.learn(options(0, ['', 'low', 'high', 'max']))
+  assert.deepEqual(catalog.data.effortsByModel[key(1)], [], 'a changed route is learned afresh')
+  catalog.setSignature(signature('http://after', 4))
+  catalog.learn(options(0, ['', 'low', 'high']))
+  assert.deepEqual(catalog.data.effortsByModel[key(1)], [], 'a capability revision invalidates the old choices')
+  catalog.learn(options(1, ['', 'low', 'medium']))
+  catalog.setSignature(signature('http://after', 4, 'fixture-v2'))
+  catalog.learn(options(0, ['', 'low', 'high']))
+  assert.deepEqual(catalog.data.effortsByModel[key(1)], [], 'a dsh update requires new ACP discovery')
+})
+
+test('a late older catalog write cannot erase newer reasoning choices on disk', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-write-order-'))
+  const file = path.join(home, 'catalog.json')
+  const firstEntered = Promise.withResolvers(), firstRelease = Promise.withResolvers(), firstDone = Promise.withResolvers(), secondDone = Promise.withResolvers()
+  const rename = fs.rename
+  let writes = 0
+  fs.rename = async (from, to) => {
+    if (to !== file) return rename(from, to)
+    const number = ++writes
+    if (number === 1) {
+      firstEntered.resolve()
+      await firstRelease.promise
+      try { return await rename(from, to) } finally { firstDone.resolve() }
+    }
+    const result = await rename(from, to)
+    if (number === 2) secondDone.resolve()
+    return result
+  }
+  t.after(async () => {
+    firstRelease.resolve()
+    fs.rename = rename
+    assert.equal(path.dirname(home), os.tmpdir())
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
+  const models = [['command-code', 'deepseek/deepseek-v4.1-flash'], ['command-code', 'Qwen/Qwen3.8-27B']]
+  const signature = JSON.stringify({ dsh: 'fixture-v1', commandCodeLearn: 3, commandCode: models.map(([, id]) => ['chat', id, id]) })
+  const catalog = await new Catalog(file, signature).load()
+  const options = (index, values) => [
+    { id: 'model', currentValue: JSON.stringify(models[index]), options: models.map(([provider, id]) => ({ group: provider, options: [{ value: JSON.stringify([provider, id]), name: id }] })) },
+    { id: 'reasoning_effort', options: values.map((value) => ({ value, name: value })) },
+  ]
+  catalog.learn(options(0, ['', 'low', 'high', 'max']))
+  await firstEntered.promise
+  catalog.learn(options(1, ['', 'low', 'medium', 'xhigh']))
+  await Promise.race([secondDone.promise, new Promise((resolve) => setTimeout(resolve, 250))])
+  firstRelease.resolve()
+  await firstDone.promise
+  await catalog.flush()
+  const disk = JSON.parse(await fs.readFile(file, 'utf8'))
+  assert.deepEqual(disk.effortsByModel[JSON.stringify(models[1])].map((entry) => entry.value), ['', 'low', 'medium', 'xhigh'])
 })
 
 test('refresh is anonymous and retains the last good inventory on failure', async (t) => {
