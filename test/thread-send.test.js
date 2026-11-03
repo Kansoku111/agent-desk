@@ -29,11 +29,11 @@ test('thread RPC only marks accepted human input, never validation failures or a
   assert.equal(answered, 1)
 })
 
-for (const effort of ['', 'high']) test('Command Code team keeps ' + (effort || 'the provider default') + ' reasoning', async (t) => {
+for (const mode of ['team', 'ordinary']) for (const effort of ['', 'high']) test('Command Code ' + mode + ' keeps ' + (effort || 'the provider default') + ' reasoning', async (t) => {
   const f = await fixture(t, { getAccounts: async () => ({ commandCode: { configured: true } }) })
   const model = JSON.stringify(['command-code', 'deepseek/deepseek-v4.1-flash'])
   const thread = f.manager.threads.get(f.thread.id)
-  Object.assign(thread, { model, effort, team: { id: 'fixture-team', childId: 'fixture-child' } })
+  Object.assign(thread, { model, effort, ...(mode === 'team' ? { team: { id: 'fixture-team', childId: 'fixture-child' } } : {}) })
   const changes = []
   const options = (currentEffort) => [
     { id: 'model', currentValue: model, options: [{ group: 'command-code', options: [{ value: model, name: 'Flash' }] }] },

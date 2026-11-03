@@ -57,6 +57,12 @@ export function resetLabel(at: number | null, now = Date.now()) {
   return `${relative}（${absolute}）`
 }
 
+/** Remove the provider prefix without truncating a model's own slash. */
+export function usageModelId(key: string) {
+  const separator = key.indexOf('/')
+  return separator < 0 ? key : key.slice(separator + 1)
+}
+
 /** Precise token counts for tooltips (12,345). */
 export function formatTokensExact(value: number) {
   return value.toLocaleString('en-US')

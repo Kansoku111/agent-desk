@@ -13,6 +13,10 @@ class Socket {
   send(body: string) {
     const input = JSON.parse(body)
     queueMicrotask(() => {
+      if (input.type === 'thread.update') {
+        server.threads = server.threads.map((thread: any) => thread.id === input.threadId ? { ...thread, ...(input.effort !== undefined ? { effort: input.effort } : {}) } : thread)
+        store.setState({ server: { ...server } })
+      }
       if (input.type === 'settings.update') {
         if (failNextSave) {
           failNextSave = false
@@ -34,6 +38,7 @@ const { TerminalChat } = await import('../../web/src/components/TerminalChat')
 const { AbView } = await import('../../web/src/components/Ab')
 const { SettingsDialog } = await import('../../web/src/components/Settings')
 const model = '["openai-codex","fixture"]'
+const commandModel = JSON.stringify(['command-code', 'deepseek/deepseek-v4.1-flash'])
 const score = (points: number, unpriced = 0) => ({ points, priced: 1, unpriced })
 const thread: any = { id: 'task', title: 'API換算額の表示確認', workspace: 'C:\\fixture', model, effort: '', permissionMode: 'workspace-write', status: 'idle', usage: null, updatedAt: 1 }
 const turns: any[] = [1, 2].map((points, index) => ({ id: `t${index}`, status: 'done', startedAt: 1, endedAt: 1001,
@@ -45,8 +50,10 @@ const server: any = {
   app: { remote: false, myPc: 'C:\\fixture', platform: 'win32' }, openTargets: {},
   settings: { agentTeams: {}, modelVisibility: {}, projectNames: {}, theme: 'light', defaultPermissionMode: 'workspace-write',
     notifications: false, browserTool: false, desktopTool: false, imageTool: false, checkpoints: true, usageCurrency: 'USD', usdJpyRate: null },
-  accounts: { chatgpt: { signedIn: true }, claude: { configured: false }, deepseek: { configured: false } },
-  catalog: { providers: { 'openai-codex': 'ChatGPT' }, models: [{ value: model, provider: 'openai-codex', id: 'fixture', name: 'Fixture' }], effortsByModel: {}, fallbackEfforts: [] },
+  accounts: { chatgpt: { signedIn: true }, claude: { configured: false }, deepseek: { configured: false }, commandCode: { configured: true } },
+  catalog: { providers: { 'openai-codex': 'ChatGPT', 'command-code': 'Command Code' }, models: [{ value: model, provider: 'openai-codex', id: 'fixture', name: 'Fixture' },
+    { value: commandModel, provider: 'command-code', id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }],
+    effortsByModel: { [commandModel]: ['', 'low', 'high', 'max'].map((value) => ({ value, name: value || 'Default' })) }, fallbackEfforts: [] },
   threads: [thread], terminals: [], teams: [], ab: [], permissionModes: ['read-only', 'workspace-write'], fastModels: {},
 }
 store.setState({ server, turns: { task: turns }, sidebarOpen: true, teamPanel: false })
@@ -59,6 +66,7 @@ const team = (points: number, kind = 'thread', eco = false): any => ({
 })
 let generation = 0
 const render = async (kind: string) => {
+  server.threads = [kind === 'command' ? { ...thread, model: commandModel, effort: '' } : thread]
   server.teams = kind === 'TM' ? [team(30)] : kind === 'eco' ? [team(40, 'thread', true)] : kind === 'CL' ? [team(50, 'terminal')] : []
   server.ab = [{ id: 'ab', workspace: thread.workspace, title: 'ABの累計', text: '相談', config: { a: model, b: model, leader: model, implementer: model, delegate: true, review: true },
     phase: 'reviewed', revision: 1, plan: 'plan', messages: [], score: score(60),
@@ -70,7 +78,8 @@ const render = async (kind: string) => {
     : kind === 'unknown' ? [{ ...turns[0], usage: { ...turns[0].usage, score: { points: 0, priced: 0, unpriced: 1 } } }]
     : ['small', 'tiny', 'zero', 'precision'].includes(kind) ? [{ ...turns[0], usage: { ...turns[0].usage, score: score(kind === 'precision' ? 9641.498 : kind === 'small' ? 21.67 : kind === 'tiny' ? 0.00005 : 0) } }]
     : ['billed', 'legacy'].includes(kind) ? turns.map((turn, index) => ({ ...turn, usage: { ...turn.usage,
-      ...(kind === 'legacy' ? { score: undefined } : {}), cost: (index + 1) * 0.002, models: ['anthropic/fixture'] } })) : turns
+      ...(kind === 'legacy' ? { score: undefined } : {}), cost: (index + 1) * 0.002, models: ['anthropic/fixture'] } }))
+    : kind === 'command' ? turns.map((turn) => ({ ...turn, usage: { ...turn.usage, models: ['command-code/deepseek/deepseek-v4.1-flash'] } })) : turns
   store.setState({ server: { ...server }, turns: { task: current } })
   const terminal: any = { ...thread, state: 'stopped', activity: 'idle', score: score(3) }
   root.render(kind === 'AB' ? <AbView key={++generation} id="ab" /> : kind === 'CL' ? <TerminalChat key={++generation} terminal={terminal} turns={turns} omitted={0} loaded error={null} onShowScreen={() => {}} onRestart={() => {}} /> : <ThreadView key={++generation} threadId="task" />)
@@ -88,6 +97,42 @@ const api = {
     root.render(<SettingsDialog key={++generation} tab="general" />)
     await tick()
   },
+  async runCommand() {
+    api.setDisplay('USD', 150)
+    await render('command')
+    const chip = () => document.querySelector<HTMLButtonElement>('button[title="推論の深さ（ホイールで切り替え）"]')
+    const choose = async (label: string) => {
+      chip()?.click(); await tick()
+      const item = [...document.querySelectorAll<HTMLButtonElement>('[role=menuitem]')].find((entry) => entry.textContent?.trim() === label)
+      if (!item) throw new Error(`missing effort option: ${label}`)
+      item.click(); await tick()
+    }
+    if (chip()?.textContent?.trim() !== '既定') throw new Error('unset effort must show the provider default')
+    server.threads[0] = { ...server.threads[0], effort: null }
+    store.setState({ server: { ...server } }); await tick()
+    if (chip()?.textContent?.trim() !== '既定') throw new Error('legacy null effort must show the provider default')
+    if (!document.querySelector<HTMLElement>('.usage-line')?.title.includes('モデル: deepseek/deepseek-v4.1-flash')) throw new Error('slash-bearing model ID was truncated')
+    if (!document.querySelector('.usage-cost')?.textContent?.includes('API換算 < $0.01')) throw new Error('missing API equivalent')
+    await choose('低')
+    if (chip()?.textContent?.trim() !== '低' || server.threads[0].effort !== 'low') throw new Error('explicit effort not selected')
+    await choose('既定')
+    if (chip()?.textContent?.trim() !== '既定' || server.threads[0].effort !== '') throw new Error('provider default not restored')
+    const original = server.catalog.effortsByModel[commandModel]
+    try {
+      server.catalog.effortsByModel[commandModel] = original.filter((entry: any) => ['', 'high', 'max'].includes(entry.value))
+      server.threads[0] = { ...server.threads[0], effort: 'medium' }
+      store.setState({ server: { ...server, catalog: { ...server.catalog } } }); await tick()
+      if (chip()?.textContent?.trim() !== '高') throw new Error('default must not change nearest explicit effort')
+      delete server.catalog.effortsByModel[commandModel]
+      store.setState({ server: { ...server, catalog: { ...server.catalog } } }); await tick()
+      if (chip()) throw new Error('unknown capabilities must not use another model’s options')
+    } finally {
+      server.catalog.effortsByModel[commandModel] = original
+      await render('normal')
+    }
+    return { passed: ['default', 'explicit', 'restore', 'nearest', 'unknown', 'model-id', 'api-equivalent'] }
+  },
+
   async run(currency: 'USD' | 'JPY' = 'USD') {
     api.setDisplay(currency, 150)
     const before = JSON.stringify(turns)

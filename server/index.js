@@ -245,11 +245,14 @@ const commandCodeModels = await new CommandCodeModels({ file: path.join(paths.ho
 let commandCodeChecking = false
 let commandCodeApplyFailed = false
 const COMMAND_CODE_LEARN = 3
+let commandCodeRuntimeSignature = null
 const commandCodeExpected = () => commandCodeModels.models.map(({ id, endpoint, name }) => [endpoint, id, name])
+const commandCodeDefinitionSignature = () => JSON.stringify(commandCodeModels.models.map(({ id, endpoint, name, contextWindow }) => [endpoint, id, name, contextWindow]))
 const commandCodeApplied = () => {
   let signature
   try { signature = JSON.parse(catalog.data.signature) } catch { return false }
   return signature?.commandCodeLearn === COMMAND_CODE_LEARN
+    && commandCodeRuntimeSignature === commandCodeDefinitionSignature()
     && matchesCommandCodeCatalog(commandCodeExpected(), catalog.data.models)
     && matchesCommandCodeEfforts(commandCodeModels.models, catalog.data.effortsByModel)
 }
@@ -413,6 +416,8 @@ async function applyHomePatch() {
   return home || children || abChanged || presetsChanged || observerChanged
 }
 await applyHomePatch()
+// No runtime exists yet; subsequent starts will read this exact home patch.
+commandCodeRuntimeSignature = commandCodeDefinitionSignature()
 
 // Fast mode: each dsh process reads the state file per request, so a switch
 // applies to the next model request without a restart.
@@ -694,6 +699,7 @@ async function restartRuntimesWhenIdle() {
     return
   }
   restartPending = false
+  const commandCodeRestartSignature = commandCodeDefinitionSignature()
   try {
     await pool.stopAll()
   } catch (error) {
@@ -701,18 +707,24 @@ async function restartRuntimesWhenIdle() {
     broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
     throw error
   }
+  commandCodeRuntimeSignature = commandCodeRestartSignature
   broadcast('runtime', { runtime: pool.status() })
+  broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
   if (catalog.stale || await commandCodeNeedsWarm()) void warmCatalogAndReport('model catalog refresh')
 }
 
 /** Report failure only for the inventory that this asynchronous warm actually tried. */
 async function warmCatalogAndReport(label) {
   const signature = catalog.signature
+  const runtimeSignature = commandCodeRuntimeSignature
+  const definitionSignature = commandCodeDefinitionSignature()
+  const triedCurrent = () => catalog.signature === signature && runtimeSignature === definitionSignature
+    && commandCodeRuntimeSignature === runtimeSignature && commandCodeDefinitionSignature() === definitionSignature
   try {
     await threads.warmCatalog({ force: await commandCodeNeedsWarm() })
-    if (catalog.signature === signature && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
+    if (triedCurrent() && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
   } catch (error) {
-    if (catalog.signature === signature && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
+    if (triedCurrent() && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
     log(label + ' failed:', error.message.split('\n')[0])
   } finally {
     if (commandCodeApplied()) commandCodeApplyFailed = false

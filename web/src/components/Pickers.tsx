@@ -149,12 +149,17 @@ export function ModelPicker({ value, onChange }: { value: string | null; onChang
 
 export function EffortPicker({ model, value, onChange }: { model: string | null; value: string; onChange: (value: string) => void }) {
   const catalog = useStore((state) => state.server?.catalog)
-  const efforts = pickableEfforts(catalog ? (model && catalog.effortsByModel[model]) || catalog.fallbackEfforts : [])
-  const values = efforts.map((effort) => effort.value)
+  const provider = parseModel(model)?.provider
+  const command = ['command-code', 'command-code-claude'].includes(provider ?? '')
+  const available = !catalog ? [] : command && model ? catalog.effortsByModel[model] ?? [] : (model && catalog.effortsByModel[model]) || catalog.fallbackEfforts
+  const efforts = pickableEfforts(available)
+  const hasDefault = command && available.some((entry) => entry.value === '')
+  const choices = hasDefault ? [{ value: '', name: '既定' }, ...efforts] : efforts
+  const values = choices.map((effort) => effort.value)
   // A level this model lacks shows (and is sent) as the nearest one it has.
-  const current = nearestEffort(value, values)
+  const current = hasDefault && !value ? '' : nearestEffort(value, efforts.map((effort) => effort.value))
   const wheel = useWheelSelect<HTMLButtonElement>(values, current, onChange)
-  if (!catalog || efforts.length <= 1) return null
+  if (!catalog || choices.length <= 1) return null
   return (
     <Dropdown
       width={200}
@@ -167,7 +172,7 @@ export function EffortPicker({ model, value, onChange }: { model: string | null;
           title="推論の深さ（ホイールで切り替え）"
         >
           <Brain size={13} />
-          <span>{effortLabel(wheel.shown ?? '')}</span>
+          <span>{hasDefault && wheel.shown === '' ? '既定' : effortLabel(wheel.shown ?? '')}</span>
           <ChevronDown size={13} />
         </button>
       )}
@@ -175,10 +180,10 @@ export function EffortPicker({ model, value, onChange }: { model: string | null;
       {(close) => (
         <>
           <MenuHeading>推論の深さ</MenuHeading>
-          {efforts.map((effort) => (
+          {choices.map((effort) => (
             <MenuItem
               key={effort.value}
-              label={effortLabel(effort.value, effort.name)}
+              label={hasDefault && effort.value === '' ? '既定' : effortLabel(effort.value, effort.name)}
               selected={effort.value === current}
               onSelect={() => {
                 onChange(effort.value)

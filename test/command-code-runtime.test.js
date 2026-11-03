@@ -13,6 +13,7 @@ import { homePatch } from '../server/dsh-config.js'
 import { appPaths } from '../server/paths.js'
 import { AcpRuntime } from '../server/runtime.js'
 import { TOOL_MODE_CONFIG } from '../server/ptc.js'
+import { turnUsage } from '../server/usage.js'
 
 for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'default', 'low', 'xhigh', 'max']) {
   test('real DSH uses the Command Code ' + endpoint + ' route with credentials and ZDR (' + mode + ')', { timeout: 90000 }, async (t) => {
@@ -36,6 +37,7 @@ for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'def
           : { role: 'assistant', content: 'fixture reply' }
         res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] }) + '\n\n')
         res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: requests.length === 1 ? 'tool_calls' : 'stop' }] }) + '\n\n')
+        res.write('data: ' + JSON.stringify({ ...base, choices: [], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13, prompt_tokens_details: { cached_tokens: 5 } } }) + '\n\n')
         res.end('data: [DONE]\n\n')
       } else {
         const send = (type, obj) => res.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...obj }) + '\n\n')
@@ -77,9 +79,16 @@ for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'def
       assert.equal(options.find((option) => option.id === 'reasoning_effort')?.currentValue, mode)
     }
     await runtime.setOption(session.sessionId, TOOL_MODE_CONFIG, 'native')
+    const since = Date.now() - 1000
     const result = await runtime.prompt(session.sessionId, [{ type: 'text', text: 'fixture prompt' }])
     assert.equal(result.stopReason, 'end_turn')
     assert.ok(JSON.stringify(updates).includes('fixture reply'))
+    const usage = await turnUsage({ dshHome: paths.dshHome, sessionId: session.sessionId, since })
+    assert.ok(usage?.input > 0 && usage.output > 0, 'real DSH session records token usage')
+    assert.deepEqual(usage.models, [provider + '/' + modelId])
+    assert.equal(usage.cost, null, 'Command Code equivalent is not a metered bill')
+    if (mode === 'unknown') assert.ok(usage.score.unpriced > 0)
+    else assert.ok(usage.score.priced > 0 && usage.score.unpriced === 0, 'known model gets an API equivalent')
     assert.equal(requests.length, 2)
     assert.match(JSON.stringify(requests[1].body.messages), /fixture evidence/)
     assert.equal(new URL(requests[0].url, root).pathname, endpoint === 'chat' ? '/provider/v1/chat/completions' : '/provider/v1/messages')

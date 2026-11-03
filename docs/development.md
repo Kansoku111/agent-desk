@@ -21,7 +21,7 @@ Planの回帰検証は `node --test test/plan.test.js` と `node --test --test-n
 
 `scripts/probe-acp.mjs` は、dsh の ACP 応答を直接確かめるための診断用スクリプトです。`scripts/check-dsh.mjs` は、dsh を更新したあとの動作確認スクリプトです（`node scripts/check-dsh.mjs`、[更新](updating.md) を参照）。
 
-累計API換算額の画面検証は `node test/fixtures/serve-ab-ui.mjs` を起動し、表示URLの `ab-ui.html` を `usage-score-ui.html` に替えて開きます。DevToolsで `await usageScoreTest.run('USD')` と `await usageScoreTest.run('JPY')` を実行すると、通常・TM・Eco・Claude親・AB、小額・既知のゼロ・未算定・旧履歴を検証し、実際に開いた詳細の課金額・手動レート・フォーカス復帰も確認します。`await usageScoreTest.renderSettings()` で一般設定、`usageScoreTest.failSave()` で次の保存失敗を再現できます。375px幅でも実行でき、実モデルや本番データは使いません。
+累計API換算額の画面検証は `node test/fixtures/serve-ab-ui.mjs` を起動し、表示URLの `ab-ui.html` を `usage-score-ui.html` に替えて開きます。DevToolsで `await usageScoreTest.run('USD')` と `await usageScoreTest.run('JPY')` を実行すると、通常・TM・Eco・Claude親・AB、小額・既知のゼロ・未算定・旧履歴を検証し、実際に開いた詳細の課金額・手動レート・フォーカス復帰も確認します。`await usageScoreTest.runCommand()` では Command Code の既定・明示レベルの切り替え、未確認モデルの扱いと利用量詳細も確認します。`await usageScoreTest.renderSettings()` で一般設定、`usageScoreTest.failSave()` で次の保存失敗を再現できます。375px幅でも実行でき、実モデルや本番データは使いません。
 
 AB・TM・ecoのPTC画面検証は同じViteフィクスチャサーバーの `ptc-ui.html` を開き、DevToolsで `await ptcTest.run()` を実行します。各開始画面の選択・設定保存・送信値、既存AB／チームの保存失敗・二重操作防止・実行中の無効化・通知後の表示更新を確認します。同じ画面で `await ptcTest.runTeamFree()` を実行すると、TM自由モードの推論レベル別の追加、開始・保存・再表示、選択解除とフォーカスを確認できます。375px幅でも実行でき、本番データや実モデルは使いません。
 

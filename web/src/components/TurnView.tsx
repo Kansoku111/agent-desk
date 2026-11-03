@@ -6,7 +6,7 @@ import {
 import { act, attachmentUrl, isImageAttachment, setSubagentPanel, useStore, type State } from '../store'
 import type { ImageRef, NoticeItem, PlanItem, SteerItem, SubagentInfo, TextItem, ToolItem, Turn, TurnItem, TurnUsage, UsageScore } from '../types'
 import { UsageCost } from './UsageCost'
-import { duration, fileChanges, formatTokens, formatTokensExact, formatUsd, summarizeTool, type DiffLine, type ToolIcon } from '../util'
+import { duration, fileChanges, formatTokens, formatTokensExact, formatUsd, summarizeTool, usageModelId, type DiffLine, type ToolIcon } from '../util'
 import { CopyButton, Markdown } from './Markdown'
 import { FileRef } from './FileRef'
 import { RestoreControls } from './Restore'
@@ -323,7 +323,7 @@ function UsageLine({ usage, taskCost, speed, score }: { usage: TurnUsage; taskCo
     usage.cacheWrite ? `キャッシュ書き込み ${formatTokensExact(usage.cacheWrite)}` : null,
     `出力 ${formatTokensExact(usage.output)}`,
     usage.reasoning ? `うち推論 ${formatTokensExact(usage.reasoning)}` : null,
-    usage.models.length ? `モデル: ${usage.models.map((model) => model.split('/')[1]).join(', ')}` : null,
+    usage.models.length ? `モデル: ${usage.models.map(usageModelId).join(', ')}` : null,
     usage.cost !== null ? `このターンの従量課金概算 ${formatUsd(usage.cost)}` : null,
     usage.cost !== null && taskCost !== null && taskCost > usage.cost ? `このセッションの従量課金概算累計 ${formatUsd(taskCost)}` : null,
     usage.cost !== null ? 'モデルの単価に基づく概算です。正確な請求額は各社の管理画面で確認してください。' : null,

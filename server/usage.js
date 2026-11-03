@@ -17,9 +17,11 @@ import zlib from 'node:zlib'
 import { fastMultiplier } from './fast-mode.js'
 import { catalogDataDirs, isModelId } from './model-catalog.js'
 import { catalogRates } from './pricing-rates.js'
+import { isLocalModelId } from './local-llm.js'
 import { deepSeekPricing, deepSeekRatesAt } from './deepseek-pricing.js'
 import { addScores, emptyScore, scoreFromUsd } from '../shared/usage-score.js'
 import fallbackPricing from './usage-pricing-fallback.json' with { type: 'json' }
+import commandCodePricing from './command-code-pricing.json' with { type: 'json' }
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 /** Providers whose API use is billed per token with catalog rates. */
@@ -295,6 +297,17 @@ export async function loadPricing() {
     } catch {}
   }
   for (const [key, rates] of catalogPricing) pricing.set(key, rates)
+  // Exact first-party IDs retain native context tiers; other routes use the
+  // documented Command Code API-price snapshot, not a subscription bill.
+  for (const [key, raw] of Object.entries(commandCodePricing.models)) {
+    const slash = key.indexOf('/')
+    const provider = key.slice(0, slash), id = key.slice(slash + 1)
+    const fallback = catalogRates(raw)
+    if (!['command-code', 'command-code-claude'].includes(provider) || !isLocalModelId(id) || !fallback) continue
+    const native = provider === 'command-code-claude' ? pricing.get(`anthropic/${id}`)
+      : isModelId(id) ? pricing.get(`openai-codex/${id}`) : null
+    pricing.set(key, catalogRates(native) ?? fallback)
+  }
   if (revision !== pricingRevision) return loadPricing()
   pricingCache = pricing
   return pricing

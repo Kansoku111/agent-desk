@@ -93,6 +93,9 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
     const setOption = AcpRuntime.prototype.setOption;
     AcpRuntime.prototype.setOption = function (...args) {
       if (fault() === 'effort' && args[1] === 'model' && args[2].includes('deepseek/deepseek-v4.1-flash')) throw new Error('fixture option failed');
+      if (fault() === 'hold' && args[1] === 'model' && args[2].includes('deepseek/deepseek-v4.1-flash')) {
+        return globalThis.fetch(${JSON.stringify(localBase + '/warm-gate')}).then(() => setOption.apply(this, args));
+      }
       return setOption.apply(this, args);
     };` : ''
   await fs.writeFile(probeFile, probeBody)
@@ -137,12 +140,13 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
   assert.ok(info, output)
   const origin = `http://127.0.0.1:${info.port}`
   ws = new WebSocket(`ws://127.0.0.1:${info.port}/ws?t=${info.token}`, { origin })
-  const replies = new Map()
+  const replies = new Map(), updates = []
   let sequence = 0, helloResolve
   const hello = new Promise((resolve) => { helloResolve = resolve })
   ws.on('message', (raw) => {
     const frame = JSON.parse(String(raw))
     if (frame.event === 'hello') helloResolve(frame.state)
+    if (frame.event === 'modelUpdate') updates.push(frame.modelUpdate)
     if (replies.has(frame.id)) { replies.get(frame.id)(frame); replies.delete(frame.id) }
   })
   await hello
@@ -173,7 +177,7 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
   const added = await waitFor((state) => models(state).length > 0)
   assert.equal(added.accounts[account].configured, true)
   assert.ok(models(added).every((model) => model.id && model.value))
-  if (afterAdded) await afterAdded({ request, waitFor, added, probeFile, home, faultFile })
+  if (afterAdded) await afterAdded({ request, waitFor, added, probeFile, home, faultFile, updates })
   await request('account.removeKey', { provider })
   const removed = await waitFor((state) => models(state).length === 0)
   assert.equal(removed.accounts[account].configured, false)
@@ -286,7 +290,7 @@ test('a failed effort discovery stays unapplied and a manual retry learns it', {
   })
 })
 
-test('Command Code inventory waits for a running task and applies automatically after it finishes', { timeout: 90_000 }, async (t) => {
+for (const change of ['models', 'context']) test('Command Code ' + change + ' waits for a running task and applies automatically after it finishes', { timeout: 90_000 }, async (t) => {
   const started = Promise.withResolvers(), release = Promise.withResolvers()
   let interrupted = false, finished = false
   const server = http.createServer(async (req, res) => {
@@ -308,11 +312,12 @@ test('Command Code inventory waits for a running task and applies automatically 
   await once(server, 'listening')
   t.after(async () => { release.resolve(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)) })
   const localBase = 'http://127.0.0.1:' + server.address().port + '/v1'
-  const entry = (id) => ({ id, name: id, context_length: 100000, supported_endpoints: ['/chat/completions'] })
+  const entry = (id, context = 100000) => ({ id, name: id, context_length: context, supported_endpoints: ['/chat/completions'] })
+  const nextId = change === 'models' ? 'second' : 'first'
   await keyRefreshesCatalog(t, {
     provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code', localBase,
     probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data: [entry('first')] }), expectedCheck: 'unverified',
-    afterAdded: async ({ request, waitFor, probeFile, home }) => {
+    afterAdded: async ({ request, waitFor, probeFile, home, updates }) => {
       const workspace = path.join(home, 'project')
       await fs.mkdir(workspace)
       await request('localLlm.set', { baseURL: localBase })
@@ -320,7 +325,8 @@ test('Command Code inventory waits for a running task and applies automatically 
       const model = before.catalog.models.find((entry) => entry.provider === 'local-llm')
       const { thread } = await request('thread.create', { workspace, model: model.value, effort: '', permissionMode: 'read-only', text: 'run fixture' })
       await started.promise
-      await fs.writeFile(probeFile, JSON.stringify({ data: [entry('second')] }))
+      const firstUpdate = updates.length
+      await fs.writeFile(probeFile, JSON.stringify({ data: [entry(nextId, change === 'context' ? 32000 : 100000)] }))
       const check = await request('modelUpdate.check')
       assert.equal(check.busy, true)
       const pending = await waitFor((state) => state.modelUpdate.commandCode.checkedAt && !state.modelUpdate.commandCode.applied)
@@ -329,9 +335,67 @@ test('Command Code inventory waits for a running task and applies automatically 
       assert.equal((await request('thread.get', { threadId: thread.id })).thread.status, 'running')
       assert.equal(interrupted, false)
       release.resolve()
-      const applied = await waitFor((state) => state.modelUpdate.commandCode.applied && state.catalog.models.some((entry) => entry.provider === 'command-code' && entry.id === 'second'))
+      const applied = await waitFor((state) => state.modelUpdate.commandCode.applied && state.catalog.models.some((entry) => entry.provider === 'command-code' && entry.id === nextId))
       assert.equal(applied.modelUpdate.commandCode.applyError, false)
+      assert.ok(updates.slice(firstUpdate).some((update) => update.commandCode.applied === false), 'pending state must be broadcast')
+      assert.ok(updates.slice(firstUpdate).some((update) => update.commandCode.applied === true), 'applied state must be broadcast')
       assert.equal(interrupted, false)
+    },
+  })
+})
+
+test('context changes during an older warm stay pending instead of reporting a failure', { timeout: 90_000 }, async (t) => {
+  const warmStarted = Promise.withResolvers(), warmRelease = Promise.withResolvers()
+  const taskStarted = Promise.withResolvers(), taskRelease = Promise.withResolvers()
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/v1/warm-gate') { warmStarted.resolve(); await warmRelease.promise; return res.end('ok') }
+    if (req.url === '/v1/models') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'local-fixture' }] }))
+    if (req.url !== '/v1/chat/completions') return res.writeHead(404).end()
+    for await (const _chunk of req) {}
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const base = { id: 'fixture', object: 'chat.completion.chunk', created: 0, model: 'local-fixture' }
+    res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: 'working' }, finish_reason: null }] }) + '\n\n')
+    taskStarted.resolve()
+    await taskRelease.promise
+    if (res.destroyed) return
+    res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\n')
+    res.end('data: [DONE]\n\n')
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(async () => { warmRelease.resolve(); taskRelease.resolve(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)) })
+  const localBase = 'http://127.0.0.1:' + server.address().port + '/v1'
+  const entry = (id, context = 100000) => ({ id, name: id, context_length: context, supported_endpoints: ['/chat/completions'] })
+  const modelId = 'deepseek/deepseek-v4.1-flash'
+  await keyRefreshesCatalog(t, {
+    provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code', localBase, injectRuntimeFailure: true,
+    probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data: [entry(modelId)] }), expectedCheck: 'unverified',
+    afterAdded: async ({ request, waitFor, probeFile, home, faultFile, updates }) => {
+      const workspace = path.join(home, 'project')
+      await fs.mkdir(workspace)
+      await request('localLlm.set', { baseURL: localBase })
+      const state = await waitFor((entry) => entry.catalog.models.some((model) => model.provider === 'local-llm') && entry.modelUpdate.commandCode.applied)
+      const model = state.catalog.models.find((entry) => entry.provider === 'local-llm')
+      await fs.writeFile(faultFile, 'hold')
+      await fs.writeFile(probeFile, JSON.stringify({ data: [entry(modelId), entry('new-model')] }))
+      await request('modelUpdate.check')
+      await warmStarted.promise
+      const { thread } = await request('thread.create', { workspace, model: model.value, effort: '', permissionMode: 'read-only', text: 'run fixture' })
+      await taskStarted.promise
+      await fs.writeFile(probeFile, JSON.stringify({ data: [entry(modelId, 32000), entry('new-model')] }))
+      const changed = await request('modelUpdate.check')
+      assert.equal(changed.busy, true)
+      assert.equal(changed.modelUpdate.commandCode.applied, false)
+      const firstUpdate = updates.length
+      warmRelease.resolve()
+      const pending = await waitFor(() => updates.length > firstUpdate)
+      assert.equal(pending.modelUpdate.commandCode.applied, false)
+      assert.equal(pending.modelUpdate.commandCode.applyError, false, 'a warm for the old context is not a failed update')
+      assert.equal((await request('thread.get', { threadId: thread.id })).thread.status, 'running')
+      await fs.writeFile(faultFile, '')
+      taskRelease.resolve()
+      const applied = await waitFor((entry) => entry.modelUpdate.commandCode.applied)
+      assert.equal(applied.modelUpdate.commandCode.applyError, false)
     },
   })
 })
@@ -352,6 +416,9 @@ test('Command Code publishes a full mixed-protocol inventory in the real picker'
       assert.equal(added.catalog.models.filter((model) => model.provider === 'command-code-claude').length, 11)
       assert.ok(added.catalog.models.some((model) => model.provider === 'command-code-claude' && model.id === 'claude-haiku-4-5-20251001'))
       assert.equal(added.modelUpdate.commandCode.applied, true)
+      for (const [provider, id] of [['command-code', known[0]], ['command-code-claude', 'claude-sonnet-5-5']]) {
+        assert.ok(added.catalog.effortsByModel[JSON.stringify([provider, id])].some((entry) => entry.value === ''), provider + ' exposes its default')
+      }
       assert.deepEqual(levels(added, 'command-code', known[0]), ['low', 'high', 'max'])
       assert.deepEqual(levels(added, 'command-code', known[1]), ['low', 'medium', 'xhigh'])
       assert.deepEqual(levels(added, 'command-code', known[2]), ['low', 'high', 'max'])

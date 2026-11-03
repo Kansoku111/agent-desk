@@ -1293,9 +1293,9 @@ export class ThreadManager extends EventEmitter {
     const strict = thread.preset || turn.usageFallback || (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort || (thread.team?.role === 'observer' && Boolean(wanted))
     const label = thread.team?.role === 'observer' ? '観測者' : thread.preset ? 'タスクのプリセット' : thread.ab ? 'AB' : turn.usageFallback ? 'フォールバック先' : 'eco'
     if (strict) assertWorkflowEffort(wanted, parsed, label)
-    // Team settings expose a provider-default choice. Keep it for Command Code
-    // instead of silently upgrading existing unset entries to an explicit level.
-    const commandDefault = thread.team && !wanted && parsed.efforts.some((entry) => entry.value === '')
+    // Preserve Command Code's provider default for existing tasks and teams;
+    // an unset value must not silently become an explicit reasoning level.
+    const commandDefault = !wanted && parsed.efforts.some((entry) => entry.value === '')
       && ['command-code', 'command-code-claude'].includes(parsed.models.find((model) => model.value === thread.model)?.provider)
     const target = strict || commandDefault ? wanted : nearestEffort(wanted, parsed.efforts)
     if (target !== wanted) {
