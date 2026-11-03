@@ -19,6 +19,16 @@ const FALLBACK_EFFORTS = [
   { value: 'high', name: 'High' },
 ]
 
+/** Does the picker contain exactly the Command Code inventory served by this runtime? */
+export function matchesCommandCodeCatalog(expected, models) {
+  const wanted = expected
+    .filter((entry) => Array.isArray(entry) && entry.length === 3)
+    .map(([endpoint, id, name]) => JSON.stringify([endpoint === 'messages' ? 'command-code-claude' : 'command-code', id, name])).sort()
+  const actual = models.filter((model) => ['command-code', 'command-code-claude'].includes(model.provider))
+    .map((model) => JSON.stringify([model.provider, model.id, model.name])).sort()
+  return JSON.stringify(actual) === JSON.stringify(wanted)
+}
+
 // A runtime can finish learning options it fetched before the catalog signature
 // changed (for example, while a DeepSeek or OpenCode Go key is being saved). Such a snapshot
 // must not make that new signature look current.
@@ -39,14 +49,7 @@ function matchesSignature(signature, models) {
     const expected = [...new Set(requirements.opencodeGoModels)].filter((id) => !/-\d{8}$/.test(id)).sort()
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return false
   }
-  if (Array.isArray(requirements.commandCode)) {
-    const expected = requirements.commandCode
-      .filter((entry) => Array.isArray(entry) && entry.length === 3 && !/-\d{8}$/.test(entry[1]))
-      .map(([endpoint, id, name]) => JSON.stringify([endpoint === 'messages' ? 'command-code-claude' : 'command-code', id, name])).sort()
-    const actual = models.filter((model) => ['command-code', 'command-code-claude'].includes(model.provider))
-      .map((model) => JSON.stringify([model.provider, model.id, model.name])).sort()
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) return false
-  }
+  if (Array.isArray(requirements.commandCode) && !matchesCommandCodeCatalog(requirements.commandCode, models)) return false
   return true
 }
 

@@ -552,6 +552,16 @@ export interface AddedModel {
   name: string
 }
 
+/** Command Code's public inventory and whether its last good list reached the picker. */
+export interface CommandCodeSync {
+  checkedAt: number | null
+  error: boolean
+  skipped: number
+  checking: boolean
+  applied: boolean
+  applyError: boolean
+}
+
 /** Models newer than the installed dsh, read from the newest pi-ai release. */
 export interface ModelUpdate {
   phase: 'idle' | 'checking'
@@ -573,6 +583,8 @@ export interface ModelUpdate {
     /** Models in the catalog that the account's list no longer has. */
     retired: AddedModel[]
   }
+  /** List availability does not validate the API key or the plan. */
+  commandCode?: CommandCodeSync
   /** OpenCode Go's list, which the picker follows; null without a saved key or with the sync off. */
   opencodeGo: {
     checkedAt: number | null

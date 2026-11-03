@@ -805,6 +805,7 @@ export class ThreadManager extends EventEmitter {
       this.#saveIndex()
       this.#saveTurns(threadId)
       resolveDone()
+      this.#notifyIdle()
       throw error
     }
     if (userInitiated) { this.userMessageAccepted?.(threadId); this.presetUserAccepted?.(threadId) }
@@ -907,6 +908,7 @@ export class ThreadManager extends EventEmitter {
     this.#emitTurn(thread.id, turn, true)
     this.#emitThread(thread)
     if (!thread.usageFallbackPending) this.emit('turn-finished', { threadId: thread.id, title: thread.title, status: outcome.status })
+    this.#notifyIdle()
   }
 
   // Only an explicitly configured target may be tried, once per human turn.
@@ -992,6 +994,7 @@ export class ThreadManager extends EventEmitter {
         this.#saveTurns(thread.id)
         if (!this.stopping) this.#emitTurn(thread.id, turn, true)
       }
+      this.#notifyIdle()
     })
     void task
   }
@@ -1102,6 +1105,7 @@ export class ThreadManager extends EventEmitter {
         return await action()
       } finally {
         this.restoring.delete(thread)
+        this.#notifyIdle()
       }
     })
   }
@@ -1605,6 +1609,10 @@ export class ThreadManager extends EventEmitter {
 
   get busy() {
     return this.active.size > 0 || this.restoring.size > 0 || this.pendingFallbacks.size > 0
+  }
+
+  #notifyIdle() {
+    if (!this.stopping && !this.busy) this.emit('idle')
   }
 
   shutdown() {

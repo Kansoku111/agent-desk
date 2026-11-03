@@ -104,6 +104,18 @@ test('parseConfigOptions flattens grouped models and hides dated snapshots', () 
   assert.deepEqual(parsed.efforts.map((effort) => effort.value), ['', 'high'])
 })
 
+test('Command Code keeps official dated IDs even without an undated alias', () => {
+  const dated = [
+    ['command-code', 'provider/model-20251001'],
+    ['command-code-claude', 'claude-haiku-20251001'],
+    ['anthropic', 'claude-sonnet-20251001'],
+  ]
+  const parsed = parseConfigOptions([{ id: 'model', options: dated.map(([provider, id]) => ({
+    group: provider, options: [{ value: JSON.stringify([provider, id]), name: id }],
+  })) }])
+  assert.deepEqual(parsed.models.map((model) => model.id), ['provider/model-20251001', 'claude-haiku-20251001'])
+})
+
 test('carryoverText condenses earlier turns, newest kept within budget', async () => {
   const { carryoverText } = await import('../server/threads.js')
   const mk = (text, answer, tools = 0) => ({

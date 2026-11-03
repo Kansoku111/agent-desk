@@ -9,7 +9,7 @@ import fsp from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { Catalog } from './catalog.js'
+import { Catalog, matchesCommandCodeCatalog } from './catalog.js'
 import { codeStamp, uiBuild } from './code-stamp.js'
 import { ChatGptLogin } from './chatgpt-login.js'
 import { Checkpoints } from './checkpoints.js'
@@ -242,6 +242,10 @@ const equivalentPricing = await new EquivalentPricing({
 }).load()
 setEquivalentPricing(equivalentPricing.rates)
 const commandCodeModels = await new CommandCodeModels({ file: path.join(paths.home, 'command-code-models.json') }).load()
+let commandCodeChecking = false
+let commandCodeApplyFailed = false
+const commandCodeExpected = () => commandCodeModels.models.map(({ id, endpoint, name }) => [endpoint, id, name])
+const commandCodeApplied = () => matchesCommandCodeCatalog(commandCodeExpected(), catalog.data.models)
 const opencodeRegistry = await new OpenCodeGoRegistry({
   file: path.join(paths.home, 'opencode-go-definitions.json'),
   base: () => readOpenCodeCatalog(modelUpdater.fetched), registry: modelRegistry,
@@ -271,9 +275,9 @@ async function opencodeGoKey() {
 await opencodeGoKey()
 /** The catalog models served to the picker; null serves them all. */
 const opencodeGoServed = () => (settings.modelAutoUpdate !== false ? opencodeGoModels.served : null)
-/** Reads the service's list now (the shared 今すぐ確認) and applies it. */
-async function checkOpenCodeGoModels() {
-  await updateModelCatalog({ forceOpenCode: true })
+/** The shared check forces Command Code; OpenCode Go continues to follow its auto-sync setting. */
+async function checkProviderModels() {
+  await updateModelCatalog({ forceOpenCode: true, forceCommandCode: true })
 }
 /** The bundled and fetched models Agent Desk currently adds to dsh's catalog. */
 let catalogAdditions = []
@@ -288,6 +292,10 @@ const modelUpdateState = () => ({
     status: codexLimits.status,
     checkedAt: codexLimits.checkedAt,
     retired: retiredModels(catalog.data.models, accountAvailability()).map(({ provider, id, name }) => ({ provider, id, name })),
+  },
+  commandCode: {
+    checkedAt: commandCodeModels.checkedAt, error: commandCodeModels.failed, skipped: commandCodeModels.skipped,
+    checking: commandCodeChecking, applied: commandCodeApplied(), applyError: commandCodeApplyFailed,
   },
   // The OpenCode Go list follows the service, while a key is saved and the sync is on.
   opencodeGo: opencodeGoKeyed && settings.modelAutoUpdate !== false
@@ -345,7 +353,9 @@ const catalogSignature = async (result) => JSON.stringify({
     ? opencodeGoServed() ?? [...(await installedModels(openCodeFetched())).keys()].sort()
     : [],
   local: localLlmSettings(settings.localLlm),
-  commandCode: (await accounts()).commandCode.configured ? commandCodeModels.models.map(({ id, endpoint, name }) => [endpoint, id, name]) : [],
+  commandCode: (await accounts()).commandCode.configured ? commandCodeExpected() : [],
+  // Only Command Code changed its dated-ID visibility; other caches remain valid.
+  commandCodeLearn: (await accounts()).commandCode.configured ? 2 : undefined,
 })
 
 const getSettings = () => settings
@@ -586,7 +596,11 @@ subagents.on('change', ({ threadId, subagent }) => {
     void teams.stopApiUse(threadId).catch((error) => log('team:', error.message))
   }
 })
-threads.on('catalog', (snapshot) => broadcast('catalog', { catalog: catalogState(snapshot) }))
+threads.on('catalog', (snapshot) => {
+  if (commandCodeApplied()) commandCodeApplyFailed = false
+  broadcast('catalog', { catalog: catalogState(snapshot) })
+  broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
+})
 threads.on('runtime', (status) => broadcast('runtime', { runtime: status }))
 // A team's children report to their leader, not to the user.
 threads.on('turn-finished', (info) => {
@@ -672,9 +686,30 @@ async function restartRuntimesWhenIdle() {
     return
   }
   restartPending = false
-  await pool.stopAll()
+  try {
+    await pool.stopAll()
+  } catch (error) {
+    if (commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
+    broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
+    throw error
+  }
   broadcast('runtime', { runtime: pool.status() })
-  if (catalog.stale) threads.warmCatalog().catch((error) => log('model catalog refresh failed:', error.message.split('\n')[0]))
+  if (catalog.stale) void warmCatalogAndReport('model catalog refresh')
+}
+
+/** Report failure only for the inventory that this asynchronous warm actually tried. */
+async function warmCatalogAndReport(label) {
+  const signature = catalog.signature
+  try {
+    await threads.warmCatalog()
+    if (catalog.signature === signature && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
+  } catch (error) {
+    if (catalog.signature === signature && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
+    log(label + ' failed:', error.message.split('\n')[0])
+  } finally {
+    if (commandCodeApplied()) commandCodeApplyFailed = false
+    broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
+  }
 }
 
 let modelCatalogQueue = Promise.resolve()
@@ -685,14 +720,21 @@ function updateModelCatalog(options = {}) {
 }
 async function performModelCatalogUpdate({ deferRuntimeEffects = false, forceOpenCode = false, forceCommandCode = false } = {}) {
   if ((await accounts()).commandCode.configured && (forceCommandCode || settings.modelAutoUpdate !== false)) {
-    await commandCodeModels.refresh({ maxAgeMs: forceCommandCode ? 0 : 60_000 })
-    broadcast('accounts', { accounts: await accounts() })
+    commandCodeChecking = true
+    broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
+    try {
+      await commandCodeModels.refresh({ maxAgeMs: forceCommandCode ? 0 : 60_000 })
+    } finally {
+      commandCodeChecking = false
+      broadcast('accounts', { accounts: await accounts() })
+    }
   }
   await opencodeGoModels.refresh(await opencodeGoKey(), { maxAgeMs: forceOpenCode ? 0 : 60_000 })
   const result = await syncModelCatalog()
   resetPricing()
   catalog.setSignature(await catalogSignature(result))
   const restartRequired = result.changed || catalog.stale
+  if (!commandCodeApplied()) commandCodeApplyFailed = false
   // settings.update combines catalog, home-patch and tool changes into one
   // restart. Other callers retain the full catalog refresh behavior.
   if (!deferRuntimeEffects) {
@@ -704,8 +746,8 @@ async function performModelCatalogUpdate({ deferRuntimeEffects = false, forceOpe
   broadcast('catalog', { catalog: catalogState() })
   return { ...result, restartRequired }
 }
-threads.on('turn-finished', () => {
-  if (restartPending) void restartRuntimesWhenIdle()
+threads.on('idle', () => {
+  if (restartPending) void restartRuntimesWhenIdle().catch((error) => log('runtime restart failed:', error.message))
 })
 updates.on('state', (state) => broadcast('updates', { updates: state }))
 modelUpdater.on('state', () => broadcast('modelUpdate', { modelUpdate: modelUpdateState() }))
@@ -809,7 +851,7 @@ const handlers = {
   }),
   ...createModelHandlers({
     threads, catalog, catalogState, updates, modelUpdater, modelUpdateState,
-    updateModelCatalog, refreshCodexModels, checkOpenCodeGoModels,
+    updateModelCatalog, refreshCodexModels, checkProviderModels,
     checkEquivalentPricing: () => equivalentPricing.refresh({ force: true }),
   }),
   ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
@@ -1014,7 +1056,7 @@ providerModelsTimer = setInterval(() => void refreshProviderModels(), 6 * 60 * 6
 providerModelsTimer.unref()
 
 // Boot the default runtime early and learn the model list in the background.
-threads.warmCatalog().catch((error) => log('model catalog warm-up failed:', error.message.split('\n')[0]))
+void warmCatalogAndReport('model catalog warm-up')
 
 updates.start()
 modelUpdater.start()

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import fs from 'node:fs/promises'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
@@ -72,14 +73,29 @@ test('old OpenCode Go snapshots cannot complete or undo a model-list refresh', a
 
 /**
  * Saves and removes a key through the real save handler, runtimes and
- * discovery, with no provider requests or real credentials: only the free
- * key-validation endpoint is mocked.
+ * discovery, with no real provider inference or credentials. Public probes are
+ * mocked; an optional local test server may handle fixture model requests.
  */
-async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false }, savedUpdates = null, afterAdded = null, afterRemoved = null, registryBody = null, expectedCheck = 'valid' }) {
+async function keyRefreshesCatalog(t, { provider, account, catalogProvider, probe, probeBody = '{"data":[]}', settings = { modelAutoUpdate: false }, savedUpdates = null, afterAdded = null, afterRemoved = null, registryBody = null, expectedCheck = 'valid', localBase = null, injectRuntimeFailure = false }) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-account-catalog-'))
   const hook = path.join(home, 'offline-fetch.mjs')
-  await fs.writeFile(hook, `globalThis.fetch = async (url) => {
-    if (String(url) === ${JSON.stringify(probe)}) return new Response(${JSON.stringify(probeBody)}, { status: 200 });
+  const probeFile = path.join(home, 'probe-response.json')
+  const faultFile = path.join(home, 'fail-runtime-warm')
+  const runtimeUrl = pathToFileURL(path.join(root, 'server', 'runtime.js')).href
+  const faultHook = injectRuntimeFailure ? `const { existsSync } = await import('node:fs');
+    const { AcpRuntime } = await import(${JSON.stringify(runtimeUrl)});
+    const newSession = AcpRuntime.prototype.newSession;
+    AcpRuntime.prototype.newSession = function (...args) {
+      if (existsSync(${JSON.stringify(faultFile)})) throw new Error('fixture runtime warm failed');
+      return newSession.apply(this, args);
+    };` : ''
+  await fs.writeFile(probeFile, probeBody)
+  await fs.writeFile(hook, `import { readFile } from 'node:fs/promises';
+  ${faultHook}
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (${JSON.stringify(localBase)} && String(url).startsWith(${JSON.stringify(localBase)})) return realFetch(url, init);
+    if (String(url) === ${JSON.stringify(probe)}) return new Response(await readFile(${JSON.stringify(probeFile)}, 'utf8'), { status: 200 });
     if (String(url) === 'https://models.opencode.ai/api.json' && ${JSON.stringify(registryBody !== null)}) return Response.json(${JSON.stringify(registryBody)});
     throw new Error('offline account-catalog test');
   }`)
@@ -151,7 +167,7 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
   const added = await waitFor((state) => models(state).length > 0)
   assert.equal(added.accounts[account].configured, true)
   assert.ok(models(added).every((model) => model.id && model.value))
-  if (afterAdded) await afterAdded({ request, waitFor, added })
+  if (afterAdded) await afterAdded({ request, waitFor, added, probeFile, home, faultFile })
   await request('account.removeKey', { provider })
   const removed = await waitFor((state) => models(state).length === 0)
   assert.equal(removed.accounts[account].configured, false)
@@ -184,8 +200,125 @@ test('Command Code saves an unverified key and loads both official protocol rout
     afterAdded: async ({ added }) => {
       assert.ok(added.catalog.models.some((model) => model.provider === 'command-code-claude' && model.id === 'claude-fixture'))
       assert.ok(added.catalog.models.some((model) => model.provider === 'command-code' && model.id === 'provider/fixture'))
+      assert.equal(added.modelUpdate.commandCode.applied, true)
+      assert.equal(added.modelUpdate.commandCode.error, false)
+      assert.equal(added.modelUpdate.commandCode.checking, false)
     },
     afterRemoved: async ({ removed }) => assert.ok(removed.catalog.models.every((model) => model.provider !== 'command-code-claude')),
+  })
+})
+
+test('the shared manual check refreshes Command Code even with auto-sync off and preserves cache on error', { timeout: 90_000 }, async (t) => {
+  const entry = (id) => ({ id, name: id, context_length: 100000, supported_endpoints: ['/chat/completions'] })
+  await keyRefreshesCatalog(t, {
+    provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code',
+    probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data: [entry('first')] }), expectedCheck: 'unverified',
+    afterAdded: async ({ request, waitFor, added, probeFile }) => {
+      assert.equal(added.settings.modelAutoUpdate, false)
+      assert.equal(added.modelUpdate.commandCode.applied, true)
+      await fs.writeFile(probeFile, JSON.stringify({ data: [entry('second')] }))
+      await request('modelUpdate.check')
+      const refreshed = await waitFor((state) => state.catalog.models.some((model) => model.provider === 'command-code' && model.id === 'second') && state.modelUpdate.commandCode.applied)
+      assert.equal(refreshed.modelUpdate.commandCode.error, false)
+      assert.equal(refreshed.catalog.models.some((model) => model.provider === 'command-code' && model.id === 'first'), false)
+      const checkedAt = refreshed.modelUpdate.commandCode.checkedAt
+      await fs.writeFile(probeFile, '{}')
+      await request('modelUpdate.check')
+      const failed = await waitFor((state) => state.modelUpdate.commandCode.error === true)
+      assert.equal(failed.modelUpdate.commandCode.checkedAt, checkedAt)
+      assert.equal(failed.modelUpdate.commandCode.applied, true)
+      assert.ok(failed.catalog.models.some((model) => model.provider === 'command-code' && model.id === 'second'))
+    },
+  })
+})
+
+test('Command Code reports runtime apply failure and clears it after a successful retry', { timeout: 90_000 }, async (t) => {
+  const entry = (id) => ({ id, name: id, context_length: 100000, supported_endpoints: ['/chat/completions'] })
+  await keyRefreshesCatalog(t, {
+    provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code', injectRuntimeFailure: true,
+    probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data: [entry('first')] }), expectedCheck: 'unverified',
+    afterAdded: async ({ request, waitFor, probeFile, home, faultFile }) => {
+      await fs.writeFile(faultFile, 'fail')
+      await fs.writeFile(probeFile, JSON.stringify({ data: [entry('second')] }))
+      await request('modelUpdate.check')
+      const failed = await waitFor((state) => state.modelUpdate.commandCode.applyError === true)
+      assert.equal(failed.modelUpdate.commandCode.error, false)
+      assert.equal(failed.modelUpdate.commandCode.applied, false)
+      assert.ok(failed.catalog.models.some((entry) => entry.provider === 'command-code' && entry.id === 'first'))
+      assert.equal(path.dirname(faultFile), home)
+      assert.equal(path.basename(faultFile), 'fail-runtime-warm')
+      await fs.unlink(faultFile)
+      await request('modelUpdate.check')
+      const applied = await waitFor((state) => state.modelUpdate.commandCode.applied && state.catalog.models.some((entry) => entry.provider === 'command-code' && entry.id === 'second'))
+      assert.equal(applied.modelUpdate.commandCode.applyError, false)
+    },
+  })
+})
+
+test('Command Code inventory waits for a running task and applies automatically after it finishes', { timeout: 90_000 }, async (t) => {
+  const started = Promise.withResolvers(), release = Promise.withResolvers()
+  let interrupted = false, finished = false
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/v1/models') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'local-fixture' }] }))
+    if (req.url !== '/v1/chat/completions') return res.writeHead(404).end()
+    for await (const _chunk of req) {}
+    res.on('close', () => { if (!finished) interrupted = true })
+    const base = { id: 'fixture', object: 'chat.completion.chunk', created: 0, model: 'local-fixture' }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: 'working' }, finish_reason: null }] }) + '\n\n')
+    started.resolve()
+    await release.promise
+    if (res.destroyed) return
+    finished = true
+    res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\n')
+    res.end('data: [DONE]\n\n')
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(async () => { release.resolve(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)) })
+  const localBase = 'http://127.0.0.1:' + server.address().port + '/v1'
+  const entry = (id) => ({ id, name: id, context_length: 100000, supported_endpoints: ['/chat/completions'] })
+  await keyRefreshesCatalog(t, {
+    provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code', localBase,
+    probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data: [entry('first')] }), expectedCheck: 'unverified',
+    afterAdded: async ({ request, waitFor, probeFile, home }) => {
+      const workspace = path.join(home, 'project')
+      await fs.mkdir(workspace)
+      await request('localLlm.set', { baseURL: localBase })
+      const before = await waitFor((state) => state.catalog.models.some((model) => model.provider === 'local-llm'))
+      const model = before.catalog.models.find((entry) => entry.provider === 'local-llm')
+      const { thread } = await request('thread.create', { workspace, model: model.value, effort: '', permissionMode: 'read-only', text: 'run fixture' })
+      await started.promise
+      await fs.writeFile(probeFile, JSON.stringify({ data: [entry('second')] }))
+      const check = await request('modelUpdate.check')
+      assert.equal(check.busy, true)
+      const pending = await waitFor((state) => state.modelUpdate.commandCode.checkedAt && !state.modelUpdate.commandCode.applied)
+      assert.equal(pending.modelUpdate.commandCode.applyError, false)
+      assert.ok(pending.catalog.models.some((entry) => entry.provider === 'command-code' && entry.id === 'first'))
+      assert.equal((await request('thread.get', { threadId: thread.id })).thread.status, 'running')
+      assert.equal(interrupted, false)
+      release.resolve()
+      const applied = await waitFor((state) => state.modelUpdate.commandCode.applied && state.catalog.models.some((entry) => entry.provider === 'command-code' && entry.id === 'second'))
+      assert.equal(applied.modelUpdate.commandCode.applyError, false)
+      assert.equal(interrupted, false)
+    },
+  })
+})
+
+test('Command Code publishes a full mixed-protocol inventory in the real picker', { timeout: 60_000 }, async (t) => {
+  const data = [
+    ...Array.from({ length: 84 }, (_, i) => ({ id: 'provider/model-' + i, name: 'Model ' + i, context_length: 1000000, supported_endpoints: ['/chat/completions'] })),
+    ...Array.from({ length: 11 }, (_, i) => ({ id: i === 10 ? 'claude-model-20251001' : 'claude-model-' + i, name: 'Claude ' + i, context_length: 200000, supported_endpoints: ['/messages'] })),
+  ]
+  await keyRefreshesCatalog(t, {
+    provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code',
+    probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data }), expectedCheck: 'unverified',
+    afterAdded: async ({ added }) => {
+      assert.equal(added.catalog.models.filter((model) => model.provider === 'command-code').length, 84)
+      assert.equal(added.catalog.models.filter((model) => model.provider === 'command-code-claude').length, 11)
+      assert.ok(added.catalog.models.some((model) => model.provider === 'command-code-claude' && model.id === 'claude-model-20251001'))
+      assert.equal(added.modelUpdate.commandCode.applied, true)
+    },
   })
 })
 

@@ -250,6 +250,8 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
           {groups.map((group, index) => <div key={group.id}>
             {index > 0 && <MenuDivider />}
             <MenuHeading>{group.heading}<span className="menu-heading-note">{group.note}</span></MenuHeading>
+            {group.status && <MenuItem label={group.status} disabled onSelect={() => {}} />}
+            {group.empty && <MenuItem label={group.empty} disabled onSelect={() => {}} />}
             {group.models.map((model) => <MenuItem key={model.value} label={model.name} checkable selected={selected.has(model.value)}
               disabled={!selected.has(model.value) && models.length >= MAX_CHILDREN} onSelect={() => toggle(model.value)} />)}
           </div>)}

@@ -4,6 +4,7 @@ import { act, openExternal, toast, useStore } from '../../store'
 import type { PermissionMode, UpdateChannel, Updates } from '../../types'
 import { copyText, PERMISSION_INFO } from '../../util'
 import { dateTime } from './shared'
+import { commandCodeStatus } from '../../command-code-status'
 
 const UPDATE_CHANNELS: UpdateChannel[] = ['latest', 'next', 'alpha']
 /** How long a newly added model shows in the updates card. */
@@ -50,11 +51,14 @@ function UpdatesCard({ updates }: { updates: Updates }) {
   const autoSync = useStore((state) => state.server?.settings.modelAutoUpdate) !== false
   const signedIn = useStore((state) => state.server?.accounts.chatgpt.signedIn)
   const opencodeConfigured = useStore((state) => state.server?.accounts.opencodeGo?.configured)
+  const commandConfigured = useStore((state) => state.server?.accounts.commandCode?.configured)
   const [checking, setChecking] = useState(false)
-  const busy = checking || updates.checking || models?.phase === 'checking'
+  const busy = checking || updates.checking || models?.phase === 'checking' || models?.commandCode?.checking
   const recent = models?.lastAdded && Date.now() - models.lastAdded.at < RECENT_MODELS_MS ? models.lastAdded : null
   const recentModels = recent?.models.filter((model) => model.provider !== 'opencode-go') ?? []
   const recentOpenCode = recent?.models.filter((model) => model.provider === 'opencode-go') ?? []
+  const command = models?.commandCode
+  const commandStatus = commandCodeStatus(Boolean(commandConfigured), autoSync, command && { ...command, checking: command.checking || checking })
   const opencode = models?.opencodeGo
   const opencodeMissing = opencode?.missing?.length ?? 0
   const { dsh, codex, claude, app } = updates
@@ -151,6 +155,17 @@ function UpdatesCard({ updates }: { updates: Updates }) {
             <p className="form-error">OpenCode Go のモデル一覧を読み込めませんでした（前回の結果を使っています）</p>
           )}
         </div>
+        <div className="update-row">
+          <span className="update-name">Command Code</span>
+          <span className="update-versions">{commandStatus.label}</span>
+          <span className="update-action">
+            {commandStatus.kind === 'checking' && <Loader2 size={15} className="spin" aria-label="確認中" />}
+            {['error', 'apply-error', 'partial'].includes(commandStatus.kind) && <AlertTriangle size={15} className="update-warning" aria-label="同期が未完了" />}
+            {commandStatus.kind === 'ready' && <Check size={15} className="update-ok" aria-label="一覧を同期済み" />}
+          </span>
+          {commandStatus.kind === 'error' && <p className="form-error">一覧を取得できませんでした。取得済みの一覧があれば使います。</p>}
+          {commandStatus.kind === 'apply-error' && <p className="form-error">一覧を実行環境に反映できませんでした。「今すぐ確認」で再試行してください。</p>}
+        </div>
         {models && (
           <div className="update-row">
             <span className="update-name">モデル</span>
@@ -183,7 +198,8 @@ function UpdatesCard({ updates }: { updates: Updates }) {
           </div>
           <details className="model-sync-details">
             <summary>同期の詳細</summary>
-            <p className="muted">GPT はアカウントの一覧に、OpenCode Go はサービスの一覧に、Claude などは pi-ai の最新版に合わせます。</p>
+            <p className="muted">GPT はアカウントの一覧に、OpenCode Go と Command Code は各サービスの一覧に、Claude などは pi-ai の最新版に合わせます。</p>
+            {commandConfigured && <p className="muted">Command Code の一覧: {command?.checkedAt ? `取得済み（${dateTime(command.checkedAt)}）` : '未取得'}。キーとプランの有効性は確認しません。</p>}
             <p className="muted">
               モデル定義: {models.source ? <code>pi-ai {models.source}</code> : '同梱のもの'}
               {models.latest && models.source && models.latest !== models.source && <> （最新: <code>{models.latest}</code>）</>}

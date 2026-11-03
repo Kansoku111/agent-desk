@@ -92,6 +92,36 @@ test('catalog exclusions remain visible only in the collapsed synchronization de
   assert.doesNotMatch(row, /unlisted|公式カタログ対象外/)
 })
 
+test('About always shows Command Code and does not show success for missing or failed synchronization', async () => {
+  const source = await updatesCardSource()
+  const row = /<span className="update-name">Command Code<\/span>([\s\S]*?)<\/div>/.exec(source)
+  assert.ok(row, 'Command Code must be visible even before a key is configured')
+  assert.match(row[1], /commandStatus\.label/)
+  assert.match(row[1], /commandStatus\.kind === 'ready'.*aria-label="一覧を同期済み"/)
+  assert.match(row[1], /apply-error/)
+  assert.match(source, /commandCodeStatus/)
+  assert.match(source, /Command Code の一覧/)
+  assert.match(source, /キーとプランの有効性は確認しません/)
+})
+
+test('the composer keeps an absent Command Code provider discoverable', async () => {
+  const source = await fs.readFile(new URL('../web/src/components/Pickers.tsx', import.meta.url), 'utf8')
+  assert.match(source, /!groups\.has\('command-code'\).*groups\.set\('command-code', \[\]\)/)
+  assert.match(source, /commandCodeStatus/)
+  assert.match(source, /command\.kind === 'pending'/)
+  assert.match(source, /作業中は終了後に反映します/)
+})
+
+test('workflow and team model fields show Command Code status when no model is selectable', async () => {
+  const workflow = await fs.readFile(new URL('../web/src/components/WorkflowModelField.tsx', import.meta.url), 'utf8')
+  const team = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
+  assert.match(workflow, /commandCodeEmptyHint/)
+  assert.match(workflow, /id: 'command-code'.*models: \[\]/)
+  assert.match(workflow, /group\.status.*disabled/)
+  assert.match(workflow, /group\.empty.*disabled/)
+  assert.match(team, /group\.empty.*disabled/)
+})
+
 test('About exposes one shared manual check for application and model updates', async () => {
   const source = await updatesCardSource()
   assert.match(source, /await\s+Promise\.all\(\[\s*act\('updates\.check'\),\s*act\('modelUpdate\.check'\)\s*\]\)/)

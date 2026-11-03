@@ -5,6 +5,7 @@ import {
 import { act, setState, useStore } from '../store'
 import type { AppState, CatalogModel, FastProvider, PermissionMode } from '../types'
 import { providerReady, visibleModels } from '../model-selection'
+import { commandCodeStatus } from '../command-code-status'
 export { pickDefaultModel, providerReady } from '../model-selection'
 import { basename, effortLabel, fastNote, nearestEffort, parseModel, PERMISSION_INFO, pickableEfforts, workspaceLabel } from '../util'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
@@ -53,6 +54,8 @@ export function ModelPicker({ value, onChange }: { value: string | null; onChang
       list.push(model)
       groups.set(model.provider, list)
     }
+    // The provider must remain discoverable while its inventory is absent or still applying.
+    if (!groups.has('command-code') && !groups.has('command-code-claude')) groups.set('command-code', [])
     // Models the ChatGPT account no longer offers sink to the bottom of their group.
     for (const list of groups.values()) list.sort((a, b) => Number(Boolean(a.retired)) - Number(Boolean(b.retired)) || byNewest(a, b))
     const order = [...new Set([...PROVIDER_ORDER, ...groups.keys()])].filter((provider) => groups.has(provider))
@@ -86,6 +89,9 @@ export function ModelPicker({ value, onChange }: { value: string | null; onChang
           {order.length === 0 && <div className="menu-empty">{server.catalog.models.length ? '表示するモデルがありません。設定からチェックを入れてください。' : 'モデル一覧を読み込み中です…'}</div>}
           {order.map((provider, index) => {
             const ready = providerReady(server, provider)
+            const command = ['command-code', 'command-code-claude'].includes(provider)
+              ? commandCodeStatus(Boolean(server.accounts.commandCode?.configured), server.settings.modelAutoUpdate !== false, server.modelUpdate?.commandCode) : null
+            const entries = groups.get(provider)!
             return (
               <div key={provider}>
                 {index > 0 && <MenuDivider />}
@@ -93,8 +99,15 @@ export function ModelPicker({ value, onChange }: { value: string | null; onChang
                   {providerHeading(server, provider)}
                   <span className="menu-heading-note">{PROVIDER_NOTE[provider] ?? ''}</span>
                 </MenuHeading>
+                {ready && command && ['checking', 'pending', 'error', 'apply-error'].includes(command.kind) && (
+                  <MenuItem label={command.label} description={command.kind === 'pending' ? '作業中は終了後に反映します' : undefined} disabled onSelect={() => {}} />
+                )}
+                {ready && command && !entries.length && !['checking', 'pending'].includes(command.kind) && (
+                  <MenuItem icon={<KeyRound size={14} />} label={command.kind === 'ready' || command.kind === 'manual' || command.kind === 'partial' ? '表示するモデルを設定…' : 'Command Code の設定を開く…'}
+                    onSelect={() => { close(); setState({ settingsOpen: command.kind === 'ready' || command.kind === 'manual' || command.kind === 'partial' ? 'models' : 'accounts' }) }} />
+                )}
                 {ready
-                  ? groups.get(provider)!.map((model) => (
+                  ? entries.map((model) => (
                     <MenuItem
                       key={model.value}
                       label={model.name}

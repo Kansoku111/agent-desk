@@ -164,10 +164,13 @@ test('ordinary fallback stops when earlier goal state cannot be proven inactive'
   runtimeOptions(f)
   f.manager.turns.get(f.thread.id).push({ id: 'goal', status: 'done', user: { text: '/goal complete the project', images: [] }, items: [] })
   f.runtime.prompt = async () => { throw new Error('usage_limit_reached') }
-  const failed = deferred()
+  const failed = deferred(), idle = deferred()
   f.manager.on('turn', ({ turn }) => { if (turn.usageFallback?.status === 'failed') failed.resolve(turn) })
+  f.manager.on('idle', () => { assert.equal(f.manager.busy, false); idle.resolve() })
   await f.manager.send(f.thread.id, { text: 'continue' }, { userInitiated: true })
   const turn = await failed.promise
+  await idle.promise
+  assert.equal(f.manager.pendingFallbacks.size, 0)
   assert.match(turn.items.at(-1).text, /ゴールの状態/)
   assert.equal(f.manager.threads.get(f.thread.id).model, f.thread.model)
 })

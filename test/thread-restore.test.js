@@ -89,7 +89,10 @@ test('a turn can be undone, the agent is told, and the undo can be taken back', 
   const preview = await manager.checkpointPreview(thread.id, turns[0].id)
   assert.deepEqual(preview.files.map((entry) => entry.action).sort(), ['delete', 'restore'])
 
+  let idleAfterRestore = 0
+  manager.on('idle', () => { assert.equal(manager.busy, false); idleAfterRestore++ })
   const restored = await manager.restoreCheckpoint(thread.id, turns[0].id)
+  assert.equal(idleAfterRestore, 1, 'restoration releases a pending runtime restart')
   assert.deepEqual(restored, { files: 2, error: null })
   assert.equal(await file('notes.txt'), 'original')
   assert.equal(await file('new.txt'), null)

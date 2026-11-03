@@ -11,7 +11,7 @@ import { planSettingsUpdate, DEFAULT_SETTINGS } from '../server/settings.js'
 import { mergeTeamConfig, teamConfig } from '../server/team-config.js'
 import { normalizeExecutionModels } from '../server/execution.js'
 import { describeError } from '../server/thread-utils.js'
-import { Catalog } from '../server/catalog.js'
+import { Catalog, matchesCommandCodeCatalog } from '../server/catalog.js'
 
 const apiList = { data: [
   { id: 'deepseek/flash', name: 'Flash', context_length: 1000000, supported_endpoints: ['/chat/completions', '/responses'] },
@@ -72,6 +72,12 @@ test('GOAT errors name the relevant plan or ZDR without changing other providers
   assert.match(describeError(new Error('403 upgrade_required'), thread('command-code'), null).message, /Go プラン.*GOAT/)
   assert.match(describeError(new Error('422 cmd_zdr_no_providers'), thread('command-code-claude'), null).message, /ZDR/)
   assert.doesNotMatch(describeError(new Error('403 upgrade_required'), thread('anthropic'), null).message, /Go プラン/)
+})
+
+test('a dated official ID must be present before the inventory is applied', () => {
+  const expected = [['messages', 'claude-model-20251001', 'Claude dated']]
+  assert.equal(matchesCommandCodeCatalog(expected, []), false)
+  assert.equal(matchesCommandCodeCatalog(expected, [{ provider: 'command-code-claude', id: 'claude-model-20251001', name: 'Claude dated' }]), true)
 })
 
 test('a stale runtime cannot replace either route and no effort is offered', async (t) => {

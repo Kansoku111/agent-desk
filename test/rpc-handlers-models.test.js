@@ -8,7 +8,7 @@ test('manual model refresh checks prices before the shared Go registry is needed
     threads: { busy: false }, catalog: {}, catalogState: () => ({}), updates: {},
     modelUpdater: { check: async () => calls.push('pi') }, modelUpdateState: () => ({}),
     checkEquivalentPricing: async () => calls.push('prices'), refreshCodexModels: async () => calls.push('account'),
-    checkOpenCodeGoModels: async () => calls.push('go'),
+    checkProviderModels: async () => calls.push('go'),
   })
   await handlers['modelUpdate.check']()
   assert.deepEqual(calls, ['prices', 'account', 'pi', 'go'])

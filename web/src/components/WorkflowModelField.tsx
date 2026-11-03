@@ -2,6 +2,7 @@ import { ChevronDown } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { AppState } from '../types'
 import { claudeCodeModels, providerReady, visibleModels } from '../model-selection'
+import { commandCodeEmptyHint, commandCodeStatus } from '../command-code-status'
 import { effortLabel, parseModel } from '../util'
 import { byNewest, providerHeading, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
@@ -9,7 +10,7 @@ import { useWheelSelect } from './useWheelSelect'
 
 export const CLAUDE_CODE = [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:sonnet', name: 'Sonnet' }, { value: 'claude:haiku', name: 'Haiku' }]
 
-interface ModelGroup { id: string; heading: string; note: string; models: { value: string; name: string }[] }
+interface ModelGroup { id: string; heading: string; note: string; models: { value: string; name: string }[]; empty?: string; status?: string }
 
 /** The models a field offers, grouped and named as in the composer's model menu. */
 export function modelGroups(server: AppState): ModelGroup[] {
@@ -19,13 +20,22 @@ export function modelGroups(server: AppState): ModelGroup[] {
     byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model])
   }
   const order = [...new Set([...PROVIDER_ORDER, ...byProvider.keys()])].filter((provider) => byProvider.has(provider))
+  const hasCommand = byProvider.has('command-code') || byProvider.has('command-code-claude')
+  const command = commandCodeStatus(Boolean(server.accounts.commandCode?.configured), server.settings.modelAutoUpdate !== false, server.modelUpdate?.commandCode)
+  const commandNotice = ['checking', 'pending', 'error', 'apply-error'].includes(command.kind) ? command.label : undefined
+  const placeholder: ModelGroup[] = hasCommand ? [] : [{
+    id: 'command-code', heading: 'Command Code', note: PROVIDER_NOTE['command-code'], models: [],
+    empty: commandCodeEmptyHint(Boolean(server.accounts.commandCode?.configured), server.settings.modelAutoUpdate !== false, server.modelUpdate?.commandCode),
+  }]
   return [
     { id: 'claude-code', heading: 'Claude Code', note: '', models: claudeCodeModels(server) },
     ...order.map((provider) => ({
       id: provider, heading: providerHeading(server, provider), note: PROVIDER_NOTE[provider] ?? '',
       models: byProvider.get(provider)!.sort(byNewest),
+      ...(['command-code', 'command-code-claude'].includes(provider) && commandNotice ? { status: commandNotice } : {}),
     })),
-  ].filter((group) => group.models.length)
+    ...placeholder,
+  ].filter((group) => group.models.length || ('empty' in group && group.empty))
 }
 
 function selectedName(groups: ModelGroup[], value: string | null) {
@@ -69,6 +79,8 @@ export function ModelField({ label, labelAction, value, groups, disabled, onChan
             <div key={group.id}>
               {index > 0 && <MenuDivider />}
               <MenuHeading>{group.heading}<span className="menu-heading-note">{group.note}</span></MenuHeading>
+              {group.status && <MenuItem label={group.status} disabled onSelect={() => {}} />}
+              {group.empty && <MenuItem label={group.empty} disabled onSelect={() => {}} />}
               {group.models.map((model) => (
                 <MenuItem key={model.value} label={model.name} selected={model.value === value} onSelect={() => { onChange(model.value); close() }} />
               ))}

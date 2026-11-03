@@ -132,7 +132,7 @@ test('the shared model check also reads OpenCode Go', async () => {
     modelUpdater: { check: async () => order.push('pi-ai') },
     modelUpdateState: () => ({ opencodeGo: null }),
     refreshCodexModels: async () => order.push('codex'),
-    checkOpenCodeGoModels: async () => order.push('opencode-go'),
+    checkProviderModels: async () => order.push('opencode-go'),
   })
   await handlers['modelUpdate.check']()
   assert.deepEqual(order, ['codex', 'pi-ai', 'opencode-go'])

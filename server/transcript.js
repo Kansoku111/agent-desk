@@ -128,7 +128,8 @@ const DATED = /-\d{8}$/
 
 /**
  * Normalizes ACP config options into the model catalog the UI shows.
- * Dated snapshot ids (e.g. claude-…-20250929) are hidden behind their alias.
+ * Dated snapshots are hidden behind catalog aliases, except Command Code's
+ * public inventory where a dated ID can be the only supported model ID.
  */
 export function parseConfigOptions(configOptions = []) {
   const modelOption = configOptions.find((option) => option.id === 'model')
@@ -143,7 +144,7 @@ export function parseConfigOptions(configOptions = []) {
         const parsed = JSON.parse(entry.value)
         if (Array.isArray(parsed)) [provider, id] = parsed
       } catch {}
-      if (DATED.test(id)) continue
+      if (DATED.test(id) && !['command-code', 'command-code-claude'].includes(provider)) continue
       models.push({ value: entry.value, provider, id, name: entry.name ?? id, description: entry.description ?? null })
     }
   }
