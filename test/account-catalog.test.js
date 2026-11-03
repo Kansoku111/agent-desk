@@ -82,12 +82,18 @@ async function keyRefreshesCatalog(t, { provider, account, catalogProvider, prob
   const probeFile = path.join(home, 'probe-response.json')
   const faultFile = path.join(home, 'fail-runtime-warm')
   const runtimeUrl = pathToFileURL(path.join(root, 'server', 'runtime.js')).href
-  const faultHook = injectRuntimeFailure ? `const { existsSync } = await import('node:fs');
+  const faultHook = injectRuntimeFailure ? `const { existsSync, readFileSync } = await import('node:fs');
     const { AcpRuntime } = await import(${JSON.stringify(runtimeUrl)});
+    const fault = () => existsSync(${JSON.stringify(faultFile)}) ? readFileSync(${JSON.stringify(faultFile)}, 'utf8') : '';
     const newSession = AcpRuntime.prototype.newSession;
     AcpRuntime.prototype.newSession = function (...args) {
-      if (existsSync(${JSON.stringify(faultFile)})) throw new Error('fixture runtime warm failed');
+      if (fault() === 'fail') throw new Error('fixture runtime warm failed');
       return newSession.apply(this, args);
+    };
+    const setOption = AcpRuntime.prototype.setOption;
+    AcpRuntime.prototype.setOption = function (...args) {
+      if (fault() === 'effort' && args[1] === 'model' && args[2].includes('deepseek/deepseek-v4.1-flash')) throw new Error('fixture option failed');
+      return setOption.apply(this, args);
     };` : ''
   await fs.writeFile(probeFile, probeBody)
   await fs.writeFile(hook, `import { readFile } from 'node:fs/promises';
@@ -255,6 +261,31 @@ test('Command Code reports runtime apply failure and clears it after a successfu
   })
 })
 
+test('a failed effort discovery stays unapplied and a manual retry learns it', { timeout: 90_000 }, async (t) => {
+  const entry = (id) => ({ id, name: id, context_length: 100000, supported_endpoints: ['/chat/completions'] })
+  const model = 'deepseek/deepseek-v4.1-flash'
+  await keyRefreshesCatalog(t, {
+    provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code', injectRuntimeFailure: true,
+    probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data: [entry('first')] }), expectedCheck: 'unverified',
+    afterAdded: async ({ request, waitFor, probeFile, home, faultFile }) => {
+      await fs.writeFile(faultFile, 'effort')
+      await fs.writeFile(probeFile, JSON.stringify({ data: [entry(model)] }))
+      await request('modelUpdate.check')
+      const failed = await waitFor((state) => state.modelUpdate.commandCode.applyError === true)
+      assert.equal(failed.modelUpdate.commandCode.applied, false)
+      assert.ok(failed.catalog.models.some((item) => item.provider === 'command-code' && item.id === model))
+      assert.deepEqual(failed.catalog.effortsByModel[JSON.stringify(['command-code', model])], [])
+      assert.equal(path.dirname(faultFile), home)
+      assert.equal(path.basename(faultFile), 'fail-runtime-warm')
+      await fs.unlink(faultFile)
+      await request('modelUpdate.check')
+      const recovered = await waitFor((state) => state.modelUpdate.commandCode.applied)
+      assert.equal(recovered.modelUpdate.commandCode.applyError, false)
+      assert.deepEqual(recovered.catalog.effortsByModel[JSON.stringify(['command-code', model])].map((entry) => entry.value).filter(Boolean), ['low', 'high', 'max'])
+    },
+  })
+})
+
 test('Command Code inventory waits for a running task and applies automatically after it finishes', { timeout: 90_000 }, async (t) => {
   const started = Promise.withResolvers(), release = Promise.withResolvers()
   let interrupted = false, finished = false
@@ -306,18 +337,27 @@ test('Command Code inventory waits for a running task and applies automatically 
 })
 
 test('Command Code publishes a full mixed-protocol inventory in the real picker', { timeout: 60_000 }, async (t) => {
-  const data = [
-    ...Array.from({ length: 84 }, (_, i) => ({ id: 'provider/model-' + i, name: 'Model ' + i, context_length: 1000000, supported_endpoints: ['/chat/completions'] })),
-    ...Array.from({ length: 11 }, (_, i) => ({ id: i === 10 ? 'claude-model-20251001' : 'claude-model-' + i, name: 'Claude ' + i, context_length: 200000, supported_endpoints: ['/messages'] })),
-  ]
+  const known = ['deepseek/deepseek-v4.1-flash', 'Qwen/Qwen3.8-27B', 'z-ai/glm-5.3-flash']
+  const snapshot = JSON.parse(await fs.readFile(new URL('../server/command-code-efforts.json', import.meta.url), 'utf8'))
+  const data = [...Object.keys(snapshot.models), 'unknown/fixture'].map((id) => ({
+    id, name: id, context_length: 200000, supported_endpoints: [id.startsWith('claude-') ? '/messages' : '/chat/completions'],
+  }))
   await keyRefreshesCatalog(t, {
     provider: 'commandCode', account: 'commandCode', catalogProvider: 'command-code',
     probe: 'https://api.commandcode.ai/provider/v1/models', probeBody: JSON.stringify({ data }), expectedCheck: 'unverified',
-    afterAdded: async ({ added }) => {
+    afterAdded: async ({ waitFor }) => {
+      const levels = (state, provider, id) => (state.catalog.effortsByModel[JSON.stringify([provider, id])] ?? []).map((entry) => entry.value).filter(Boolean)
+      const added = await waitFor((state) => state.modelUpdate.commandCode.applied && known.every((id) => levels(state, 'command-code', id).length) && levels(state, 'command-code-claude', 'claude-sonnet-5-5').length)
       assert.equal(added.catalog.models.filter((model) => model.provider === 'command-code').length, 84)
       assert.equal(added.catalog.models.filter((model) => model.provider === 'command-code-claude').length, 11)
-      assert.ok(added.catalog.models.some((model) => model.provider === 'command-code-claude' && model.id === 'claude-model-20251001'))
+      assert.ok(added.catalog.models.some((model) => model.provider === 'command-code-claude' && model.id === 'claude-haiku-4-5-20251001'))
       assert.equal(added.modelUpdate.commandCode.applied, true)
+      assert.deepEqual(levels(added, 'command-code', known[0]), ['low', 'high', 'max'])
+      assert.deepEqual(levels(added, 'command-code', known[1]), ['low', 'medium', 'xhigh'])
+      assert.deepEqual(levels(added, 'command-code', known[2]), ['low', 'high', 'max'])
+      assert.deepEqual(levels(added, 'command-code-claude', 'claude-sonnet-5-5'), ['low', 'medium', 'high', 'xhigh', 'max'])
+      assert.deepEqual(levels(added, 'command-code-claude', 'claude-sonnet-4-6'), ['low', 'medium', 'high', 'max'])
+      assert.deepEqual(levels(added, 'command-code', 'unknown/fixture'), [])
     },
   })
 })

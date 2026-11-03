@@ -29,6 +29,24 @@ test('thread RPC only marks accepted human input, never validation failures or a
   assert.equal(answered, 1)
 })
 
+for (const effort of ['', 'high']) test('Command Code team keeps ' + (effort || 'the provider default') + ' reasoning', async (t) => {
+  const f = await fixture(t, { getAccounts: async () => ({ commandCode: { configured: true } }) })
+  const model = JSON.stringify(['command-code', 'deepseek/deepseek-v4.1-flash'])
+  const thread = f.manager.threads.get(f.thread.id)
+  Object.assign(thread, { model, effort, team: { id: 'fixture-team', childId: 'fixture-child' } })
+  const changes = []
+  const options = (currentEffort) => [
+    { id: 'model', currentValue: model, options: [{ group: 'command-code', options: [{ value: model, name: 'Flash' }] }] },
+    { id: 'reasoning_effort', currentValue: currentEffort, options: ['', 'low', 'high', 'max'].map((value) => ({ value, name: value || 'Default' })) },
+  ]
+  f.runtime.newSession = async function () { this.liveSessions.add('s'); return { sessionId: 's', configOptions: options('') } }
+  f.runtime.setOption = async (_sessionId, id, value) => { changes.push([id, value]); return options(value) }
+  await f.manager.send(f.thread.id, { text: 'fixture' })
+  await f.started.promise
+  assert.equal(thread.effort, effort)
+  assert.deepEqual(changes.filter(([id]) => id === 'reasoning_effort'), effort ? [['reasoning_effort', effort]] : [])
+})
+
 test('two sends that arrive together start one turn; the other is refused', async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-send-'))
   t.after(() => fs.rm(base, { recursive: true, force: true }))

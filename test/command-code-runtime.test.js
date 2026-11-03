@@ -14,8 +14,8 @@ import { appPaths } from '../server/paths.js'
 import { AcpRuntime } from '../server/runtime.js'
 import { TOOL_MODE_CONFIG } from '../server/ptc.js'
 
-for (const endpoint of ['chat', 'messages']) {
-  test('real DSH uses the Command Code ' + endpoint + ' route with credentials and ZDR', { timeout: 90000 }, async (t) => {
+for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'default', 'low', 'xhigh', 'max']) {
+  test('real DSH uses the Command Code ' + endpoint + ' route with credentials and ZDR (' + mode + ')', { timeout: 90000 }, async (t) => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-runtime-'))
     const paths = appPaths(home)
     const workspace = path.join(home, 'workspace')
@@ -23,13 +23,14 @@ for (const endpoint of ['chat', 'messages']) {
     await fs.mkdir(workspace)
     await fs.writeFile(path.join(workspace, 'evidence.txt'), 'fixture evidence')
     const requests = [], updates = []
+    const modelId = mode === 'unknown' ? 'test-model' : endpoint === 'messages' ? 'claude-sonnet-5-5' : mode === 'xhigh' ? 'Qwen/Qwen3.8-27B' : 'deepseek/deepseek-v4.1-flash'
     const server = http.createServer(async (req, res) => {
       let raw = ''
       for await (const chunk of req) raw += chunk
       requests.push({ url: req.url, headers: req.headers, body: JSON.parse(raw) })
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       if (endpoint === 'chat') {
-        const base = { id: 'mock', object: 'chat.completion.chunk', created: 0, model: 'test-model' }
+        const base = { id: 'mock', object: 'chat.completion.chunk', created: 0, model: modelId }
         const delta = requests.length === 1
           ? { role: 'assistant', tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'read', arguments: JSON.stringify({ file_path: 'evidence.txt' }) } }] }
           : { role: 'assistant', content: 'fixture reply' }
@@ -38,7 +39,7 @@ for (const endpoint of ['chat', 'messages']) {
         res.end('data: [DONE]\n\n')
       } else {
         const send = (type, obj) => res.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...obj }) + '\n\n')
-        send('message_start', { message: { id: 'mock', type: 'message', role: 'assistant', model: 'test-model', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } })
+        send('message_start', { message: { id: 'mock', type: 'message', role: 'assistant', model: modelId, content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } })
         if (requests.length === 1) {
           send('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'call-1', name: 'read', input: {} } })
           send('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ file_path: 'evidence.txt' }) } })
@@ -56,9 +57,9 @@ for (const endpoint of ['chat', 'messages']) {
     await once(server, 'listening')
     const root = 'http://127.0.0.1:' + server.address().port + '/provider'
     const provider = endpoint === 'chat' ? 'command-code' : 'command-code-claude'
-    const routes = commandCodeRoutes([{ id: 'test-model', name: 'Test', contextWindow: 32768, endpoint }], { root, zdr: true })
+    const routes = commandCodeRoutes([{ id: modelId, name: 'Test', contextWindow: 32768, endpoint }], { root, zdr: true })
     const rows = YAML.parse(homePatch({ commandCodeRoutes: routes }))
-    rows.find((row) => row.id === 'acp').config = { provider, model: 'test-model' }
+    rows.find((row) => row.id === 'acp').config = { provider, model: modelId }
     await fs.writeFile(paths.homePatch, YAML.stringify(rows))
     await new CredentialStore(paths.credentials).setRef(COMMAND_CODE_REF, 'fixture-not-a-real-key')
     const runtime = new AcpRuntime({ mode: 'read-only', paths, onUpdate: (_id, update) => updates.push(update), onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
@@ -71,6 +72,10 @@ for (const endpoint of ['chat', 'messages']) {
     })
     await runtime.start()
     const session = await runtime.newSession(workspace)
+    if (!['unknown', 'default'].includes(mode)) {
+      const options = await runtime.setOption(session.sessionId, 'reasoning_effort', mode)
+      assert.equal(options.find((option) => option.id === 'reasoning_effort')?.currentValue, mode)
+    }
     await runtime.setOption(session.sessionId, TOOL_MODE_CONFIG, 'native')
     const result = await runtime.prompt(session.sessionId, [{ type: 'text', text: 'fixture prompt' }])
     assert.equal(result.stopReason, 'end_turn')
@@ -80,7 +85,16 @@ for (const endpoint of ['chat', 'messages']) {
     assert.equal(new URL(requests[0].url, root).pathname, endpoint === 'chat' ? '/provider/v1/chat/completions' : '/provider/v1/messages')
     assert.equal(requests[0].headers['x-cmd-zdr'], '1')
     assert.equal(endpoint === 'chat' ? requests[0].headers.authorization : requests[0].headers['x-api-key'], endpoint === 'chat' ? 'Bearer fixture-not-a-real-key' : 'fixture-not-a-real-key')
-    assert.equal(requests[0].body.model, 'test-model')
+    assert.equal(requests[0].body.model, modelId)
+    if (!['unknown', 'default'].includes(mode) && endpoint === 'chat') assert.equal(requests[0].body.reasoning_effort, mode)
+    if (!['unknown', 'default'].includes(mode) && endpoint === 'messages') {
+      assert.equal(requests[0].body.thinking?.type, 'adaptive')
+      assert.equal(requests[0].body.output_config?.effort, mode)
+    }
+    if (['unknown', 'default'].includes(mode)) {
+      assert.equal(requests[0].body.reasoning_effort, undefined)
+      assert.equal(requests[0].body.output_config, undefined)
+    }
     assert.ok(Array.isArray(requests[0].body.tools))
   })
 }

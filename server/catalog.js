@@ -91,16 +91,15 @@ export class Catalog {
     let changed = false
     const models = parsed.models.filter((model) => PROVIDER_LABELS[model.provider])
     const current = models.length > 0 && matchesSignature(this.signature, models)
-    // Command Code inventory does not describe reasoning controls; both routes explicitly disable them.
-    if (current) for (const model of models.filter((entry) => ['command-code', 'command-code-claude'].includes(entry.provider))) {
-      if (JSON.stringify(this.data.effortsByModel[model.value]) !== '[]') {
-        this.data.effortsByModel[model.value] = []
-        changed = true
-      }
-    }
     // A pending restart can leave old sessions emitting config options. They
     // must neither replace an existing list nor mark the new signature current.
     if (!current && this.data.models.length) return false
+    // Reset old Command Code capabilities once per signature; warmCatalog learns
+    // each model's actual ACP options without erasing previously learned ones.
+    if (current && this.data.signature !== this.signature) for (const model of models.filter((entry) => ['command-code', 'command-code-claude'].includes(entry.provider))) {
+      this.data.effortsByModel[model.value] = []
+      changed = true
+    }
     if (models.length && JSON.stringify(models) !== JSON.stringify(this.data.models)) {
       this.data.models = models
       changed = true

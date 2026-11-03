@@ -23,7 +23,7 @@ import { createAppRestarter } from './app-restart.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
 import { createSettingsService, DEFAULT_SETTINGS, effectiveCustomInstructions, migrateSettings } from './settings.js'
 import { localLlmSettings, localRoute } from './local-llm.js'
-import { CommandCodeModels, commandCodeRoutes } from './command-code.js'
+import { CommandCodeModels, commandCodeRoutes, matchesCommandCodeEfforts } from './command-code.js'
 import { teamConfig } from './team-config.js'
 import { readJson, UnmovableFileError, writeJson } from './json-file.js'
 import { catalogModelLimits, configuredModelCatalog, readOpenCodeCatalog } from './model-catalog.js'
@@ -244,8 +244,16 @@ setEquivalentPricing(equivalentPricing.rates)
 const commandCodeModels = await new CommandCodeModels({ file: path.join(paths.home, 'command-code-models.json') }).load()
 let commandCodeChecking = false
 let commandCodeApplyFailed = false
+const COMMAND_CODE_LEARN = 3
 const commandCodeExpected = () => commandCodeModels.models.map(({ id, endpoint, name }) => [endpoint, id, name])
-const commandCodeApplied = () => matchesCommandCodeCatalog(commandCodeExpected(), catalog.data.models)
+const commandCodeApplied = () => {
+  let signature
+  try { signature = JSON.parse(catalog.data.signature) } catch { return false }
+  return signature?.commandCodeLearn === COMMAND_CODE_LEARN
+    && matchesCommandCodeCatalog(commandCodeExpected(), catalog.data.models)
+    && matchesCommandCodeEfforts(commandCodeModels.models, catalog.data.effortsByModel)
+}
+const commandCodeNeedsWarm = async () => commandCodeModels.models.length > 0 && (await accounts()).commandCode.configured && !commandCodeApplied()
 const opencodeRegistry = await new OpenCodeGoRegistry({
   file: path.join(paths.home, 'opencode-go-definitions.json'),
   base: () => readOpenCodeCatalog(modelUpdater.fetched), registry: modelRegistry,
@@ -354,8 +362,8 @@ const catalogSignature = async (result) => JSON.stringify({
     : [],
   local: localLlmSettings(settings.localLlm),
   commandCode: (await accounts()).commandCode.configured ? commandCodeExpected() : [],
-  // Only Command Code changed its dated-ID visibility; other caches remain valid.
-  commandCodeLearn: (await accounts()).commandCode.configured ? 2 : undefined,
+  // Command Code's model-specific efforts changed; other provider caches remain valid.
+  commandCodeLearn: (await accounts()).commandCode.configured ? COMMAND_CODE_LEARN : undefined,
 })
 
 const getSettings = () => settings
@@ -694,14 +702,14 @@ async function restartRuntimesWhenIdle() {
     throw error
   }
   broadcast('runtime', { runtime: pool.status() })
-  if (catalog.stale) void warmCatalogAndReport('model catalog refresh')
+  if (catalog.stale || await commandCodeNeedsWarm()) void warmCatalogAndReport('model catalog refresh')
 }
 
 /** Report failure only for the inventory that this asynchronous warm actually tried. */
 async function warmCatalogAndReport(label) {
   const signature = catalog.signature
   try {
-    await threads.warmCatalog()
+    await threads.warmCatalog({ force: await commandCodeNeedsWarm() })
     if (catalog.signature === signature && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
   } catch (error) {
     if (catalog.signature === signature && commandCodeModels.models.length && !commandCodeApplied()) commandCodeApplyFailed = true
@@ -733,7 +741,7 @@ async function performModelCatalogUpdate({ deferRuntimeEffects = false, forceOpe
   const result = await syncModelCatalog()
   resetPricing()
   catalog.setSignature(await catalogSignature(result))
-  const restartRequired = result.changed || catalog.stale
+  const restartRequired = result.changed || catalog.stale || await commandCodeNeedsWarm()
   if (!commandCodeApplied()) commandCodeApplyFailed = false
   // settings.update combines catalog, home-patch and tool changes into one
   // restart. Other callers retain the full catalog refresh behavior.

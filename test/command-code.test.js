@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import YAML from 'yaml'
-import { CommandCodeModels, commandCodeRoutes, parseCommandCodeModels, COMMAND_CODE_MODELS_URL } from '../server/command-code.js'
+import { CommandCodeModels, commandCodeRoutes, matchesCommandCodeEfforts, parseCommandCodeModels, COMMAND_CODE_MODELS_URL } from '../server/command-code.js'
 import { homePatch } from '../server/dsh-config.js'
 import { dshEnv } from '../server/dsh-env.js'
 import { planSettingsUpdate, DEFAULT_SETTINGS } from '../server/settings.js'
@@ -53,6 +53,57 @@ test('the two official routes share a key and keep ZDR opt-in', () => {
   assert.equal(planSettingsUpdate(structuredClone(DEFAULT_SETTINGS), { commandCodeZdr: true }, 0).effects.homePatch, true)
 })
 
+test('official model-specific effort levels use only Provider API-compatible values', () => {
+  const models = [
+    { id: 'deepseek/deepseek-v4.1-flash', endpoint: 'chat' },
+    { id: 'Qwen/Qwen3.8-27B', endpoint: 'chat' },
+    { id: 'z-ai/glm-5.3-flash', endpoint: 'chat' },
+    { id: 'constructor', endpoint: 'chat' },
+    { id: 'claude-sonnet-5-5', endpoint: 'messages' },
+    { id: 'claude-sonnet-4-6', endpoint: 'messages' },
+    { id: 'claude-haiku-4-5-20251001', endpoint: 'messages' },
+  ].map((model) => ({ ...model, name: model.id, contextWindow: 200000 }))
+  const routes = commandCodeRoutes(models)
+  const efforts = Object.fromEntries(Object.values(routes).flatMap((route) => route.models.map((model) => [model.id, model.reasoningEfforts])))
+  assert.deepEqual(efforts['deepseek/deepseek-v4.1-flash'], { low: 'low', high: 'high', max: 'max' })
+  assert.deepEqual(efforts['Qwen/Qwen3.8-27B'], { low: 'low', medium: 'medium', xhigh: 'xhigh' })
+  assert.deepEqual(efforts['z-ai/glm-5.3-flash'], { low: 'low', high: 'high', max: 'max' })
+  assert.deepEqual(efforts['claude-sonnet-5-5'], { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' })
+  assert.deepEqual(efforts['claude-sonnet-4-6'], { low: 'low', medium: 'medium', high: 'high', max: 'max' })
+  assert.equal(efforts['claude-haiku-4-5-20251001'], false)
+  assert.equal(efforts.constructor, false)
+  assert.equal(routes['command-code'].compat.thinkingFormat, 'openai')
+  assert.equal(routes['command-code'].compat.supportsReasoningEffort, true)
+  assert.equal(routes['command-code-claude'].compat.forceAdaptiveThinking, true)
+})
+
+test('inventory is not applied until all known model efforts reach the picker', () => {
+  const models = [
+    { id: 'deepseek/deepseek-v4.1-flash', endpoint: 'chat' },
+    { id: 'Qwen/Qwen3.8-27B', endpoint: 'chat' },
+    { id: 'claude-sonnet-5-5', endpoint: 'messages' },
+    { id: 'unknown', endpoint: 'chat' },
+  ]
+  const key = (provider, id) => JSON.stringify([provider, id])
+  const efforts = (values) => ['', ...values].map((value) => ({ value }))
+  const learned = {
+    [key('command-code', models[0].id)]: efforts(['low', 'high', 'max']),
+    [key('command-code', models[1].id)]: efforts(['low', 'medium', 'xhigh']),
+  }
+  assert.equal(matchesCommandCodeEfforts(models, learned), false)
+  learned[key('command-code-claude', models[2].id)] = efforts(['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.equal(matchesCommandCodeEfforts(models, learned), false) // unknown still needs its explicit empty state
+  learned[key('command-code', models[3].id)] = []
+  assert.equal(matchesCommandCodeEfforts(models, learned), true)
+  learned[key('command-code', models[3].id)] = efforts(['low'])
+  assert.equal(matchesCommandCodeEfforts(models, learned), false)
+  learned[key('command-code', models[3].id)] = []
+  learned[key('command-code', models[1].id)] = efforts(['low', 'medium'])
+  assert.equal(matchesCommandCodeEfforts(models, learned), false)
+  learned[key('command-code', models[1].id)] = [null]
+  assert.equal(matchesCommandCodeEfforts(models, learned), false)
+})
+
 test('team choices preserve each protocol and slash-bearing model id', () => {
   const defaults = teamConfig({})
   assert.equal(defaults.commandCode.enabled, false)
@@ -98,6 +149,35 @@ test('a stale runtime cannot replace either route and no effort is offered', asy
   catalog.learn(options([['command-code', 'deepseek/flash', 'Renamed'], ['command-code-claude', 'claude-test']]))
   assert.equal(catalog.stale, false)
   assert.equal(catalog.data.models.find((entry) => entry.id === 'deepseek/flash').name, 'Renamed')
+})
+
+test('learning Command Code efforts preserves other models and resets only on a new signature', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-efforts-'))
+  t.after(async () => {
+    // Catalog writes are asynchronous; let the atomic writes settle before removing their directory.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(path.dirname(home), os.tmpdir())
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
+  const entries = [['command-code', 'deepseek/flash'], ['command-code', 'Qwen/test']]
+  const signature = (version) => JSON.stringify({ commandCode: entries.map(([, id]) => ['chat', id, id]), commandCodeLearn: version })
+  const catalog = await new Catalog(path.join(home, 'catalog.json'), signature(1)).load()
+  const value = (i) => JSON.stringify(entries[i])
+  const options = (i, levels) => [
+    { id: 'model', currentValue: value(i), options: entries.map(([provider, id]) => ({ group: provider, options: [{ value: JSON.stringify([provider, id]), name: id }] })) },
+    { id: 'reasoning_effort', currentValue: levels[0], options: levels.map((level) => ({ value: level, name: level })) },
+  ]
+  catalog.learn(options(0, ['low', 'high', 'max']))
+  catalog.learn(options(1, ['low', 'medium', 'xhigh']))
+  assert.deepEqual(catalog.data.effortsByModel[value(0)].map((entry) => entry.value), ['low', 'high', 'max'])
+  assert.deepEqual(catalog.data.effortsByModel[value(1)].map((entry) => entry.value), ['low', 'medium', 'xhigh'])
+  catalog.setSignature(signature(2))
+  catalog.learn(options(0, ['low', 'high']))
+  assert.deepEqual(catalog.data.effortsByModel[value(0)].map((entry) => entry.value), ['low', 'high'])
+  assert.deepEqual(catalog.data.effortsByModel[value(1)], [])
+  catalog.learn(options(1, ['medium']))
+  assert.deepEqual(catalog.data.effortsByModel[value(0)].map((entry) => entry.value), ['low', 'high'])
+  assert.deepEqual(catalog.data.effortsByModel[value(1)].map((entry) => entry.value), ['medium'])
 })
 
 test('refresh is anonymous and retains the last good inventory on failure', async (t) => {

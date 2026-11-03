@@ -1293,7 +1293,11 @@ export class ThreadManager extends EventEmitter {
     const strict = thread.preset || turn.usageFallback || (thread.ab && (wanted || thread.ab.strictEffort)) || thread.team?.strictEffort || (thread.team?.role === 'observer' && Boolean(wanted))
     const label = thread.team?.role === 'observer' ? '観測者' : thread.preset ? 'タスクのプリセット' : thread.ab ? 'AB' : turn.usageFallback ? 'フォールバック先' : 'eco'
     if (strict) assertWorkflowEffort(wanted, parsed, label)
-    const target = strict ? wanted : nearestEffort(wanted, parsed.efforts)
+    // Team settings expose a provider-default choice. Keep it for Command Code
+    // instead of silently upgrading existing unset entries to an explicit level.
+    const commandDefault = thread.team && !wanted && parsed.efforts.some((entry) => entry.value === '')
+      && ['command-code', 'command-code-claude'].includes(parsed.models.find((model) => model.value === thread.model)?.provider)
+    const target = strict || commandDefault ? wanted : nearestEffort(wanted, parsed.efforts)
     if (target !== wanted) {
       thread.effort = target
       this.#saveIndex()
@@ -1590,8 +1594,8 @@ export class ThreadManager extends EventEmitter {
   }
 
   /** Learns the model catalog once, so the composer has models before the first thread. */
-  async warmCatalog() {
-    if (!this.catalog.stale) return
+  async warmCatalog({ force = false } = {}) {
+    if (!force && !this.catalog.stale) return
     const runtime = await this.pool.get('workspace-write')
     await fs.mkdir(this.paths.runtimeCwd, { recursive: true })
     const created = await runtime.newSession(this.paths.runtimeCwd)

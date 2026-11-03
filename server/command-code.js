@@ -1,8 +1,9 @@
-// Command Code's public Provider API inventory. It describes protocol and context,
-// not plan entitlement or model capabilities; never treat listing as authorization.
+// The Provider API inventory describes protocol and context, not plan entitlement.
+// Reasoning levels are a separate, pinned snapshot from the official CLI catalog.
 import { readJson, writeJson } from './json-file.js'
 import { isLocalModelId } from './local-llm.js'
 import { COMMAND_CODE_REF } from './credentials.js'
+import effortCatalog from './command-code-efforts.json' with { type: 'json' }
 
 export const COMMAND_CODE_MODELS_URL = 'https://api.commandcode.ai/provider/v1/models'
 export const COMMAND_CODE_ROOT = 'https://api.commandcode.ai/provider'
@@ -38,6 +39,26 @@ export function parseCommandCodeModels(body) {
   return { models, skipped }
 }
 
+/** The inventory has no effort metadata; unknown and explicitly unsupported models stay unselectable. */
+export function commandCodeEfforts(id, endpoint) {
+  const levels = Object.hasOwn(effortCatalog.models, id) ? effortCatalog.models[id] : []
+  // The CLI lists xhigh for Sonnet 4.6, but Anthropic's Messages API does not.
+  // https://platform.claude.com/docs/en/build-with-claude/effort
+  return endpoint === 'messages' && id === 'claude-sonnet-4-6' ? levels.filter((level) => level !== 'xhigh') : levels
+}
+
+/** The picker must contain each model's known levels, or an explicit empty state. */
+export function matchesCommandCodeEfforts(models, effortsByModel) {
+  return models.every(({ id, endpoint }) => {
+    const expected = commandCodeEfforts(id, endpoint)
+    const provider = endpoint === 'messages' ? COMMAND_CODE_MESSAGES : COMMAND_CODE_CHAT
+    const entries = effortsByModel[JSON.stringify([provider, id])]
+    if (!Array.isArray(entries) || entries.some((entry) => !entry || typeof entry.value !== 'string')) return false
+    const actual = entries.map((entry) => entry.value).filter(Boolean).sort()
+    return JSON.stringify(actual) === JSON.stringify([...expected].sort())
+  })
+}
+
 /** Both fixed protocol routes use the user's key and the same Command Code account. */
 export function commandCodeRoutes(models, { zdr = false, root = COMMAND_CODE_ROOT } = {}) {
   const routes = {}
@@ -50,12 +71,17 @@ export function commandCodeRoutes(models, { zdr = false, root = COMMAND_CODE_ROO
     routes[provider] = {
       displayName, api, baseURL, apiKeyEnv: COMMAND_CODE_REF,
       ...(zdr ? { headers: { 'x-cmd-zdr': '1' } } : {}),
-      ...(endpoint === 'chat' ? { compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: 'max_tokens' } } : {}),
+      compat: endpoint === 'chat'
+        ? { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: 'openai', maxTokensField: 'max_tokens' }
+        : { forceAdaptiveThinking: true },
       defaultMaxTokens: MAX_OUTPUT,
-      models: selected.map(({ id, name, contextWindow }) => ({
-        id, name, contextWindow, maxTokens: Math.min(MAX_OUTPUT, Math.max(1, Math.floor(contextWindow / 4))),
-        input: ['text'], reasoningEfforts: false,
-      })),
+      models: selected.map(({ id, name, contextWindow }) => {
+        const levels = commandCodeEfforts(id, endpoint)
+        return {
+          id, name, contextWindow, maxTokens: Math.min(MAX_OUTPUT, Math.max(1, Math.floor(contextWindow / 4))),
+          input: ['text'], reasoningEfforts: levels.length ? Object.fromEntries(levels.map((level) => [level, level])) : false,
+        }
+      }),
     }
   }
   return routes

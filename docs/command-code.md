@@ -20,6 +20,8 @@ Command Code の利用は登録したキーの契約・クレジット・利用�
 
 ## 接続方式と制約
 
-公開一覧の対応エンドポイントに基づき、Chat Completions と Anthropic Messages の2経路を分け、どちらも同じ Command Code API キーを使います。Claude モデルは Anthropic API 直契約や Claude Code の認証には切り替わりません。公開一覧に能力情報がないため、現時点ではテキスト入力のみ、推論レベルの指定なし、最大出力 8,192 トークン以下として扱います。モデルごとの画像・推論能力は推測しません。API 換算額の単価も不明として扱います。
+公開一覧の対応エンドポイントに基づき、Chat Completions と Anthropic Messages の2経路を分け、どちらも同じ Command Code API キーを使います。Claude モデルは Anthropic API 直契約や Claude Code の認証には切り替わりません。テキスト入力のみ、最大出力 8,192 トークン以下として扱い、API 換算額の単価は不明とします。
+
+推論レベルは、同梱した [Command Code 公式 CLI のモデル定義](../server/command-code-efforts.json)で対応レベルが明記されたモデルだけで選択できます。定義にないモデルや、レベル指定がないモデルは「指定不可」のままです。モデル一覧の自動同期ではこの推論定義は更新されず、アプリの更新で追従します。CLI にある「オフ」は Provider API で無効化できることを確認できないため表示しません。Claude 互換経路では [Anthropic の API 仕様](https://platform.claude.com/docs/en/build-with-claude/effort)も考慮します。対応状況や選択したレベルの実際の効果は処理先によって異なる場合があります。
 
 モデル一覧の取得にはキーや会話を送らず、公式一覧から ID・表示名・コンテキスト長・対応形式だけを検証し、`command-code-models.json` に保存します。未対応形式は除外し、日付付きの正規 ID は省略せず表示します。キーは他の API キーと同じ `dsh-home/.credentials.yaml` に保存し、既存のローカル LLM 設定は使いません。
