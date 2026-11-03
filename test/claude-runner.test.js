@@ -165,6 +165,112 @@ test('Claude scores deduplicated responses, retains stopped consumption and rest
   assert.ok(Math.abs(restored.turns(session.id)[1].totalScore.points - 3.1) < 1e-9)
 })
 
+test('stream usage finalizes each response once, even before a stale assistant block arrives', async (t) => {
+  const { runner, spawned, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work', model: 'test-model' })
+  const rates = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }
+  runner.pricing = new Map([['anthropic/test-model', rates]])
+  runner.run(session.id, 'test')
+  const [proc] = spawned
+  const part = (event, extra = {}) => proc.write({ type: 'stream_event', event, ...extra })
+  const message = { id: 'm1', model: 'test-model', content: [{ type: 'text', text: 'answer' }],
+    usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 1000, cache_creation_input_tokens: 100,
+      cache_creation: { ephemeral_1h_input_tokens: 100 }, speed: 'fast' } }
+  part({ type: 'message_start', message })
+  proc.write({ type: 'assistant', message })
+  part({ type: 'message_start', message: { ...message, id: 'nested' } }, { parent_tool_use_id: 'nested-tool' })
+  part({ type: 'message_delta', usage: { output_tokens: 900000 } }, { parent_tool_use_id: 'nested-tool' })
+  proc.write({ type: 'assistant', parent_tool_use_id: 'nested-tool', message: { ...message, id: 'nested' } })
+  part({ type: 'message_stop' }, { parent_tool_use_id: 'nested-tool' })
+  // Usage refinements keep the response's first rates, TTL split and speed.
+  runner.pricing = new Map([['anthropic/test-model', { ...rates, output: 100 }]])
+  part({ type: 'message_delta', usage: { output_tokens: 600 } })
+  part({ type: 'message_delta', usage: { output_tokens: 1000 } })
+  part({ type: 'message_delta', usage: { output_tokens: 1000 } })
+  part({ type: 'message_stop' })
+  proc.write({ type: 'assistant', message })
+  proc.write({ type: 'assistant', message })
+  assert.equal(runner.turns(session.id)[0].usage.requests, 1)
+  assert.equal(runner.turns(session.id)[0].usage.output, 1000)
+  assert.ok(Math.abs(runner.turns(session.id)[0].usage.score.points * 0.002 - 0.02104) < 1e-12)
+  part({ type: 'message_start', message: { id: 'm2', model: 'test-model', usage: { input_tokens: 20, output_tokens: 1 } } })
+  proc.write({ type: 'assistant', message })
+  part({ type: 'message_delta', usage: { output_tokens: 100 } })
+  part({ type: 'message_stop' })
+  // No active message: a stray delta must not change m2 or m1.
+  part({ type: 'message_delta', usage: { output_tokens: 999999 } })
+  const ended = done()
+  proc.write({ type: 'result', subtype: 'success', result: 'done', total_cost_usd: 99,
+    usage: { output_tokens: 1100 } })
+  proc.end()
+  await ended
+  const [turn] = runner.turns(session.id)
+  assert.equal(turn.usage.requests, 2)
+  assert.equal(turn.usage.input, 30)
+  assert.equal(turn.usage.output, 1100)
+  assert.equal(turn.usage.cacheRead, 1000)
+  assert.equal(turn.usage.cacheWrite, 100)
+  assert.equal(turn.usage.score.unpriced, 0)
+  assert.ok(Math.abs(turn.usage.score.points * 0.002 - 0.03108) < 1e-12)
+  await runner.writes.get(session.id)
+  const restored = await new ClaudeRunner({ dir: runner.dir }).load()
+  assert.deepEqual(restored.turns(session.id)[0].usage, turn.usage)
+  assert.deepEqual(restored.get(session.id).score, turn.totalScore)
+})
+
+test('stream-only usage retains stopped consumption and rejects invalid final output counts', async (t) => {
+  const { runner, spawned, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work', model: 'test-model' })
+  runner.pricing = new Map([['anthropic/test-model', { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }]])
+  runner.run(session.id, 'test')
+  const [proc] = spawned
+  const part = (event) => proc.write({ type: 'stream_event', event })
+  part({ type: 'message_delta', usage: { output_tokens: 999999 } })
+  part({ type: 'message_start', message: { id: 'm1', model: 'test-model', usage: { input_tokens: 10, output_tokens: 1 } } })
+  part({ type: 'message_delta', usage: { output_tokens: 1000 } })
+  for (const value of [-1, 1.5, '9000', null, Number.MAX_SAFE_INTEGER + 1]) {
+    part({ type: 'message_delta', usage: { output_tokens: value } })
+  }
+  // A malformed start clears the old correlation, rather than borrowing m1's id.
+  part({ type: 'message_start', message: {} })
+  part({ type: 'message_delta', usage: { output_tokens: 999999 } })
+  const ended = done()
+  runner.stop(session.id)
+  await ended
+  const [turn] = runner.turns(session.id)
+  assert.equal(turn.status, 'cancelled')
+  assert.equal(turn.usage.requests, 1)
+  assert.equal(turn.usage.output, 1000)
+  assert.ok(Math.abs(turn.usage.score.points * 0.002 - 0.01002) < 1e-12)
+  assert.equal(turn.items.length, 0, 'usage events never append transcript content')
+})
+
+test('stream usage preserves per-response long-context tiers and leaves unknown models unpriced', async (t) => {
+  const { runner, spawned, done } = await setup(t)
+  const session = await runner.create({ workspace: '/work', model: 'test-model' })
+  const low = { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
+  runner.pricing = new Map([['anthropic/test-model', { ...low,
+    tiers: [{ inputTokensAbove: 100000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }] }]])
+  runner.run(session.id, 'test')
+  const [proc] = spawned
+  const part = (event) => proc.write({ type: 'stream_event', event })
+  for (const [id, model, input] of [['low', 'test-model', 100000], ['high', 'test-model', 100001], ['unknown', 'unknown-model', 1]]) {
+    part({ type: 'message_start', message: { id, model, usage: { input_tokens: input, output_tokens: 1 } } })
+    part({ type: 'message_delta', usage: { output_tokens: 1000 } })
+    part({ type: 'message_stop' })
+  }
+  const ended = done()
+  proc.write({ type: 'result', subtype: 'success', result: 'done' })
+  proc.end()
+  await ended
+  const { usage } = runner.turns(session.id)[0]
+  assert.equal(usage.requests, 3)
+  assert.equal(usage.output, 3000)
+  assert.equal(usage.score.priced, 2)
+  assert.equal(usage.score.unpriced, 1)
+  assert.ok(Math.abs(usage.score.points - 31.50025) < 1e-12)
+})
+
 test('partial Claude text/thought events share the meter without duplicating the final transcript', async (t) => {
   const { runner, spawned, done } = await setup(t)
   const session = await runner.create({ workspace: '/work' })

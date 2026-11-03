@@ -282,7 +282,7 @@ export class ClaudeRunner extends EventEmitter {
     const command = launchCommand(claude, args)
     const spawnOptions = { cwd: record.workspace, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }
     const live = {
-      proc: null, turn, stopping: false, apiKey: null, refusal: null, stderr: '', result: null, responses: new Map(), untrackedCalls: new Set(),
+      proc: null, turn, stopping: false, apiKey: null, refusal: null, stderr: '', result: null, responses: new Map(), streamId: null, untrackedCalls: new Set(),
       steers: new Map(), early: [], denials: [], ended: false, grace: null,
       // Its commands running in the background (task id → description), and the waits on them.
       background: new Map(), answered: false, wake: null, backgroundCap: null, cutBackground: null,
@@ -442,6 +442,22 @@ export class ClaudeRunner extends EventEmitter {
     proc.on('close', (code) => end(code))
   }
 
+  /** Refine a response, retaining its rates and the cumulative output reported by the stream. */
+  #recordUsage(live, message, streamOutput) {
+    const id = message?.id
+    const raw = message?.usage
+    if (typeof id !== 'string' || !id || !raw || typeof raw !== 'object' || Array.isArray(raw)) return
+    const previous = live.responses.get(id)
+    const model = message.model ?? previous?.model
+    const output = streamOutput ?? previous?.streamOutput
+    const usage = { ...previous?.raw, ...raw }
+    // Assistant blocks can still carry the initial output_tokens: 1 after message_delta.
+    if (output !== undefined) usage.output_tokens = output
+    const parsed = claudeUsage({ model, usage }, this.pricing ?? new Map(), this.now(), previous?.saved)
+    live.responses.set(id, { model, raw: usage, streamOutput: output, ...parsed })
+    live.turn.usage = [...live.responses.values()].reduce((sum, response) => mergeUsage(sum, response.usage), null)
+  }
+
   #onLine(record, live, line) {
     if (!line.trim()) return
     let event
@@ -454,9 +470,18 @@ export class ClaudeRunner extends EventEmitter {
     if (event.type === 'stream_event') {
       // Nested agents may stream concurrently; they are not this turn's model.
       if (event.parent_tool_use_id) return
-      // Partial events are used only for timing. The final assistant message
-      // still owns transcript content, avoiding duplicate text/tool calls.
+      // Stream usage is cumulative; message_start identifies the response it refines.
+      // Transcript content still comes only from assistant messages, never partial text.
       const part = event.event
+      if (part?.type === 'message_start') {
+        live.streamId = typeof part.message?.id === 'string' && part.message.id ? part.message.id : null
+        this.#recordUsage(live, part.message)
+      } else if (part?.type === 'message_delta' && live.responses.has(live.streamId)) {
+        const output = part.usage?.output_tokens
+        if (Number.isSafeInteger(output) && output >= 0) {
+          this.#recordUsage(live, { id: live.streamId, usage: { output_tokens: output } }, output)
+        }
+      } else if (part?.type === 'message_stop') live.streamId = null
       if (!live.stopping && !live.ended) {
         if (part?.type === 'message_start') live.speed.start()
         else if (part?.type === 'content_block_delta') {
@@ -479,16 +504,12 @@ export class ClaudeRunner extends EventEmitter {
       return
     }
     if (event.type === 'system' && event.subtype === 'background_tasks_changed') return this.#onBackground(live, event.tasks)
-    if (event.type === 'assistant') {
+    if (event.type === 'assistant' && !event.parent_tool_use_id) {
       for (const id of untrackedClaudeCalls(event.message)) live.untrackedCalls.add(id)
-      const id = event.message?.id ?? event.uuid
-      const parsed = claudeUsage(event.message, this.pricing ?? new Map(), this.now())
-      if (id && parsed) {
-        live.responses.set(id, parsed.usage)
-        live.turn.usage = [...live.responses.values()].reduce((sum, usage) => mergeUsage(sum, usage), null)
-      }
+      this.#recordUsage(live, { ...event.message, id: event.message?.id ?? event.uuid })
     }
     if (event.type === 'result') {
+      live.streamId = null
       live.speed.pause()
       live.result = event
       if (!live.responses.size) {

@@ -17,6 +17,13 @@ test('bundled models join the catalog once and carry a marker', () => {
   assert.equal(base['anthropic-messages']['claude-sonnet-5-5'], undefined)
 })
 
+test('bundled Sonnet 5.5 uses the official cache-read rate per million tokens', () => {
+  const { data } = applyCatalogAdditions(base, 'anthropic')
+  assert.deepEqual(data['anthropic-messages']['claude-sonnet-5-5'].cost, {
+    input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5,
+  })
+})
+
 test('a bundled model the installed catalog already ships is left alone', () => {
   const shipped = structuredClone(base)
   shipped['anthropic-messages']['claude-sonnet-5-5'] = { id: 'claude-sonnet-5-5', name: 'Shipped' }
