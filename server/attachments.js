@@ -13,12 +13,12 @@ const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i
 /** A file name safe to create on Windows, keeping as much of the original as possible. */
 export function safeFileName(name) {
   let safe = String(name ?? '').replace(/[/\\:*?"<>|\0-\x1f]/g, '_').replace(/[. ]+$/, '').trim()
-  if (!safe || /^\.+$/.test(safe)) safe = 'file'
-  if (RESERVED.test(safe)) safe = `_${safe}`
   if (safe.length > 120) {
     const ext = path.extname(safe).slice(0, 20)
-    safe = safe.slice(0, 120 - ext.length) + ext
+    safe = (safe.slice(0, 120 - ext.length) + ext).replace(/[. ]+$/, '')
   }
+  if (!safe || /^\.+$/.test(safe)) safe = 'file'
+  if (RESERVED.test(safe)) safe = `_${safe}`
   return safe
 }
 

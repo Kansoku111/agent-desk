@@ -16,6 +16,8 @@ test('safeFileName keeps the name but drops what Windows cannot store', () => {
   const long = safeFileName(`${'x'.repeat(300)}.csv`)
   assert.equal(long.length, 120)
   assert.ok(long.endsWith('.csv'))
+  assert.equal(safeFileName(`${'x'.repeat(119)} ${'y'.repeat(40)}`), 'x'.repeat(119))
+  assert.equal(safeFileName(`CON${' '.repeat(117)}suffix`), '_CON')
 })
 
 test('only names the server makes are accepted', () => {
