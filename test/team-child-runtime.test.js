@@ -92,5 +92,5 @@ test('team children run in runtimes of their own, which load the layer', () => {
   assert.equal(child.mode, 'danger-full-access')
   assert.deepEqual(child.patches, ['C:\\home\\team-child.patch.yml'])
   // Settings show the users' runtimes only.
-  assert.deepEqual(Object.keys(pool.status()), ['read-only', 'workspace-write', 'danger-full-access'])
+  assert.deepEqual(Object.keys(pool.status()), ['read-only', 'workspace-write', 'danger-full-access', 'chat-web'])
 })

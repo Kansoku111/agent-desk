@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import {
-  Brain, ChevronDown, FolderOpen, FolderPlus, KeyRound, Monitor, Shield, ShieldAlert, ShieldCheck, X, Zap,
+  Brain, ChevronDown, FolderOpen, FolderPlus, Globe, KeyRound, Monitor, Shield, ShieldAlert, ShieldCheck, X, Zap,
 } from 'lucide-react'
 import { act, setState, useStore } from '../store'
 import type { AppState, CatalogModel, FastProvider, PermissionMode } from '../types'
@@ -227,6 +227,7 @@ const MODE_ICONS: Record<PermissionMode, typeof Shield> = {
   'read-only': Shield,
   'workspace-write': ShieldCheck,
   'danger-full-access': ShieldAlert,
+  'chat-web': Globe,
 }
 
 export function PermissionPicker({ value, onChange, existing, disabled }: {
@@ -246,7 +247,7 @@ export function PermissionPicker({ value, onChange, existing, disabled }: {
           className={`chip ${open ? 'active' : ''} ${value === 'danger-full-access' ? 'warn' : ''}`}
           onClick={toggle}
           disabled={disabled}
-          title={disabled ? '作業中は変更できません' : '権限'}
+          title={disabled ? '作業中は変更できません' : '実行モード'}
         >
           <Icon size={13} />
           <span>{PERMISSION_INFO[value].label}</span>
@@ -256,12 +257,13 @@ export function PermissionPicker({ value, onChange, existing, disabled }: {
     >
       {(close) => (
         <>
-          <MenuHeading>権限</MenuHeading>
+          <MenuHeading>実行モード</MenuHeading>
           {modes.map((mode) => {
             const ModeIcon = MODE_ICONS[mode]
             return (
+              <div key={mode}>
+              {mode === 'chat-web' && <MenuDivider />}
               <MenuItem
-                key={mode}
                 icon={<ModeIcon size={15} />}
                 label={PERMISSION_INFO[mode].label}
                 description={PERMISSION_INFO[mode].description}
@@ -272,6 +274,7 @@ export function PermissionPicker({ value, onChange, existing, disabled }: {
                   close()
                 }}
               />
+              </div>
             )
           })}
           {existing && <div className="menu-footnote">変更すると新しいセッションに切り替わります。会話の要点は自動で引き継ぎます。</div>}

@@ -88,6 +88,10 @@ export const PERMISSION_INFO: Record<PermissionMode, { label: string; descriptio
     label: 'フルアクセス',
     description: '制限も承認もありません。信頼できる環境でのみ使ってください。',
   },
+  'chat-web': {
+    label: 'チャット＋Web検索',
+    description: 'Web検索のみ。ファイルやPCの操作はできません。',
+  },
 }
 
 const EFFORT_LABELS: Record<string, string> = {

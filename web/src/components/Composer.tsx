@@ -88,8 +88,8 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
     const sentAttachments = attachments
     setSending(true)
     const ok = thread
-      ? await sendMessage(thread.id, text.trim(), attachments, plan)
-      : await startThread(text.trim(), attachments, plan)
+      ? await sendMessage(thread.id, text.trim(), attachments, permissionMode === 'chat-web' ? false : plan)
+      : await startThread(text.trim(), attachments, permissionMode === 'chat-web' ? false : plan)
     setSending(false)
     if (ok) {
       // What was typed or attached while the message was on its way is the next one.
@@ -231,7 +231,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
               event.target.value = ''
             }}
           />
-          {(thread?.workspace ?? draft.workspace) && !thread?.ab && (
+          {(thread?.workspace ?? draft.workspace) && !thread?.ab && permissionMode !== 'chat-web' && (
             <SkillPicker workspace={(thread?.workspace ?? draft.workspace)!} threadId={thread?.id} onSelect={(name) => {
               const element = input.current
               const start = element?.selectionStart ?? text.length
@@ -251,7 +251,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
           <EffortPicker model={model} value={effort} onChange={setEffort} />
           <FastModeChip model={model} />
           <PermissionPicker value={permissionMode} onChange={setMode} existing={Boolean(thread?.sessionId)} disabled={running} />
-          {!thread?.ab && (
+          {!thread?.ab && permissionMode !== 'chat-web' && (
             <button type="button" className="icon-button edit-toggle"
               aria-label="編集の依頼" aria-pressed={!plan} disabled={sending}
               title={`編集の依頼: ${plan ? 'オフ（相談のみ・権限は変わりません）' : 'オン'}`}
@@ -260,7 +260,7 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
               {plan && <CircleX size={12} className="edit-toggle-off" aria-hidden="true" />}
             </button>
           )}
-          {ptcAvailable && (
+          {ptcAvailable && permissionMode !== 'chat-web' && (
             <button
               type="button"
               className={`chip ptc-chip ${toolMode === 'ptc' ? 'on' : ''}`}

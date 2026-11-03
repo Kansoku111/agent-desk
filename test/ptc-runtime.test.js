@@ -12,7 +12,7 @@ import { AcpRuntime, RuntimePool } from '../server/runtime.js'
 import { TeamManager } from '../server/teams.js'
 import { ThreadManager } from '../server/threads.js'
 import { appPaths } from '../server/paths.js'
-import { abPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
+import { abPatch, chatWebPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
 import { localRoute } from '../server/local-llm.js'
 import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
 import { PLAN_INSTRUCTION } from '../server/thread-utils.js'
@@ -54,7 +54,7 @@ async function setup(t, mode, profile) {
   const patches = []
   if (profile) {
     const file = path.join(home, 'role.patch.yml')
-    await fs.writeFile(file, profile.startsWith('team') ? teamChildPatch({ subagents, persona }) : abPatch({ subagents, persona, writable: profile === 'ab-write', lean: profile !== 'ab-research' }))
+    await fs.writeFile(file, profile === 'chat-web' ? chatWebPatch() : profile.startsWith('team') ? teamChildPatch({ subagents, persona }) : abPatch({ subagents, persona, writable: profile === 'ab-write', lean: profile !== 'ab-research' }))
     patches.push(file)
   }
   const permissions = []
@@ -83,6 +83,32 @@ async function setup(t, mode, profile) {
   }
   return { runtime, session, prompt, run, requests, updates, permissions, workspace, home, queue, paths, patches, runtimes, cleanups }
 }
+
+test('web-only ACP sends only search and fetch tools with a short prompt', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'read-only', 'chat-web')
+  await f.prompt()
+  const request = f.requests.at(-1)
+  assert.deepEqual(request.tools.map((tool) => tool.function.name).sort(), ['web_fetch', 'web_search'])
+  const system = request.messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n')
+  assert.ok(system.length < 6000, 'system prompt should stay small')
+})
+
+test('chat-web thread overrides saved PTC selection and sends only web tools', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'read-only', 'chat-web')
+  const pool = Object.assign(new EventEmitter(), {
+    get: () => f.runtime.start(), holderOf: (id) => f.runtime.liveSessions.has(id) ? f.runtime : null, status: () => ({}),
+  })
+  const threads = new ThreadManager({ paths: f.paths, pool, catalog: { learn: () => false },
+    getAccounts: async () => ({ localLlm: { configured: true } }), getTurnUsage: async () => null })
+  f.cleanups.push(() => threads.shutdown())
+  f.runtime.onUpdate = (id, update) => threads.onUpdate(id, update)
+  const thread = await threads.create({ workspace: f.workspace, model: '["local-llm","ptc-fixture"]', permissionMode: 'chat-web', toolMode: 'ptc' })
+  await threads.send(thread.id, { text: 'hello' }, { userInitiated: true })
+  await threads.active.get(thread.id).done
+  assert.deepEqual(f.requests.at(-1).tools.map((tool) => tool.function.name).sort(), ['web_fetch', 'web_search'])
+  const { turns } = await threads.get(thread.id)
+  assert.equal(turns.at(-1).status, 'done')
+})
 
 test('real ACP reports the actual model used for fallback decisions', { timeout: 120_000 }, async (t) => {
   const f = await setup(t, 'danger-full-access')

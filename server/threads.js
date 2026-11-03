@@ -441,6 +441,7 @@ export class ThreadManager extends EventEmitter {
     await assertDirectory(workspace)
     if (this.stopping) throw new Error('アプリを終了しています')
     if (!PERMISSION_MODES.includes(permissionMode)) throw new Error('不明な権限モードです')
+    if (permissionMode === 'chat-web' && (team || ab || preset)) throw new Error('チーム・AB・委託担当ではチャット＋Web検索を使えません')
     assertToolMode(toolMode)
     if (createReceipt) {
       const { createId, payloadHash } = createReceipt
@@ -559,6 +560,7 @@ export class ThreadManager extends EventEmitter {
     if (typeof patch.archived === 'boolean') thread.archived = patch.archived
     if (typeof patch.pinned === 'boolean') thread.pinned = patch.pinned
     if (patch.permissionMode !== undefined && patch.permissionMode !== thread.permissionMode) {
+      if (thread.team && patch.permissionMode === 'chat-web') throw new Error('チームのタスクではチャット＋Web検索を選べません')
       if (thread.team?.executionMode === 'research') throw new Error('EXの調査専用タスクは読み取り専用です')
       if (!PERMISSION_MODES.includes(patch.permissionMode)) throw new Error('不明な権限モードです')
       if (running) throw new Error('実行中は権限モードを変更できません')
@@ -1249,7 +1251,7 @@ export class ThreadManager extends EventEmitter {
     if (options) this.#learnOptions(thread, options)
     if (legacyPlan) {
       try {
-        assertSessionPolicy(this.liveOptions.get(thread.sessionId), thread.permissionMode)
+        assertSessionPolicy(this.liveOptions.get(thread.sessionId), thread.permissionMode === 'chat-web' ? 'read-only' : thread.permissionMode)
       } catch (error) {
         this.liveOptions.delete(thread.sessionId)
         await runtime.closeSession(thread.sessionId).catch(() => {})
@@ -1266,7 +1268,8 @@ export class ThreadManager extends EventEmitter {
       await runtime.setGoalWaiting(thread.sessionId, waiting)
       this.#checkRun(thread, active)
     }
-    const toolMode = this.summary(thread).toolMode
+    // PTC exposes code execution; the web-only runtime always uses native tools.
+    const toolMode = thread.permissionMode === 'chat-web' ? 'native' : this.summary(thread).toolMode
     assertToolMode(toolMode)
     const modeOption = toolModeOption(this.liveOptions.get(thread.sessionId))
     // Older/unpatched runtimes remain usable in native mode only. Never send
@@ -1422,6 +1425,7 @@ export class ThreadManager extends EventEmitter {
     if (!userInitiated) return undefined
     const objective = goalCommandObjective(text)
     if (objective === undefined) return undefined
+    if (thread.permissionMode === 'chat-web') throw new Error('チャット＋Web検索では/goalを使えません。')
     if (thread.preset || thread.ab || thread.team?.childId) throw new Error('/goalは通常のdshタスク、eco・TMのdshの親で使えます。AB・子では使えません。')
     if (plan) throw new Error('/goalはPlanをオフにして送信してください。')
     return objective

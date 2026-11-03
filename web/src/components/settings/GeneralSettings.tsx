@@ -113,7 +113,7 @@ export function GeneralSettings() {
       </div>
       <div className="setting">
         <div>
-          <h3>新しいタスクの権限</h3>
+          <h3>新しいタスクの実行モード</h3>
           <p className="muted">{PERMISSION_INFO[settings.defaultPermissionMode].description}</p>
         </div>
         <select
@@ -123,7 +123,7 @@ export function GeneralSettings() {
             update({ defaultPermissionMode: value })
             setState((state) => ({ draft: { ...state.draft, permissionMode: value } }))
           }}
-          aria-label="新しいタスクの権限"
+          aria-label="新しいタスクの実行モード"
         >
           {(Object.keys(PERMISSION_INFO) as PermissionMode[]).map((mode) => <option key={mode} value={mode}>{PERMISSION_INFO[mode].label}</option>)}
         </select>

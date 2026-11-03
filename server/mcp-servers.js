@@ -29,6 +29,7 @@ export function createMcpServerList({ paths, getSettings, getTeams }) {
   /** MCP servers mounted into a task's session; ACP stdio servers need an absolute command. */
   function mcpServersFor(thread) {
     const servers = []
+    if (thread.permissionMode === 'chat-web') return servers
     // Fail closed: observer sessions never inherit ordinary task or leader MCPs.
     if (thread.team?.role === 'observer') {
       const server = getTeams()?.observerMcpFor(thread)

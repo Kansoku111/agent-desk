@@ -20,7 +20,7 @@ import { runtimeHookArgs } from './dsh-compatibility.js'
 
 export { dshEnv }
 
-export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access']
+export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access', 'chat-web']
 
 /** The runtime a thread's session runs in: its mode's, or the team children's of that mode. */
 export const runtimeKey = (thread) => thread.team?.role === 'observer' ? 'team:observer' : thread.preset ? 'preset:' + thread.permissionMode : thread.ab ? (thread.ab.writable ? 'ab:write' : thread.ab.lean ? 'ab:lean' : 'ab:research') : (thread.team?.childId ? `team:${thread.permissionMode}` : thread.permissionMode)
@@ -266,8 +266,8 @@ export class RuntimePool extends EventEmitter {
     super()
     this.runtimes = new Map()
     for (const mode of PERMISSION_MODES) {
-      for (const [key, patches] of [[mode, []], [`team:${mode}`, [paths.teamChildPatch]]]) {
-        const runtime = new AcpRuntime({ mode, paths, patches, onUpdate, onPermission })
+      for (const [key, patches] of (mode === 'chat-web' ? [[mode, [paths.chatWebPatch]]] : [[mode, []], [`team:${mode}`, [paths.teamChildPatch]]])) {
+        const runtime = new AcpRuntime({ mode: mode === 'chat-web' ? 'read-only' : mode, paths, patches, onUpdate, onPermission })
         runtime.on('exit', (info) => this.emit('exit', { mode, key, ...info }))
         this.runtimes.set(key, runtime)
       }
