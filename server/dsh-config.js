@@ -354,11 +354,10 @@ export function abPatch({ subagents = [], persona = null, writable = false, lean
     { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable } }] },
   ])
 }
-/** A read-only observer has no native file, shell, web, goal or delegation tools. */
+/** An observer keeps read-only file tools, without shell, web, goal or delegation tools. */
 export function observerPatch(options = {}) {
   const rows = YAML.parse(abPatch({ ...options, writable: false, lean: true }))
-    .filter((row) => !row.insert?.some((item) => item.id === 'agent-desk-ab-policy') && row.id !== 'tool-fs')
-  rows.push({ id: 'tool-fs', disabled: true })
+    .filter((row) => !row.insert?.some((item) => item.id === 'agent-desk-ab-policy'))
   rows.push({ insert: [{ id: 'agent-desk-observer-policy', name: new URL('./team-observer-policy.js', import.meta.url).href }] })
   return YAML.stringify(rows)
 }

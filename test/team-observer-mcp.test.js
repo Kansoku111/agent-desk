@@ -8,6 +8,8 @@ test('observer MCP exposes only bounded readers and standing restrictions', asyn
   const init = await handleObserverMcp(msg('initialize', { protocolVersion: '2025-06-18' }), call)
   assert.match(init.result.instructions, /Never poll/)
   assert.match(init.result.instructions, /untrusted data/)
+  assert.match(init.result.instructions, /search and read workspace files/)
+  assert.match(init.result.instructions, /Never modify files, execute commands, or delegate/)
   const list = await handleObserverMcp(msg('tools/list'), call)
   assert.deepEqual(list.result.tools.map((tool) => tool.name), ['status', 'child_turns', 'send', 'stop'])
   assert.equal(list.result.tools[1].inputSchema.properties.limit.maximum, 10)

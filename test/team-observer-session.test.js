@@ -125,8 +125,11 @@ test('switching to Claude preserves earlier chat and checks billing before launc
   assert.deepEqual(team.observer.history, [{ id: 'observer-thread', kind: 'thread' }])
   const args = calls.find((entry) => entry[0] === 'set-args')[2]
   assert.ok(args.includes('--strict-mcp-config'))
-  assert.ok(args.includes('--tools'))
-  assert.ok(args.includes('mcp__observer'))
+  assert.equal(args[args.indexOf('--tools') + 1], 'Read,Glob,Grep')
+  assert.equal(args[args.indexOf('--allowedTools') + 1], 'Read,Glob,Grep,mcp__observer')
+  const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
+  assert.match(prompt, /search and read workspace files/)
+  assert.match(prompt, /Never modify files, execute commands, or delegate/)
   assert.equal(calls.at(-1)[0], 'agent-run')
   assert.match(calls.at(-1)[3].blocks[0].text, /最初/)
   assert.match(team.observer.carryover, /not a new authorization/)

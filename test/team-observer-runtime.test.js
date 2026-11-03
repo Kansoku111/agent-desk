@@ -28,18 +28,23 @@ test('only the owning observer mounts its own MCP capability', () => {
   assert.throws(() => list({ ...thread, id: 'other' }), /確認できません/)
 })
 
-test('observer native runtime permits only its four MCP tools', () => {
-  for (const name of ['mcp__observer__status', 'mcp__observer__child_turns', 'mcp__observer__send', 'mcp__observer__stop']) assert.equal(observerToolAllowed(name), true)
-  for (const name of ['run_code', 'read', 'grep', 'write', 'pwsh', 'subagent', 'mcp__agent-team__spawn', 'mcp__observer__other']) assert.equal(observerToolAllowed(name), false)
+test('observer native runtime permits file readers and its four MCP tools, not mutation or execution', () => {
+  for (const name of ['read', 'read_image', 'glob', 'grep', 'mcp__observer__status', 'mcp__observer__child_turns', 'mcp__observer__send', 'mcp__observer__stop']) assert.equal(observerToolAllowed(name), true, name)
+  for (const name of ['run_code', 'write', 'edit', 'bash', 'pwsh', 'subagent', 'subagent_fork', 'create_goal', 'mcp__agent-team__spawn', 'mcp__observer__other']) assert.equal(observerToolAllowed(name), false, name)
   let guard
   apply({ tools: { guard: (fn) => { guard = fn } } })
   assert.equal(guard({ name: 'mcp__observer__status' }), undefined)
-  assert.match(guard({ name: 'read' }), /unavailable/)
+  for (const name of ['read', 'read_image', 'glob', 'grep']) assert.equal(guard({ name }), undefined, name)
+  for (const name of ['write', 'edit', 'pwsh', 'run_code']) assert.match(guard({ name }), /unavailable/, name)
 })
 
-test('observer patch removes file and other tools and installs its own policy', () => {
+test('observer patch keeps read-only file tools and removes execution and delegation tools', () => {
   const rows = YAML.parse(observerPatch({ subagents: [{ provider: 'anthropic', model: 'model' }] }))
-  for (const id of ['tool-fs', 'tool-bash', 'tool-pwsh', 'tool-web', 'tool-goal', 'tool-subagent', 'agent-desk-subagent-claude']) {
+  const files = rows.find((row) => row.id === 'tool-fs')
+  assert.deepEqual(files.config, { write: false, edit: false })
+  assert.notEqual(files.disabled, true)
+  assert.ok(!rows.some((row) => row.id === 'tool-fs-search' && row.disabled))
+  for (const id of ['tool-bash', 'tool-pwsh', 'tool-web', 'tool-goal', 'tool-subagent', 'agent-desk-subagent-claude']) {
     assert.ok(rows.some((row) => row.id === id && row.disabled), id)
   }
   assert.ok(rows.some((row) => row.insert?.some((item) => item.id === 'agent-desk-observer-policy')))
