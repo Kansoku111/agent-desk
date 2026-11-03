@@ -277,6 +277,7 @@ const BASE_SUBAGENT_TOOLS = ['tool-subagent', 'tool-subagent-fork', 'tool-subage
  * children: no subagent tools, so a child does its own work and the team's
  * size stays what the user set. Applied after {@link homePatch}, so it also
  * removes the fixed-model tools that patch adds, with their prompt section.
+ * Children report to the leader; neither goal tools nor the round driver run here.
  * Same options as homePatch (`subagents`, `persona`). The child's standing
  * instructions go in the system prompt ({@link TEAM_CHILD_PLUGIN}), where
  * compaction leaves them be. The child backend bounds automatic compaction
@@ -287,6 +288,10 @@ export function teamChildPatch({ subagents = [], persona = null } = {}) {
   const rows = [
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
     ...pinned.map(({ provider }) => ({ id: `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`, disabled: true })),
+    // A child reports to its leader instead of autonomously repeating a goal while blocked.
+    // Disable the driver as well as the tool so saved goals cannot start new rounds.
+    { id: 'tool-goal', disabled: true },
+    { id: 'goal-round-driver', disabled: true },
     { id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic', disabled: true },
     { insert: [{ id: 'agent-desk-child-compaction', name: TEAM_CHILD_COMPACTION_PLUGIN }] },
   ]

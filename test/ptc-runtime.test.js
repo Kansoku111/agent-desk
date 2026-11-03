@@ -314,6 +314,65 @@ for (const toolMode of ['native', 'ptc']) {
 }
 
 for (const toolMode of ['native', 'ptc']) {
+  test('team child retains a saved goal without autonomous rounds and accepts another request (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
+    const f = await setup(t, 'danger-full-access')
+    const id = f.session.sessionId
+    const objective = 'Previously saved child goal'
+    await f.runtime.setGoalWaiting(id, true)
+    await f.runtime.prompt(id, [{ type: 'text', text: 'Create the previous goal' }], objective)
+    assert.equal(f.requests.length, 1)
+    await f.runtime.stop()
+
+    // Reopen a real persisted goal under the new child role, as after an app restart.
+    const role = path.join(f.home, 'child-goal.patch.yml')
+    await fs.writeFile(role, teamChildPatch())
+    const child = new AcpRuntime({ mode: 'danger-full-access', paths: f.paths, patches: [role],
+      onUpdate: (_id, update) => f.updates.push(update), onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
+    f.runtimes.push(child)
+    await child.start()
+    await child.resumeSession(id, f.workspace)
+    await child.setOption(id, TOOL_MODE_CONFIG, toolMode)
+    if (toolMode === 'ptc') f.queue.push({ name: 'run_code', args: {
+      description: 'Inspect child goal tools',
+      code: 'return { create: typeof tools.create_goal, update: typeof tools.update_goal, get: typeof tools.get_goal };',
+    } })
+    const before = f.requests.length
+    assert.equal((await child.prompt(id, [{ type: 'text', text: 'Browser is unavailable; report the blocker' }])).stopReason, 'end_turn')
+    assert.equal(f.requests.length, before + (toolMode === 'ptc' ? 2 : 1))
+    const request = f.requests.at(-1)
+    if (toolMode === 'ptc') {
+      const result = JSON.stringify(request.messages.filter((entry) => entry.role === 'tool').at(-1).content)
+      assert.match(result, /create[^}]*undefined/)
+      assert.match(result, /update[^}]*undefined/)
+      assert.match(result, /get[^}]*undefined/)
+    } else {
+      const names = request.tools.map((entry) => entry.function.name)
+      for (const name of ['create_goal', 'update_goal', 'get_goal']) assert.ok(!names.includes(name), name)
+    }
+    const reassigned = f.requests.length
+    assert.equal((await child.prompt(id, [{ type: 'text', text: 'Browser is available; perform the measurement' }])).stopReason, 'end_turn')
+    assert.equal(f.requests.length, reassigned + 1, 'only the explicit reassignment runs')
+    await child.stop()
+
+    // The old goal and conversation remain available; no goal round was admitted.
+    await f.runtime.start()
+    await f.runtime.resumeSession(id, f.workspace)
+    f.queue.push({ name: 'get_goal', args: {} })
+    const inspection = f.requests.length
+    await f.runtime.prompt(id, [{ type: 'text', text: 'Inspect the saved goal' }])
+    assert.equal(f.requests.length, inspection + 2)
+    const latest = f.requests.at(-1)
+    const goal = JSON.stringify(latest.messages.filter((entry) => entry.role === 'tool').at(-1).content)
+    assert.match(goal, /Previously saved child goal/)
+    assert.match(goal, /phase[\s\S]{0,20}active/)
+    assert.match(goal, /activation[\s\S]{0,20}disarmed/)
+    assert.match(goal, /roundsStarted[\s\S]{0,10}0/)
+    assert.match(JSON.stringify(latest.messages), /Browser is unavailable/)
+    assert.match(JSON.stringify(latest.messages), /Browser is available/)
+  })
+}
+
+for (const toolMode of ['native', 'ptc']) {
   test('real team goal wait makes no automatic calls and accepts reports and user prompts (' + toolMode + ')', { timeout: 120_000 }, async (t) => {
     const f = await setup(t, 'danger-full-access')
     await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
@@ -600,9 +659,9 @@ for (const profile of ['ab-read', 'ab-research', 'ab-write', 'team', 'team-read'
     const absent = await f.run('return { subagent: typeof tools.subagent, workflow: typeof tools.workflow, goal: typeof tools.create_goal, write: typeof tools.write };')
     const text = JSON.stringify(absent)
     assert.match(text, /subagent[^}]*undefined/)
+    assert.match(text, /goal[^}]*undefined/)
     if (profile.startsWith('ab')) {
       assert.match(text, /workflow[^}]*undefined/)
-      assert.match(text, /goal[^}]*undefined/)
     }
     const target = path.join(f.workspace, 'role-write.txt')
     if (writable) {
@@ -630,6 +689,8 @@ for (const profile of ['ab-read', 'ab-research', 'ab-write', 'team', 'team-read'
     assert.ok(schemas.includes('read'))
     assert.ok(!schemas.includes('run_code'))
     assert.ok(!schemas.includes('subagent'))
+    assert.ok(!schemas.includes('create_goal'))
+    assert.ok(!schemas.includes('update_goal'))
   })
 }
 
