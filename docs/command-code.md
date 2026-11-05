@@ -20,7 +20,7 @@ Command Code の利用は登録したキーの契約・クレジット・利用�
 
 ## 接続方式と制約
 
-公開一覧の対応エンドポイントに基づき、Chat Completions と Anthropic Messages の2経路を分け、どちらも同じ Command Code API キーを使います。Claude モデルは Anthropic API 直契約や Claude Code の認証には切り替わりません。テキスト入力のみです。出力上限は DeepSeek V4.1 Flash（`deepseek/deepseek-v4.1-flash`）のみ最大 65,536 トークン、それ以外は最大 8,192 トークンで、いずれもコンテキスト長の4分の1以下に制限します。推論も出力枠を消費するため、上限を増やすと利用量や処理時間が増える場合があります。[API 換算額の単価と制約](usage.md#回答末尾の累計api換算額)は実請求とは別です。
+公開一覧の対応エンドポイントに基づき、Chat Completions と Anthropic Messages の2経路を分け、どちらも同じ Command Code API キーを使います。Claude モデルは Anthropic API 直契約や Claude Code の認証には切り替わりません。テキスト入力のみです。出力上限は DeepSeek V4.1 Flash（`deepseek/deepseek-v4.1-flash`）が最大 65,536 トークン、Claude Haiku 5.5（`claude-haiku-5-5`）が[公式の最大出力](https://platform.claude.com/docs/en/models/haiku-5-5/overview)に合わせて最大 128,000 トークン、それ以外は最大 8,192 トークンです。いずれもコンテキスト長の4分の1以下に制限します。推論も出力枠を消費するため、上限を増やすと利用量や処理時間が増える場合があります。[API 換算額の単価と制約](usage.md#回答末尾の累計api換算額)は実請求とは別です。
 
 推論レベルは、同梱した [Command Code 公式 CLI のモデル定義](../server/command-code-efforts.json)で対応レベルが明記されたモデルだけで選択できます。定義にないモデルや、レベル指定がないモデルは「指定不可」のままです。モデル一覧の自動同期ではこの推論定義は更新されず、アプリの更新で追従します。「既定」は推論レベルを指定せず処理先の既定に従います。CLI にある「オフ」は Provider API で無効化できることを確認できないため表示しません。Claude 互換経路では [Anthropic の API 仕様](https://platform.claude.com/docs/en/build-with-claude/effort)も考慮します。対応状況や選択したレベルの実際の効果は処理先によって異なる場合があります。
 

@@ -13,8 +13,10 @@ const MAX_AGE_MS = 6 * 60 * 60 * 1000
 const MAX_MODELS = 2000
 const MAX_CONTEXT = 100_000_000
 const MAX_OUTPUT = 8192
-// Max-effort reasoning can exhaust 8K before the answer; other models retain the conservative default.
+// Reasoning consumes the output budget too; keep other models at the conservative default.
 const DEEPSEEK_FLASH_OUTPUT = 65536
+// https://platform.claude.com/docs/en/models/haiku-5-5/overview
+const HAIKU_55_OUTPUT = 128000
 
 function usable(entry) {
   return entry && isLocalModelId(entry.id)
@@ -79,8 +81,10 @@ export function commandCodeRoutes(models, { zdr = false, root = COMMAND_CODE_ROO
       defaultMaxTokens: MAX_OUTPUT,
       models: selected.map(({ id, name, contextWindow }) => {
         const levels = commandCodeEfforts(id, endpoint)
+        const output = endpoint === 'chat' && id === 'deepseek/deepseek-v4.1-flash' ? DEEPSEEK_FLASH_OUTPUT
+          : endpoint === 'messages' && id === 'claude-haiku-5-5' ? HAIKU_55_OUTPUT : MAX_OUTPUT
         return {
-          id, name, contextWindow, maxTokens: Math.min(endpoint === 'chat' && id === 'deepseek/deepseek-v4.1-flash' ? DEEPSEEK_FLASH_OUTPUT : MAX_OUTPUT, Math.max(1, Math.floor(contextWindow / 4))),
+          id, name, contextWindow, maxTokens: Math.min(output, Math.max(1, Math.floor(contextWindow / 4))),
           input: ['text'], reasoningEfforts: levels.length ? Object.fromEntries(levels.map((level) => [level, level])) : false,
         }
       }),
