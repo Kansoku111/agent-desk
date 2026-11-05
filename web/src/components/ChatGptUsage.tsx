@@ -29,7 +29,7 @@ export function ChatGptLimits() {
   return (
     <div className="limits">
       <div className="limits-head">
-        <span>Codex の利用上限（SIWC のアプリ別使用枠とは別）</span>
+        <span>Codex の利用上限（SIWC の利用可否を保証しません）</span>
         <button type="button" className="icon-button small" title="最新の状態に更新" aria-label="利用上限を更新" onClick={() => void refresh(0)} disabled={loading}>
           <RefreshCw size={13} className={loading ? 'spin' : ''} />
         </button>
@@ -66,16 +66,18 @@ export function ChatGptLimitChip() {
   const usage = useStore((state) => state.server?.chatgptUsage ?? null)
   if (usage?.status !== 'ok' || usage.windows.length === 0) return null
   const tightest = usage.windows.reduce((low, window) => (remaining(window) < remaining(low) ? window : low))
-  const left = usage.limitReached ? 0 : remaining(tightest)
+  // Reaching the limit is its own fact: keep the window's real number instead of inventing 0% left.
+  const left = remaining(tightest)
+  const reached = usage.limitReached
   return (
     <button
       type="button"
-      className={`limit-chip ${left <= 20 ? 'low' : ''}`}
+      className={`limit-chip ${reached || left <= 20 ? 'low' : ''}`}
       title={[...usage.windows.map(windowLine), 'クリックで詳細'].join('\n')}
       onClick={() => setState({ settingsOpen: 'accounts' })}
     >
       <Gauge size={13} />
-      <span>Codex {tightest.label} 残り {left}%</span>
+      <span>{reached ? `Codex 上限到達 · ${tightest.label} 残り ${left}%` : `Codex ${tightest.label} 残り ${left}%`}</span>
     </button>
   )
 }

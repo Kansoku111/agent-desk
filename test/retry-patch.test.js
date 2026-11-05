@@ -98,7 +98,7 @@ test('a rate limit is a rate limit again, and a hard limit stays a hard limit', 
       ['an exhausted quota', 'openai-codex API error (429): 429 {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}', 'QUOTA', 'QUOTA'],
       // A shared subscription limit and a free-tier limit are permanent too,
       // though the installed dsh cannot tell them from a rate limit.
-      ['a shared subscription limit', 'openai-codex API error (429): 429 {"error":{"message":"subscription_sharing_usage_limit_exceeded: ChatGPT のプランの利用上限に達しました。","type":"invalid_request_error","code":"subscription_sharing_usage_limit_exceeded"}}', 'RATE_LIMIT', 'PI_AI_ERROR'],
+      ['a shared subscription limit', 'openai-codex API error (429): 429 {"error":{"message":"subscription_sharing_usage_limit_exceeded: ChatGPT またはこのアプリの利用上限に達しました。","type":"invalid_request_error","code":"subscription_sharing_usage_limit_exceeded"}}', 'RATE_LIMIT', 'PI_AI_ERROR'],
       ['a free-tier limit', 'opencode-go API error (429): 429 {"error":{"type":"FreeUsageLimitError","message":"Your free usage limit has been reached."}}', 'RATE_LIMIT', 'QUOTA'],
     ]
     for (const [name, message, upstreamClass, patchedClass] of cases) {

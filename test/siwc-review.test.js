@@ -11,7 +11,7 @@ import { newerModels, readFetchedCatalog } from '../server/model-updates.js'
 import { homePatch } from '../server/dsh-config.js'
 import { SIWC_API, SIWC_BASE_URL } from '../server/siwc-route.js'
 import { withSiwc } from '../server/siwc-request.js'
-import { SIWC_LIMIT_CODE, SIWC_LIMIT_MESSAGE, SIWC_LIMIT_TEXT } from '../server/siwc-usage-error.js'
+import { SIWC_LIMIT_CODE, SIWC_LIMIT_MESSAGE, SIWC_LIMIT_TEXT, explainSiwcUsage } from '../server/siwc-usage-error.js'
 import { describeError } from '../server/thread-utils.js'
 import { stream } from '@earendil-works/pi-ai/api/openai-responses'
 import os from 'node:os'
@@ -205,7 +205,47 @@ test('actual GPT transport preserves optional escalation controls in native and 
   }
 })
 
-test('HTTP429 and streamed usage-limit errors reach actual pi-ai task error with actionable Japanese link, no retries', async () => {
+test('SIWC limit rewrite preserves HTTP/SSE status, headers and machine-readable code', async () => {
+  const limit = { code: SIWC_LIMIT_CODE, message: 'raw usage limit' }
+  const http = await explainSiwcUsage(new Response(JSON.stringify({ error: limit }), {
+    status: 429,
+    statusText: 'Too Many Requests',
+    headers: { 'content-type': 'application/json', 'x-request-id': 'fixture-request-id' },
+  }))
+  assert.equal(http.status, 429)
+  assert.equal(http.statusText, 'Too Many Requests')
+  assert.equal(http.headers.get('x-request-id'), 'fixture-request-id')
+  const httpError = (await http.json()).error
+  assert.equal(httpError.code, SIWC_LIMIT_CODE)
+  assert.ok(!httpError.message.includes('fixture-request-id'))
+  assert.ok(httpError.message.includes(SIWC_LIMIT_TEXT))
+  assert.ok(httpError.message.includes('https://chatgpt.com/settings/usage'))
+
+  const sse = await explainSiwcUsage(new Response('data: ' + JSON.stringify({
+    type: 'response.failed',
+    response: { error: limit },
+  }) + '\n\n', {
+    headers: { 'content-type': 'text/event-stream', 'x-request-id': 'fixture-request-id' },
+  }))
+  assert.equal(sse.status, 200)
+  assert.equal(sse.headers.get('x-request-id'), 'fixture-request-id')
+  const event = JSON.parse((await sse.text()).match(/^data: (.+)$/m)[1])
+  assert.equal(event.response.error.code, SIWC_LIMIT_CODE)
+  assert.ok(event.response.error.message.includes(SIWC_LIMIT_TEXT))
+  assert.ok(event.response.error.message.includes('https://chatgpt.com/settings/usage'))
+
+  for (const error of [
+    { code: 'insufficient_quota', message: 'billing error' },
+    { code: 'invalid_api_key', message: 'authentication error' },
+  ]) {
+    const unrelated = { error }
+    const unchanged = await explainSiwcUsage(Response.json(unrelated, { status: 429 }))
+    assert.deepEqual(await unchanged.json(), unrelated)
+  }
+})
+
+test('HTTP429 and streamed usage-limit errors keep the concise message, link and code without retries', async () => {
+  assert.equal(SIWC_LIMIT_TEXT, 'ChatGPT またはこのアプリの利用上限に達しました。')
   for (const streamed of [false, true]) {
     let calls = 0
     const fetcher = async () => {
@@ -249,11 +289,11 @@ test('HTTP429 and streamed usage-limit errors reach actual pi-ai task error with
     }, options)
     const message = await events.result()
     assert.equal(message.stopReason, 'error')
-    assert.match(message.errorMessage, /ChatGPT のプランの利用上限に達しました/)
+    assert.ok(message.errorMessage.includes(SIWC_LIMIT_TEXT))
     assert.match(message.errorMessage, /https:\/\/chatgpt.com\/settings\/usage/)
     assert.match(message.errorMessage, /subscription_sharing_usage_limit_exceeded/)
     assert.equal(calls, 1)
     assert.equal((await classify())(message.errorMessage), 'PI_AI_ERROR')
   }
-  assert.ok(SIWC_LIMIT_MESSAGE.includes('クレジット'))
+  assert.ok(SIWC_LIMIT_MESSAGE.includes('https://chatgpt.com/settings/usage'))
 })

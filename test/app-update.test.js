@@ -52,6 +52,12 @@ test('latestRelease takes the newest published release', async () => {
   assert.deepEqual(installable.asset, { url: 'https://dl/0.1.9.zip', digest: `sha256:${'a'.repeat(64)}` })
   assert.equal(await latestRelease({ repo: 'o/r', fetch: github([]) }), null)
   await assert.rejects(latestRelease({ repo: 'o/r', fetch: async () => new Response('limit', { status: 403 }) }), /403/)
+  let confirmationCalls = 0
+  await assert.rejects(latestRelease({ repo: 'o/r', fetch: async () => {
+    confirmationCalls += 1
+    return new Response('gateway timeout', { status: 504 })
+  } }), /504/)
+  assert.equal(confirmationCalls, 1)
 })
 
 test('prepareZip checks the hash and the version inside', async (t) => {
@@ -73,6 +79,93 @@ test('prepareZip checks the hash and the version inside', async (t) => {
   await assert.rejects(prepareZip({ release: release('0.2.0', null), dir, fetch, extract: extract('0.2.0') }), /ハッシュ値がありません/)
   await assert.rejects(prepareZip({ release: release(), dir, fetch, extract: extract('0.1.0') }), /0\.2\.0 ではありません/)
   await assert.rejects(prepareZip({ release: { version: '0.2.0', tag: 'v0.2.0', asset: null }, dir, fetch }), /AgentDesk-0\.2\.0\.zip/)
+})
+
+test('prepareZip retries a 504 and verifies the recovered ZIP', async (t) => {
+  const dir = await tempDir(t)
+  const body = 'verified zip bytes'
+  const digest = `sha256:${createHash('sha256').update(body).digest('hex')}`
+  const release = { version: '0.2.0', tag: 'v0.2.0', asset: { url: 'https://dl/x.zip', digest } }
+  const delays = []
+  let attempts = 0
+  let discarded = 0
+  let extracted = false
+  const fetch = async (_url, { signal }) => {
+    attempts += 1
+    assert.equal(signal.aborted, false)
+    if (attempts === 1) {
+      const stream = new ReadableStream({
+        start(controller) { controller.enqueue(new TextEncoder().encode('gateway error')) },
+        cancel() { discarded += 1 },
+      })
+      return new Response(stream, { status: 504 })
+    }
+    return new Response(body)
+  }
+  const payload = await prepareZip({
+    release, dir, fetch, delay: async (milliseconds) => { delays.push(milliseconds) },
+    extract: async (zip, out) => {
+      assert.equal(await read(zip), body)
+      await fs.mkdir(path.join(out, 'AgentDesk'))
+      await fs.writeFile(path.join(out, 'AgentDesk', 'package.json'), JSON.stringify({ name: 'agent-desk', version: '0.2.0' }))
+      extracted = true
+    },
+  })
+  assert.equal(payload, path.join(dir, 'files', 'AgentDesk'))
+  assert.equal(extracted, true)
+  assert.equal(attempts, 2)
+  assert.equal(discarded, 1)
+  assert.deepEqual(delays, [1_000])
+})
+
+test('prepareZip stops after bounded consecutive 504 responses', async (t) => {
+  const dir = await tempDir(t)
+  const release = { version: '0.2.0', tag: 'v0.2.0', asset: { url: 'https://dl/x.zip', digest: `sha256:${'a'.repeat(64)}` } }
+  let attempts = 0
+  let discarded = 0
+  const delays = []
+  const fetch = async () => {
+    attempts += 1
+    return new Response(new ReadableStream({ cancel() { discarded += 1 } }), { status: 504 })
+  }
+  await assert.rejects(prepareZip({ release, dir, fetch, delay: async (milliseconds) => { delays.push(milliseconds) } }), /504/)
+  assert.equal(attempts, 3)
+  assert.equal(discarded, 3)
+  assert.deepEqual(delays, [1_000, 1_000])
+})
+
+test('prepareZip does not retry other HTTP, hash, or extraction failures', async (t) => {
+  const root = await tempDir(t)
+  const body = 'valid archive bytes'
+  const digest = `sha256:${createHash('sha256').update(body).digest('hex')}`
+  const scenarios = [
+    {
+      name: 'http', digest, error: /503/,
+      response: (discard) => new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new TextEncoder().encode('unavailable')) },
+        cancel() { discard() },
+      }), { status: 503 }),
+    },
+    { name: 'hash', digest: `sha256:${'0'.repeat(64)}`, error: /ハッシュ値が一致しません/, response: () => new Response(body) },
+    { name: 'extract', digest, error: /unpack failed/, response: () => new Response(body), extractError: new Error('unpack failed') },
+  ]
+  for (const scenario of scenarios) {
+    let attempts = 0
+    let delays = 0
+    let discarded = 0
+    let extractions = 0
+    const release = { version: '0.2.0', tag: 'v0.2.0', asset: { url: 'https://dl/x.zip', digest: scenario.digest } }
+    await assert.rejects(prepareZip({
+      release, dir: path.join(root, scenario.name),
+      fetch: async () => { attempts += 1; return scenario.response(() => { discarded += 1 }) },
+      delay: async () => { delays += 1 },
+      extract: async () => { extractions += 1; if (scenario.extractError) throw scenario.extractError },
+    }), scenario.error)
+    assert.equal(attempts, 1, `${scenario.name} fetch attempts`)
+    assert.equal(delays, 0, `${scenario.name} retry delays`)
+    assert.equal(extractions, scenario.name === 'extract' ? 1 : 0, `${scenario.name} extraction calls`)
+    if (scenario.name === 'http') assert.equal(discarded, 1)
+  }
 })
 
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', ...args], { cwd, encoding: 'utf8', windowsHide: true }).trim()

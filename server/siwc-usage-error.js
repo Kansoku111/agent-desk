@@ -1,8 +1,7 @@
-// Keep the machine-readable code while making plan limits actionable in tasks.
+// The shared code does not distinguish ChatGPT usage from this app's limit.
 import { observeCache } from './gpt-cache-diagnostics.js'
 export const SIWC_LIMIT_CODE = 'subscription_sharing_usage_limit_exceeded'
-export const SIWC_LIMIT_TEXT = 'ChatGPT のプランの利用上限に達しました。'
-  + 'ChatGPT の設定 → Usage で Agent Desk の上限やクレジットの利用を見直すと続けられます。'
+export const SIWC_LIMIT_TEXT = 'ChatGPT またはこのアプリの利用上限に達しました。'
 export const SIWC_LIMIT_MESSAGE = SIWC_LIMIT_TEXT
   + ' [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage)'
 function explain(error) {

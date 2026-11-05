@@ -38,6 +38,19 @@ export function updateFiles(home) {
 }
 
 const BUSY = '作業中のタスクがあります。終わってから更新してください'
+const DOWNLOAD_TIMEOUT_MS = 10 * 60_000
+const DOWNLOAD_RETRY_DELAY_MS = 1_000
+const DOWNLOAD_MAX_RETRIES = 2
+
+const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+
+async function discardResponseBody(response) {
+  try {
+    await response.body?.cancel()
+  } catch {
+    // A failed response is already unusable; cancellation is only cleanup.
+  }
+}
 
 /** "owner/name" of the GitHub repository in package.json's `repository`, or null. */
 export function githubRepository(pkg) {
@@ -125,15 +138,32 @@ async function packageRoot(dir) {
 }
 
 /** Downloads the release zip, checks it against GitHub's hash and unpacks it; resolves to the new version's folder. */
-export async function prepareZip({ release, dir, fetch = globalThis.fetch, extract = extractZip }) {
+export async function prepareZip({ release, dir, fetch = globalThis.fetch, extract = extractZip, delay = sleep }) {
   if (!release.asset) throw new Error(`${release.tag} に配布用のファイル（${releaseAsset(release.version)}）がありません`)
   const expected = /^sha256:([0-9a-f]{64})$/i.exec(release.asset.digest ?? '')?.[1]?.toLowerCase()
   if (!expected) throw new Error('配布用ファイルのハッシュ値がありません')
   await fsp.rm(dir, { recursive: true, force: true })
   await fsp.mkdir(dir, { recursive: true })
   const zip = path.join(dir, releaseAsset(release.version))
-  const response = await fetch(release.asset.url, { headers: { 'user-agent': 'agent-desk' }, signal: AbortSignal.timeout(10 * 60_000) })
-  if (!response.ok || !response.body) throw new Error(`ダウンロードに失敗しました（${response.status}）`)
+  // One deadline covers all attempts and the pauses between them.
+  const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS
+  let response
+  for (let retry = 0; ; retry += 1) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error('ダウンロードがタイムアウトしました')
+    response = await fetch(release.asset.url, { headers: { 'user-agent': 'agent-desk' }, signal: AbortSignal.timeout(remaining) })
+    if (response.status !== 504) break
+
+    await discardResponseBody(response)
+    if (retry >= DOWNLOAD_MAX_RETRIES || deadline - Date.now() <= DOWNLOAD_RETRY_DELAY_MS) {
+      throw new Error(`ダウンロードに失敗しました（${response.status}）`)
+    }
+    await delay(DOWNLOAD_RETRY_DELAY_MS)
+  }
+  if (!response.ok || !response.body) {
+    await discardResponseBody(response)
+    throw new Error(`ダウンロードに失敗しました（${response.status}）`)
+  }
   const hash = createHash('sha256')
   const digest = new Transform({
     transform(chunk, _encoding, done) {
