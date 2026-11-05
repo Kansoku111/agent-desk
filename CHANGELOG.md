@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop unused session-title generation in Claude Code's headless GPT subagent, without changing its selected model or reasoning effort.
+- Include model-generated compaction summaries in turn, child-panel and history usage without charging forked history again. Rescan available logs once while keeping cached totals for deleted logs; saved finalized conversion amounts are not repriced.
+
 - Capture cumulative output tokens from Claude Code stream events in non-interactive workers, keeping response IDs, original rates, cache TTLs and speed while ignoring nested-agent usage and duplicate notifications. Correct the bundled Sonnet 5.5 cache-read rate to $0.10 per million tokens. Saved historical costs are not automatically repriced.
 - Prevent a different concurrent reply to a delegated worker from being acknowledged without being sent. Identical concurrent resume requests still share their result; conflicting replies report that the worker is resuming.
 - Compare conversational worker replies with the files at the start of that reply, so questions after a stop or blocked result do not automatically restart unfinished work. Preserve the previous result and delivery state when the answer changes nothing.

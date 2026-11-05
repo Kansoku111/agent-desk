@@ -13,7 +13,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import zlib from 'node:zlib'
 import { clip } from './transcript.js'
-import { findSessionLog, loadPricing, priceResponse } from './usage.js'
+import { findSessionLog, loadPricing, priceResponse, recordedModelResponse } from './usage.js'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 const LOG_NAME = 'session.v4.jsonl.zstd'
@@ -281,6 +281,17 @@ export function foldChild(child, event, pricing = null) {
     default:
   }
   if (child.seeding) return
+  const response = recordedModelResponse(event)
+  if (response?.usage) {
+    const { source, usage } = response
+    child.usage.requests += 1
+    child.usage.input += usage.inputTokens ?? 0
+    child.usage.output += usage.outputTokens ?? 0
+    child.usage.cacheRead += usage.cacheReadTokens ?? 0
+    child.usage.cacheWrite += usage.cacheWriteTokens ?? 0
+    const price = pricing && source.provider && source.model ? priceResponse(pricing, `${source.provider}/${source.model}`, usage, event.time) : null
+    if (price !== null) child.usage.cost = (child.usage.cost ?? 0) + price
+  }
   switch (event.type) {
     case 'session/title':
       if (typeof data.title === 'string') child.title = data.title
@@ -326,17 +337,6 @@ export function foldChild(child, event, pricing = null) {
           thought = null
           pushItem(child, { type: 'agent', id: `${message.id}-t${index}`, text: block.text })
         }
-      }
-      const usage = data.usage
-      if (usage) {
-        child.usage.requests += 1
-        child.usage.input += usage.inputTokens ?? 0
-        child.usage.output += usage.outputTokens ?? 0
-        child.usage.cacheRead += usage.cacheReadTokens ?? 0
-        child.usage.cacheWrite += usage.cacheWriteTokens ?? 0
-        const source = message.source ?? {}
-        const price = pricing && source.provider && source.model ? priceResponse(pricing, `${source.provider}/${source.model}`, usage, event.time) : null
-        if (price !== null) child.usage.cost = (child.usage.cost ?? 0) + price
       }
       return
     }

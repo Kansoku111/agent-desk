@@ -50,6 +50,45 @@ test('turn usage counts a grandchild the subagent started, as the history does',
   near(history.all.cost, turn.cost)
 })
 
+test('turn and history include a model summary in a child log', async (t) => {
+  setCatalogPricing({ 'anthropic/claude-sonnet-5-5': sonnet })
+  t.after(() => setCatalogPricing({}))
+  const home = await tempHome(t)
+  await sessionsIn(home, {
+    parent: [{ type: 'session', id: 'parent' }, response('p', 1, 'openai-codex', 'gpt-6-luna', { inputTokens: 100 }), { type: 'turn/end', seq: 2, time: now + 3 }],
+    child: [{ type: 'session', id: 'child', parentSession: 'parent' },
+      { type: 'compaction/summary', seq: 1, time: now + 1, data: { compactionId: 'c', llmStreamCall: true, provider: 'anthropic', model: 'claude-sonnet-5-5', usage: { inputTokens: 500, outputTokens: 50 } } },
+      response('c', 2, 'anthropic', 'claude-sonnet-5-5', { inputTokens: 100, outputTokens: 10 })],
+  })
+  const turn = await turnUsage({ dshHome: home, sessionId: 'parent', since: now - 1000, waitMs: 0 })
+  const history = await new UsageHistory({ dshHome: home, file: path.join(home, 'usage-history.json'), now: () => now }).refresh()
+  assert.equal(turn.requests, 3)
+  assert.equal(turn.input, 700)
+  assert.equal(turn.requests, history.all.requests)
+  assert.equal(turn.input, history.all.input)
+  near(turn.cost, sonnetCost(600, 60))
+})
+
+test('forked logs do not charge inherited replies or compactions again', async (t) => {
+  setCatalogPricing({ 'anthropic/claude-sonnet-5-5': sonnet })
+  t.after(() => setCatalogPricing({}))
+  const home = await tempHome(t)
+  const summary = (id, seq, input) => ({ type: 'compaction/summary', seq, time: now + seq, data: { compactionId: id, llmStreamCall: true, provider: 'anthropic', model: 'claude-sonnet-5-5', usage: { inputTokens: input } } })
+  const inherited = [summary('parent-summary', 1, 500), response('parent-reply', 2, 'anthropic', 'claude-sonnet-5-5', { inputTokens: 100 })]
+  await sessionsIn(home, {
+    parent: [{ type: 'session', id: 'parent' }, ...inherited, { type: 'turn/end', seq: 3, time: now + 6 }],
+    child: [{ type: 'session', id: 'child', parentSession: 'parent', isSeeded: true }, ...inherited,
+      { type: 'session/end-seed', seq: 3, time: now + 3, data: { inherited: true } },
+      summary('child-summary', 4, 300), response('child-reply', 5, 'anthropic', 'claude-sonnet-5-5', { inputTokens: 200 })],
+  })
+  const turn = await turnUsage({ dshHome: home, sessionId: 'parent', since: now - 1000, waitMs: 0 })
+  const history = await new UsageHistory({ dshHome: home, file: path.join(home, 'usage-history.json'), now: () => now }).refresh()
+  assert.equal(turn.requests, 4)
+  assert.equal(turn.input, 1100)
+  assert.equal(history.all.requests, 4)
+  assert.equal(history.all.input, 1100)
+})
+
 test('subagent folders that name each other are not reached from the turn', async (t) => {
   setCatalogPricing({ 'anthropic/claude-sonnet-5-5': sonnet })
   t.after(() => setCatalogPricing({}))

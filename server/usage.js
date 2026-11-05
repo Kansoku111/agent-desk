@@ -145,8 +145,13 @@ export async function findSessionLog(dshHome, sessionId) {
   return null
 }
 
-const isResponse = (line) => line.includes('assistant/message')
-const isResponseOrEnd = (line) => line.includes('assistant/message') || line.includes('turn/end')
+function ownSessionEvents(events) {
+  const cut = events.findLastIndex(event => event.type === 'session/end-seed' && event.data?.inherited === true)
+  return cut < 0 ? events : events.slice(cut + 1)
+}
+
+const isResponse = (line) => line.includes('assistant/message') || line.includes('compaction/summary') || line.includes('session/end-seed')
+const isResponseOrEnd = (line) => isResponse(line) || line.includes('turn/end')
 
 /**
  * The first event of a log, from its first frame alone: null when the log has
@@ -228,7 +233,7 @@ async function childSessionLogs(parentLog, sessionId, since, until) {
   const children = []
   for (const { file, events } of found) {
     try {
-      children.push(events ?? await decodeSessionRange(await fs.readFile(file), { keep: isResponse, since, until }))
+      children.push(ownSessionEvents(events ?? await decodeSessionRange(await fs.readFile(file), { keep: isResponse, since, until })))
     } catch {}
   }
   return children
@@ -368,6 +373,22 @@ export function responseCost(rates, usage) {
   return parts.reduce((sum, [key, count]) => sum + (count ? active[key] * count : 0), 0) / 1_000_000
 }
 
+/** A durable model response; a compaction's replacement user message is not another call. */
+export function recordedModelResponse(event) {
+  const data = event?.data
+  let source, id
+  if (event?.type === 'assistant/message') {
+    source = data?.message?.source ?? {}
+    id = data?.message?.id ?? event.seq
+  } else if (event?.type === 'compaction/summary' && (data?.llmStreamCall === true || data?.usage)) {
+    // Template-only compactions do not spend a model request. Older summaries
+    // may report usage without the newer llmStreamCall marker.
+    source = data ?? {}
+    id = data?.compactionId ?? event.seq
+  } else return null
+  return { id: id == null ? event : `${event.type}:${id}`, source, usage: data?.usage }
+}
+
 /**
  * Sums the responses a turn produced.
  * @param events - decoded session log events.
@@ -379,19 +400,19 @@ export function summarizeUsage(events, since, pricing, until = Infinity) {
   const total = { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: null, models: [], score: emptyScore() }
   const responses = new Map()
   for (const event of events) {
-    if (event?.type !== 'assistant/message' || !(event.time >= since && event.time <= until)) continue
-    const id = event.data?.message?.id ?? event.seq ?? event
+    if (!(event?.time >= since && event.time <= until)) continue
+    const response = recordedModelResponse(event)
+    if (!response) continue
     // Prefer the latest recorded usage; a usage-less duplicate cannot erase it.
-    if (!responses.has(id) || event.data?.usage) responses.set(id, event)
+    if (!responses.has(response.id) || response.usage) responses.set(response.id, { event, response })
   }
   const models = new Set()
   let cost = 0
   let priced = false
-  for (const event of responses.values()) {
-    const source = event.data?.message?.source ?? {}
+  for (const { event, response } of responses.values()) {
+    const { source, usage } = response
     if (source.provider && source.model) models.add(`${source.provider}/${source.model}`)
     total.requests += 1
-    const usage = event.data?.usage
     if (!usage) {
       total.score = addScores(total.score, null)
       continue
@@ -433,7 +454,7 @@ export async function turnUsage({ dshHome, sessionId, since, until = Infinity, w
       const stamp = `${stat.size}:${stat.mtimeMs}`
       if (stamp !== seen) {
         seen = stamp
-        const events = await decodeSessionRange(await fs.readFile(file), { keep: isResponseOrEnd, since, until })
+        const events = ownSessionEvents(await decodeSessionRange(await fs.readFile(file), { keep: isResponseOrEnd, since, until }))
         summary = summarizeUsage(events, since, pricing, until)
         const ended = events.some((event) => event?.type === 'turn/end' && event.time >= since && event.time <= until)
         if (ended) {

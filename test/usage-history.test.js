@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import zlib from 'node:zlib'
+import { createHash } from 'node:crypto'
 import { decodeSessionLog } from '../server/usage.js'
 import { dailyUsage, localDay, summarizeHistory, UsageHistory } from '../server/usage-history.js'
 
@@ -31,6 +32,30 @@ test('dailyUsage sums responses by local day and model, pricing only rated model
   const gpt = days['2026-10-02']['openai-codex/gpt-6.1-sol']
   assert.equal(gpt.input, 900)
   assert.equal(gpt.cost, null)
+})
+
+test('dailyUsage includes reported summary usage on its actual route, not the replacement message', () => {
+  const time = at('2026-10-01T10:00:00')
+  const usage = { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 5000, reasoningTokens: 20 }
+  const days = dailyUsage([
+    { type: 'compaction/summary', time, data: { compactionId: 'c', llmStreamCall: true, provider: 'anthropic', model: 'claude-sonnet-5-5', usage } },
+    { type: 'user/message', time, data: { usage } },
+    { type: 'compaction/summary', time, data: { provider: 'openai-codex', model: 'gpt-6-luna', usage: { inputTokens: 7 } } },
+    { type: 'compaction/summary', time, data: { provider: 'anthropic', model: 'claude-sonnet-5-5' } },
+    { type: 'compaction/summary', time, data: { llmStreamCall: true, usage: { inputTokens: 123 } } },
+  ], pricing)
+  const total = days['2026-10-01']?.['anthropic/claude-sonnet-5-5']
+  assert.ok(total)
+  assert.equal(total.requests, 1)
+  assert.equal(total.input, 1000)
+  assert.equal(total.output, 100)
+  assert.equal(total.cacheRead, 5000)
+  assert.equal(total.reasoning, 20)
+  assert.equal(total.cost, (1000 * 2 + 100 * 10 + 5000 * 0.2) / 1e6)
+  assert.equal(days['2026-10-01']['openai-codex/gpt-6-luna'].input, 7)
+  assert.equal(days['2026-10-01']['openai-codex/gpt-6-luna'].cost, null)
+  assert.equal(days['2026-10-01'].unknown.input, 123)
+  assert.equal(days['2026-10-01'].unknown.cost, null)
 })
 
 test('summarizeHistory splits today, this month and all time', () => {
@@ -95,6 +120,86 @@ test('UsageHistory caches per log, rescans changed logs and keeps removed ones',
   assert.equal(second.all.cost, 5)
   assert.ok(pricingCalls >= 1)
   await fs.rm(home, { recursive: true, force: true })
+})
+
+test('UsageHistory recomputes legacy counters for live logs and retains deleted logs', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-history-compaction-'))
+  try {
+    const dshHome = path.join(home, 'dsh-home')
+    const file = path.join(home, 'usage-history.json')
+    const logFile = path.join(dshHome, 'sessions', '--work--', 'live', 'session.v4.jsonl.zstd')
+    await fs.mkdir(path.dirname(logFile), { recursive: true })
+    const now = at('2026-10-09T12:00:00')
+    const assistant = message(now, 'anthropic', 'claude-sonnet-5-5', { inputTokens: 100 })
+    const summary = (id, input) => ({ type: 'compaction/summary', time: now, data: { compactionId: id, llmStreamCall: true, provider: 'anthropic', model: 'claude-sonnet-5-5', usage: { inputTokens: input } } })
+    await fs.writeFile(logFile, log([assistant, summary('c1', 200)]))
+    const stat = await fs.stat(logFile)
+    const legacySignature = createHash('sha256').update(JSON.stringify({ billing: 'metered-only', unpriced: 'counted', rates: [...pricing] })).digest('hex').slice(0, 16)
+    await fs.writeFile(file, JSON.stringify({ version: 1, pricing: legacySignature, files: {
+      '--work--/live': { size: stat.size, mtimeMs: stat.mtimeMs, offset: 0, days: dailyUsage([assistant], pricing), base: {} },
+      '--work--/deleted': { days: dailyUsage([message(now, 'anthropic', 'claude-sonnet-5-5', { inputTokens: 300 })], pricing) },
+    } }))
+    const history = new UsageHistory({ dshHome, file, pricing: async () => pricing, now: () => now })
+    const initial = await history.refresh()
+    assert.equal(initial.all.requests, 3)
+    assert.equal(initial.all.input, 600)
+    assert.notEqual(history.cache.pricing, legacySignature)
+    await fs.appendFile(logFile, log([summary('c2', 400)]))
+    const appended = await history.refresh()
+    assert.equal(appended.all.requests, 4)
+    assert.equal(appended.all.input, 1000)
+    await fs.appendFile(logFile, log([summary('c3', 500)]))
+    const appendedAgain = await history.refresh()
+    assert.equal(appendedAgain.all.requests, 5)
+    assert.equal(appendedAgain.all.input, 1500)
+    await fs.rm(logFile)
+    const reloaded = new UsageHistory({ dshHome, file, pricing: async () => pricing, now: () => now })
+    const retained = await reloaded.refresh()
+    assert.equal(retained.all.requests, 5)
+    assert.equal(retained.all.input, 1500)
+    assert.equal(reloaded.cache.version, 1)
+  } finally {
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('UsageHistory resets inherited fork totals across appended and incomplete seed frames', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-history-fork-'))
+  try {
+    const dshHome = path.join(home, 'dsh-home')
+    const logFile = path.join(dshHome, 'sessions', '--work--', 'fork', 'session.v4.jsonl.zstd')
+    await fs.mkdir(path.dirname(logFile), { recursive: true })
+    const now = at('2026-10-09T12:00:00')
+    const reply = input => message(now, 'anthropic', 'claude-sonnet-5-5', { inputTokens: input })
+    const marker = () => ({ type: 'session/end-seed', time: now, data: { inherited: true } })
+    const frames = [
+      log([{ type: 'session', id: 'fork', isSeeded: true }, reply(100), marker()]),
+      log([reply(200)]),
+      log([marker()]),
+      log([{ type: 'compaction/summary', time: now, data: { compactionId: 'own', llmStreamCall: true, provider: 'anthropic', model: 'claude-sonnet-5-5', usage: { inputTokens: 300 } } }]),
+      log([reply(400)]),
+    ]
+    const options = { dshHome, file: path.join(home, 'usage-history.json'), pricing: async () => pricing, now: () => now }
+    let history = new UsageHistory(options)
+    await fs.writeFile(logFile, Buffer.concat(frames.slice(0, 2)))
+    await history.refresh()
+    const seed = Buffer.concat(frames.slice(0, 3))
+    await fs.writeFile(logFile, seed.subarray(0, seed.length - 3))
+    await history.refresh()
+    await fs.writeFile(logFile, seed)
+    assert.equal((await history.refresh()).all.input, 0)
+    await fs.appendFile(logFile, frames[3])
+    assert.equal((await history.refresh()).all.input, 300)
+    history = new UsageHistory(options)
+    assert.equal((await history.refresh()).all.input, 300)
+    await fs.appendFile(logFile, frames[4])
+    const own = await history.refresh()
+    assert.equal(own.all.requests, 2)
+    assert.equal(own.all.input, 700)
+    assert.equal(own.all.cost, 700 * 2 / 1e6)
+  } finally {
+    await fs.rm(home, { recursive: true, force: true })
+  }
 })
 
 test('UsageHistory retries all logs after a failed repricing read', async () => {

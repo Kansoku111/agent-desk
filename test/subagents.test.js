@@ -136,6 +136,23 @@ test('foldChild skips the history a fork was seeded with', () => {
   assert.equal(child.model, 'gpt-6.1-sol')
 })
 
+test('foldChild counts model summaries on their route without displaying or inheriting them', () => {
+  const child = newChild(header('summary-child', { parentSession: 'parent', isSeeded: true }))
+  const pricing = new Map([['anthropic/summary-model', { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 }]])
+  const summary = event('compaction/summary', { compactionId: 'c', llmStreamCall: true, provider: 'anthropic', model: 'summary-model', usage: { inputTokens: 500, outputTokens: 50, cacheReadTokens: 700 } })
+  foldChild(child, summary, pricing)
+  assert.equal(child.usage.requests, 0)
+  foldChild(child, event('session/end-seed', {}), pricing)
+  foldChild(child, summary, pricing)
+  foldChild(child, event('compaction/summary', { summary: 'template, no model call' }), pricing)
+  assert.equal(child.usage.requests, 1)
+  assert.equal(child.usage.input, 500)
+  assert.equal(child.usage.output, 50)
+  assert.equal(child.usage.cacheRead, 700)
+  assert.equal(child.usage.cost, (500 + 50 * 2 + 700 * 0.1) / 1e6)
+  assert.deepEqual(child.items, [])
+})
+
 test('SubagentTracker evicts expired idle trees when polling stops', async (t) => {
   const tracker = new SubagentTracker({ dshHome: 'unused', pollMs: 10 })
   t.after(() => tracker.stop())

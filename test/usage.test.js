@@ -45,6 +45,65 @@ test('summarizeUsage sums the turn and prices billed routes only', () => {
   assert.equal(summarizeUsage(events, 100, pricing), null)
 })
 
+test('summarizeUsage includes one-shot compaction calls without counting their checkpoints twice', () => {
+  const summary = {
+    type: 'compaction/summary', seq: 2, time: 11,
+    data: { compactionId: 'shared-id', llmStreamCall: true, provider: 'anthropic', model: 'claude-sonnet-5-5', usage: { inputTokens: 200, outputTokens: 20, cacheReadTokens: 800, reasoningTokens: 5 } },
+  }
+  const assistant = message(10, 'anthropic', 'claude-sonnet-5-5', { inputTokens: 100, outputTokens: 10 })
+  assistant.data.message.id = 'shared-id'
+  const usage = summarizeUsage([
+    assistant, summary, { ...summary, seq: 3 },
+    { type: 'user/message', time: 11, data: { usage: summary.data.usage } },
+    { type: 'compaction/summary', time: 12, data: { provider: 'anthropic', model: 'claude-sonnet-5-5' } },
+    { ...summary, time: 20, data: { ...summary.data, compactionId: 'later' } },
+  ], 10, pricing, 12)
+  assert.equal(usage.requests, 2)
+  assert.equal(usage.input, 300)
+  assert.equal(usage.output, 30)
+  assert.equal(usage.cacheRead, 800)
+  assert.equal(usage.reasoning, 5)
+  assert.deepEqual(usage.models, ['anthropic/claude-sonnet-5-5'])
+  assert.equal(usage.cost, responseCost(sonnet, { inputTokens: 100, outputTokens: 10 }) + responseCost(sonnet, summary.data.usage))
+})
+
+test('summarizeUsage accepts legacy summary usage and retains unknown LLM summary requests', () => {
+  const source = { provider: 'openai-codex', model: 'gpt-6-luna' }
+  const usage = summarizeUsage([
+    { type: 'compaction/summary', time: 1, seq: 1, data: { ...source, compactionId: 'legacy', usage: { inputTokens: 7, outputTokens: 2 } } },
+    { type: 'compaction/summary', time: 2, seq: 2, data: { ...source, compactionId: 'unknown', llmStreamCall: true } },
+  ], 0, new Map())
+  assert.equal(usage.requests, 2)
+  assert.equal(usage.input, 7)
+  assert.equal(usage.output, 2)
+  assert.equal(usage.cost, null)
+  assert.equal(usage.score.unpriced, 2)
+  assert.deepEqual(usage.models, ['openai-codex/gpt-6-luna'])
+})
+
+test('turnUsage includes a compaction-only turn from compressed log frames', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-compaction-usage-'))
+  try {
+    const dir = path.join(home, 'sessions', '--work--', 'summary-only')
+    await fs.mkdir(dir, { recursive: true })
+    const events = [
+      { type: 'session', id: 'summary-only' },
+      { type: 'compaction/summary', seq: 1, time: 11, data: { compactionId: 'c', llmStreamCall: true, provider: 'openai-codex', model: 'gpt-6-luna', usage: { inputTokens: 500, outputTokens: 25, cacheReadTokens: 1000 } } },
+      { type: 'turn/end', seq: 2, time: 12 },
+    ]
+    await fs.writeFile(path.join(dir, 'session.v4.jsonl.zstd'), zlib.zstdCompressSync(Buffer.from(events.map(event => JSON.stringify(event)).join('\n') + '\n')))
+    const usage = await turnUsage({ dshHome: home, sessionId: 'summary-only', since: 10, until: 12, waitMs: 0 })
+    assert.equal(usage.requests, 1)
+    assert.equal(usage.input, 500)
+    assert.equal(usage.cacheRead, 1000)
+    assert.equal(usage.output, 25)
+    assert.equal(usage.cost, null)
+    assert.deepEqual(usage.models, ['openai-codex/gpt-6-luna'])
+  } finally {
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
 test('decodeSessionLog reads appended zstd frames', () => {
   const frame = (lines) => zlib.zstdCompressSync(Buffer.from(lines.map((line) => JSON.stringify(line)).join('\n') + '\n'))
   const log = Buffer.concat([frame([{ type: 'session' }]), frame([{ type: 'turn/start' }, { type: 'turn/end' }])])

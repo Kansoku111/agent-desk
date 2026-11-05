@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { readJson, writeJson } from './json-file.js'
-import { FRAME_BATCH, frameStarts, frameTexts, isBilledModel, loadPricing, priceResponse } from './usage.js'
+import { FRAME_BATCH, frameStarts, frameTexts, isBilledModel, loadPricing, priceResponse, recordedModelResponse } from './usage.js'
 
 const CACHE_VERSION = 1
 const LOG_NAME = 'session.v4.jsonl.zstd'
@@ -25,13 +25,13 @@ export function localDay(time) {
 }
 
 /**
- * Billing policy, the unpriced count and metered rates invalidate cached costs;
+ * Counted response kinds, billing policy, the unpriced count and metered rates invalidate cached costs;
  * point-only rates do not. Fast-mode periods only
  * grow, and a log is repriced whenever it changes, so they need not count.
  */
 export function pricingSignature(pricing) {
   const entries = [...pricing.entries()].filter(([key]) => isBilledModel(key)).sort(([a], [b]) => a.localeCompare(b))
-  return createHash('sha256').update(JSON.stringify({ billing: 'metered-only', unpriced: 'counted', rates: entries })).digest('hex').slice(0, 16)
+  return createHash('sha256').update(JSON.stringify({ billing: 'metered-only', unpriced: 'counted', responses: 'own-assistant-and-compaction', rates: entries })).digest('hex').slice(0, 16)
 }
 
 // `unpriced` counts billed responses whose price is unknown; `cost` sums only the priced ones.
@@ -62,11 +62,19 @@ export function dailyUsage(events, pricing, days = {}) {
 function addResponses(days, events, pricing) {
   let added = false
   for (const event of events) {
-    if (event?.type !== 'assistant/message' || typeof event.time !== 'number') continue
-    const usage = event.data?.usage
+    if (event?.type === 'session/end-seed' && event.data?.inherited === true) {
+      // A fork copies its parent's prefix. Reset this log even when the
+      // inherited marker arrives in a later frame; the last-frame base is replayed.
+      for (const day of Object.keys(days)) delete days[day]
+      added = true
+      continue
+    }
+    if (typeof event?.time !== 'number') continue
+    const response = recordedModelResponse(event)
+    const usage = response?.usage
     if (!usage) continue
     added = true
-    const source = event.data?.message?.source ?? {}
+    const source = response.source
     const model = source.provider && source.model ? `${source.provider}/${source.model}` : 'unknown'
     const day = (days[localDay(event.time)] ??= {})
     const totals = (day[model] ??= emptyTotals())
@@ -250,7 +258,7 @@ export class UsageHistory extends EventEmitter {
           if (texts[index] === null) continue
           const events = []
           for (const line of texts[index].split('\n')) {
-            if (!line.includes('assistant/message')) continue
+            if (!line.includes('assistant/message') && !line.includes('compaction/summary') && !line.includes('session/end-seed')) continue
             try {
               events.push(JSON.parse(line))
             } catch {}
