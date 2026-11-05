@@ -474,7 +474,7 @@ export interface Settings extends UsageDisplay {
   /** Older saves default to enabled. */
   customInstructionsEnabled?: boolean
   /** A local OpenAI-compatible server and the models it listed (older saves lack it). */
-  localLlm?: { baseURL: string | null; models: { id: string; contextWindow?: number }[] }
+  localLlm?: { baseURL: string | null; models: { id: string; contextWindow?: number; maxTokens?: number }[] }
   agentTeams: TeamSettings
   /** Older saves lack them (none). */
   teamPolicies?: TeamPolicy[]

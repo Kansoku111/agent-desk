@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import YAML from 'yaml'
-import { commandCodeRoutes } from '../server/command-code.js'
+import { CommandCodeModels, commandCodeRoutes, parseCommandCodeModels, registryOutputLimit } from '../server/command-code.js'
 import { CredentialStore, COMMAND_CODE_REF } from '../server/credentials.js'
 import { homePatch } from '../server/dsh-config.js'
 import { appPaths } from '../server/paths.js'
@@ -17,13 +17,45 @@ const model = (id, contextWindow, endpoint = 'chat') => ({ id, name: id, context
 
 test('known models get their output budgets without changing others', () => {
   const routes = commandCodeRoutes([model(flash, 1000000), model('deepseek/deepseek-v4.1-flash-fast', 1000000), model('claude-test', 200000, 'messages'), model('claude-haiku-5-5', 1000000, 'messages')])
-  assert.equal(routes['command-code'].models[0].maxTokens, 65536)
-  assert.equal(routes['command-code'].models[1].maxTokens, 8192)
+  assert.equal(routes['command-code'].models[0].maxTokens, 384000)
+  assert.equal(routes['command-code'].models[1].maxTokens, 384000)
   assert.equal(routes['command-code-claude'].models[0].maxTokens, 8192)
   assert.equal(routes['command-code-claude'].models[1].maxTokens, 128000)
-  assert.equal(commandCodeRoutes([model('claude-haiku-5-5', 200000, 'messages')])['command-code-claude'].models[0].maxTokens, 50000)
+  assert.equal(commandCodeRoutes([model('claude-haiku-5-5', 200000, 'messages')])['command-code-claude'].models[0].maxTokens, 68928)
   assert.equal(routes['command-code'].defaultMaxTokens, 8192)
-  assert.equal(commandCodeRoutes([model(flash, 100000)])['command-code'].models[0].maxTokens, 25000)
+  assert.equal(commandCodeRoutes([{ ...model(flash, 100000), maxTokens: 50000 }])['command-code'].models[0].maxTokens, 25000)
+  assert.equal(commandCodeRoutes([{ ...model(flash, 131073), maxTokens: 100000 }])['command-code'].models[0].maxTokens, 32768)
+  assert.equal(commandCodeRoutes([model(flash, 100000)])['command-code'].models[0].maxTokens, 8192)
+})
+
+test('registry limits match exact IDs and survive offline refresh and reload', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-output-cache-'))
+  t.after(async () => { assert.equal(path.dirname(home), os.tmpdir()); await fs.rm(home, { recursive: true, force: true }) })
+  const file = path.join(home, 'models.json')
+  const item = model('new-model', 1000000)
+  const body = { commandcode: { id: 'commandcode', api: 'https://api.commandcode.ai/provider/v1', models: {
+    'new-model': { id: 'new-model', limit: { context: 1000000, output: 96000 } },
+  } } }
+  assert.equal(registryOutputLimit(body, item), 96000)
+  const official = parseCommandCodeModels({ data: [{ id: item.id, name: item.name, context_length: item.contextWindow, max_output_tokens: 0, maxOutputTokens: 48000, supported_endpoints: ['/chat/completions'] }] })
+  assert.equal(official.models[0].maxTokens, 48000)
+  assert.equal(commandCodeRoutes(official.models)['command-code'].models[0].maxTokens, 48000)
+  assert.equal(registryOutputLimit({ commandcode: { ...body.commandcode, api: 'https://other.example' } }, item), undefined)
+  assert.equal(registryOutputLimit({ commandcode: { ...body.commandcode, models: { 'new-model': { id: 'other', limit: { context: 1000000, output: 10 } } } } }, item), undefined)
+  assert.equal(registryOutputLimit({ commandcode: { ...body.commandcode, models: { 'new-model': { id: 'new-model', limit: { context: 50000, output: 96000 } } } } }, item), undefined)
+  let offline = false
+  const registry = { get: async () => { if (offline) throw new Error('offline'); return body } }
+  const fetchImpl = async () => Response.json({ data: [{ id: item.id, name: item.name, context_length: item.contextWindow, supported_endpoints: ['/chat/completions'] }] })
+  const inventory = await new CommandCodeModels({ file, fetchImpl, registry }).load()
+  assert.equal(await inventory.refresh({ maxAgeMs: 0 }), true)
+  assert.equal(inventory.models[0].maxTokens, 96000)
+  assert.equal(commandCodeRoutes(inventory.models)['command-code'].models[0].maxTokens, 96000)
+  offline = true
+  assert.equal(await inventory.refresh({ maxAgeMs: 0 }), false)
+  assert.equal(inventory.models[0].maxTokens, 96000)
+  const reloaded = await new CommandCodeModels({ file, fetchImpl, registry }).load()
+  assert.equal(reloaded.models[0].maxTokens, 96000)
+  assert.equal(commandCodeRoutes([model('unknown', 1000000)])['command-code'].models[0].maxTokens, 8192)
 })
 
 test('DSH sends the larger budget to the Command Code chat endpoint', { timeout: 90000 }, async (t) => {
@@ -66,7 +98,7 @@ test('DSH sends the larger budget to the Command Code chat endpoint', { timeout:
   assert.equal(requests.length, 1)
   assert.equal(requests[0].model, flash)
   assert.equal(requests[0].reasoning_effort, 'max')
-  assert.equal(requests[0].max_tokens, 65536)
+  assert.equal(requests[0].max_tokens, 384000)
 })
 
 test('DSH sends the Haiku output budget to the Messages endpoint', { timeout: 90000 }, async (t) => {

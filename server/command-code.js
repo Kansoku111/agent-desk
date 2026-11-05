@@ -4,6 +4,8 @@ import { readJson, writeJson } from './json-file.js'
 import { isLocalModelId } from './local-llm.js'
 import { COMMAND_CODE_REF } from './credentials.js'
 import effortCatalog from './command-code-efforts.json' with { type: 'json' }
+import outputCatalog from './command-code-output-limits.json' with { type: 'json' }
+import { contextOutputBudget } from './output-budget.js'
 
 export const COMMAND_CODE_MODELS_URL = 'https://api.commandcode.ai/provider/v1/models'
 export const COMMAND_CODE_ROOT = 'https://api.commandcode.ai/provider'
@@ -12,11 +14,24 @@ export const COMMAND_CODE_MESSAGES = 'command-code-claude'
 const MAX_AGE_MS = 6 * 60 * 60 * 1000
 const MAX_MODELS = 2000
 const MAX_CONTEXT = 100_000_000
-const MAX_OUTPUT = 8192
-// Reasoning consumes the output budget too; keep other models at the conservative default.
-const DEEPSEEK_FLASH_OUTPUT = 65536
-// https://platform.claude.com/docs/en/models/haiku-5-5/overview
-const HAIKU_55_OUTPUT = 128000
+// Unknown models still need a finite value until the provider supplies a limit.
+const UNKNOWN_OUTPUT = 8192
+const outputLimit = (value, context) => Number.isSafeInteger(value) && value > 0 && value <= context ? value : undefined
+
+function knownOutput(model) {
+  return outputLimit(model.maxTokens, model.contextWindow)
+    ?? outputLimit(Object.hasOwn(outputCatalog.models, model.id) ? outputCatalog.models[model.id] : undefined, model.contextWindow)
+    ?? UNKNOWN_OUTPUT
+}
+
+/** Match the public registry by exact provider and model ID; never use it to select a model or endpoint. */
+export function registryOutputLimit(body, model) {
+  const provider = body?.commandcode
+  if (provider?.id !== 'commandcode' || provider.api !== 'https://api.commandcode.ai/provider/v1') return undefined
+  const entry = Object.hasOwn(provider.models ?? {}, model.id) ? provider.models[model.id] : null
+  if (entry?.id !== model.id || !Number.isSafeInteger(entry?.limit?.context) || entry.limit.context <= 0) return undefined
+  return outputLimit(entry.limit.output, Math.min(entry.limit.context, model.contextWindow))
+}
 
 function usable(entry) {
   return entry && isLocalModelId(entry.id)
@@ -35,6 +50,9 @@ export function parseCommandCodeModels(body) {
     const endpoint = Array.isArray(endpoints) && endpoints.includes('/chat/completions') ? 'chat'
       : Array.isArray(endpoints) && endpoints.includes('/messages') ? 'messages' : null
     const model = { id: entry?.id, name: entry?.name, contextWindow: entry?.context_length, endpoint }
+    const maxTokens = [entry?.max_output_tokens, entry?.maxOutputTokens, entry?.max_tokens]
+      .map((value) => outputLimit(value, model.contextWindow)).find(Boolean)
+    if (maxTokens) model.maxTokens = maxTokens
     if (!usable(model) || ids.has(model.id)) { skipped++; continue }
     ids.add(model.id)
     models.push(model)
@@ -78,13 +96,12 @@ export function commandCodeRoutes(models, { zdr = false, root = COMMAND_CODE_ROO
       compat: endpoint === 'chat'
         ? { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: 'openai', maxTokensField: 'max_tokens' }
         : { forceAdaptiveThinking: true },
-      defaultMaxTokens: MAX_OUTPUT,
-      models: selected.map(({ id, name, contextWindow }) => {
+      defaultMaxTokens: UNKNOWN_OUTPUT,
+      models: selected.map((model) => {
+        const { id, name, contextWindow } = model
         const levels = commandCodeEfforts(id, endpoint)
-        const output = endpoint === 'chat' && id === 'deepseek/deepseek-v4.1-flash' ? DEEPSEEK_FLASH_OUTPUT
-          : endpoint === 'messages' && id === 'claude-haiku-5-5' ? HAIKU_55_OUTPUT : MAX_OUTPUT
         return {
-          id, name, contextWindow, maxTokens: Math.min(output, Math.max(1, Math.floor(contextWindow / 4))),
+          id, name, contextWindow, maxTokens: Math.min(knownOutput(model), contextOutputBudget(contextWindow)),
           input: ['text'], reasoningEfforts: levels.length ? Object.fromEntries(levels.map((level) => [level, level])) : false,
         }
       }),
@@ -95,8 +112,8 @@ export function commandCodeRoutes(models, { zdr = false, root = COMMAND_CODE_ROO
 
 /** Refreshes are serialized; bad responses leave the last verified inventory intact. */
 export class CommandCodeModels {
-  constructor({ file, fetchImpl = fetch }) {
-    Object.assign(this, { file, fetchImpl })
+  constructor({ file, fetchImpl = fetch, registry = null }) {
+    Object.assign(this, { file, fetchImpl, registry })
     this.models = []
     this.checkedAt = null
     this.skipped = 0
@@ -109,7 +126,7 @@ export class CommandCodeModels {
     if (Array.isArray(saved?.models) && saved.models.length > 0 && saved.models.length <= MAX_MODELS
       && saved.models.every(usable) && new Set(saved.models.map((model) => model.id)).size === saved.models.length
       && Number.isFinite(saved.checkedAt)) {
-      this.models = saved.models.map(({ id, name, contextWindow, endpoint }) => ({ id, name, contextWindow, endpoint }))
+      this.models = saved.models.map(({ id, name, contextWindow, endpoint, maxTokens }) => ({ id, name, contextWindow, endpoint, ...(outputLimit(maxTokens, contextWindow) ? { maxTokens } : {}) }))
       this.checkedAt = saved.checkedAt
       this.skipped = Number.isSafeInteger(saved.skipped) && saved.skipped >= 0 ? saved.skipped : 0
     }
@@ -125,6 +142,13 @@ export class CommandCodeModels {
         const response = await this.fetchImpl(COMMAND_CODE_MODELS_URL, { redirect: 'error', signal: AbortSignal.timeout(8000) })
         if (!response.ok) throw new Error('model list unavailable')
         const { models, skipped } = parseCommandCodeModels(await response.json())
+        // Registry availability is independent of the official inventory; keep last-known limits on failure.
+        const registry = this.registry ? await this.registry.get().catch(() => null) : null
+        for (const model of models) {
+          const previous = this.models.find((item) => item.id === model.id && item.endpoint === model.endpoint)
+          const maxTokens = model.maxTokens ?? registryOutputLimit(registry, model) ?? outputLimit(previous?.maxTokens, model.contextWindow)
+          if (maxTokens) model.maxTokens = maxTokens
+        }
         const checkedAt = Date.now()
         await writeJson(this.file, { models, skipped, checkedAt })
         Object.assign(this, { models, skipped, checkedAt, failed: false })

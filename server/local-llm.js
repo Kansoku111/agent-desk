@@ -3,6 +3,7 @@
 // it as one more pi-ai route; the user gives its URL, and the models it lists
 // are kept in the settings so the route survives the server being offline.
 import { LOCAL_LLM_REF } from './credentials.js'
+import { contextOutputBudget } from './output-budget.js'
 
 /** The dsh provider route (and catalog provider) of the local server's models. */
 export const LOCAL_PROVIDER = 'local-llm'
@@ -46,7 +47,9 @@ export function parseModelList(body) {
     const id = typeof entry === 'string' ? entry : entry?.id ?? entry?.model ?? entry?.name
     if (!isLocalModelId(id) || models.some((model) => model.id === id)) continue
     const contextWindow = typeof entry === 'object' ? contextOf(entry) : null
-    models.push(contextWindow ? { id, contextWindow } : { id })
+    const outputs = typeof entry === 'object' ? [entry.max_output_tokens, entry.maxOutputTokens, entry.max_completion_tokens, entry.limit?.output] : []
+    const maxTokens = outputs.find((value) => Number.isSafeInteger(value) && value > 0 && (!contextWindow || value <= contextWindow))
+    models.push({ id, ...(contextWindow ? { contextWindow } : {}), ...(maxTokens ? { maxTokens } : {}) })
     if (models.length >= MAX_MODELS) break
   }
   return models
@@ -108,12 +111,15 @@ export function localRoute(saved, { keyed = false } = {}) {
     defaultContextWindow: DEFAULT_CONTEXT,
     defaultMaxTokens: DEFAULT_MAX_TOKENS,
     retryPolicy: { mode: 'normal', maxRetries: 2 },
-    models: models.map(({ id, contextWindow }) => ({
+    models: models.map(({ id, contextWindow, maxTokens }) => ({
       id,
       name: id,
       input: ['text'],
       reasoningEfforts: false,
-      ...(contextWindow ? { contextWindow, maxTokens: Math.min(DEFAULT_MAX_TOKENS, Math.max(1024, Math.floor(contextWindow / 4))) } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
+      ...(Number.isSafeInteger(maxTokens) && maxTokens > 0
+        ? { maxTokens: Math.min(maxTokens, contextOutputBudget(contextWindow ?? DEFAULT_CONTEXT)) }
+        : contextWindow ? { maxTokens: Math.min(DEFAULT_MAX_TOKENS, Math.max(1024, Math.floor(contextWindow / 4))) } : {}),
     })),
   }
 }

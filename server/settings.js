@@ -206,8 +206,10 @@ export function planSettingsUpdate(current, patch, now) {
     const models = value.models.map((model) => {
       if (!isLocalModelId(model?.id)) throw new Error('使えないモデル ID です')
       const contextWindow = model.contextWindow
-      if (contextWindow !== undefined && (!Number.isInteger(contextWindow) || contextWindow <= 0)) throw new Error('contextWindow は正の整数で指定してください')
-      return contextWindow ? { id: model.id, contextWindow } : { id: model.id }
+      if (contextWindow !== undefined && (!Number.isSafeInteger(contextWindow) || contextWindow <= 0)) throw new Error('contextWindow は正の整数で指定してください')
+      const maxTokens = model.maxTokens
+      if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens <= 0 || (contextWindow && maxTokens > contextWindow))) throw new Error('maxTokens はコンテキスト長以下の正の整数で指定してください')
+      return { id: model.id, ...(contextWindow ? { contextWindow } : {}), ...(maxTokens ? { maxTokens } : {}) }
     })
     next.localLlm = baseURL ? { baseURL, models } : { baseURL: null, models: [] }
     localChanged = true

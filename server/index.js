@@ -241,13 +241,13 @@ const equivalentPricing = await new EquivalentPricing({
   },
 }).load()
 setEquivalentPricing(equivalentPricing.rates)
-const commandCodeModels = await new CommandCodeModels({ file: path.join(paths.home, 'command-code-models.json') }).load()
+const commandCodeModels = await new CommandCodeModels({ file: path.join(paths.home, 'command-code-models.json'), registry: modelRegistry }).load()
 let commandCodeChecking = false
 let commandCodeApplyFailed = false
 const COMMAND_CODE_LEARN = 3
 let commandCodeRuntimeSignature = null
 const commandCodeExpected = () => commandCodeModels.models.map(({ id, endpoint, name }) => [endpoint, id, name])
-const commandCodeDefinitionSignature = () => JSON.stringify(commandCodeModels.models.map(({ id, endpoint, name, contextWindow }) => [endpoint, id, name, contextWindow]))
+const commandCodeDefinitionSignature = () => JSON.stringify(commandCodeModels.models.map(({ id, endpoint, name, contextWindow, maxTokens }) => [endpoint, id, name, contextWindow, maxTokens]))
 const commandCodeApplied = () => {
   let signature
   try { signature = JSON.parse(catalog.data.signature) } catch { return false }
