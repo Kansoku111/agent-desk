@@ -99,7 +99,7 @@ async function fixture(t) {
   const goalToolDir = await pkg('@deepseek-ai/dsh-tool-goal')
   const goalDriverDir = await pkg('@deepseek-ai/dsh-goal-round-driver')
   const ptcRuntimeDir = await pkg('@deepseek-ai/dsh-ptc-runtime-node')
-  const toolsDir = await pkg('@deepseek-ai/dsh-tools')
+  const toolsDir = await pkg('@deepseek-ai/dsh-tool-executor-ptc')
   // Use a read-only upstream source snapshot, copied to the isolated fixture.
   // Its imports are only parsed (--check), never evaluated.
   const acpSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-acp'), 'utf8')
@@ -114,7 +114,7 @@ async function fixture(t) {
   const goalDriver = await put(`${goalDriverDir}/lib/index.js`, goalDriverSource)
   const ptcRuntimeSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-ptc-runtime-node'), 'utf8')
   const ptcRuntime = await put(`${ptcRuntimeDir}/lib/index.js`, ptcRuntimeSource)
-  const toolsSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-tools'), 'utf8')
+  const toolsSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-tool-executor-ptc'), 'utf8')
   const tools = await put(`${toolsDir}/lib/index.js`, toolsSource)
   const pi = await pkg('@earendil-works/pi-ai', 'dist/index.js', {
     exports: { '.': './dist/index.js', './utils/*': './dist/utils/*.js', './api/*': './dist/api/*.js' },
@@ -164,7 +164,7 @@ for (const [name, field, change] of [
   ['output-speed', 'acp', (source) => source.replace('requestSignal?.removeEventListener', 'requestSignal?.upstreamRemoveEventListener')],
   ['mcp-startup', 'acp', (source) => source.replace('for (const config of configs) await agentCtx.plugin(McpClient, config);', 'await changedMount();')],
   ['ptc', 'acp', (source) => source.replace('return this.modelControl.set(configId, value, signal);', 'return upstreamSetConfig();')],
-  ['ptc-errors', 'ptcRuntime', (source) => source.replace('stripTypeScriptTypes(spec.program)', 'changedParse(spec.program)')],
+  ['ptc-errors', 'ptcRuntime', (source) => source.replace('stripTypeScriptTypes(STRIP_PREFIX + program + STRIP_SUFFIX)', 'changedParse(STRIP_PREFIX + program + STRIP_SUFFIX)')],
   ['ptc-sdk', 'tools', (source) => source.replace('const outputMembers = [];', 'const changedOutput = [];')],
   ['fs-search', 'search', (source) => source.replace('async function runRipgrep(', 'async function upstreamSearch(')],
 ]) {

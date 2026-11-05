@@ -23,6 +23,11 @@ test('the installed dsh-acp takes the steering patch, and still parses', () => {
   assert.ok(patched, 'dsh-acp no longer matches steer-patch.js; update the patch for this dsh')
   assert.ok(patched.includes(`params._meta?.[${JSON.stringify(STEER_META)}] === true`))
   assert.ok(patched.includes('this.agent.steer('))
+  // Inserted code runs only when steering, so only a real prompt reveals a renamed internal call.
+  // The selection it admits against must be the one the regular prompt path builds.
+  const regular = /const promptSelection = (this(?:\.[\w$]+)+\(\));/.exec(source)[1]
+  assert.ok(patched.includes(`const steerContent = await admitAcpPrompt(this.ctx, ${regular}, params.prompt`))
+  assert.ok(!patched.includes('modelControl.snapshot') || source.includes('modelControl.snapshot'), 'steer calls an internal API this dsh-acp no longer has')
   assert.ok(patched.includes(JSON.stringify(STEERED_META)))
   // The steer branch comes before the "already in flight" refusal it bypasses.
   assert.ok(patched.indexOf('this.agent.steer(') < patched.indexOf('a prompt is already in flight'))
@@ -47,6 +52,7 @@ for (const abortDuringAdmission of [false, true]) {
   test(`steering rejects an aborted prompt (${abortDuringAdmission ? 'during admission' : 'already cancelled'})`, async () => {
     const source = `async prompt(params, imageEnabled, requestSignal) {
       if (this.inflight !== void 0) throw invalidParams("a prompt is already in flight for this session");
+      const promptSelection = this.agent.model.current();
       const content = await admit(this.ctx, promptSelection, params.prompt, imageEnabled, admissionController.signal);
       const message = userMessage({ content, source: { kind: "user" } });
     }`
@@ -56,8 +62,7 @@ for (const abortDuringAdmission of [false, true]) {
     const bridge = new Bridge()
     bridge.inflight = { admissionController: new AbortController() }
     let steered = false
-    bridge.agent = { status: 'running', steer: () => { steered = true } }
-    bridge.modelControl = { snapshot: () => ({}) }
+    bridge.agent = { status: 'running', steer: () => { steered = true }, model: { current: () => ({}) } }
     if (!abortDuringAdmission) bridge.inflight.admissionController.abort()
     const prompt = bridge.prompt({ _meta: { [STEER_META]: true }, prompt: [] }, true)
     if (abortDuringAdmission) bridge.inflight.admissionController.abort()

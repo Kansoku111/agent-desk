@@ -1,5 +1,10 @@
 // Loaded only inside dsh. Each ACP root owns its own presentation declaration;
 // this does not change the deployment default or a subagent's composition.
+// dsh 0.2.2 dropped tools.presentAs(): a presentation is now the executor
+// registered in the agent's scope. Registering one explicitly for "native" too
+// keeps the root's choice independent of whatever executor the deployment mounts.
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
+import { PtcExecutor } from '@deepseek-ai/dsh-tool-executor-ptc'
 import { TOOL_MODE_CONFIG, TOOL_MODES } from './ptc.js'
 import { SESSION_POLICY_CONFIG, sessionPolicyOption } from './session-policy-plugin.js'
 const states = new WeakMap()
@@ -32,7 +37,8 @@ export async function setToolMode(record, mode) {
     await state.dispose?.()
     state.dispose = null
     record.assertActive()
-    state.dispose = await record.agent.ctx.tools.presentAs(mode)
+    const ctx = record.agent.ctx
+    state.dispose = ctx.tools.setExecutor(mode === 'ptc' ? new PtcExecutor(ctx) : new NativeToolExecutor(ctx))
     state.mode = mode
   } finally {
     state.changing = false

@@ -95,9 +95,11 @@ export function resolveCompatibilityModules(root) {
   const goalTool = createRequire(base).resolve('@deepseek-ai/dsh-tool-goal')
   const goalDriver = createRequire(base).resolve('@deepseek-ai/dsh-goal-round-driver')
   const ptcRuntime = createRequire(base).resolve('@deepseek-ai/dsh-ptc-runtime-node')
-  const tools = createRequire(base).resolve('@deepseek-ai/dsh-tools')
+  // The key stays `tools`: it is the module that renders the PTC SDK
+  // declarations. That moved from dsh-tools to dsh-tool-executor-ptc in 0.2.2-rc.1.
+  const tools = createRequire(base).resolve('@deepseek-ai/dsh-tool-executor-ptc')
   // A changed entrypoint no longer matches the hooks' URL filters.
-  for (const [file, name] of [[acp, 'dsh-acp'], [llm, 'dsh-llm-pi-ai'], [search, 'dsh-tool-fs-search'], [goalTool, 'dsh-tool-goal'], [goalDriver, 'dsh-goal-round-driver'], [ptcRuntime, 'dsh-ptc-runtime-node'], [tools, 'dsh-tools']]) {
+  for (const [file, name] of [[acp, 'dsh-acp'], [llm, 'dsh-llm-pi-ai'], [search, 'dsh-tool-fs-search'], [goalTool, 'dsh-tool-goal'], [goalDriver, 'dsh-goal-round-driver'], [ptcRuntime, 'dsh-ptc-runtime-node'], [tools, 'dsh-tool-executor-ptc']]) {
     if (!file.replaceAll('\\', '/').endsWith(`/@deepseek-ai/${name}/lib/index.js`)) {
       throw new Error(`${name}: module entrypoint no longer matches the runtime hook: ${file}`)
     }

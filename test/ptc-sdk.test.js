@@ -51,7 +51,7 @@ test('TypeScript proves every compacted output and key identical; a required-fie
 })
 
 test('the real SDK renderer is patched once without altering argument docs or the Python renderer', async () => {
-  const source=await fs.readFile(require.resolve('@deepseek-ai/dsh-tools'),'utf8')
+  const source=await fs.readFile(require.resolve('@deepseek-ai/dsh-tool-executor-ptc'),'utf8')
   const patched=patchPtcSdkSource(source)
   assert.ok(patched)
   assert.equal(patchPtcSdkSource(patched),null)

@@ -147,13 +147,17 @@ test('valid TypeScript is unchanged and unsupported syntax or unknown stack form
   assert.match(ptcSyntaxMessage(eof, 'const value = {', 1), /end of program|line/)
 })
 
-test('the installed runtime receives both parse wrappers once and refuses changed upstream anchors', async () => {
+test('the installed runtime wraps every execution mode once and refuses changed upstream anchors', async () => {
   const source = await fs.readFile(require.resolve('@deepseek-ai/dsh-ptc-runtime-node'), 'utf8')
   const patched = patchPtcRuntimeSource(source)
   assert.ok(patched)
-  assert.ok(patched.includes('agentDeskStripPtc(spec.program)'))
-  assert.ok(patched.includes('agentDeskStripPtc(STRIP_PREFIX + spec.program + STRIP_SUFFIX, spec.program, 1)'))
+  // per-call wraps the program in one function line; persistent-in-memory and vm-script strip it directly.
+  assert.equal(patched.split('agentDeskStripPtc(STRIP_PREFIX + program + STRIP_SUFFIX, program, 1)').length, 2)
+  assert.equal(patched.split('stripTypes: agentDeskStripPtc').length, 3)
+  assert.ok(!patched.includes('stripTypes: stripTypeScriptTypes'))
   assert.equal(patchPtcRuntimeSource(patched), null)
-  assert.equal(patchPtcRuntimeSource(source.replace('stripTypeScriptTypes(spec.program)', 'changed(spec.program)')), null)
+  assert.equal(patchPtcRuntimeSource(source.replace('stripTypeScriptTypes(STRIP_PREFIX + program + STRIP_SUFFIX)', 'changed(STRIP_PREFIX + program + STRIP_SUFFIX)')), null)
+  assert.equal(patchPtcRuntimeSource(source.replace('stripTypes: stripTypeScriptTypes', 'stripTypes: changed')), null)
+  assert.equal(patchPtcRuntimeSource(source + '\nconst another = { stripTypes: stripTypeScriptTypes }'), null)
   assert.equal(patchPtcRuntimeSource(source.replace('const STRIP_PREFIX =', 'const CHANGED_PREFIX =')), null)
 })

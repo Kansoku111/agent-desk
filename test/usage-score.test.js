@@ -126,7 +126,9 @@ test('GPT-6.1 Terra has official fallback rates until its real catalog rates arr
     known: ['gpt-6.1-terra', 'gpt-6.1-sol'] }
   const catalog = await configuredModelCatalog(accountModelAdditions(availability))
   assert.ok(catalog.definitions['openai-codex'].some((model) => model.id === 'gpt-6.1-terra'))
-  assert.equal(catalog.pricing[key], undefined, 'account clones must not lend their template rates')
+  // pi-ai 1.5.0 ships Terra's own rates, so nothing is cloned from Sol any more. Before that the
+  // clone had no rates; either way it must never carry Sol's (input 2).
+  assert.ok(catalog.pricing[key] === undefined || catalog.pricing[key].input === 1, 'account clones must not lend their template rates')
   setCatalogPricing(catalog.pricing)
   try {
     const rates = await loadPricing()

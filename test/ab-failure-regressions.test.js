@@ -9,6 +9,7 @@ import { AbRunner } from '../server/ab-runner.js'
 import { abToolAllowed, apply as applyAbPolicy } from '../server/ab-policy-plugin.js'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { notificationRoute, notificationText } from '../web/src/notification.ts'
 import { createAbHandlers } from '../server/rpc-handlers-ab.js'
 import { fixture, deferred, pending } from './helpers/thread-manager.js'
@@ -314,13 +315,19 @@ test('real DSH ToolRuntime enforces AB guards before dispatch', async () => {
   const ctx = new Context()
   ctx.provide('systemPrompt', { tools() {}, section() {} })
   const tools = new ToolRuntime(ctx)
+  // dsh 0.2.2 dispatches only through a registered executor; the app loads the native one by default.
+  tools.setExecutor(new NativeToolExecutor(ctx))
   let calls = 0
   const register = (name) => tools.register({ name, description: 'fixture', parameters: { type: 'object' },
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     execute: async () => { calls++; return 'ran' } })
   register('read'); register('write')
   applyAbPolicy(ctx, { writable: false })
-  const execute = (name, arguments_ = {}) => tools.execute({ name, arguments: arguments_, callId: `test-${name}`, signal: new AbortController().signal })
+  // The executor takes a raw call batch (arguments as JSON text) and settles it.
+  const execute = async (name, arguments_ = {}) => {
+    const { results } = await tools.execute({ calls: [{ id: `test-${name}`, name, arguments: JSON.stringify(arguments_) }], signal: new AbortController().signal })
+    return results[0].result
+  }
   assert.equal((await execute('read')).isError, false)
   assert.equal(calls, 1)
   assert.equal((await execute('write')).isError, true)

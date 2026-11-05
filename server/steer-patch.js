@@ -11,8 +11,11 @@ export const STEERED_META = 'agentDesk/steered'
 export function patchAcpSource(source) {
   const busy = /if \(this\.inflight !== void 0\) throw ([\w$]+)\("a prompt is already in flight for this session"\);/.exec(source)
   const admit = /const content = await ([\w$]+)\(this\.ctx, promptSelection, params\.prompt, imageEnabled, admissionController\.signal\);/.exec(source)
+  // The steer branch must read the model selection the way the regular prompt path does: that is
+  // `this.modelControl.snapshot()` up to 0.2.1 and `this.agent.model.current()` from 0.2.2.
+  const selection = /const promptSelection = (this(?:\.[\w$]+)+\(\));/.exec(source)
   const message = /const message = ([\w$]+)\(\{\s*content,\s*source: \{ kind: "user" \}\s*\}\);/.exec(source)
-  if (!busy || !admit || !message || source.indexOf(busy[0]) !== source.lastIndexOf(busy[0])) return null
+  if (!busy || !admit || !selection || !message || source.indexOf(busy[0]) !== source.lastIndexOf(busy[0])) return null
   const [, invalidParams] = busy
   const unavailable = `${invalidParams}("agent-desk/steer-unavailable: the current turn no longer accepts messages")`
   // Accepted only while the turn still runs: a message steered into an idle
@@ -22,7 +25,7 @@ export function patchAcpSource(source) {
     `if (params._meta?.[${JSON.stringify(STEER_META)}] === true) {`,
     'const steerInflight = this.inflight;',
     `if (steerInflight === void 0 || !(${open('steerInflight')})) throw ${unavailable};`,
-    `const steerContent = await ${admit[1]}(this.ctx, this.modelControl.snapshot(), params.prompt, imageEnabled, requestSignal ?? new AbortController().signal);`,
+    `const steerContent = await ${admit[1]}(this.ctx, ${selection[1]}, params.prompt, imageEnabled, requestSignal ?? new AbortController().signal);`,
     `if (!(${open('steerInflight')})) throw ${unavailable};`,
     `this.agent.steer(${message[1]}({ content: steerContent, source: { kind: "user" } }));`,
     `if (typeof params._meta?.[${JSON.stringify(GOAL_WAIT_AFTER_STEER)}] === "boolean") agentDeskSetGoalWaiting(this, params._meta[${JSON.stringify(GOAL_WAIT_AFTER_STEER)}] ? "waiting" : "ready");`,

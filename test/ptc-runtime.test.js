@@ -13,7 +13,7 @@ import { AcpRuntime, RuntimePool } from '../server/runtime.js'
 import { TeamManager } from '../server/teams.js'
 import { ThreadManager } from '../server/threads.js'
 import { appPaths } from '../server/paths.js'
-import { abPatch, chatWebPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
+import { WEB_SEARCH_PLUGIN, abPatch, chatWebPatch, homePatch, shippedPersona, teamChildPatch } from '../server/dsh-config.js'
 import { localRoute } from '../server/local-llm.js'
 import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
 import { PLAN_INSTRUCTION } from '../server/thread-utils.js'
@@ -49,7 +49,10 @@ async function setup(t, mode, profile) {
   await once(server, 'listening')
   const subagents = profile ? [{ provider: 'openai-codex', model: 'gpt-6.1-sol' }] : []
   const persona = await shippedPersona()
-  const rows = YAML.parse(homePatch({ localRoute: localRoute({ baseURL: `http://127.0.0.1:${server.address().port}/v1`, models: [{ id: 'ptc-fixture' }] }), subagentsEnabled: Boolean(profile), subagents, persona }))
+  const rows = YAML.parse(homePatch({ localRoute: localRoute({ baseURL: `http://127.0.0.1:${server.address().port}/v1`, models: [{ id: 'ptc-fixture' }] }), subagentsEnabled: Boolean(profile), subagents, persona,
+    // As in production (server/index.js). Without it dsh falls back to DeepSeek's search, which
+    // 0.2.2 hides on a route it cannot authenticate for, such as this local model.
+    webSearch: { plugin: WEB_SEARCH_PLUGIN, credentials: paths.credentials } }))
   rows.find((row) => row.id === 'acp').config = { provider: 'local-llm', model: 'ptc-fixture' }
   await fs.writeFile(paths.homePatch, YAML.stringify(rows))
   const patches = []

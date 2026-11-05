@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated the bundled DeepSeek Harness (`@deepseek-ai/dsh` and `@deepseek-ai/dsh-atomic-write`) from 0.2.1-rc.5 to 0.2.2-rc.1 (bundled pi-ai 1.4.0 → 1.5.0); refreshed dependency notices. Followed dsh's changes: per-task PTC switching now registers the native or PTC tool executor instead of the removed `presentAs`, the steering patch reads the model selection from `agent.model.current()`, the PTC SDK and syntax-error hooks target `@deepseek-ai/dsh-tool-executor-ptc` and the new `vm-script` mode, the goal-tool hook only adds argument guidance (dsh now ignores unused `update_goal` fields), and OpenCode Go registry models match pi-ai's new endpoints so newly listed models are still added.
 - Connect the standard browser, desktop, history and image MCP servers concurrently when a session uses only those servers. Preserve sequential startup for other server sets and await teardown of started connections on failure.
 - Extend opt-in private GPT diagnostics with credential, HTTP, text-receive and ACP notification-return timings. Record missing observations explicitly without treating notification return as successful UI delivery.
 

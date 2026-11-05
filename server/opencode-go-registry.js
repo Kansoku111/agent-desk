@@ -12,11 +12,14 @@ const RETRY_MS = 60_000
 const LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 // Map explicitly documented SDK/endpoint pairs onto routes the installed pi-ai
 // already speaks. The registry is not allowed to introduce any new destination.
+// [protocol, the registry's endpoint, the baseUrl the installed pi-ai sends that protocol to].
+// The last one must equal pi-ai's data exactly; pi-ai 1.5.0 moved all four (test/opencode-go-registry.test.js
+// checks them against the installed package), and a mismatch silently adds no model.
 const ROUTES = {
-  '@ai-sdk/openai-compatible': ['openai-completions', 'https://opencode.ai/inference/go/openai/v1', 'https://opencode.ai/inference/go/v1'],
-  '@ai-sdk/openai': ['openai-responses', 'https://opencode.ai/inference/go/openai/v1', 'https://opencode.ai/inference/go/v1'],
-  '@ai-sdk/anthropic': ['anthropic-messages', 'https://opencode.ai/inference/go/anthropic/v1', 'https://opencode.ai/inference/go'],
-  '@ai-sdk/google': ['google-generative-ai', 'https://opencode.ai/inference/go/google/v1beta', 'https://opencode.ai/inference/go/v1'],
+  '@ai-sdk/openai-compatible': ['openai-completions', 'https://opencode.ai/inference/go/openai/v1', 'https://opencode.ai/inference/go/openai/v1'],
+  '@ai-sdk/openai': ['openai-responses', 'https://opencode.ai/inference/go/openai/v1', 'https://opencode.ai/inference/go/openai/v1'],
+  '@ai-sdk/anthropic': ['anthropic-messages', 'https://opencode.ai/inference/go/anthropic/v1', 'https://opencode.ai/inference/go/anthropic'],
+  '@ai-sdk/google': ['google-generative-ai', 'https://opencode.ai/inference/go/google/v1beta', 'https://opencode.ai/inference/go/google/v1beta'],
 }
 
 const positive = (value) => Number.isSafeInteger(value) && value > 0

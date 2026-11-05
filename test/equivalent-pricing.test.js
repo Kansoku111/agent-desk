@@ -82,7 +82,7 @@ test('Go definitions and equivalent pricing reuse the same public download', asy
     api: 'https://opencode.ai/inference/go/openai/v1', models: { [go.id]: go } } }
   const { registry, pricing, file } = await fixture(t, async () => { calls++; return Response.json(all) })
   const base = { 'openai-completions': { known: { id: 'known', provider: 'opencode-go',
-    api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/v1' } } }
+    api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/openai/v1' } } }
   const goRegistry = await new OpenCodeGoRegistry({ file: file + '.go', registry, base: async () => base }).load()
   await pricing.refresh({ force: true })
   await goRegistry.refresh(['go-new'], { force: true })
@@ -150,7 +150,10 @@ test('public prices fill unknown GPT ids without replacing real catalog or bille
   assert.equal(unknown.get('anthropic/gpt-new'), undefined)
   assert.equal(unknown.get('openai-codex/invalid'), undefined)
   assert.equal(unknown.get('openai-codex/gpt-6.1-sol').input, 2, 'installed model pricing outranks public fallback')
-  assert.equal(unknown.get('openai-codex/gpt-6.1-terra').input, 3, 'public pricing outranks offline seed')
+  // The offline seed's only OpenAI model, gpt-6.1-terra, entered the installed catalog with pi-ai 1.5.0,
+  // so the catalog now outranks the public fallback here. No shipped model is left to show
+  // "public pricing outranks the offline seed"; that is the order of the first two Map sources.
+  assert.equal(unknown.get('openai-codex/gpt-6.1-terra').input, 1, 'installed model pricing outranks the public fallback and the offline seed')
   setCatalogPricing({ 'openai-codex/gpt-new': { input: 7, output: 20 } })
   near(scoreResponse(await loadPricing(), 'openai-codex/gpt-new', { inputTokens: 1000 }, 0).points, 3.5)
 })

@@ -174,8 +174,17 @@ test('real errors, invalid inputs and malformed complete records still fail', as
   const diagnostics = fixture(['too much\n'], { rawOutputMaxBytes: 2, exitCode: 1, stderr: 'unreadable directory' })
   await assert.rejects(invoke(diagnostics, 'glob', { pattern: '*' }), /unreadable directory/)
   await assert.rejects(invoke(fixture(['not json\n']), 'grep', { pattern: 'x' }), /malformed/)
-  await assert.rejects(invoke(fixture(), 'grep', { pattern: 'x', include: '' }), /non-empty glob/)
+  await assert.rejects(invoke(fixture(), 'grep', { pattern: 'x', include: ' ' }), /non-empty glob/)
   await assert.rejects(invoke(fixture(), 'glob', { pattern: ' ' }), /non-empty string/)
+})
+
+// 0.2.2-rc.1 treats an exact empty include as omitted (it was rejected before);
+// whitespace-only stays invalid, as asserted above.
+test('an exact empty grep include is accepted as omitted', async () => {
+  const f = fixture()
+  await invoke(f, 'grep', { pattern: 'x', include: '' })
+  assert.equal(f.specs.length, 1)
+  assert.ok(!f.specs[0].argv.some((arg) => arg.startsWith('--glob=')), 'an empty include must not become an empty --glob filter')
 })
 
 test('only output-limit termination is success; caller cancellation always wins', async () => {

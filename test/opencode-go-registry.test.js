@@ -4,12 +4,20 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { mergeOpenCodeCatalog, openCodeModels } from '../server/opencode-go-catalog.js'
+import { catalogDataDirs } from '../server/model-catalog.js'
 import { OpenCodeGoModels } from '../server/opencode-go-models.js'
 import { OPENCODE_GO_REGISTRY_URL, OpenCodeGoRegistry, registryDefinitions } from '../server/opencode-go-registry.js'
 
+// Where the installed pi-ai (1.5.0) sends each protocol.
+const BASE_URLS = {
+  'openai-completions': 'https://opencode.ai/inference/go/openai/v1',
+  'openai-responses': 'https://opencode.ai/inference/go/openai/v1',
+  'anthropic-messages': 'https://opencode.ai/inference/go/anthropic',
+  'google-generative-ai': 'https://opencode.ai/inference/go/google/v1beta',
+}
 const native = (id = 'known-model', api = 'openai-completions') => ({
   id, name: id, api, provider: 'opencode-go',
-  baseUrl: api === 'anthropic-messages' ? 'https://opencode.ai/inference/go' : 'https://opencode.ai/inference/go/v1',
+  baseUrl: BASE_URLS[api],
   input: ['text', 'image'], reasoning: true, thinkingLevelMap: { low: 'low', high: 'high' },
   contextWindow: 100000, maxTokens: 10000, cost: { input: 1, output: 2 },
   compat: { supportsStore: false, supportsDeveloperRole: false, maxTokensField: 'max_tokens' },
@@ -51,6 +59,20 @@ test('exact official ids can fill new or renamed models without a hardcoded alia
   assert.equal(definition.cost.cacheRead, 0.015)
   assert.ok(openCodeModels(mergeOpenCodeCatalog(previous, result)).some((model) => model.id === 'new-family'))
   assert.deepEqual(registryDefinitions(body(metadata('new-family-free')), ['new-family'], previous), {})
+})
+
+test('every route accepts a model against the installed pi-ai data, so a moved base URL cannot silently add nothing', async () => {
+  const data = JSON.parse(await fs.readFile(path.join(catalogDataDirs()[0], 'opencode-go.json'), 'utf8'))
+  for (const [api, npm, endpoint] of [
+    ['openai-completions', '@ai-sdk/openai-compatible', 'https://opencode.ai/inference/go/openai/v1'],
+    ['openai-responses', '@ai-sdk/openai', 'https://opencode.ai/inference/go/openai/v1'],
+    ['anthropic-messages', '@ai-sdk/anthropic', 'https://opencode.ai/inference/go/anthropic/v1'],
+    ['google-generative-ai', '@ai-sdk/google', 'https://opencode.ai/inference/go/google/v1beta'],
+  ]) {
+    assert.equal(data[api] !== undefined && Object.values(data[api]).every((model) => model.baseUrl === BASE_URLS[api]), true, `${api}: test fixture base URL differs from the installed pi-ai`)
+    const result = registryDefinitions(body(metadata('new-model', { provider: { npm, api: endpoint } })), ['new-model'], data)
+    assert.equal(result[api]?.['new-model']?.baseUrl, BASE_URLS[api], `${api}: route no longer matches the installed pi-ai base URL`)
+  }
 })
 
 test('explicit SDK/endpoint pairs select only installed protocols and destinations', () => {

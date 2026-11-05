@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { test } from 'node:test'
+import { PtcExecutor } from '@deepseek-ai/dsh-tool-executor-ptc'
 import { patchPtcSource } from '../server/ptc-patch.js'
 import { assertPresentationReady, setToolMode, withToolMode } from '../server/ptc-bridge.js'
 import { TOOL_MODE_CONFIG, ptcEventUpdate, toolModeOption } from '../server/ptc.js'
@@ -25,28 +26,38 @@ test('bridge releases the exact declaration before switching, rejects busy/inval
   const calls = []
   const gate = deferred()
   let fail = false
-  const record = { assertActive() {}, agent: { status: 'idle', ctx: { tools: { async presentAs(mode) {
+  let hold = false
+  // The executors only read these from the context while being built.
+  const record = { assertActive() {}, agent: { status: 'idle', ctx: { systemPrompt: { getSectionOrder: () => 0 }, tools: { setExecutor(executor) {
+    const mode = executor instanceof PtcExecutor ? 'ptc' : 'native'
+    if (fail) throw new Error('declaration failed')
     calls.push(mode)
-    if (fail) { await gate.promise; throw new Error('declaration failed') }
-    return () => { calls.push(`dispose:${mode}`) }
+    return async () => {
+      if (hold) await gate.promise
+      calls.push(`dispose:${mode}`)
+    }
   } } } } }
   assert.equal(toolModeOption(withToolMode(record, [])).currentValue, 'native')
   await setToolMode(record, 'ptc')
   await setToolMode(record, 'ptc')
   await setToolMode(record, 'native')
   assert.deepEqual(calls, ['ptc', 'dispose:ptc', 'native'])
+  calls.length = 0
   record.inflight = {}
   await assert.rejects(setToolMode(record, 'ptc'), /busy/)
   delete record.inflight
   await assert.rejects(setToolMode(record, 'invalid'))
   fail = true
+  hold = true
   const change = setToolMode(record, 'ptc')
   assert.throws(() => assertPresentationReady(record), /not ready/)
   await assert.rejects(setToolMode(record, 'ptc'), /busy/)
   gate.resolve()
   await assert.rejects(change, /declaration failed/)
+  assert.deepEqual(calls, ['dispose:native'], 'the previous declaration is released before the new one is attempted')
   assert.throws(() => assertPresentationReady(record), /not ready/)
   fail = false
+  hold = false
   await setToolMode(record, 'native')
   assertPresentationReady(record)
 })

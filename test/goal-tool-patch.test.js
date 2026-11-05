@@ -27,8 +27,7 @@ function fixture({ authority = 'human', rounds = 3, phase = 'active', eventRevis
   const ctx = {
     tools: { register: (tool) => tools.set(tool.name, tool) },
     systemPrompt: { section: (section) => sections.push(section), getSectionOrder: () => 0 },
-    agents: { get: () => agent, currentInitiator: () => agent, roots: () => authority === 'child' ? [] : [agent] },
-    sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) },
+    agents: { get: () => agent, currentInitiator: () => agent, roots: () => authority === 'child' ? [] : [agent], turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) },
     goals: { get: () => goal },
   }
   for (const operation of ['edit', 'pause', 'resume', 'complete', 'block']) {
@@ -40,13 +39,6 @@ function fixture({ authority = 'human', rounds = 3, phase = 'active', eventRevis
   return { tools, sections, calls, deferred, goal, agent, invoke }
 }
 
-function correctedCall(error) {
-  assert.equal(error.code, 'GOAL_TOOL_INVALID_UPDATE')
-  const match = /Retry with: (\{.*\})\. Do not repeat/.exec(error.message)
-  assert.ok(match, error.message)
-  return JSON.parse(match[1])
-}
-
 const rejectsCode = (code) => (error) => { assert.equal(error.code, code); return true }
 
 test('installed goal tools take the patch; changed or already-patched sources are rejected', async () => {
@@ -56,10 +48,11 @@ test('installed goal tools take the patch; changed or already-patched sources ar
   assert.equal(patchGoalToolSource(patched), null)
   assert.equal(patchGoalToolSource('export {}'), null)
   for (const anchor of [
+    'difficulty, uncertainty, or useful remaining work is not blocked.',
     'description: "Update the current goal."',
+    'Replacement objective; valid only with action edit.',
     'Replacement cap; valid only with action edit.',
-    'objective and max_goal_rounds are valid only with action edit; blocked_reason is valid only with action blocked',
-    '/** Build the exact compare-and-set ref from model arguments. */',
+    'Required only with action blocked: the concrete condition that persisted across rounds and blocks progress.',
   ]) assert.equal(patchGoalToolSource(source.replace(anchor, 'changed upstream')), null, anchor)
   assert.equal(patchGoalToolSource(source + '\n// Replacement cap; valid only with action edit.'), null)
 })
@@ -70,7 +63,6 @@ test('model guidance explains omission and fillers without changing required fie
   assert.deepEqual(tool.parameters.required, ['goal_id', 'revision', 'action'])
   assert.match(tool.description, /pause\/resume\/complete need only goal_id, revision, and action/)
   assert.match(tool.description, /objective="", max_goal_rounds=0, blocked_reason=""/)
-  assert.match(tool.description, /instead of repeating the rejected call/)
   assert.match(tool.parameters.properties.objective.description, /Do not copy the current objective/)
   assert.match(tool.parameters.properties.max_goal_rounds.description, /use 0/)
   assert.match(tool.parameters.properties.blocked_reason.description, /Otherwise omit/)
@@ -88,61 +80,35 @@ for (const action of ['pause', 'resume', 'complete']) {
       assert.deepEqual(f.calls, [{ operation: action, args: [f.agent, { id: ref.goal_id, revision: ref.revision }] }])
     }
   })
-
-  test(`${action} rejects a copied cap before mutation and gives an executable corrected call`, async () => {
-    const f = fixture()
-    let corrected
-    await assert.rejects(f.invoke({ action, ...fillers, max_goal_rounds: 23 }), (error) => {
-      assert.match(error.message, new RegExp(`action "${action}" does not accept: max_goal_rounds\\.`))
-      corrected = correctedCall(error)
-      assert.deepEqual(corrected, { ...ref, action, ...fillers })
-      return true
-    })
-    assert.equal(f.calls.length, 0)
-    await f.invoke(corrected)
-    assert.equal(f.calls.length, 1)
-    assert.equal(f.calls[0].operation, action)
-  })
 }
 
-test('a copied objective or blocked reason also identifies only the rejected fields', async () => {
-  for (const [extra, fields] of [
-    [{ objective: 'Original goal' }, 'objective'],
-    [{ blocked_reason: 'Not blocked' }, 'blocked_reason'],
-    [{ objective: 'Original goal', max_goal_rounds: 23, blocked_reason: 'Not blocked' }, 'objective, max_goal_rounds, blocked_reason'],
-  ]) {
-    const f = fixture()
-    await assert.rejects(f.invoke({ action: 'complete', ...fillers, ...extra }), (error) => {
-      assert.ok(error.message.includes(`does not accept: ${fields}.`))
-      assert.deepEqual(correctedCall(error), { ...ref, action: 'complete', ...fillers })
-      return true
-    })
-    assert.equal(f.calls.length, 0)
+// 0.2.2-rc.1 ignores the fields an action does not use; earlier dsh rejected
+// them. If a later dsh rejects them again, this fails and the error rewrite that
+// this hook used to apply is worth restoring.
+test('pause, resume and complete ignore a copied objective, cap or blocked reason', async () => {
+  for (const action of ['pause', 'resume', 'complete']) {
+    for (const extra of [
+      { max_goal_rounds: 23 },
+      { objective: 'Original goal' },
+      { blocked_reason: 'Not blocked' },
+      { objective: 'Original goal', max_goal_rounds: 23, blocked_reason: 'Not blocked' },
+    ]) {
+      const f = fixture()
+      await f.invoke({ action, ...fillers, ...extra })
+      assert.deepEqual(f.calls, [{ operation: action, args: [f.agent, { id: ref.goal_id, revision: ref.revision }] }])
+    }
   }
 })
 
-test('corrected edit keeps requested replacements, while corrected blocked keeps its reason', async () => {
-  for (const [action, args, expected] of [
-    ['edit', { objective: 'New objective', max_goal_rounds: 30, blocked_reason: 'Unused' },
-      { objective: 'New objective', max_goal_rounds: 30, blocked_reason: '' }],
-    ['blocked', { objective: 'Original goal', max_goal_rounds: 23, blocked_reason: 'Service remains unavailable' },
-      { objective: '', max_goal_rounds: 0, blocked_reason: 'Service remains unavailable' }],
-  ]) {
-    const f = fixture()
-    let corrected
-    await assert.rejects(f.invoke({ action, ...args }), (error) => {
-      corrected = correctedCall(error)
-      assert.deepEqual(corrected, { ...ref, action, ...expected })
-      return true
-    })
-    assert.equal(f.calls.length, 0)
-    await f.invoke(corrected)
-    const call = f.calls[0]
-    assert.equal(call.operation, action === 'blocked' ? 'block' : 'edit')
-    assert.deepEqual(call.args[2], action === 'edit'
-      ? { objective: 'New objective', maxGoalRounds: 30 }
-      : { code: 'model-reported', message: 'Service remains unavailable' })
-  }
+test('edit and blocked pass only the fields they use to the goal domain', async () => {
+  const edit = fixture()
+  await edit.invoke({ action: 'edit', objective: 'New objective', max_goal_rounds: 30, blocked_reason: 'Unused' })
+  assert.equal(edit.calls[0].operation, 'edit')
+  assert.deepEqual(edit.calls[0].args[2], { objective: 'New objective', maxGoalRounds: 30 })
+  const blocked = fixture()
+  await blocked.invoke({ action: 'blocked', objective: 'Original goal', max_goal_rounds: 23, blocked_reason: 'Service remains unavailable' })
+  assert.equal(blocked.calls[0].operation, 'block')
+  assert.deepEqual(blocked.calls[0].args[2], { code: 'model-reported', message: 'Service remains unavailable' })
 })
 
 test('edit still permits independent replacements without sending filler values to the goal domain', async () => {
