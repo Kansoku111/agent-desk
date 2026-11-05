@@ -8,8 +8,8 @@
 
 - 個人指示を残したLunaの試行は、パーソナライズOFFのハーネス比較には使わない。
 - 個人指示・口調・AGENTS自動読込を除外したTerra/mediumの成功1ペアでは、両者とも同じ独立209チェックに成功した。Agent Deskは未キャッシュ入力30,896、cache read 56,576、出力1,087。Codexデスクトップ同梱エンジンは20,014、111,616、954だった。GUI同士の比較ではなく、通常の実行コアを用いた小課題の1試行である。
-- この試行では総トークンはAgent Deskの方が少ない一方、同じStandard API単価で換算すると約29%多い。実際の購読枠・追加クレジット差を測った値ではなく、一般的な節約率にも外挿しない。
-- Agent Deskの4応答目に15,057入力・cache read 0があった。圧縮・モデル変更・LLM retryは無かったが、送信payloadとツール定義の時系列が残っておらず、アプリ側のprefix変化か上流cache/routingかは断定できない。
+- 保存されたusageを同じStandard API単価で換算すると、総トークンはAgent Deskの方が少ない一方、参考額は約29%多い。ただし、上流のキャッシュ内訳が欠落していた場合は未キャッシュ入力と換算差が過大になり得る。実際の購読枠・追加クレジット差を測った値ではなく、一般的な節約率にも外挿しない。
+- Agent Deskの4応答目は入力15,057で、保存usageにcacheReadTokensが無く、集計上は0だった。生のcached_tokensが明示的に0だったか、項目が未報告だったかは区別できない。圧縮・モデル変更・LLM retryは無かったが、送信payloadとツール定義の時系列が残っておらず、アプリ側のprefix変化か上流cache/routingかは断定できない。
 
 [OpenAIのキャッシュ仕様](https://developers.openai.com/api/docs/guides/prompt-caching)は先頭一致と設定の安定性を重視する。一方、[文脈設計の原則](https://www.anthropic.com/research/effective-context-engineering-for-ai-agents)や[圧縮と観測マスキングの比較](https://arxiv.org/abs/2508.21433)からも、短縮・要約・PTCが品質や再試行を含め常に有利とは言えない。自動的な文脈削減ではなく、完了した仕事単位で測る。
 
