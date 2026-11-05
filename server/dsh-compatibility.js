@@ -14,6 +14,8 @@ import { patchOutputSpeedSource } from './output-speed-patch.js'
 import { patchFsSearchSource } from './fs-search-patch.js'
 import { patchGoalToolSource } from './goal-tool-patch.js'
 import { patchPtcSource } from './ptc-patch.js'
+import { patchPtcRuntimeSource } from './ptc-runtime-patch.js'
+import { patchPtcSdkSource } from './ptc-sdk-patch.js'
 
 // Both AcpRuntime and the verifier use this registration order. load hooks call
 // nextLoad first, so their source transforms unwind in registration order (not
@@ -29,6 +31,8 @@ const HOOKS = [
   { name: 'mcp-timeout', module: 'acp', patch: patchMcpTimeoutSource },
   { name: 'output-speed', module: 'acp', patch: patchOutputSpeedSource },
   { name: 'ptc', module: 'acp', patch: patchPtcSource },
+  { name: 'ptc-errors', module: 'ptcRuntime', patch: patchPtcRuntimeSource },
+  { name: 'ptc-sdk', module: 'tools', patch: patchPtcSdkSource },
   { name: 'fs-search', module: 'search', patch: patchFsSearchSource },
 ]
 
@@ -36,8 +40,8 @@ export function runtimeHookArgs() {
   return HOOKS.flatMap(({ name }) => ['--import', new URL(`./${name}-hook.js`, import.meta.url).href])
 }
 
-export function composeCompatibilityPatches({ acp, llm, search, goalTool, goalDriver }) {
-  const sources = { acp, llm, search, goalTool, goalDriver }
+export function composeCompatibilityPatches({ acp, llm, search, goalTool, goalDriver, ptcRuntime, tools }) {
+  const sources = { acp, llm, search, goalTool, goalDriver, ptcRuntime, tools }
   for (const hook of HOOKS) {
     if (!hook.patch) continue
     const patched = hook.patch(sources[hook.module])
@@ -88,8 +92,10 @@ export function resolveCompatibilityModules(root) {
   const search = createRequire(base).resolve('@deepseek-ai/dsh-tool-fs-search')
   const goalTool = createRequire(base).resolve('@deepseek-ai/dsh-tool-goal')
   const goalDriver = createRequire(base).resolve('@deepseek-ai/dsh-goal-round-driver')
+  const ptcRuntime = createRequire(base).resolve('@deepseek-ai/dsh-ptc-runtime-node')
+  const tools = createRequire(base).resolve('@deepseek-ai/dsh-tools')
   // A changed entrypoint no longer matches the hooks' URL filters.
-  for (const [file, name] of [[acp, 'dsh-acp'], [llm, 'dsh-llm-pi-ai'], [search, 'dsh-tool-fs-search'], [goalTool, 'dsh-tool-goal'], [goalDriver, 'dsh-goal-round-driver']]) {
+  for (const [file, name] of [[acp, 'dsh-acp'], [llm, 'dsh-llm-pi-ai'], [search, 'dsh-tool-fs-search'], [goalTool, 'dsh-tool-goal'], [goalDriver, 'dsh-goal-round-driver'], [ptcRuntime, 'dsh-ptc-runtime-node'], [tools, 'dsh-tools']]) {
     if (!file.replaceAll('\\', '/').endsWith(`/@deepseek-ai/${name}/lib/index.js`)) {
       throw new Error(`${name}: module entrypoint no longer matches the runtime hook: ${file}`)
     }
@@ -97,7 +103,7 @@ export function resolveCompatibilityModules(root) {
   const pi = packageFile('@earendil-works/pi-ai', llm)
   // retry-hook imports the app's pi-ai, which may differ from dsh's nested copy.
   const retryPi = packageFile('@earendil-works/pi-ai', path.join(root, 'server', 'retry-hook.js'))
-  return { acp, llm, search, goalTool, goalDriver, pi, retryPi }
+  return { acp, llm, search, goalTool, goalDriver, ptcRuntime, tools, pi, retryPi }
 }
 
 async function verifyActualHookChain(modules, expected) {
@@ -106,7 +112,7 @@ async function verifyActualHookChain(modules, expected) {
   // the result of their nextLoad chain. Do not evaluate any dsh module: replacing
   // its final source with an empty module prevents all upstream side effects.
   for (const { name } of HOOKS) await import(new URL(`./${name}-hook.js`, import.meta.url).href)
-  const targets = new Map(['acp', 'llm', 'search', 'goalTool', 'goalDriver'].map((key) => [
+  const targets = new Map(['acp', 'llm', 'search', 'goalTool', 'goalDriver', 'ptcRuntime', 'tools'].map((key) => [
     `${pathToFileURL(modules[key]).href}?agent-desk-compatibility`, key,
   ]))
   const seen = new Set()
@@ -135,6 +141,8 @@ export async function verifyDshCompatibility({ root = fileURLToPath(new URL('../
     const sources = composeCompatibilityPatches({
       acp: await fs.readFile(modules.acp, 'utf8'),
       llm: await fs.readFile(modules.llm, 'utf8'),
+      ptcRuntime: await fs.readFile(modules.ptcRuntime, 'utf8'),
+      tools: await fs.readFile(modules.tools, 'utf8'),
       search: await fs.readFile(modules.search, 'utf8'),
       goalTool: await fs.readFile(modules.goalTool, 'utf8'),
       goalDriver: await fs.readFile(modules.goalDriver, 'utf8'),

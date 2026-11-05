@@ -8,6 +8,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import YAML from 'yaml'
+import ts from 'typescript'
 import { AcpRuntime, RuntimePool } from '../server/runtime.js'
 import { TeamManager } from '../server/teams.js'
 import { ThreadManager } from '../server/threads.js'
@@ -525,6 +526,45 @@ test('real ACP switches native → PTC → native, forwards internal tools, resu
   await f.prompt()
   assert.deepEqual(schemas(), ['run_code'])
   assert.ok(f.requests.at(-1).messages.some((message) => message.role === 'tool'), 'prior tool history survives switching and resume')
+})
+
+test('real ACP shares SDK output types while retaining every native binding', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'workspace-write')
+  await f.prompt()
+  const nativeNames = f.requests.at(-1).tools.map(tool => tool.function.name).sort()
+  await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+  await f.prompt()
+  const system = f.requests.at(-1).messages.filter(message => message.role === 'system').map(message => String(message.content)).join('\n')
+  const fence = String.fromCharCode(96).repeat(3)
+  const argsAt = system.indexOf('interface ToolArgsMap')
+  const start = system.lastIndexOf(fence + 'ts\n', argsAt)
+  const end = system.indexOf('\n' + fence, argsAt)
+  assert.ok(argsAt >= 0 && start >= 0 && end > start)
+  const source = system.slice(start + (fence + 'ts\n').length, end)
+  const parsed = ts.createSourceFile('actual-ptc-sdk.ts', source, ts.ScriptTarget.ESNext, true)
+  assert.equal(parsed.parseDiagnostics.length, 0)
+  const args = parsed.statements.find(node => ts.isInterfaceDeclaration(node) && node.name.text === 'ToolArgsMap')
+  const outputs = parsed.statements.find(node => ts.isInterfaceDeclaration(node) && node.name.text === 'ToolOutputMap')
+  assert.deepEqual(args.members.map(member => member.name.text).sort(), nativeNames)
+  assert.deepEqual(outputs.members.map(member => member.name.text).sort(), nativeNames)
+  assert.ok(parsed.statements.some(node => ts.isTypeAliasDeclaration(node) && node.name.text.startsWith('SharedOutput')))
+})
+
+test('real PTC syntax diagnostics reach the model without executing tools and the session recovers', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'workspace-write')
+  await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+  const marker = path.join(f.workspace, 'must-not-be-written.txt')
+  await f.run('await tools.write({file_path:"must-not-be-written.txt",content:"SECRET_OTHER_LINE"});\nconst broken = {x: 1)')
+  const content = f.requests.at(-1).messages.filter(entry => entry.role === 'tool').at(-1).content
+  const error = typeof content === 'string' ? content : JSON.stringify(content)
+  assert.match(error, /code run failed/)
+  assert.match(error, /line 2, column/)
+  assert.match(error, /const broken/)
+  assert.doesNotMatch(error, /SECRET_OTHER_LINE|node:internal|__dsh_program__/)
+  await assert.rejects(fs.stat(marker))
+  await f.run('console.log("syntax-recovery"); return {ok:true}')
+  const recovered = f.requests.at(-1).messages.filter(entry => entry.role === 'tool').at(-1).content
+  assert.match(typeof recovered === 'string' ? recovered : JSON.stringify(recovered), /syntax-recovery/)
 })
 
 test('real PTC timeout and cancellation settle, then the same ACP session can execute again', { timeout: 120_000 }, async (t) => {

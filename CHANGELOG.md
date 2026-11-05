@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Share identical PTC SDK output types without removing argument descriptions, tool capabilities or return-type information.
 - API換算額を小数点以下最大2桁まで表示するようにしました。USD・JPYとも切り捨てと末尾ゼロの省略を維持し、0.01未満の正の値は `< $0.01`／`< ¥0.01` と表示します。保存済みの金額や計算精度は変更しません。
 - 独立レビューの開始画面を担当（DSH／Claude Code）と方法（意見を聞く／レビューして修正）の2つの選択にしました。会話中の設計案も対象として引き継ぎ、意見モードでは変更せず報告し、完了後に親へ自動返送します。モデルは設定画面でハーネスごとに選びます。
 - 「子に委託」「独立レビュー」の担当画面に、通常タスクと同じ入力欄を追加しました。作業中は割り込み、止まった後や完了後は返信として同じ会話で続けられます。完了後の返信も使え、新しい結果は検証し直して返送できます（意見モードは自動、それ以外は「本セッションに渡す」）。会話だけの返信は完了済みの結果を変えません。アプリが担当へ送る指示は先頭に目印を付けて画面から隠し、利用者の発言だけを表示します。
@@ -20,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve PTC TypeScript syntax-error locations and a bounded source excerpt instead of dropping Node's parser codeframe. Valid programs, sandbox policies and tool-result forwarding are unchanged.
 - Stop unused session-title generation in Claude Code's headless GPT subagent, without changing its selected model or reasoning effort.
 - Include model-generated compaction summaries in turn, child-panel and history usage without charging forked history again. Rescan available logs once while keeping cached totals for deleted logs; saved finalized conversion amounts are not repriced.
 

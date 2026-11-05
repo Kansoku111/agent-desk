@@ -15,6 +15,8 @@ import { patchOutputSpeedSource } from '../server/output-speed-patch.js'
 import { patchFsSearchSource } from '../server/fs-search-patch.js'
 import { patchGoalToolSource } from '../server/goal-tool-patch.js'
 import { patchPtcSource } from '../server/ptc-patch.js'
+import { patchPtcRuntimeSource } from '../server/ptc-runtime-patch.js'
+import { patchPtcSdkSource } from '../server/ptc-sdk-patch.js'
 
 const project = fileURLToPath(new URL('../', import.meta.url))
 
@@ -63,7 +65,7 @@ async function fixture(t) {
     'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js',
     'fs-search-hook.js', 'fs-search-patch.js', 'fs-search.js',
     'goal-tool-hook.js', 'goal-tool-patch.js', 'goal-wait-hook.js', 'goal-wait.js', 'goal-command.js',
-    'ptc-hook.js', 'ptc-patch.js',
+    'ptc-hook.js', 'ptc-patch.js', 'ptc-errors-hook.js', 'ptc-runtime-patch.js', 'ptc-program-error.js', 'ptc-sdk-hook.js', 'ptc-sdk-patch.js',
   ].map((file) => `server/${file}`)]) {
     await fs.copyFile(path.join(project, file), path.join(root, file))
   }
@@ -94,6 +96,8 @@ async function fixture(t) {
   const searchDir = await pkg('@deepseek-ai/dsh-tool-fs-search')
   const goalToolDir = await pkg('@deepseek-ai/dsh-tool-goal')
   const goalDriverDir = await pkg('@deepseek-ai/dsh-goal-round-driver')
+  const ptcRuntimeDir = await pkg('@deepseek-ai/dsh-ptc-runtime-node')
+  const toolsDir = await pkg('@deepseek-ai/dsh-tools')
   // Use a read-only upstream source snapshot, copied to the isolated fixture.
   // Its imports are only parsed (--check), never evaluated.
   const acpSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-acp'), 'utf8')
@@ -106,6 +110,10 @@ async function fixture(t) {
   const goalTool = await put(`${goalToolDir}/lib/index.js`, goalToolSource)
   const goalDriverSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-goal-round-driver'), 'utf8')
   const goalDriver = await put(`${goalDriverDir}/lib/index.js`, goalDriverSource)
+  const ptcRuntimeSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-ptc-runtime-node'), 'utf8')
+  const ptcRuntime = await put(`${ptcRuntimeDir}/lib/index.js`, ptcRuntimeSource)
+  const toolsSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-tools'), 'utf8')
+  const tools = await put(`${toolsDir}/lib/index.js`, toolsSource)
   const pi = await pkg('@earendil-works/pi-ai', 'dist/index.js', {
     exports: { '.': './dist/index.js', './utils/*': './dist/utils/*.js', './api/*': './dist/api/*.js' },
   })
@@ -116,16 +124,16 @@ async function fixture(t) {
   await put(`${pi}/dist/providers/opencode-go.models.js`, 'import values from "./data/opencode-go.json" with { type: "json" }; export const OPENCODE_GO_MODELS = values')
   await put(`${pi}/dist/providers/data/opencode-go.json`, JSON.stringify({ 'openai-completions': { 'chat:fixture': { id: 'fixture', type: 'chat' } } }))
   const retry = await put(`${pi}/dist/utils/retry.js`, 'export const isRetryableAssistantError = () => true')
-  return { root, put, acp, llm, search, goalTool, goalDriver, acpSource, llmSource, searchSource, goalToolSource, goalDriverSource, retry, pi }
+  return { root, put, acp, llm, search, goalTool, goalDriver, ptcRuntime, tools, acpSource, llmSource, searchSource, goalToolSource, goalDriverSource, ptcRuntimeSource, toolsSource, retry, pi }
 }
 
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
-  const { acpSource, llmSource, searchSource, goalToolSource, goalDriverSource } = await fixture(t)
+  const { acpSource, llmSource, searchSource, goalToolSource, goalDriverSource, ptcRuntimeSource, toolsSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
-    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'goal-wait-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'fs-search-hook.js',
+    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'goal-wait-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'ptc-errors-hook.js', 'ptc-sdk-hook.js', 'fs-search-hook.js',
   ])
-  assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, search: searchSource, goalTool: goalToolSource, goalDriver: goalDriverSource }), {
-    acp: patchPtcSource(patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource))))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource),
+  assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, search: searchSource, goalTool: goalToolSource, goalDriver: goalDriverSource, ptcRuntime: ptcRuntimeSource, tools: toolsSource }), {
+    acp: patchPtcSource(patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource))))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource), ptcRuntime: patchPtcRuntimeSource(ptcRuntimeSource), tools: patchPtcSdkSource(toolsSource),
   })
 })
 
@@ -153,6 +161,8 @@ for (const [name, field, change] of [
   ['retry', 'llm', (source) => source.replace('function classifyPiAiError(message)', 'function upstreamClassifier(message)')],
   ['output-speed', 'acp', (source) => source.replace('requestSignal?.removeEventListener', 'requestSignal?.upstreamRemoveEventListener')],
   ['ptc', 'acp', (source) => source.replace('return this.modelControl.set(configId, value, signal);', 'return upstreamSetConfig();')],
+  ['ptc-errors', 'ptcRuntime', (source) => source.replace('stripTypeScriptTypes(spec.program)', 'changedParse(spec.program)')],
+  ['ptc-sdk', 'tools', (source) => source.replace('const outputMembers = [];', 'const changedOutput = [];')],
   ['fs-search', 'search', (source) => source.replace('async function runRipgrep(', 'async function upstreamSearch(')],
 ]) {
   test(`fresh verify rejects changed upstream ${name} fixture instead of accepting model-only success`, async (t) => {
@@ -221,7 +231,7 @@ test('retry check export is mandatory, not merely an optional startup warning', 
   await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /isRetryableAssistantError is unavailable/)
 })
 
-for (const name of ['goal', 'goal-wait', 'goal-tool', 'ptc']) {
+for (const name of ['goal', 'goal-wait', 'goal-tool', 'ptc', 'ptc-errors', 'ptc-sdk']) {
   test(`the gate observes actual ${name} hook transformations, not just standalone patch functions`, async (t) => {
     const { root } = await fixture(t)
     const hook = path.join(root, 'server', `${name}-hook.js`)
