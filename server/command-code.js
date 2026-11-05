@@ -13,6 +13,8 @@ const MAX_AGE_MS = 6 * 60 * 60 * 1000
 const MAX_MODELS = 2000
 const MAX_CONTEXT = 100_000_000
 const MAX_OUTPUT = 8192
+// Max-effort reasoning can exhaust 8K before the answer; other models retain the conservative default.
+const DEEPSEEK_FLASH_OUTPUT = 65536
 
 function usable(entry) {
   return entry && isLocalModelId(entry.id)
@@ -78,7 +80,7 @@ export function commandCodeRoutes(models, { zdr = false, root = COMMAND_CODE_ROO
       models: selected.map(({ id, name, contextWindow }) => {
         const levels = commandCodeEfforts(id, endpoint)
         return {
-          id, name, contextWindow, maxTokens: Math.min(MAX_OUTPUT, Math.max(1, Math.floor(contextWindow / 4))),
+          id, name, contextWindow, maxTokens: Math.min(endpoint === 'chat' && id === 'deepseek/deepseek-v4.1-flash' ? DEEPSEEK_FLASH_OUTPUT : MAX_OUTPUT, Math.max(1, Math.floor(contextWindow / 4))),
           input: ['text'], reasoningEfforts: levels.length ? Object.fromEntries(levels.map((level) => [level, level])) : false,
         }
       }),
