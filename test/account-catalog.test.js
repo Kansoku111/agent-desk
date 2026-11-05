@@ -474,7 +474,7 @@ test('Command Code publishes a full mixed-protocol inventory in the real picker'
     afterAdded: async ({ waitFor }) => {
       const levels = (state, provider, id) => (state.catalog.effortsByModel[JSON.stringify([provider, id])] ?? []).map((entry) => entry.value).filter(Boolean)
       const added = await waitFor((state) => state.modelUpdate.commandCode.applied && known.every((id) => levels(state, 'command-code', id).length) && levels(state, 'command-code-claude', 'claude-sonnet-5-5').length)
-      assert.equal(added.catalog.models.filter((model) => model.provider === 'command-code').length, 84)
+      assert.equal(added.catalog.models.filter((model) => model.provider === 'command-code').length, 85)
       assert.equal(added.catalog.models.filter((model) => model.provider === 'command-code-claude').length, 11)
       assert.ok(added.catalog.models.some((model) => model.provider === 'command-code-claude' && model.id === 'claude-haiku-4-5-20251001'))
       assert.equal(added.modelUpdate.commandCode.applied, true)

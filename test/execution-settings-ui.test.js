@@ -5,6 +5,7 @@ import ts from 'typescript'
 import * as workflowEffort from '../shared/workflow-effort.js'
 import * as usageFallback from '../shared/usage-fallback.js'
 import { claudeCodeModels } from '../web/src/model-selection.ts'
+import * as commandCodeStatus from '../web/src/command-code-status.ts'
 
 const jsx = (type, props, key) => ({ type, props: { ...props, ...(key === undefined ? {} : { key }) } })
 const jsxRuntime = { jsx, jsxs: jsx, Fragment: Symbol.for('react.fragment') }
@@ -25,6 +26,7 @@ const fieldSource = await moduleSource('../web/src/components/WorkflowModelField
 const fieldComponents = compile(fieldSource, {
   react: {}, 'react/jsx-runtime': jsxRuntime, 'lucide-react': { ChevronDown: 'ChevronDown' },
   '../model-selection': { claudeCodeModels, providerReady: () => true, visibleModels: (server) => server.catalog.models },
+  '../command-code-status': commandCodeStatus,
   '../util': { effortLabel: (value) => value || '指定なし', parseModel: (value) => { const [provider, model] = JSON.parse(value); return { provider, model } } },
   './Pickers': { byNewest: () => 0, providerHeading: (server, provider) => server.catalog.providers[provider] ?? provider, PROVIDER_NOTE: {}, PROVIDER_ORDER: ['openai-codex'] },
   './Popover': {

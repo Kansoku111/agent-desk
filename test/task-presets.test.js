@@ -188,6 +188,21 @@ test('task handoff retains requested creative tools and does not inherit an assi
   assert.doesNotMatch(workerPresetInstructions(run), /running implementation worker/)
 })
 
+test('review-and-fix asks for evidence and focused verification without affecting opinion or delegation', () => {
+  const review = { id: 'R', kind: 'review', reviewMode: 'fix' }
+  const prompt = workerPresetInstructions(review)
+  assert.match(preparePresetPrompt(review), /発生条件・具体的な影響と根拠/)
+  assert.match(prompt, /concern as a hypothesis.*triggering conditions, concrete impact and evidence/)
+  assert.match(prompt, /Do not require a dangerous reproduction.*report significant risks/)
+  assert.match(prompt, /verify the original issue and related regressions/)
+  assert.match(prompt, /unsubstantiated concerns and checks you could not perform as unverified/)
+  assert.match(prompt, /stop; do not search indefinitely/)
+  assert.match(prompt, /No findings is valid/)
+  for (const run of [{ id: 'R', kind: 'review', reviewMode: 'opinion' }, { id: 'D', kind: 'delegate' }]) {
+    assert.doesNotMatch(workerPresetInstructions(run), /concern as a hypothesis/)
+  }
+})
+
 test('delegate completes one-way; only explicit delivery sends a parent prompt, once', async (t) => {
   const f = await fixture(t)
   const run = await f.start()
@@ -260,11 +275,11 @@ test('opinion passes the proposed design without asking for edits and runs DSH r
   const prompt = f.threads.calls.at(-1).input.text
   assert.match(prompt, /認証設計の案と制約/)
   assert.match(prompt, /Do not create or modify files/)
-  assert.doesNotMatch(prompt, /Fix every actionable bug/)
+  assert.doesNotMatch(prompt, /Fix substantiated in-scope bugs/)
   await f.complete(run.worker.id, '結果ブロックが欠落')
   const retry = f.threads.calls.at(-1).input.text
-  assert.match(retry, /ファイルを変更せず/ )
-  assert.doesNotMatch(retry, /必要な修正・検証/ )
+  assert.match(retry, /ファイルを変更せず/)
+  assert.doesNotMatch(retry, /必要な修正・検証/)
   await f.complete(run.worker.id, '設計案への意見: 前提と代替案の具体的な根拠\n\n' + result(run, { summary: '設計案への意見' }))
   assert.equal(run.phase, 'completed')
   const parentCalls = f.threads.calls.filter((call) => call.id === f.parent.id)
@@ -362,7 +377,7 @@ test('legacy reviewer is retained only for its own harness and explicit choices 
   const run = await f.start({ kind: 'review', harness: 'dsh', reviewMode: 'fix', expectedModel: 'D', expectedEffort: 'low' })
   assert.equal(run.model, 'D')
   assert.equal(run.permissionMode, 'workspace-write')
-  assert.match(workerPresetInstructions(run), /Fix every actionable bug/)
+  assert.match(workerPresetInstructions(run), /Fix substantiated in-scope bugs/)
   assert.throws(() => planSettingsUpdate(DEFAULT_SETTINGS, { taskPresets: { reviewDsh: { model: 'claude:haiku' } } }, Date.now()), /ハーネス/)
   assert.throws(() => planSettingsUpdate(DEFAULT_SETTINGS, { taskPresets: { reviewClaude: { model: 'D' } } }, Date.now()), /ハーネス/)
 })

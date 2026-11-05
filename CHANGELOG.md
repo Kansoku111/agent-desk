@@ -7,12 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-11-05
+
 ### Added
+
+- Add Command Code Provider API support with explicit model selection, model-list synchronization, reasoning choices and optional zero data retention. Usage follows the account’s Command Code plan; see [setup and limitations](docs/command-code.md).
+- Add a lightweight chat mode with Web search and fetch, without workspace editing, MCP or project skills.
+- Enable Codex image generation for Claude Code and eligible team children, using the separately signed-in Codex account.
 
 - Add opt-in local GPT cache diagnostics for normalized SIWC requests and raw terminal usage, distinguishing missing, zero and invalid cache counts without storing bodies or credentials. Diagnostics are disabled by default and bounded; write failures do not interrupt tasks or change their settings.
 
 ### Changed
 
+- Allow the team observer to inspect the workspace, receive images and direct active agents when requested.
+- Use model-specific output budgets for Command Code and local LLMs when available. Enable reasoning choices for the supported local Strata Gyro endpoint.
+- 独立レビューとecoの担当に、懸念の発生条件・影響・根拠を確かめ、修正後は問題の解消と関連する回帰を検証し、必要な確認が済んだらレビューを繰り返さず終了するよう指示します。危険な再現は求めず、根拠不足や未確認事項を報告します。指示の変更であり、モデルの判断や確認の実施を保証するものではありません。
 - Share identical PTC SDK output types without removing argument descriptions, tool capabilities or return-type information.
 - API換算額を小数点以下最大2桁まで表示するようにしました。USD・JPYとも切り捨てと末尾ゼロの省略を維持し、0.01未満の正の値は `< $0.01`／`< ¥0.01` と表示します。保存済みの金額や計算精度は変更しません。
 - 独立レビューの開始画面を担当（DSH／Claude Code）と方法（意見を聞く／レビューして修正）の2つの選択にしました。会話中の設計案も対象として引き継ぎ、意見モードでは変更せず報告し、完了後に親へ自動返送します。モデルは設定画面でハーネスごとに選びます。
@@ -21,9 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refresh stale local model catalogs after switching servers, and prevent team children from starting autonomous goal rounds.
 - Preserve PTC TypeScript syntax-error locations and a bounded source excerpt instead of dropping Node's parser codeframe. Valid programs, sandbox policies and tool-result forwarding are unchanged.
 - Stop unused session-title generation in Claude Code's headless GPT subagent, without changing its selected model or reasoning effort.
 - Include model-generated compaction summaries in turn, child-panel and history usage without charging forked history again. Rescan available logs once while keeping cached totals for deleted logs; saved finalized conversion amounts are not repriced.
+
+- Command Code の Ling 3.1 Flash 1019 で low・medium・high を選択可能にしました。別サービスの対応情報に基づく暫定対応で、Command Code 側での効果は未確認です。
 
 - Capture cumulative output tokens from Claude Code stream events in non-interactive workers, keeping response IDs, original rates, cache TTLs and speed while ignoring nested-agent usage and duplicate notifications. Correct the bundled Sonnet 5.5 cache-read rate to $0.10 per million tokens. Saved historical costs are not automatically repriced.
 - Prevent a different concurrent reply to a delegated worker from being acknowledged without being sent. Identical concurrent resume requests still share their result; conflicting replies report that the worker is resuming.

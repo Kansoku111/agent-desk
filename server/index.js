@@ -244,7 +244,7 @@ setEquivalentPricing(equivalentPricing.rates)
 const commandCodeModels = await new CommandCodeModels({ file: path.join(paths.home, 'command-code-models.json'), registry: modelRegistry }).load()
 let commandCodeChecking = false
 let commandCodeApplyFailed = false
-const COMMAND_CODE_LEARN = 3
+const COMMAND_CODE_LEARN = 4
 let commandCodeRuntimeSignature = null
 const commandCodeExpected = () => commandCodeModels.models.map(({ id, endpoint, name }) => [endpoint, id, name])
 const commandCodeDefinitionSignature = () => JSON.stringify(commandCodeModels.models.map(({ id, endpoint, name, contextWindow, maxTokens }) => [endpoint, id, name, contextWindow, maxTokens]))
@@ -364,6 +364,8 @@ const catalogSignature = async (result) => JSON.stringify({
     ? opencodeGoServed() ?? [...(await installedModels(openCodeFetched())).keys()].sort()
     : [],
   local: localLlmSettings(settings.localLlm),
+  // Force a fresh ACP discovery when the Strata Gyro gains effort choices.
+  localReasoningLearn: localRoute(settings.localLlm)?.compat?.supportsReasoningEffort ? 'strata-gyro-1' : undefined,
   commandCode: (await accounts()).commandCode.configured ? commandCodeExpected() : [],
   // Command Code's model-specific efforts changed; other provider caches remain valid.
   commandCodeLearn: (await accounts()).commandCode.configured ? COMMAND_CODE_LEARN : undefined,

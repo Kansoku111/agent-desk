@@ -15,7 +15,7 @@ import { AcpRuntime } from '../server/runtime.js'
 import { TOOL_MODE_CONFIG } from '../server/ptc.js'
 import { turnUsage } from '../server/usage.js'
 
-for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'default', 'low', 'xhigh', 'max']) {
+for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'default', 'low', 'xhigh', 'max', ...(endpoint === 'chat' ? ['ling-low', 'ling-medium', 'ling-high', 'ling1019-low', 'ling1019-medium', 'ling1019-high'] : [])]) {
   test('real DSH uses the Command Code ' + endpoint + ' route with credentials and ZDR (' + mode + ')', { timeout: 90000 }, async (t) => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-runtime-'))
     const paths = appPaths(home)
@@ -24,7 +24,8 @@ for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'def
     await fs.mkdir(workspace)
     await fs.writeFile(path.join(workspace, 'evidence.txt'), 'fixture evidence')
     const requests = [], updates = []
-    const modelId = mode === 'unknown' ? 'test-model' : endpoint === 'messages' ? 'claude-sonnet-5-5' : mode === 'xhigh' ? 'Qwen/Qwen3.8-27B' : 'deepseek/deepseek-v4.1-flash'
+    const modelId = mode === 'unknown' ? 'test-model' : mode.startsWith('ling1019-') ? 'inclusionai/ling-3.1-flash-1019' : mode.startsWith('ling-') ? 'inclusionai/ling-3.1-flash' : endpoint === 'messages' ? 'claude-sonnet-5-5' : mode === 'xhigh' ? 'Qwen/Qwen3.8-27B' : 'deepseek/deepseek-v4.1-flash'
+    const effort = mode.startsWith('ling1019-') ? mode.slice(9) : mode.startsWith('ling-') ? mode.slice(5) : mode
     const server = http.createServer(async (req, res) => {
       let raw = ''
       for await (const chunk of req) raw += chunk
@@ -75,8 +76,8 @@ for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'def
     await runtime.start()
     const session = await runtime.newSession(workspace)
     if (!['unknown', 'default'].includes(mode)) {
-      const options = await runtime.setOption(session.sessionId, 'reasoning_effort', mode)
-      assert.equal(options.find((option) => option.id === 'reasoning_effort')?.currentValue, mode)
+      const options = await runtime.setOption(session.sessionId, 'reasoning_effort', effort)
+      assert.equal(options.find((option) => option.id === 'reasoning_effort')?.currentValue, effort)
     }
     await runtime.setOption(session.sessionId, TOOL_MODE_CONFIG, 'native')
     const since = Date.now() - 1000
@@ -87,7 +88,7 @@ for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'def
     assert.ok(usage?.input > 0 && usage.output > 0, 'real DSH session records token usage')
     assert.deepEqual(usage.models, [provider + '/' + modelId])
     assert.equal(usage.cost, null, 'Command Code equivalent is not a metered bill')
-    if (mode === 'unknown') assert.ok(usage.score.unpriced > 0)
+    if (mode === 'unknown' || mode.startsWith('ling1019-')) assert.ok(usage.score.unpriced > 0)
     else assert.ok(usage.score.priced > 0 && usage.score.unpriced === 0, 'known model gets an API equivalent')
     assert.equal(requests.length, 2)
     assert.match(JSON.stringify(requests[1].body.messages), /fixture evidence/)
@@ -95,7 +96,7 @@ for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'def
     assert.equal(requests[0].headers['x-cmd-zdr'], '1')
     assert.equal(endpoint === 'chat' ? requests[0].headers.authorization : requests[0].headers['x-api-key'], endpoint === 'chat' ? 'Bearer fixture-not-a-real-key' : 'fixture-not-a-real-key')
     assert.equal(requests[0].body.model, modelId)
-    if (!['unknown', 'default'].includes(mode) && endpoint === 'chat') assert.equal(requests[0].body.reasoning_effort, mode)
+    if (!['unknown', 'default'].includes(mode) && endpoint === 'chat') assert.equal(requests[0].body.reasoning_effort, effort)
     if (!['unknown', 'default'].includes(mode) && endpoint === 'messages') {
       assert.equal(requests[0].body.thinking?.type, 'adaptive')
       assert.equal(requests[0].body.output_config?.effort, mode)

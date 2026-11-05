@@ -153,6 +153,11 @@
       "medium",
       "high"
     ],
+    "inclusionai/ling-3.1-flash-1019": [
+      "low",
+      "medium",
+      "high"
+    ],
     "mistral/mistral-large-4": [
       "low",
       "medium",

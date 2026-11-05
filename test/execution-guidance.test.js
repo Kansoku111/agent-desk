@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { EXECUTION_PROMPT } from '../server/execution.js'
+import { EXECUTION_PROMPT, executionPrompt, PLAN_IMPLEMENT_PROMPT } from '../server/execution.js'
 import { executionTask } from '../server/teams-prompts.js'
 
 test('eco delegates costly exploration without fixing strategy or review count', () => {
@@ -11,6 +11,20 @@ test('eco delegates costly exploration without fixing strategy or review count',
   assert.match(EXECUTION_PROMPT, /Inspect source when needed for a decision/)
   assert.match(EXECUTION_PROMPT, /batch related questions or instructions/)
   assert.match(EXECUTION_PROMPT, /Do small fixes directly only when you already have the evidence/)
+})
+
+test('both eco workflows use evidence and focused verification with their existing review limits', () => {
+  for (const prompt of [executionPrompt(false), executionPrompt(true)]) {
+    assert.match(prompt, /review concerns as hypotheses.*triggering conditions, concrete impact and evidence/)
+    assert.match(prompt, /Do not require unsafe reproduction.*report significant risks/)
+    assert.match(prompt, /checks not performed as unverified/)
+    assert.match(prompt, /focus verification on resolving that issue and related regressions/)
+    assert.match(prompt, /reverify when it is stale/)
+    assert.match(prompt, /do not keep reviewing merely to eliminate findings/)
+    assert.match(prompt, /Do not ignore newly discovered important risks/)
+  }
+  assert.match(PLAN_IMPLEMENT_PROMPT, /Do not perform a second review/)
+  assert.match(PLAN_IMPLEMENT_PROMPT, /final changes were not parent-reviewed/)
 })
 
 test('eco child sees exact command IDs and working directories without mutating captured checks', () => {
@@ -28,6 +42,10 @@ test('eco child sees exact command IDs and working directories without mutating 
   assert.match(prompt, /再現・対象を絞った回帰確認を優先/)
   assert.match(prompt, /全体テストが必要なら実行/)
   assert.match(prompt, /バックグラウンドの書き込み処理は残さず/)
+  assert.match(prompt, /発生条件・具体的な影響と根拠/)
+  assert.match(prompt, /その解消と関連する回帰/)
+  assert.match(prompt, /危険な再現をせず根拠と未確認点/)
+  assert.match(prompt, /新しい改善点を探し続けず終了/)
 })
 
 test('no selected app checks means unverified, not no need for child verification', () => {

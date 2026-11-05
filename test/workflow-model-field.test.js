@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { claudeCodeModels, isModelVisible, providerReady, visibleModels } from '../web/src/model-selection.ts'
+import * as commandCodeStatus from '../web/src/command-code-status.ts'
 
 async function load(path, modules, extra = '') {
   const source = await fs.readFile(new URL(path, import.meta.url), 'utf8')
@@ -18,7 +19,7 @@ async function load(path, modules, extra = '') {
 }
 
 const jsx = (type, props) => ({ type, props })
-const common = { react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {}, '../store': {}, '../model-selection': { claudeCodeModels, isModelVisible, providerReady, visibleModels }, '../util': {}, './Popover': {}, './useWheelSelect': {}, './ProjectDialog': {} }
+const common = { react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {}, '../store': {}, '../command-code-status': commandCodeStatus, '../model-selection': { claudeCodeModels, isModelVisible, providerReady, visibleModels }, '../util': {}, './Popover': {}, './useWheelSelect': {}, './ProjectDialog': {} }
 const pickers = await load('../web/src/components/Pickers.tsx', common)
 const parseModel = (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }
 const workflow = await load('../web/src/components/WorkflowModelField.tsx', { ...common, '../util': { parseModel }, './Pickers': pickers }, '\nexport { selectedName }')

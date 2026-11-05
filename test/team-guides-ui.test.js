@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import ts from 'typescript'
 import { createSettingsService, migrateSettings } from '../server/settings.js'
 import { claudeCodeModels, isModelVisible, providerReady, visibleModels } from '../web/src/model-selection.ts'
+import * as commandCodeStatus from '../web/src/command-code-status.ts'
 
 // Keep the editor's conflict-handling contract covered independently of a browser.
 const source = () => fs.readFile(new URL('../web/src/components/TeamGuides.tsx', import.meta.url), 'utf8')
@@ -180,6 +181,7 @@ test('policy prompt receives the real picker candidates, including all OpenCode 
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
   const modules = {
     'react/jsx-runtime': {}, 'lucide-react': {}, '../model-selection': { claudeCodeModels, isModelVisible, providerReady, visibleModels },
+    '../command-code-status': commandCodeStatus,
     '../util': {}, './Pickers': { byNewest: (a, b) => a.id.localeCompare(b.id), providerHeading: (server, provider) => provider === 'anthropic' ? 'Claude（API）' : server.catalog.providers[provider] ?? provider, PROVIDER_NOTE: {}, PROVIDER_ORDER: ['opencode-go', 'anthropic'] },
     './Popover': {}, './useWheelSelect': {},
   }

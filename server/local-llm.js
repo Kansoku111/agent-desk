@@ -101,13 +101,17 @@ export function localLlmSettings(saved) {
 export function localRoute(saved, { keyed = false } = {}) {
   const { baseURL, models } = localLlmSettings(saved)
   if (!baseURL || !models.length) return null
+  // Strata's local gateway accepts OpenAI reasoning_effort. Other local servers
+  // do not all implement it, so only opt in for the known Strata model/endpoint.
+  const strataGyro = baseURL === 'http://127.0.0.1:47831/v1'
+    && models.some(({ id }) => id === 'gyro-gyro-s-abliterated-huihui')
   return {
     displayName: 'ローカル LLM',
     api: 'openai-completions',
     baseURL,
     ...(keyed ? { apiKeyEnv: LOCAL_LLM_REF } : { headers: { authorization: 'Bearer local' } }),
     // Local servers speak the plain dialect: no `store`, no developer role, `max_tokens`.
-    compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: 'max_tokens' },
+    compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: strataGyro, ...(strataGyro ? { thinkingFormat: 'openai' } : {}), maxTokensField: 'max_tokens' },
     defaultContextWindow: DEFAULT_CONTEXT,
     defaultMaxTokens: DEFAULT_MAX_TOKENS,
     retryPolicy: { mode: 'normal', maxRetries: 2 },
@@ -115,7 +119,9 @@ export function localRoute(saved, { keyed = false } = {}) {
       id,
       name: id,
       input: ['text'],
-      reasoningEfforts: false,
+      reasoningEfforts: strataGyro && id === 'gyro-gyro-s-abliterated-huihui'
+        ? { off: 'none', low: 'low', medium: 'medium', high: 'high' }
+        : false,
       ...(contextWindow ? { contextWindow } : {}),
       ...(Number.isSafeInteger(maxTokens) && maxTokens > 0
         ? { maxTokens: Math.min(maxTokens, contextOutputBudget(contextWindow ?? DEFAULT_CONTEXT)) }

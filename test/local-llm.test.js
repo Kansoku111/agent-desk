@@ -76,6 +76,40 @@ test('the route joins the home patch only when it has models', () => {
   assert.deepEqual(providers({ localRoute: keyless })['local-llm'], keyless)
 })
 
+test('only the known Strata Gyro route offers mapped reasoning levels', () => {
+  const id = 'gyro-gyro-s-abliterated-huihui'
+  const route = localRoute({ baseURL: 'http://127.0.0.1:47831/v1', models: [{ id }, { id: 'gyro-gyro-s' }] })
+  assert.equal(route.compat.supportsReasoningEffort, true)
+  assert.equal(route.compat.thinkingFormat, 'openai')
+  assert.deepEqual(route.models[0].reasoningEfforts, { off: 'none', low: 'low', medium: 'medium', high: 'high' })
+  assert.equal(route.models[1].reasoningEfforts, false)
+  const other = localRoute({ baseURL: 'http://localhost:11434/v1', models: [{ id }] })
+  assert.equal(other.compat.supportsReasoningEffort, false)
+  assert.equal(other.models[0].reasoningEfforts, false)
+})
+
+test('Strata effort choices are sent as OpenAI reasoning_effort', async (t) => {
+  const { openAICompletionsApi } = await import('@earendil-works/pi-ai/api/openai-completions.lazy')
+  const mock = await mockServer('ok')
+  t.after(() => mock.server.close())
+  const id = 'gyro-gyro-s-abliterated-huihui'
+  const route = localRoute({ baseURL: 'http://127.0.0.1:47831/v1', models: [{ id }] })
+  const entry = route.models[0]
+  const model = {
+    id, name: id, api: route.api, provider: 'local-llm', baseUrl: mock.url,
+    input: ['text'], reasoning: true, thinkingLevelMap: entry.reasoningEfforts,
+    contextWindow: 32768, maxTokens: 128, compat: route.compat,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  }
+  const context = { messages: [{ role: 'user', content: 'hello', timestamp: Date.now() }] }
+  for (const reasoning of ['off', 'low', 'medium', 'high']) {
+    const answer = await openAICompletionsApi().streamSimple(model, context, { apiKey: 'local', reasoning, maxRetries: 0 }).result()
+    assert.notEqual(answer.stopReason, 'error', answer.errorMessage)
+  }
+  const values = mock.requests.filter((r) => r.url === '/v1/chat/completions').map((r) => JSON.parse(r.body).reasoning_effort)
+  assert.deepEqual(values, ['none', 'low', 'medium', 'high'])
+})
+
 test('settings take a local server and clear it', () => {
   const current = structuredClone(DEFAULT_SETTINGS)
   const { settings, effects } = planSettingsUpdate(current, { localLlm: { baseURL: 'http://h:1/v1/', models: [{ id: 'q:1', contextWindow: 4096 }] } }, 0)

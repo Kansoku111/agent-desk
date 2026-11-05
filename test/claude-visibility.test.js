@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { claudeCodeModels, isModelVisible, providerReady, visibleModels } from '../web/src/model-selection.ts'
+import * as commandCodeStatus from '../web/src/command-code-status.ts'
 
 const jsx = (type, props) => ({ type, props })
 const nodes = (node, match) => !node || typeof node !== 'object' ? [] : [
@@ -26,6 +27,7 @@ const calls = []
 const store = { useStore: (select) => select({ server: state }), act: (method, params) => { calls.push([method, params]); Object.assign(state.settings.modelVisibility, params.patch.modelVisibility) } }
 const workflow = await load('../web/src/components/WorkflowModelField.tsx', {
   'react/jsx-runtime': { jsx, jsxs: jsx }, '../model-selection': { claudeCodeModels, isModelVisible, providerReady, visibleModels },
+  '../command-code-status': commandCodeStatus,
   './Pickers': { byNewest: () => 0, providerHeading: () => 'Claude（API）', PROVIDER_NOTE: {}, PROVIDER_ORDER: ['anthropic'] },
 })
 const settings = await load('../web/src/components/settings/ModelsSettings.tsx', {

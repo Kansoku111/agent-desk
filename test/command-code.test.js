@@ -58,6 +58,7 @@ test('official model-specific effort levels use only Provider API-compatible val
     { id: 'deepseek/deepseek-v4.1-flash', endpoint: 'chat' },
     { id: 'Qwen/Qwen3.8-27B', endpoint: 'chat' },
     { id: 'z-ai/glm-5.3-flash', endpoint: 'chat' },
+    { id: 'inclusionai/ling-3.1-flash-1019', endpoint: 'chat' },
     { id: 'constructor', endpoint: 'chat' },
     { id: 'claude-sonnet-5-5', endpoint: 'messages' },
     { id: 'claude-sonnet-4-6', endpoint: 'messages' },
@@ -68,6 +69,7 @@ test('official model-specific effort levels use only Provider API-compatible val
   assert.deepEqual(efforts['deepseek/deepseek-v4.1-flash'], { low: 'low', high: 'high', max: 'max' })
   assert.deepEqual(efforts['Qwen/Qwen3.8-27B'], { low: 'low', medium: 'medium', xhigh: 'xhigh' })
   assert.deepEqual(efforts['z-ai/glm-5.3-flash'], { low: 'low', high: 'high', max: 'max' })
+  assert.deepEqual(efforts['inclusionai/ling-3.1-flash-1019'], { low: 'low', medium: 'medium', high: 'high' })
   assert.deepEqual(efforts['claude-sonnet-5-5'], { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' })
   assert.deepEqual(efforts['claude-sonnet-4-6'], { low: 'low', medium: 'medium', high: 'high', max: 'max' })
   assert.equal(efforts['claude-haiku-4-5-20251001'], false)

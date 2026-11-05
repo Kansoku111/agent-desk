@@ -50,6 +50,13 @@ function matchesSignature(signature, models) {
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return false
   }
   if (Array.isArray(requirements.commandCode) && !matchesCommandCodeCatalog(requirements.commandCode, models)) return false
+  // An old runtime can finish after a local server switch. Compare IDs before
+  // accepting its snapshot, including when the saved signature was corrupted.
+  if (requirements.local && Array.isArray(requirements.local.models)) {
+    const expected = [...new Set(requirements.local.models.map((model) => model.id))].filter((id) => typeof id === 'string' && !/-\d{8}$/.test(id)).sort()
+    const actual = models.filter((model) => model.provider === 'local-llm').map((model) => model.id).sort()
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) return false
+  }
   return true
 }
 
@@ -78,7 +85,7 @@ export class Catalog {
   }
 
   get stale() {
-    return this.empty || this.data.signature !== this.signature
+    return this.empty || this.data.signature !== this.signature || !matchesSignature(this.signature, this.data.models)
   }
 
   /** Marks the cache stale after the served catalog changed. */
