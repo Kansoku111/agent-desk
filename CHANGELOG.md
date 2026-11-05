@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve useful PTC syntax-error locations in long programs containing Japanese, without inventing columns for unsupported character widths.
+
 ## [0.1.10] - 2026-11-05
 
 ### Added

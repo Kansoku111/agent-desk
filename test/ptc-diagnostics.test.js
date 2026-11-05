@@ -48,6 +48,39 @@ test('caret-like text in a program is not mistaken for the parser marker', () =>
   })
 })
 
+test('a long program still marks the syntax error when Unicode occurs only after it', () => {
+  const program = 'const before = 1; '.repeat(45) + 'const broken = {x: 1); ' + 'const todo = "確認する"; '.repeat(30)
+  assert.throws(() => stripPtcTypes(PREFIX + program + SUFFIX, program, 1), error => {
+    assert.match(error.message, /line 1, column/)
+    assert.ok(error.message.length < 240)
+    const [source, caret] = error.message.split('\n').slice(-2)
+    assert.equal(source[caret.indexOf('^')], ')')
+    assert.ok(source.includes('const broken = {x: 1)'))
+    return true
+  })
+})
+
+test('Japanese before a long-line syntax error retains its exact source column', () => {
+  const program = 'const label = "確認日本語"; ' + 'const before = 1; '.repeat(45) + 'const broken = {x: 1); ' + 'const after = 2; '.repeat(30)
+  assert.throws(() => stripPtcTypes(PREFIX + program + SUFFIX, program, 1), error => {
+    assert.match(error.message, new RegExp('line 1, column ' + (program.indexOf(');') + 1)))
+    const [source, caret] = error.message.split('\n').slice(-2)
+    assert.equal(source[caret.indexOf('^')], ')')
+    assert.ok(error.message.length < 240)
+    return true
+  })
+})
+
+test('a caret following visible Japanese uses display width', () => {
+  const program = 'const label = "確認"; const broken = {x: 1)'
+  assert.throws(() => stripPtcTypes(PREFIX + program + SUFFIX, program, 1), error => {
+    assert.match(error.message, new RegExp('column ' + (program.indexOf(')') + 1)))
+    const [source, caret] = error.message.split('\n').slice(-2)
+    assert.equal(caret.indexOf('^'), source.indexOf(')') + 2)
+    return true
+  })
+})
+
 test('tabs, Unicode and CRLF keep a useful program location', () => {
   for (const program of ['\tconst broken = {x: 1)', 'const text = "日本😀"; const broken = {x: 1)', 'const a=1\r\nconst broken = {x: 1)', '\tconst broken = {x: 1); ' + ' '.repeat(80), 'const text = "日本語"; const broken = {x: 1); ' + ' '.repeat(80)]) {
     assert.throws(() => stripPtcTypes(PREFIX + program + SUFFIX, program, 1), error => {
@@ -55,8 +88,50 @@ test('tabs, Unicode and CRLF keep a useful program location', () => {
       assert.match(error.message, /const broken/)
       if(error.message.includes('column')) {
         const [source, caret] = error.message.split('\n').slice(-2)
-        assert.equal(source[caret.indexOf('^')], ')')
+        const position = source.indexOf(')')
+        const wide = [...source.slice(0, position)].filter(char => char.charCodeAt(0) > 0x7e).length
+        assert.equal(caret.indexOf('^'), position + wide)
       }
+      return true
+    })
+  }
+})
+
+test('unsupported display widths before the error never claim a column', () => {
+  for (const prefix of ['😀', '👩‍💻', 'e\u0301', '🇯🇵', '\t']) {
+    const program = (prefix === '\t' ? '\tconst prefix = 1' : 'const prefix = ' + JSON.stringify(prefix)) + '; const broken = {x: 1); ' + ' '.repeat(80)
+    assert.throws(() => stripPtcTypes(PREFIX + program + SUFFIX, program, 1), error => {
+      assert.match(error.message, /line 1/)
+      assert.doesNotMatch(error.message, /column|\n *\^/)
+      return true
+    })
+  }
+})
+
+test('standalone carriage-return line breaks retain the error line', () => {
+  const program = 'const a=1;\rconst broken={x:1)'
+  assert.throws(() => stripPtcTypes(PREFIX + program + SUFFIX, program, 1), error => {
+    assert.match(error.message, /line 2/)
+    assert.doesNotMatch(error.message, /end of program/)
+    return true
+  })
+})
+
+test('zero-width characters at the caret boundary never produce a false column', () => {
+  const program = 'const x={a:e\u0301)'
+  assert.throws(() => stripPtcTypes(PREFIX + program + SUFFIX, program, 1), error => {
+    assert.match(error.message, /line 1/)
+    assert.doesNotMatch(error.message, /column|\n *\^/)
+    return true
+  })
+})
+
+test('diagnostic excerpts are well-formed and exclude terminal control characters', () => {
+  for (const tail of ['a'.repeat(21) + '😀tail', '\x1b[31m\0\u202emore']) {
+    const program = 'const broken = {x: 1);' + tail
+    assert.throws(() => stripPtcTypes(PREFIX + program + SUFFIX, program, 1), error => {
+      assert.ok(error.message.isWellFormed())
+      assert.doesNotMatch(error.message, /[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e]/)
       return true
     })
   }

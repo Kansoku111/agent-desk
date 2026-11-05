@@ -562,6 +562,13 @@ test('real PTC syntax diagnostics reach the model without executing tools and th
   assert.match(error, /const broken/)
   assert.doesNotMatch(error, /SECRET_OTHER_LINE|node:internal|__dsh_program__/)
   await assert.rejects(fs.stat(marker))
+  // A Japanese todo after an earlier error must not hide the actual location.
+  await f.run('const before = 1; '.repeat(45) + 'const broken = {x: 1); ' + 'const todo = "確認する"; '.repeat(30))
+  const longContent = f.requests.at(-1).messages.filter(entry => entry.role === 'tool').at(-1).content
+  const longError = typeof longContent === 'string' ? longContent : JSON.stringify(longContent)
+  assert.match(longError, /line 1, column/)
+  assert.match(longError, /const broken = \{x: 1\)/)
+  assert.ok(longError.length < 350)
   await f.run('console.log("syntax-recovery"); return {ok:true}')
   const recovered = f.requests.at(-1).messages.filter(entry => entry.role === 'tool').at(-1).content
   assert.match(typeof recovered === 'string' ? recovered : JSON.stringify(recovered), /syntax-recovery/)
