@@ -1,4 +1,5 @@
 // Keep the machine-readable code while making plan limits actionable in tasks.
+import { observeCache } from './gpt-cache-diagnostics.js'
 export const SIWC_LIMIT_CODE = 'subscription_sharing_usage_limit_exceeded'
 export const SIWC_LIMIT_TEXT = 'ChatGPT のプランの利用上限に達しました。'
   + 'ChatGPT の設定 → Usage で Agent Desk の上限やクレジットの利用を見直すと続けられます。'
@@ -11,7 +12,7 @@ function explain(error) {
 }
 
 /** Preserve status/headers and other errors, including pre-stream admission details. */
-export async function explainSiwcUsage(response) {
+export async function explainSiwcUsage(response, observation) {
   if (!response.ok) {
     let body
     try {
@@ -39,6 +40,8 @@ export async function explainSiwcUsage(response) {
       controller.enqueue(encoder.encode(block + '\n\n'))
       return
     }
+    // Observe original usage before any error-message rewrite, using this existing parser.
+    if (observation) observeCache(observation, 'event', event)
     const changed = explain(event.response?.error) || explain(event.error)
     controller.enqueue(encoder.encode(changed ? `data: ${JSON.stringify(event)}\n\n` : block + '\n\n'))
   }

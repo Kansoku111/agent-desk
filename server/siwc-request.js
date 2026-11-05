@@ -2,6 +2,7 @@
 import { CredentialStore } from './credentials.js'
 import { explainSiwcUsage } from './siwc-usage-error.js'
 import { SiwcClient, SIWC_RESOURCE, SIWC_KEY_PLACEHOLDER } from './siwc-client.js'
+import { configuredCacheDiagnostics, observeCache } from './gpt-cache-diagnostics.js'
 export const SIWC_UNSUPPORTED_FIELDS = [
   'background', 'conversation', 'max_output_tokens', 'max_tool_calls', 'metadata',
   'moderation', 'multi_agent', 'prompt', 'prompt_cache_retention', 'safety_identifier',
@@ -66,7 +67,7 @@ export function siwcPayload(payload, model) {
   }]
   return next
 }
-export function requireCompleted(response) {
+export function requireCompleted(response, observation) {
   if (!response.ok || !response.body) return response
   let pending = '',
     data = [],
@@ -100,6 +101,7 @@ export function requireCompleted(response) {
     },
     flush() {
       consume(decoder.decode() + '\n\n')
+      if (observation) observeCache(observation, 'finish', terminal === 'response.completed' ? 'completed' : terminal === 'response.failed' ? 'failed' : terminal === 'response.incomplete' ? 'incomplete' : 'interrupted')
       if (terminal !== 'response.completed') throw new Error(`SIWC stream did not complete (${terminal ?? 'interrupted'})`)
     }
   }))
@@ -114,9 +116,11 @@ export function requireCompleted(response) {
 // it. Silence this long, twice the longest gap seen in real GPT replies, ends
 // the request as a timeout, which dsh retries.
 export const SIWC_IDLE_MS = 600_000
-export async function sendWithIdleLimit(send, url, init, idleMs = SIWC_IDLE_MS) {
+export async function sendWithIdleLimit(send, url, init, idleMs = SIWC_IDLE_MS, observation) {
   const error = new Error(`SIWC stream timed out: no data for ${Math.round(idleMs / 1000)} s`)
   const stall = new AbortController()
+  // Stream callbacks retain the signal, not the request body.
+  const callerSignal = init.signal
   let timer, reader
   const arm = () => {
     timer = setTimeout(() => {
@@ -129,9 +133,10 @@ export async function sendWithIdleLimit(send, url, init, idleMs = SIWC_IDLE_MS) 
   try {
     response = await send(url, {
       ...init,
-      signal: init.signal ? AbortSignal.any([init.signal, stall.signal]) : stall.signal
+      signal: callerSignal ? AbortSignal.any([callerSignal, stall.signal]) : stall.signal
     })
   } catch (cause) {
+    if (observation) observeCache(observation, 'finish', stall.signal.aborted ? 'idle_timeout' : callerSignal?.aborted ? 'cancelled' : 'transport_error')
     throw stall.signal.aborted ? error : cause
   } finally {
     clearTimeout(timer)
@@ -145,16 +150,21 @@ export async function sendWithIdleLimit(send, url, init, idleMs = SIWC_IDLE_MS) 
       try {
         chunk = await reader.read()
       } catch (cause) {
+        if (observation) observeCache(observation, 'finish', stall.signal.aborted ? 'idle_timeout' : callerSignal?.aborted ? 'cancelled' : 'transport_error')
         throw stall.signal.aborted ? error : cause
       } finally {
         clearTimeout(timer)
       }
-      if (stall.signal.aborted) throw error
+      if (stall.signal.aborted) {
+        if (observation) observeCache(observation, 'finish', 'idle_timeout')
+        throw error
+      }
       if (chunk.done) controller.close()
       else controller.enqueue(chunk.value)
     },
     cancel(reason) {
       clearTimeout(timer)
+      if (observation) observeCache(observation, 'finish', 'cancelled')
       return reader.cancel(reason)
     }
   })
@@ -168,12 +178,14 @@ export function withSiwc(model, options, {
   credentials = process.env.AGENT_DESK_SIWC_CREDENTIALS,
   client,
   fetch: fetcher,
-  idleMs = SIWC_IDLE_MS
+  idleMs = SIWC_IDLE_MS,
+  diagnostics
 } = {}) {
   if (!isSiwcModel(model)) return options
   if (!credentials && !client) throw new Error('Official ChatGPT route requires Agent Desk SIWC authentication hook')
   const siwc = client ?? new SiwcClient(new CredentialStore(credentials))
   const previous = options?.onPayload
+  const diagnostic = diagnostics === undefined ? configuredCacheDiagnostics() : diagnostics
   const send = fetcher ?? options?.fetch ?? globalThis.fetch
   return {
     ...options,
@@ -193,14 +205,19 @@ export function withSiwc(model, options, {
       headers.delete('chatgpt-account-id')
       headers.delete('content-length')
       headers.delete('OpenAI-Beta')
+      const serialized = JSON.stringify(body)
+      let observation
+      try { observation = diagnostic?.begin(JSON.parse(serialized), options?.sessionId) } catch {}
       const response = await sendWithIdleLimit(send, request.url, {
         method: 'POST',
         redirect: 'error',
         headers,
-        body: JSON.stringify(body),
+        body: serialized,
         signal: request.signal
-      }, idleMs)
-      return requireCompleted(await explainSiwcUsage(response))
+      }, idleMs, observation)
+      if (observation && !response.ok) observeCache(observation, 'finish', 'http_error', response.status)
+      else if (observation && !response.body) observeCache(observation, 'finish', 'no_body', response.status)
+      return requireCompleted(await explainSiwcUsage(response, observation), observation)
     }
   }
 }

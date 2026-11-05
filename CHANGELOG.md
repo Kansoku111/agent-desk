@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add opt-in local GPT cache diagnostics for normalized SIWC requests and raw terminal usage, distinguishing missing, zero and invalid cache counts without storing bodies or credentials. Diagnostics are disabled by default and bounded; write failures do not interrupt tasks or change their settings.
+
 ### Changed
 
 - API換算額を小数点以下最大2桁まで表示するようにしました。USD・JPYとも切り捨てと末尾ゼロの省略を維持し、0.01未満の正の値は `< $0.01`／`< ¥0.01` と表示します。保存済みの金額や計算精度は変更しません。
