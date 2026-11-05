@@ -6,7 +6,7 @@ import path from 'node:path'
 export const CACHE_DIAGNOSTICS_ENV = 'AGENT_DESK_GPT_CACHE_DIAGNOSTICS'
 export const CACHE_DIAGNOSTICS_LIMITS = Object.freeze({ requests: 200, series: 16, inputItems: 4096, bytes: 1024 * 1024 })
 const TERMINALS = new Set(['response.completed', 'response.failed', 'response.incomplete'])
-const OUTCOMES = new Set(['completed', 'failed', 'incomplete', 'interrupted', 'transport_error', 'idle_timeout', 'cancelled', 'http_error', 'no_body'])
+const OUTCOMES = new Set(['completed', 'failed', 'incomplete', 'interrupted', 'transport_error', 'idle_timeout', 'cancelled', 'http_error', 'no_body', 'auth_error'])
 const ITEM_KINDS = new Set(['message', 'reasoning', 'function_call', 'function_call_output', 'additional_tools', 'tool_search_output'])
 const ROLES = new Set(['system', 'developer', 'user', 'assistant', 'tool'])
 const OMIT_SETTINGS = new Set(['input', 'instructions', 'tools', 'prompt_cache_key'])
@@ -63,24 +63,38 @@ function usageOf(response) {
 const itemKind = item => ITEM_KINDS.has(item?.type) ? item.type : ROLES.has(item?.role) ? 'message' : 'other'
 
 // This scope deliberately cannot capture the payload or its item hash arrays.
-function responseObserver(id, lifecycle, record) {
+function responseObserver(id, lifecycle, record, now) {
+  const startedAt = Date.now(), started = now()
+  const timing = { authReadyMs: null, sendMs: null, headersMs: null, firstByteMs: null, firstEventMs: null, firstTextMs: null, lastTextMs: null, terminalMs: null, finishedMs: null }
+  const mark = name => {
+    if (!lifecycle.finished && Object.hasOwn(timing, name) && (timing[name] === null || name === 'lastTextMs')) timing[name] = Math.max(0, now() - started)
+  }
   let terminal = null
   let usage = { ...usageOf(null), state: 'unobserved' }
   return {
+    mark,
     event(event) {
+      if (lifecycle.finished) return
+      mark('firstEventMs')
+      if (event?.type === 'response.output_text.delta' && typeof event.delta === 'string' && event.delta.length) {
+        mark('firstTextMs')
+        mark('lastTextMs')
+      }
       if (!TERMINALS.has(event?.type)) return
+      mark('terminalMs')
       terminal = event.type
       usage = usageOf(event.response)
     },
     finish(outcome, httpStatus) {
       if (lifecycle.finished) return
+      mark('finishedMs')
       lifecycle.finished = true
-      record({ event: 'result', id, outcome: OUTCOMES.has(outcome) ? outcome : 'unknown', ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), terminal, usage })
+      record({ event: 'result', id, startedAt, timing, outcome: OUTCOMES.has(outcome) ? outcome : 'unknown', ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), terminal, usage })
     },
   }
 }
 
-export function createCacheDiagnostics({ directory, write, onStop = notifyStop } = {}) {
+export function createCacheDiagnostics({ directory, write, onStop = notifyStop, now = () => performance.now() } = {}) {
   if (!write && (typeof directory !== 'string' || !path.isAbsolute(directory) || /^[\\/]{2}/.test(directory))) {
     throw new Error('Cache diagnostics require an absolute local directory')
   }
@@ -88,6 +102,7 @@ export function createCacheDiagnostics({ directory, write, onStop = notifyStop }
   const filename = 'gpt-cache-' + process.pid + '-' + randomBytes(8).toString('hex') + '.jsonl'
   const file = directory ? path.join(directory, filename) : null
   let created = false, failed = false, limited = false, requests = 0, queuedBytes = 0, writtenBytes = 0, records = 0
+  let deliveries = 0
   let queue = Promise.resolve()
   const series = new Map()
   const notified = new Set()
@@ -165,8 +180,33 @@ export function createCacheDiagnostics({ directory, write, onStop = notifyStop }
         if (items) series.set(group, { id, items, inputKind, fingerprints, lifecycle })
         if (series.size > CACHE_DIAGNOSTICS_LIMITS.series) series.delete(series.keys().next().value)
       }
-      record({ event: 'request', id, series: group, groupSource, cacheKeyPresent: Object.hasOwn(payload, 'prompt_cache_key'), inputKind, inputItems: input.length, fingerprintComplete: complete, fingerprints, prefix })
-      return responseObserver(id, lifecycle, record)
+      const effort = payload.reasoning?.effort
+      const reasoningEffort = effort === undefined ? 'absent' : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) ? effort : 'invalid'
+      const tier = payload.service_tier
+      const serviceTier = tier === undefined ? 'absent' : ['auto', 'default', 'flex', 'priority'].includes(tier) ? tier : 'invalid'
+      record({ event: 'request', id, route: 'official_responses', reasoningEffort, serviceTier, series: group, groupSource, cacheKeyPresent: Object.hasOwn(payload, 'prompt_cache_key'), inputKind, inputItems: input.length, fingerprintComplete: complete, fingerprints, prefix })
+      return responseObserver(id, lifecycle, record, now)
+    },
+    beginDelivery(sessionId) {
+      if (failed) return null
+      if (deliveries >= CACHE_DIAGNOSTICS_LIMITS.requests) { limited = true; stopped('delivery_limit'); return null }
+      deliveries++
+      const series = typeof sessionId === 'string' && sessionId ? digest(['session', sessionId]) : null
+      const startedAt = Date.now(), started = now()
+      const timing = { firstTextMs: null, lastTextMs: null, firstNotifyMs: null, lastNotifyMs: null, lastNotifyReturnedMs: null, finishedMs: null }
+      let finished = false, notifyRejected = false
+      return {
+        mark(name) {
+          if (!finished && Object.hasOwn(timing, name) && (timing[name] === null || name.startsWith('last'))) timing[name] = Math.max(0, now() - started)
+        },
+        failed() { notifyRejected = true },
+        finish() {
+          if (finished) return
+          timing.finishedMs = Math.max(0, now() - started)
+          finished = true
+          record({ event: 'delivery', series, startedAt, timing, deliveryStatus: notifyRejected ? 'notify_rejected' : 'unconfirmed' })
+        },
+      }
     },
     async flush() {
       await queue

@@ -2,10 +2,16 @@
 // deltas. Observe the root Agent's real transient stream, sending only scalar
 // snapshots through standard empty-text ACP updates with extension metadata.
 import { OutputSpeedMeter, OUTPUT_SPEED_META } from './output-speed.js'
+import { configuredCacheDiagnostics, observeCache } from './gpt-cache-diagnostics.js'
 
 const meters = new WeakMap()
+const deliveries = new WeakMap()
 
-export function beginOutputSpeed(record) {
+export function beginOutputSpeed(record, diagnostics = configuredCacheDiagnostics()) {
+  try {
+    const delivery = diagnostics?.beginDelivery(record.agent.session.id)
+    if (delivery) deliveries.set(record, delivery)
+  } catch {}
   const meter = new OutputSpeedMeter({ onChange: (speed) => {
     record.outputTail = record.outputTail.then(() => record.notify({
       sessionId: record.agent.session.id,
@@ -23,6 +29,11 @@ export function observeOutputSpeed(record, frame) {
   if (frame.type === 'end') return meter.pause()
   if (frame.type !== 'chunk') return
   const chunk = frame.chunk
+  if (chunk?.type === 'text-delta' && typeof chunk.text === 'string' && chunk.text.length) {
+    const delivery = deliveries.get(record)
+    observeCache(delivery, 'mark', 'firstTextMs')
+    observeCache(delivery, 'mark', 'lastTextMs')
+  }
   if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') meter.push(chunk.text)
   else if (chunk?.type === 'finish') meter.pause()
   else if (chunk?.type === 'tool-call-delta'
@@ -34,5 +45,25 @@ export async function finishOutputSpeed(record) {
   meters.delete(record)
   meter?.finish()
   // Final average must arrive before the prompt response/new turn can start.
-  await record.outputTail
+  try { await record.outputTail } finally {
+    observeCache(deliveries.get(record), 'finish')
+    deliveries.delete(record)
+  }
+}
+
+// Measure the existing committed-message notification, never another copy of it.
+export async function deliverAssistantUpdate(record, params) {
+  const update = params.update
+  const delivery = update?.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && update.content.text?.length
+    ? deliveries.get(record) : null
+  observeCache(delivery, 'mark', 'firstNotifyMs')
+  observeCache(delivery, 'mark', 'lastNotifyMs')
+  try {
+    const result = await record.notify(params)
+    observeCache(delivery, 'mark', 'lastNotifyReturnedMs')
+    return result
+  } catch (error) {
+    observeCache(delivery, 'failed')
+    throw error
+  }
 }

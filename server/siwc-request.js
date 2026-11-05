@@ -131,10 +131,12 @@ export async function sendWithIdleLimit(send, url, init, idleMs = SIWC_IDLE_MS, 
   arm()
   let response
   try {
+    if (observation) observeCache(observation, 'mark', 'sendMs')
     response = await send(url, {
       ...init,
       signal: callerSignal ? AbortSignal.any([callerSignal, stall.signal]) : stall.signal
     })
+    if (observation) observeCache(observation, 'mark', 'headersMs')
   } catch (cause) {
     if (observation) observeCache(observation, 'finish', stall.signal.aborted ? 'idle_timeout' : callerSignal?.aborted ? 'cancelled' : 'transport_error')
     throw stall.signal.aborted ? error : cause
@@ -160,7 +162,10 @@ export async function sendWithIdleLimit(send, url, init, idleMs = SIWC_IDLE_MS, 
         throw error
       }
       if (chunk.done) controller.close()
-      else controller.enqueue(chunk.value)
+      else {
+        if (observation && chunk.value.byteLength) observeCache(observation, 'mark', 'firstByteMs')
+        controller.enqueue(chunk.value)
+      }
     },
     cancel(reason) {
       clearTimeout(timer)
@@ -197,7 +202,15 @@ export function withSiwc(model, options, {
         throw new Error('Refusing to send SIWC credential outside the official Responses endpoint')
       }
       const body = siwcPayload(JSON.parse(await request.text()), model)
-      const credential = await siwc.auth()
+      const serialized = JSON.stringify(body)
+      let observation
+      try { observation = diagnostic?.begin(JSON.parse(serialized), options?.sessionId) } catch {}
+      let credential
+      try { credential = await siwc.auth() } catch (error) {
+        if (observation) observeCache(observation, 'finish', 'auth_error')
+        throw error
+      }
+      if (observation) observeCache(observation, 'mark', 'authReadyMs')
       const headers = new Headers(request.headers)
       headers.set('authorization', `Bearer ${credential.access_token}`)
       headers.set('user-agent', 'Agent-Desk-SIWC/0.1')
@@ -205,9 +218,6 @@ export function withSiwc(model, options, {
       headers.delete('chatgpt-account-id')
       headers.delete('content-length')
       headers.delete('OpenAI-Beta')
-      const serialized = JSON.stringify(body)
-      let observation
-      try { observation = diagnostic?.begin(JSON.parse(serialized), options?.sessionId) } catch {}
       const response = await sendWithIdleLimit(send, request.url, {
         method: 'POST',
         redirect: 'error',

@@ -10,6 +10,7 @@ import { composeCompatibilityPatches, runtimeHookArgs } from '../server/dsh-comp
 import { patchAcpSource } from '../server/steer-patch.js'
 import { patchGoalSource, patchGoalDriverSource } from '../server/goal-patch.js'
 import { patchMcpTimeoutSource } from '../server/mcp-timeout-patch.js'
+import { patchMcpStartupSource } from '../server/mcp-startup-patch.js'
 import { patchRetrySource } from '../server/retry-patch.js'
 import { patchOutputSpeedSource } from '../server/output-speed-patch.js'
 import { patchFsSearchSource } from '../server/fs-search-patch.js'
@@ -62,7 +63,8 @@ async function fixture(t) {
   for (const file of ['scripts/check-dsh.mjs', ...[
     'dsh-compatibility.js', 'steer-patch.js', 'goal-patch.js', 'retry-patch.js', 'mcp-timeout-patch.js', 'fast-mode-hook.js', 'fast-mode.js',
     'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js',
-    'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js',
+    'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js', 'gpt-cache-diagnostics.js',
+    'mcp-startup-hook.js', 'mcp-startup-patch.js', 'mcp-startup.js',
     'fs-search-hook.js', 'fs-search-patch.js', 'fs-search.js',
     'goal-tool-hook.js', 'goal-tool-patch.js', 'goal-wait-hook.js', 'goal-wait.js', 'goal-command.js',
     'ptc-hook.js', 'ptc-patch.js', 'ptc-errors-hook.js', 'ptc-runtime-patch.js', 'ptc-program-error.js', 'ptc-sdk-hook.js', 'ptc-sdk-patch.js',
@@ -130,10 +132,10 @@ async function fixture(t) {
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
   const { acpSource, llmSource, searchSource, goalToolSource, goalDriverSource, ptcRuntimeSource, toolsSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
-    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'goal-wait-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'ptc-errors-hook.js', 'ptc-sdk-hook.js', 'fs-search-hook.js',
+    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'goal-wait-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'mcp-startup-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'ptc-errors-hook.js', 'ptc-sdk-hook.js', 'fs-search-hook.js',
   ])
   assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, search: searchSource, goalTool: goalToolSource, goalDriver: goalDriverSource, ptcRuntime: ptcRuntimeSource, tools: toolsSource }), {
-    acp: patchPtcSource(patchOutputSpeedSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource))))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource), ptcRuntime: patchPtcRuntimeSource(ptcRuntimeSource), tools: patchPtcSdkSource(toolsSource),
+    acp: patchPtcSource(patchOutputSpeedSource(patchMcpStartupSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource)))))), llm: patchRetrySource(llmSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource), ptcRuntime: patchPtcRuntimeSource(ptcRuntimeSource), tools: patchPtcSdkSource(toolsSource),
   })
 })
 
@@ -160,6 +162,7 @@ for (const [name, field, change] of [
   ['goal-tool', 'goalTool', (source) => source.replace('Replacement cap; valid only with action edit.', 'changed upstream cap')],
   ['retry', 'llm', (source) => source.replace('function classifyPiAiError(message)', 'function upstreamClassifier(message)')],
   ['output-speed', 'acp', (source) => source.replace('requestSignal?.removeEventListener', 'requestSignal?.upstreamRemoveEventListener')],
+  ['mcp-startup', 'acp', (source) => source.replace('for (const config of configs) await agentCtx.plugin(McpClient, config);', 'await changedMount();')],
   ['ptc', 'acp', (source) => source.replace('return this.modelControl.set(configId, value, signal);', 'return upstreamSetConfig();')],
   ['ptc-errors', 'ptcRuntime', (source) => source.replace('stripTypeScriptTypes(spec.program)', 'changedParse(spec.program)')],
   ['ptc-sdk', 'tools', (source) => source.replace('const outputMembers = [];', 'const changedOutput = [];')],
@@ -231,7 +234,7 @@ test('retry check export is mandatory, not merely an optional startup warning', 
   await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /isRetryableAssistantError is unavailable/)
 })
 
-for (const name of ['goal', 'goal-wait', 'goal-tool', 'ptc', 'ptc-errors', 'ptc-sdk']) {
+for (const name of ['goal', 'goal-wait', 'goal-tool', 'mcp-startup', 'ptc', 'ptc-errors', 'ptc-sdk']) {
   test(`the gate observes actual ${name} hook transformations, not just standalone patch functions`, async (t) => {
     const { root } = await fixture(t)
     const hook = path.join(root, 'server', `${name}-hook.js`)

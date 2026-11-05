@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { patchAcpSource } from './steer-patch.js'
 import { patchGoalSource, patchGoalDriverSource } from './goal-patch.js'
 import { patchMcpTimeoutSource } from './mcp-timeout-patch.js'
+import { patchMcpStartupSource } from './mcp-startup-patch.js'
 import { patchRetrySource } from './retry-patch.js'
 import { patchOutputSpeedSource } from './output-speed-patch.js'
 import { patchFsSearchSource } from './fs-search-patch.js'
@@ -29,6 +30,7 @@ const HOOKS = [
   { name: 'goal-wait', module: 'goalDriver', patch: patchGoalDriverSource },
   { name: 'goal-tool', module: 'goalTool', patch: patchGoalToolSource },
   { name: 'mcp-timeout', module: 'acp', patch: patchMcpTimeoutSource },
+  { name: 'mcp-startup', module: 'acp', patch: patchMcpStartupSource },
   { name: 'output-speed', module: 'acp', patch: patchOutputSpeedSource },
   { name: 'ptc', module: 'acp', patch: patchPtcSource },
   { name: 'ptc-errors', module: 'ptcRuntime', patch: patchPtcRuntimeSource },

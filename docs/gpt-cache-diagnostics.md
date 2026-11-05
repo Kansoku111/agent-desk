@@ -8,7 +8,7 @@ SIWCのResponses呼出で、送信内容の変化と生usageの項目有無を�
 
 通常のアプリやユーザー環境へ常設せず、比較ランチャーが起動するプロセスだけに設定してください。`dshEnv` はこの値を子へ引き継ぎます。出力はフォルダー内の `gpt-cache-<pid>-<random>.jsonl` です。比較ランチャーと有料試行の上限は、計画の次の段階で用意します。
 
-対象は `withSiwc` を通るHTTP試行です。モデル一覧・認証・別経路の検索・他プロバイダー・Codex側の通信をすべて記録する機能ではありません。設定が無いときは診断用のJSON再解析・HMAC計算・ファイル書込をしません。
+HTTPの対象は `withSiwc` を通るResponses試行です。これに加え、同じ環境変数を渡したDSHのACPプロセスではprompt単位の本文通知の時刻も記録します。モデル一覧・認証用HTTP・別経路の検索・他プロバイダー・Codex側の通信をすべて記録する機能ではありません。設定が無いときは診断用のJSON再解析・HMAC計算・ファイル書込をしません。
 
 ## 記録するもの
 
@@ -24,9 +24,34 @@ usageの個別項目は、正数の `value`、明示0の `zero`、項目なし�
 
 非2xxはヘッダー時点のHTTPエラーを優先して記録し、その後のエラー本文でのtimeout・取消では結果を書き換えません。本文の読み取り失敗自体は従来どおり呼出元へ伝わります。HTTPエラーの本文や例外のmessage/stackは記録しません。キャンセルは上流へ伝わったキャンセルの観測であり、人が操作したことまで意味しません。
 
+## 遅延の切り分け
+
+`request` には固定の経路名 `official_responses`、実送信JSONの `reasoningEffort` と `serviceTier` も記録します。値は許可リスト内のものだけで、未指定は `absent`、想定外の値は `invalid` です。SIWCで削除されるservice tierは `absent` になり、上流が実際に適用した優先度までは分かりません。
+
+`result.startedAt` は試行観測開始の壁時計時刻です。`result.timing` は指紋記録直後・認証情報の取得前を起点とする単調時計の経過ミリ秒で、未到達の地点は `null` です。
+
+| 項目 | 観測地点 |
+|---|---|
+| `authReadyMs` | 認証情報を取得した後。更新やロック待ちがあれば含む |
+| `sendMs` | Responses用fetchの呼出直前 |
+| `headersMs` | fetchがResponseを返した直後 |
+| `firstByteMs` | 非空のbody chunkを最初に読み取った時点 |
+| `firstEventMs` | 既存SSEパーサが最初のJSONイベントを解析した時点 |
+| `firstTextMs` / `lastTextMs` | 最初／最後の非空 `response.output_text.delta` を解析した時点 |
+| `terminalMs` | completed・failed・incompleteの終端イベントを解析した時点 |
+| `finishedMs` | ストリーム終了、または失敗を観測した時点 |
+
+これらはクライアント側の観測であり、サーバーの純粋な推論時間やTCP上の到着時刻ではありません。heartbeat・推論・ツール引数は本文deltaとは分けます。HTTP非2xxではヘッダー時点で結果を確定するため、その後のエラー本文の受信時刻は採取しません。認証段階で失敗した場合も `auth_error` を残し、送信時刻は `null` です。
+
+`delivery` は、HTTP試行とは別のprompt単位の記録です。`startedAt` を起点に、DSHで受け取った最初／最後の本文delta（`firstTextMs` / `lastTextMs`）、最初／最後の非空本文通知の呼出（`firstNotifyMs` / `lastNotifyMs`）、最後に通知関数が正常復帰した時刻（`lastNotifyReturnedMs`）、prompt処理の終了（`finishedMs`）を記録します。空の速度表示用通知は本文に数えません。
+
+ACPの通知関数は内部で送信エラーを捕捉するため、正常復帰しても送信・UI描画の成功は確認できません。`deliveryStatus` は通常 `unconfirmed`、通知関数自体から例外が出た場合だけ `notify_rejected` です。本文は複製配信せず、通知やHTTPの例外伝播も維持します。
+
+各spanは起点が異なります。同じプロセスのsession由来HMACが一致すれば `series` を参考にできますが、SDKのsessionIdとACPのsessionIdの一致、リトライや並行実行をまたぐHTTP試行との1対1対応は保証しません。別プロセスの単調時計を直接減算せず、壁時計・系列は参考の相関にとどめてください。既存ログに無かった時刻は復元できません。
+
 ## 上限と失敗時の扱い
 
-1診断インスタンス（環境変数による利用では1プロセス）につき最大200HTTP試行、出力1MiBです。保持する比較用snapshotは最大16系列、入力4,096項目までで、本文ではなくHMACです。入力上限を超えた試行は `fingerprintComplete: false` とし、その入力との前回比較はしません。
+1診断インスタンス（環境変数による利用では1プロセス）につき最大200HTTP試行（認証段階の失敗を含む）、200件のACP prompt計測、合計出力1MiBです。ACP側はSIWC以外のDSH promptも上限を消費します。上限後は `limited` と停止通知を確認し、欠測を0として扱わないでください。保持する比較用snapshotは最大16系列、入力4,096項目までで、本文ではなくHMACです。入力上限を超えた試行は `fingerprintComplete: false` とし、その入力との前回比較はしません。
 
 書込は非同期で、ログの遅延・失敗を会話へ伝播しません。書込失敗後は新しい採取を止めます。設定不正、書込失敗、上限で採取を止める場合は、本文・例外詳細・保存先の原文を含まない `gpt-cache-diagnostics-stopped` JSONをstderrへ出します。上限と書込失敗はそれぞれ一度だけ通知します。比較側はstderrも収集し、停止通知があるデータを完備した総消費として扱わないでください。強制終了・出力上限等によりresultが無い場合、消費0ではなく未取得として扱ってください。通常のファイル権限に加え、共有する場合もtoken数・時刻などのメタデータは残る点に注意してください。
 
@@ -34,12 +59,12 @@ usageの個別項目は、正数の `value`、明示0の `zero`、項目なし�
 
 ## 検証
 
-次のコマンドはネットワークのfetchと認証をモックし、有料モデルを呼びません。
+次のコマンドはモック通信またはローカルの偽HTTP／stdioサーバーを使い、実プロバイダーや有料モデルを呼びません。
 
 ```powershell
-node --test test/gpt-cache-diagnostics*.test.js test/siwc*.test.js
+node --test test/gpt-cache-diagnostics*.test.js test/gpt-latency.test.js test/siwc*.test.js test/output-speed*.test.js test/mcp-startup*.test.js
 ```
 
 実送信の正規化、UTF-8とSSEの分割、診断OFF/ONの送受信一致、実SDKによるusage正規化、欠落/0/不正値、中断・timeout・エラー、非漏洩・上限・書込失敗を検証します。
 
-この診断で確認できるのはクライアントが送ったJSONと受け取ったusageです。上流の実際のtoken化・非公開指示・処理先・cache状態・利用枠の計上条件までは分かりません。同じ入力で明示的な0が続く場合も、上流原因を断定するのではなく次の調査候補を絞る材料として使います。
+この診断で確認できるのはクライアントが送ったJSON、受け取ったusageと、上記のクライアント側の観測時刻です。上流の実際のtoken化・非公開指示・処理先・cache状態・利用枠の計上条件までは分かりません。同じ入力で明示的な0が続く場合も、上流原因を断定するのではなく次の調査候補を絞る材料として使います。

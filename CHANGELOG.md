@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Connect the standard browser, desktop, history and image MCP servers concurrently when a session uses only those servers. Preserve sequential startup for other server sets and await teardown of started connections on failure.
+- Extend opt-in private GPT diagnostics with credential, HTTP, text-receive and ACP notification-return timings. Record missing observations explicitly without treating notification return as successful UI delivery.
+
 ### Fixed
 
 - Preserve useful PTC syntax-error locations in long programs containing Japanese, without inventing columns for unsupported character widths.
