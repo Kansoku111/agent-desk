@@ -22,6 +22,11 @@ test('the GPT subagent\'s layer runs the chosen GPT model, without subagent tool
   assert.deepEqual(rows.find((row) => row.id === 'system-prompt'), { id: 'system-prompt', config: persona })
 })
 
+test('headless GPT subagents do not spend a model call generating an unused session title', () => {
+  const rows = YAML.parse(gptSubagentPatch({ subagents: [{ provider: 'openai-codex', model: 'gpt-6-luna' }] }))
+  assert.deepEqual(rows.find(row => row.id === 'session-title-llm'), { id: 'session-title-llm', disabled: true })
+})
+
 test('configured reasoning reaches both pinned tools and the Claude Code GPT layer', () => {
   const subagents = [
     { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' },

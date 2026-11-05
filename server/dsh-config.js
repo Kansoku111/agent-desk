@@ -319,6 +319,8 @@ export function gptSubagentPatch({ subagents = [], subagentsEnabled = true, pers
   const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
   const rows = [
     { id: 'agent-default-model', config: { provider: gpt.provider, model: gpt.model, ...(gpt.effort ? { reasoningEffort: gpt.effort } : {}) } },
+    // Headless callers consume only the result, never a generated session title.
+    { id: 'session-title-llm', disabled: true },
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
     ...pinned.map(({ provider }) => ({ id: `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`, disabled: true })),
   ]
