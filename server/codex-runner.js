@@ -6,6 +6,7 @@ import path from 'node:path'
 import { readJson, writeJson, debouncedWriter } from './json-file.js'
 import { abImages } from './ab-images.js'
 import { applyCodexEvent } from './codex-events.js'
+import { CodexOutputSpeedMeter } from './codex-output-speed.js'
 import { loadPricing, scoreResponse } from './usage.js'
 import { addScores, emptyScore } from '../shared/usage-score.js'
 
@@ -22,7 +23,7 @@ export function codexSandbox(mode, workspace) {
 }
 
 export class CodexRunner extends EventEmitter {
-  constructor({ home, server, attachmentsDir, instructions = () => '', now = Date.now, stopTimeoutMs = 10000 }) {
+  constructor({ home, server, attachmentsDir, instructions = () => '', now = Date.now, speedNow, stopTimeoutMs = 10000 }) {
     super()
     this.home = path.resolve(home)
     this.dir = path.join(this.home, 'codex-tasks')
@@ -31,6 +32,7 @@ export class CodexRunner extends EventEmitter {
     this.attachmentsDir = attachmentsDir
     this.instructions = instructions
     this.now = now
+    this.speedNow = speedNow
     this.stopTimeoutMs = stopTimeoutMs
     this.records = new Map()
     this.writers = new Map()
@@ -61,6 +63,7 @@ export class CodexRunner extends EventEmitter {
       for (const turn of record.turns) {
         if (turn.status !== 'running') continue
         turn.status = 'cancelled'
+        delete turn.outputSpeed
         turn.endedAt = this.now()
         turn.error = { message: 'Agent Desk が終了したため、作業が中断されました。履歴を確認してから再開してください。' }
         turn.totalScore = addScores(record.score ?? emptyScore(), null)
@@ -192,6 +195,12 @@ export class CodexRunner extends EventEmitter {
     if (typeof text !== 'string' || (!text.trim() && !images.length)) throw new Error('メッセージが空です')
     const turn = { id: randomUUID(), startedAt: this.now(), endedAt: null, status: 'running', stopReason: null, error: null, user: { text, images }, items: [] }
     const live = { turn, turnId: null, startAcknowledged: false, earlyCompletion: null, ended: false, stopping: false, ready: deferred(), done: deferred(), denials: [], baseline: record.tokenTotal, baselineKnown: record.turns.length === 0 || record.tokenTotal !== null, usage: null }
+    live.speed = new CodexOutputSpeedMeter({ now: this.speedNow, onChange: speed => {
+      if (speed) turn.outputSpeed = speed
+      else delete turn.outputSpeed
+      if (this.live.get(id) !== live || this.closing || live.ended || speed?.state === 'done') return
+      this.emit('turn-speed', { id, turnId: turn.id, speed: speed ?? null })
+    } })
     record.turns.push(turn)
     record.updatedAt = this.now()
     record.status = 'running'
@@ -295,6 +304,7 @@ export class CodexRunner extends EventEmitter {
     if (!live || live.ended) return
     const incomingId = params.turnId ?? params.turn?.id
     if (live.turnId && incomingId && incomingId !== live.turnId) return
+    if (!live.stopping) live.speed.event(method, params)
     if (method === 'turn/started') { live.turnId = params.turn.id; live.ready.resolve(live.turnId); return }
     if (method === 'thread/tokenUsage/updated') { live.usage = params.tokenUsage; return }
     if (method === 'model/rerouted' && params.toModel !== this.#record(id).model) {
@@ -326,6 +336,7 @@ export class CodexRunner extends EventEmitter {
     const record = this.records.get(id), live = this.live.get(id)
     const known = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)
     if (!known) { this.server.reject(requestId, { code: -32601, message: 'Agent Desk does not expose this client operation' }); return }
+    if (live && !live.ended && (!live.turnId || params.turnId === live.turnId)) live.speed.pause({ discard: true })
     if (!record || !live || live.ended || live.stopping || (live.turnId && params.turnId !== live.turnId) || record.permissionMode === 'read-only' || record.ab || record.permissionPolicy === 'deny') {
       this.server.respond(requestId, { decision: 'decline' })
       if (live) live.denials.push({ tool_name: method, tool_input: { command: params.command, reason: params.reason } })
@@ -352,6 +363,7 @@ export class CodexRunner extends EventEmitter {
   async #finish(id, live, status, message) {
     if (live.ended) return live.done.promise
     live.ended = true
+    live.speed.finish()
     live.ready.resolve(null)
     const record = this.#record(id), turn = live.turn
     for (const [key, pending] of this.permissions) if (pending.taskId === id) { try { this.server.respond(pending.rawId, { decision: 'cancel' }) } catch {} this.permissions.delete(key) }
@@ -386,6 +398,7 @@ export class CodexRunner extends EventEmitter {
     const live = this.live.get(id)
     if (!live) return this.get(id)
     live.stopping = true
+    live.speed.pause()
     if (live.turnId && !live.ended) await this.server.rawRequest('turn/interrupt', { threadId: this.#record(id).sessionId, turnId: live.turnId })
     let timer
     try { await Promise.race([live.done.promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Codex の停止完了を確認できませんでした')), this.stopTimeoutMs) })]) }

@@ -359,6 +359,11 @@ function handleFrame(frame: any) {
       updateServer({ codexTasks: (state.server?.codexTasks ?? []).filter((task) => task.id !== frame.taskId) })
       if (state.route.view === 'codex' && state.route.id === frame.taskId) navigate({ view: 'home' })
       break
+    case 'codexTurnSpeed': {
+      const next = withSpeed(state.codexTurns[frame.taskId], frame.turnId, frame.speed)
+      if (next) setState({ codexTurns: { ...state.codexTurns, [frame.taskId]: next } })
+      break
+    }
     case 'codexTurn': {
       const turns = state.codexTurns[frame.taskId]
       if (!turns) break

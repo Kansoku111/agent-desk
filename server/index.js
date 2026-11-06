@@ -523,6 +523,7 @@ teams = await new TeamManager({
 codex.executionGuard = (record, context) => teams.guardExecution(record, context)
 codex.on('session', task => broadcast('codexTask', { task }))
 codex.on('turn', ({ id, turn }) => broadcast('codexTurn', { taskId: id, turn }))
+codex.on('turn-speed', ({ id, turnId, speed }) => broadcast('codexTurnSpeed', { taskId: id, turnId, speed }))
 codex.on('removed', ({ id }) => broadcast('codexTaskRemoved', { taskId: id }))
 codex.on('fault', error => log('Codex task:', error.message))
 codex.on('approval', ({ id }) => {
