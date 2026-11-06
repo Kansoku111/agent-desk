@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import fs from 'node:fs/promises'
 import YAML from 'yaml'
-import { createRequire } from 'node:module'
+import { createRequire, findPackageJSON } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { patchPiAiSource, RETRYABLE_KEY, retryableCheck, replayGuard } from '../server/retry-patch.js'
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry'
@@ -296,4 +296,34 @@ test('HTTP429 and streamed usage-limit errors keep the concise message, link and
     assert.equal((await classify())(message.errorMessage), 'PI_AI_ERROR')
   }
   assert.ok(SIWC_LIMIT_MESSAGE.includes('https://chatgpt.com/settings/usage'))
+})
+
+test('the DSH installed provider retains streamed rejection status for retry classification', async () => {
+  const piPackage = findPackageJSON('@earendil-works/pi-ai', pathToFileURL(require.resolve('@deepseek-ai/dsh-llm-pi-ai')))
+  const { stream: dshStream } = await import(new URL('./dist/api/openai-responses.js', pathToFileURL(piPackage)).href)
+  const classifier = await classify()
+  for (const [status, code, classification] of [
+    [400, 'subscription_sharing_unsupported_capability', 'INVALID_REQUEST'],
+    [401, 'invalid_api_key', 'AUTH'],
+    [429, 'rate_limit_exceeded', 'RATE_LIMIT'],
+    [429, SIWC_LIMIT_CODE, 'PI_AI_ERROR'],
+    [503, 'server_error', 'SERVER'],
+  ]) {
+    let calls = 0
+    const options = withSiwc(model, { maxRetries: 0 }, {
+      client: { auth: async () => ({ access_token: 'mock-only' }) },
+      diagnostics: null,
+      fetch: async () => {
+        calls++
+        const data = [{ type: 'codex.response.metadata' }, { type: 'error', status, error: { code, message: 'fixture rejection' } }]
+        return new Response(data.map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''))
+      },
+    })
+    const result = await dshStream(model, { messages: [{ role: 'user', content: 'hi', timestamp: 0 }] }, options).result()
+    assert.equal(result.stopReason, 'error')
+    assert.match(result.errorMessage, new RegExp(String(status)))
+    assert.ok(result.errorMessage.includes(code), result.errorMessage)
+    assert.equal(classifier(result.errorMessage), classification, result.errorMessage)
+    assert.equal(calls, 1)
+  }
 })

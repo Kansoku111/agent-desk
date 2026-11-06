@@ -272,6 +272,31 @@ test('an error event mid-response reaches the SDK and the connection is dropped'
   assert.equal(local.state.connections.length, 2)
 })
 
+test('metadata before a rejection preserves the error without replaying the request', async t => {
+  const local = await server(t, (_, client) => {
+    client.send(JSON.stringify({ type: 'codex.response.metadata' }))
+    client.send(JSON.stringify({ type: 'error', status: 400, error: { code: 'subscription_sharing_unsupported_capability', message: 'fixture rejection' } }))
+  })
+  const records = []
+  const diagnostics = createCacheDiagnostics({ write: line => records.push(JSON.parse(line)), onStop() {} })
+  let httpCalls = 0
+  const options = withSiwc(model, { sessionId: 's1' }, {
+    client: { auth: async () => ({ access_token: 'token-1' }) },
+    diagnostics,
+    socket: pipe(t, local),
+    fetch: async () => { httpCalls++; throw new Error('must not replay after the stream started') },
+  })
+  const response = await options.fetch(REQUEST_URL, { method: 'POST', body: '{"input":[]}' })
+  assert.equal(response.status, 200, 'the stream has already started')
+  await assert.rejects(response.text(), /400.*subscription_sharing_unsupported_capability/)
+  await diagnostics.flush()
+  assert.equal(records.find(record => record.event === 'result').outcome, 'failed')
+  assert.equal(records.find(record => record.event === 'result').transport, 'websocket')
+  assert.doesNotMatch(JSON.stringify(records), /fixture rejection|token-1/)
+  assert.equal(local.state.requests.length, 1)
+  assert.equal(httpCalls, 0)
+})
+
 test('aborting before the first event rejects like fetch and closes the connection', async t => {
   const local = await server(t, () => {})
   const socket = pipe(t, local)

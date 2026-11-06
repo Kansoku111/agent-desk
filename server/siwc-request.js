@@ -1,7 +1,7 @@
 // SIWC preview compatibility. Applied after other payload hooks and again at the wire boundary.
 import { CredentialStore } from './credentials.js'
 import { explainSiwcUsage } from './siwc-usage-error.js'
-import { SiwcClient, SIWC_RESOURCE, SIWC_KEY_PLACEHOLDER } from './siwc-client.js'
+import { SiwcClient, SIWC_RESOURCE, SIWC_KEY_PLACEHOLDER, redactSiwc } from './siwc-client.js'
 import { configuredCacheDiagnostics, observeCache } from './gpt-cache-diagnostics.js'
 import { configuredSiwcSocket } from './siwc-socket.js'
 export const SIWC_UNSUPPORTED_FIELDS = [
@@ -77,10 +77,20 @@ export function requireCompleted(response, observation) {
   function line(value) {
     if (!value) {
       if (data.length) {
-        try {
-          const event = JSON.parse(data.join('\n'))
-          if (['response.completed', 'response.failed', 'response.incomplete'].includes(event.type)) terminal = event.type
-        } catch {/* SDK will handle malformed events. */}
+        let event
+        try { event = JSON.parse(data.join('\n')) } catch {/* SDK will handle malformed events. */}
+        if (event?.type === 'error') {
+          // SIWC may send metadata before rejecting a request. The HTTP headers
+          // are already 200 then; retain the streamed status so a permanent 4xx
+          // does not become a retryable interruption or an SDK "undefined" error.
+          const error = event.error && typeof event.error === 'object' ? event.error : event
+          const status = Number.isInteger(event.status) && event.status >= 400 && event.status <= 599 ? `${event.status}: ` : ''
+          const code = typeof error.code === 'string' ? error.code : 'unknown'
+          const message = typeof error.message === 'string' ? error.message : 'provider error'
+          if (observation) observeCache(observation, 'finish', 'failed')
+          throw new Error(redactSiwc(`SIWC stream error ${status}${code}: ${message}`))
+        }
+        if (['response.completed', 'response.failed', 'response.incomplete'].includes(event?.type)) terminal = event.type
       }
       data = []
     } else if (value.startsWith('data:')) data.push(value.slice(5).trimStart())

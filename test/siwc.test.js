@@ -235,6 +235,43 @@ test('SIWC rejects incomplete and interrupted streams instead of treating SDK le
   await assert.rejects(requireCompleted(new Response('data: {"type":"response.incomplete"}\n\n')).text(), /did not complete/)
   await assert.rejects(requireCompleted(new Response('data: {"type":"response.created"}\n\n')).text(), /interrupted/)
 })
+
+test('an explicit streamed error keeps its status and cause instead of becoming an interruption', async () => {
+  for (const nested of [true, false]) {
+    const error = { code: 'subscription_sharing_unsupported_capability', message: 'Remove unsupported input items' }
+    const event = { type: 'error', status: 400, ...(nested ? { error } : error) }
+    const bytes = new TextEncoder().encode('data: {"type":"codex.response.metadata"}\n\n' + 'data: ' + JSON.stringify(event) + '\n\n')
+    const records = []
+    const response = requireCompleted(new Response(new ReadableStream({
+      start(controller) {
+        // The metadata/error pair and the error JSON cross chunk boundaries.
+        for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7))
+        controller.close()
+      }
+    })), { finish: (...args) => records.push(args) })
+    await assert.rejects(response.text(), error => {
+      assert.match(error.message, /400/)
+      assert.match(error.message, /subscription_sharing_unsupported_capability/)
+      assert.match(error.message, /Remove unsupported input items/)
+      assert.doesNotMatch(error.message, /interrupted/)
+      return true
+    })
+    assert.deepEqual(records, [['failed']])
+  }
+})
+
+test('stream errors without details still fail and JWT-looking material is redacted', async () => {
+  for (const event of [
+    { type: 'error' },
+    { type: 'error', status: 'PRIVATE_STATUS', error: { code: 'bad', message: 'token eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.signature' } },
+  ]) {
+    await assert.rejects(requireCompleted(new Response('data: ' + JSON.stringify(event) + '\n\n')).text(), error => {
+      assert.match(error.message, /SIWC stream error/)
+      assert.doesNotMatch(error.message, /eyJ|PRIVATE_STATUS|interrupted/)
+      return true
+    })
+  }
+})
 test('refresh uses issued client/resource, no scope, locks rotating tokens across clients and preserves legacy grant', async t => {
   const store = await storeFor(t)
   await store.setGrant(CODEX_RECORD, {

@@ -34,6 +34,8 @@ usageの個別項目は、正数の `value`、明示0の `zero`、項目なし�
 
 `result.transport` は応答を受け取った通信路で、`websocket` か `http` です。WebSocketから切り替えた試行は `http` になります。WebSocketの `headersMs` は最初のイベントを受けた時点で、HTTPのレスポンスヘッダーとは意味が異なるため、通信路をまたぐ比較には `terminalMs` か `firstTextMs` を使ってください。
 
+metadataの後に明示的な`error`イベントが届いた場合、ヘッダーが既に200でも結果は`failed`です。例外にはサービスが報告したstatus/codeを残して再試行を判断しますが、診断ファイルへエラー本文は保存しません。終端応答を伴わないため、この場合のusageは`unobserved`、`terminal`は`null`のままです。単なる途中切断と、明示的な拒否を分けて解釈してください。
+
 `result.startedAt` は試行観測開始の壁時計時刻です。`result.timing` は指紋記録直後・認証情報の取得前を起点とする単調時計の経過ミリ秒で、未到達の地点は `null` です。
 
 | 項目 | 観測地点 |
