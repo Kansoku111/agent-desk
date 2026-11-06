@@ -17,10 +17,10 @@ function setup() {
     turns: id => [{ id: `turn-${id}` }],
     pendingPermissions: id => [{ requestId: `request-${id}` }],
     models: async options => { calls.push(['models', options]); return [{ id: 'model' }] },
-    create: async options => { calls.push(['create', options]); return { id: 'new', workspace: options.workspace } },
+    create: async options => { calls.push(['create', options]); return { id: 'new', workspace: options.workspace, model: options.model ?? 'model', effort: options.effort ?? 'low', permissionMode: options.permissionMode ?? 'workspace-write' } },
     send: async (id, options) => { calls.push(['send', id, options]) },
     stop: async id => { calls.push(['stop', id]); return records.get(id) },
-    update: async (id, options) => { calls.push(['update', id, options]); return records.get(id) },
+    update: async (id, options) => { calls.push(['update', id, options]); const value = { ...records.get(id), ...Object.fromEntries(Object.entries(options).filter(([, value]) => value !== undefined)) }; records.set(id, value); return value },
     remove: async id => { calls.push(['remove', id]) },
     respondPermission: (id, requestId, decision) => { calls.push(['respond', id, requestId, decision]) },
   }
@@ -29,14 +29,14 @@ function setup() {
     refreshCodexLeader: async id => { calls.push(['refresh', id]) },
     removeTeam: async id => { calls.push(['removeTeam', id]) },
   }
-  const handlers = createCodexHandlers({ codex, teams, paths: { myPc: '/my-pc' }, mutateSettings: async fn => fn(settings) })
+  const handlers = createCodexHandlers({ codex, teams, paths: { myPc: '/my-pc' }, getSettings: () => settings, mutateSettings: async fn => fn(settings) })
   return { handlers, calls, settings, codex }
 }
 
 test('create guards workspace, forwards only allowed options, and adds workspace once', async () => {
   const { handlers: h, calls, settings } = setup()
   const args = { workspace: '/project', model: 'model', effort: 'low', permissionMode: 'read-only', instructions: 'injected', mcpServers: { evil: {} }, permissionPolicy: 'bypass', team: { id: 'other' }, ab: {} }
-  assert.deepEqual(await h['codex.task.create'](args), { task: { id: 'new', workspace: '/project' } })
+  assert.deepEqual(await h['codex.task.create'](args), { task: { id: 'new', workspace: '/project', model: 'model', effort: 'low', permissionMode: 'read-only' } })
   assert.deepEqual(calls, [
     ['guard', { workspace: '/project' }],
     ['create', { workspace: '/project', model: 'model', effort: 'low', permissionMode: 'read-only' }],

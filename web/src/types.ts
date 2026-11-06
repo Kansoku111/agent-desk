@@ -455,6 +455,7 @@ export interface Settings extends UsageDisplay {
   observerModel: { model: string; effort: string | null } | null
   usageFallbackRoutes?: { model: string; effort: string }[] | null
   defaultPermissionMode: PermissionMode
+  codexDefaults?: Pick<CodexTaskSummary, 'model' | 'effort' | 'permissionMode'> | null
   workspaces: string[]
   lastWorkspace: string | null
   notifications: boolean

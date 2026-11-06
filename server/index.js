@@ -945,7 +945,7 @@ const handlers = {
     checkEquivalentPricing: () => equivalentPricing.refresh({ force: true }),
   }),
   ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
-  ...createCodexHandlers({ paths, codex, teams, mutateSettings }),
+  ...createCodexHandlers({ paths, codex, teams, getSettings, mutateSettings }),
 
   ...createAbHandlers(ab),
   'preset.inspect': ({ source }) => presets.inspect(source),

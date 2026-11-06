@@ -1,5 +1,5 @@
 // A separate task API keeps Codex sessions out of dsh's ACP/session policies.
-export function createCodexHandlers({ codex, teams, paths, mutateSettings }) {
+export function createCodexHandlers({ codex, teams, paths, getSettings, mutateSettings }) {
   function task(taskId) {
     const value = codex.get(taskId)
     if (!value) throw new Error('Codex タスクが見つかりません')
@@ -10,13 +10,30 @@ export function createCodexHandlers({ codex, teams, paths, mutateSettings }) {
     if (value.ab || value.team) throw new Error('この担当はAB・チームの画面から操作してください')
     return value
   }
+  function remember(candidate, value, { model = false, permissionMode = false } = {}) {
+    const previous = candidate.codexDefaults
+    const next = previous ? { ...previous } : { model: value.model, effort: value.effort, permissionMode: value.permissionMode }
+    if (model) { next.model = value.model; next.effort = value.effort }
+    if (permissionMode) next.permissionMode = value.permissionMode
+    if (previous && ['model', 'effort', 'permissionMode'].every(key => previous[key] === next[key])) return false
+    candidate.codexDefaults = next
+    return true
+  }
   return {
     'codex.models': async () => ({ models: await codex.models({ refresh: true }) }),
     'codex.task.create': async ({ workspace, model, effort, permissionMode }) => {
       teams.guardExecution({ workspace })
-      const value = await codex.create({ workspace, model, effort, permissionMode })
+      const defaults = getSettings().codexDefaults ?? {}
+      const sameModel = model === undefined || model === defaults.model
+      const value = await codex.create({ workspace,
+        model: model === undefined ? defaults.model : model,
+        effort: effort === undefined && sameModel ? defaults.effort : effort,
+        permissionMode: permissionMode === undefined ? defaults.permissionMode : permissionMode,
+      })
       await mutateSettings(candidate => {
-        if (value.workspace === paths.myPc || candidate.workspaces.includes(value.workspace)) return false
+        // Inheriting settings must not overwrite a newer choice made while creation was pending.
+        const changed = remember(candidate, value, { model: model !== undefined || effort !== undefined, permissionMode: permissionMode !== undefined })
+        if (value.workspace === paths.myPc || candidate.workspaces.includes(value.workspace)) return changed
         candidate.workspaces.unshift(value.workspace)
       })
       return { task: value }
@@ -38,7 +55,11 @@ export function createCodexHandlers({ codex, teams, paths, mutateSettings }) {
       const value = task(taskId)
       if (value.ab || value.team?.childId || (value.team && value.team.role !== 'leader')) throw new Error('AB・チームの担当設定はここでは変更できません')
       if (value.team && [model, effort, permissionMode].some(entry => entry !== undefined)) throw new Error('チームの実行設定はチーム設定から変更してください')
-      return { task: await codex.update(taskId, { title, archived, pinned, model, effort, permissionMode }) }
+      const updated = await codex.update(taskId, { title, archived, pinned, model, effort, permissionMode })
+      if (!value.team && [model, effort, permissionMode].some(entry => entry !== undefined)) {
+        await mutateSettings(candidate => remember(candidate, updated, { model: model !== undefined || effort !== undefined, permissionMode: permissionMode !== undefined }))
+      }
+      return { task: updated }
     },
     'codex.task.remove': async ({ taskId }) => {
       const value = task(taskId)

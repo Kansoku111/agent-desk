@@ -36,6 +36,8 @@ export const DEFAULT_SETTINGS = {
   // Null preserves legacy per-mode preferences until the user explicitly configures the shared policy.
   usageFallbackRoutes: null,
   defaultPermissionMode: 'workspace-write',
+  // Normal GP tasks remember their own choices; workflow workers never change these defaults.
+  codexDefaults: null,
   workspaces: [],
   lastWorkspace: null,
   notifications: true,
