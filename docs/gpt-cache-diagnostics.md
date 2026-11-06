@@ -28,6 +28,8 @@ usageの個別項目は、正数の `value`、明示0の `zero`、項目なし�
 
 `request` には固定の経路名 `official_responses`、実送信JSONの `reasoningEffort` と `serviceTier` も記録します。値は許可リスト内のものだけで、未指定は `absent`、想定外の値は `invalid` です。SIWCで削除されるservice tierは `absent` になり、上流が実際に適用した優先度までは分かりません。
 
+`result.transport` は応答を受け取った通信路で、`websocket` か `http` です。WebSocketから切り替えた試行は `http` になります。WebSocketの `headersMs` は最初のイベントを受けた時点で、HTTPのレスポンスヘッダーとは意味が異なるため、通信路をまたぐ比較には `terminalMs` か `firstTextMs` を使ってください。
+
 `result.startedAt` は試行観測開始の壁時計時刻です。`result.timing` は指紋記録直後・認証情報の取得前を起点とする単調時計の経過ミリ秒で、未到達の地点は `null` です。
 
 | 項目 | 観測地点 |

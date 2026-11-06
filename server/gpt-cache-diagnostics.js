@@ -70,9 +70,13 @@ function responseObserver(id, lifecycle, record, now) {
     if (!lifecycle.finished && Object.hasOwn(timing, name) && (timing[name] === null || name === 'lastTextMs')) timing[name] = Math.max(0, now() - started)
   }
   let terminal = null
+  let transportUsed = 'http'
   let usage = { ...usageOf(null), state: 'unobserved' }
   return {
     mark,
+    transport(kind) {
+      if (kind === 'websocket' || kind === 'http') transportUsed = kind
+    },
     event(event) {
       if (lifecycle.finished) return
       mark('firstEventMs')
@@ -89,7 +93,7 @@ function responseObserver(id, lifecycle, record, now) {
       if (lifecycle.finished) return
       mark('finishedMs')
       lifecycle.finished = true
-      record({ event: 'result', id, startedAt, timing, outcome: OUTCOMES.has(outcome) ? outcome : 'unknown', ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), terminal, usage })
+      record({ event: 'result', id, startedAt, timing, transport: transportUsed, outcome: OUTCOMES.has(outcome) ? outcome : 'unknown', ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), terminal, usage })
     },
   }
 }

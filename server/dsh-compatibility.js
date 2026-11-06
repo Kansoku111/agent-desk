@@ -16,6 +16,7 @@ import { patchFsSearchSource } from './fs-search-patch.js'
 import { patchGoalToolSource } from './goal-tool-patch.js'
 import { patchPtcSource } from './ptc-patch.js'
 import { patchPtcRuntimeSource } from './ptc-runtime-patch.js'
+import { patchPtcResultsSource } from './ptc-results-patch.js'
 import { patchPtcSdkSource } from './ptc-sdk-patch.js'
 
 // Both AcpRuntime and the verifier use this registration order. load hooks call
@@ -35,6 +36,7 @@ const HOOKS = [
   { name: 'ptc', module: 'acp', patch: patchPtcSource },
   { name: 'ptc-errors', module: 'ptcRuntime', patch: patchPtcRuntimeSource },
   { name: 'ptc-sdk', module: 'tools', patch: patchPtcSdkSource },
+  { name: 'ptc-results', module: 'tools', patch: patchPtcResultsSource },
   { name: 'fs-search', module: 'search', patch: patchFsSearchSource },
 ]
 

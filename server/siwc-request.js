@@ -3,6 +3,7 @@ import { CredentialStore } from './credentials.js'
 import { explainSiwcUsage } from './siwc-usage-error.js'
 import { SiwcClient, SIWC_RESOURCE, SIWC_KEY_PLACEHOLDER } from './siwc-client.js'
 import { configuredCacheDiagnostics, observeCache } from './gpt-cache-diagnostics.js'
+import { configuredSiwcSocket } from './siwc-socket.js'
 export const SIWC_UNSUPPORTED_FIELDS = [
   'background', 'conversation', 'max_output_tokens', 'max_tool_calls', 'metadata',
   'moderation', 'multi_agent', 'prompt', 'prompt_cache_retention', 'safety_identifier',
@@ -184,7 +185,8 @@ export function withSiwc(model, options, {
   client,
   fetch: fetcher,
   idleMs = SIWC_IDLE_MS,
-  diagnostics
+  diagnostics,
+  socket
 } = {}) {
   if (!isSiwcModel(model)) return options
   if (!credentials && !client) throw new Error('Official ChatGPT route requires Agent Desk SIWC authentication hook')
@@ -192,6 +194,8 @@ export function withSiwc(model, options, {
   const previous = options?.onPayload
   const diagnostic = diagnostics === undefined ? configuredCacheDiagnostics() : diagnostics
   const send = fetcher ?? options?.fetch ?? globalThis.fetch
+  // A supplied fetch owns the transport.
+  const pipe = socket !== undefined ? socket : fetcher || options?.fetch ? null : configuredSiwcSocket()
   return {
     ...options,
     apiKey: SIWC_KEY_PLACEHOLDER,
@@ -218,7 +222,12 @@ export function withSiwc(model, options, {
       headers.delete('chatgpt-account-id')
       headers.delete('content-length')
       headers.delete('OpenAI-Beta')
-      const response = await sendWithIdleLimit(send, request.url, {
+      const transport = pipe ? (target, sendInit) => pipe.send(target, sendInit, {
+        key: options?.sessionId,
+        http: send,
+        used: kind => observeCache(observation, 'transport', kind)
+      }) : send
+      const response = await sendWithIdleLimit(transport, request.url, {
         method: 'POST',
         redirect: 'error',
         headers,
