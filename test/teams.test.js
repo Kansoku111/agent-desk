@@ -4001,6 +4001,26 @@ function fakeCodex() {
 const codexConfig = { enabled: true, low: { enabled: true, model: 'codex-model', effort: 'low' }, mid: { enabled: false, model: null, effort: null } }
 const codexCatalog = { ...CATALOG.data, models: [...CATALOG.data.models, { value: 'codex:codex-model', provider: 'codex', id: 'codex-model', name: 'Codex model' }], effortsByModel: { 'codex:codex-model': [{ value: 'low' }] } }
 
+test('Codex child loads an empty model catalog before validating its saved choice', async (t) => {
+  const codex = fakeCodex()
+  let ready = false
+  codex.models = async () => { ready = true; return [{ id: 'codex-model' }] }
+  const f = await setup(t, { codex: codexConfig }, { codex, catalogState: () => ready ? codexCatalog : CATALOG.data })
+  await f.tool('spawn', { title: 'child', task: 'work', provider: 'codex', tier: 'low' })
+  assert.equal(ready, true)
+  assert.equal(f.team.children[0].model, 'codex-model')
+})
+
+test('Codex child reports when its saved model is absent from the current account', async (t) => {
+  const codex = fakeCodex()
+  let loads = 0
+  codex.models = async () => { loads++; return [] }
+  const f = await setup(t, { codex: codexConfig }, { codex, catalogState: () => CATALOG.data })
+  await assert.rejects(f.tool('spawn', { title: 'child', task: 'work', provider: 'codex', tier: 'low' }), /現在のCodexアカウントで利用できません/)
+  assert.equal(loads, 1)
+  assert.equal(f.team.children.length, 0)
+})
+
 test('Codex child uses dedicated runner for launch, reports, steer, stop and deletion', async (t) => {
   const codex = fakeCodex()
   const f = await setup(t, { codex: codexConfig }, { codex, catalogState: () => codexCatalog })

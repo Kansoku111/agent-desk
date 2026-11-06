@@ -1339,8 +1339,14 @@ export class TeamManager extends EventEmitter {
     provider = selected.provider
     if (provider === 'codex') {
       if (!this.codex) throw new Error('Codexを利用できません')
-      const catalog = this.catalogState()
-      try { validateAbModel(`codex:${model}`, catalog, this.modelVisibility()) } catch { throw new Error('Codexの子モデルを選び直してください') }
+      let catalog = this.catalogState()
+      if (!catalog.models.some((entry) => entry.value === `codex:${model}`)) {
+        try { await this.codex.models() } catch (error) { throw new Error(`Codexのモデル一覧を取得できません: ${error.message}`) }
+        guard()
+        catalog = this.catalogState()
+      }
+      if (!catalog.models.some((entry) => entry.value === `codex:${model}`)) throw new Error('選択したモデルは現在のCodexアカウントで利用できません。Codexの子モデルを選び直してください')
+      try { validateAbModel(`codex:${model}`, catalog, this.modelVisibility()) } catch { throw new Error('Codexの子モデルが非表示です。設定で表示するか、選び直してください') }
       if (effort && !workflowEffortSupported(effort, workflowLevels(catalog, `codex:${model}`))) throw new Error('Codexの子の推論レベルを選び直してください')
     }
     this.#checkRoom(team)
