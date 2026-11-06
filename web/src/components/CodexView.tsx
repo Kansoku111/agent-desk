@@ -5,6 +5,7 @@ import type { Attachment, CodexTaskSummary } from '../types'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import { workspaceLabel } from '../util'
 import { TurnView } from './TurnView'
+import { CodexModelPicker } from './CodexModelPicker'
 import { OpenInMenu } from './ThreadView'
 import { TeamPanel, TeamToggle } from './TeamPanel'
 import { useConversationScroll } from './useConversationScroll'
@@ -35,6 +36,7 @@ export function CodexView({ taskId }: { taskId: string }) {
   const update = async (patch: Partial<CodexTaskSummary>) => {
     const result = await act<{ task: CodexTaskSummary }>('codex.task.update', { taskId, ...patch })
     if (result) upsertCodexTask(result.task)
+    return Boolean(result)
   }
   const send = async () => {
     const sentText = getDraft(draftKey), sentImages = images
@@ -85,9 +87,8 @@ export function CodexView({ taskId }: { taskId: string }) {
       <textarea {...ime.fieldProps} rows={2} value={text} aria-label="メッセージ" placeholder={working ? '追加指示を入力…' : 'メッセージを入力…'} onChange={(event) => setText(event.target.value)} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void addFiles([...event.clipboardData.files]) } }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !isTouch()) { event.preventDefault(); void send() } }} />
       <div className="composer-bar"><div className="composer-left">
         <button type="button" className="icon-button" aria-label="画像を添付" disabled={Boolean(teamChild)} onClick={() => input.current?.click()}><Paperclip size={16} /></button><input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={(event) => { void addFiles([...event.target.files ?? []]); event.target.value = '' }} />
-        <select aria-label="モデル" value={task.model ?? ''} disabled={working || Boolean(team || task.ab)} onChange={(event) => { const model = choices.find((entry) => entry.id === event.target.value); if (model) void update({ model: model.id, effort: model.defaultEffort ?? model.efforts[0] ?? null }) }}><option value="" disabled>モデルを選択</option>{choices.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select>
-        <select aria-label="推論レベル" value={task.effort ?? ''} disabled={working || Boolean(team || task.ab)} onChange={(event) => void update({ effort: event.target.value || null })}><option value="" disabled>推論レベル</option>{(choices.find((model) => model.id === task.model)?.efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select>
-        <select aria-label="権限" value={task.permissionMode} disabled={working || Boolean(team || task.ab)} onChange={(event) => void update({ permissionMode: event.target.value as CodexTaskSummary['permissionMode'] })}><option value="read-only">読み取りのみ</option><option value="workspace-write">ワークスペース編集</option><option value="danger-full-access">フルアクセス</option></select>
+        <CodexModelPicker task={task} models={choices} disabled={working || Boolean(task.team || team || task.ab)} onChange={update} />
+        <select aria-label="権限" value={task.permissionMode} disabled={working || Boolean(task.team || team || task.ab)} onChange={(event) => void update({ permissionMode: event.target.value as CodexTaskSummary['permissionMode'] })}><option value="read-only">読み取りのみ</option><option value="workspace-write">ワークスペース編集</option><option value="danger-full-access">フルアクセス</option></select>
       </div><div className="composer-right"><button type="button" className="send-button" title={working ? '追加指示を送信' : '送信'} aria-label={working ? '追加指示を送信' : '送信'} disabled={busy || uploading || (!text.trim() && !images.length)} onPointerDown={(event) => { event.preventDefault(); ime.confirm() }} onClick={() => void send()}><ArrowUp size={17} /></button></div></div>
     </div></div>{team && teamPanel && <TeamPanel team={team} />}</div>
   </div>

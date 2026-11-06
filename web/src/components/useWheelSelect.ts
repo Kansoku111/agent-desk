@@ -18,7 +18,7 @@ const ECHO_TIMEOUT_MS = 3000
  * @param options - the selectable values in menu order.
  * @param value - the committed value.
  * @param onChange - commits a value.
- * @returns a callback ref for the trigger element and the value to display.
+ * @returns a trigger ref, display value, and cancel to discard a preview when opening a menu.
  */
 export function useWheelSelect<T extends HTMLElement>(options: string[], value: string | null, onChange: (value: string) => void) {
   const [pending, setPending] = useState<string | null>(null)
@@ -95,5 +95,13 @@ export function useWheelSelect<T extends HTMLElement>(options: string[], value: 
     window.clearTimeout(echoTimer.current)
   }, [])
 
-  return { ref, shown: pending ?? value, pending: pending !== null }
+  const cancel = useCallback(() => {
+    window.clearTimeout(commitTimer.current)
+    window.clearTimeout(echoTimer.current)
+    travel.current = 0
+    cursor.current = null
+    setPending(null)
+  }, [])
+
+  return { ref, shown: pending ?? value, pending: pending !== null, cancel }
 }
