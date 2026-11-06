@@ -15,7 +15,7 @@ const jsx = (type, props) => ({ type, props })
 const field = function ModelField() {}
 const groups = [
   { id: 'claude-code', heading: 'Claude Code', note: '', models: [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:haiku', name: 'Haiku' }] },
-  ...[['openai-codex', 'gpt-6-luna'], ['anthropic', 'claude-haiku-5-5'], ['deepseek-official', 'deepseek-v4-flash'], ['opencode-go', 'glm-5.3'], ['local-llm', 'org/model:8b']].map(([id, model]) => ({
+  ...[['openai-codex', 'gpt-6-luna'], ['anthropic', 'claude-haiku-5-5'], ['deepseek-official', 'deepseek-v4-flash'], ['opencode-go', 'glm-5.3'], ['openscale', 'deepseek/deepseek-v4.1-flash'], ['local-llm', 'org/model:8b']].map(([id, model]) => ({
     id, heading: id, note: '', models: [{ value: JSON.stringify([id, model]), name: model }],
   })),
 ]
@@ -64,7 +64,7 @@ test('leader picker selects each provider and stores its own model and effort', 
   const h = harness({})
   for (const [provider, catalog, id] of [
     ['claudeApi', 'anthropic', 'claude-haiku-5-5'], ['deepseek', 'deepseek-official', 'deepseek-v4-flash'],
-    ['opencodeGo', 'opencode-go', 'glm-5.3'], ['local', 'local-llm', 'org/model:8b'],
+    ['opencodeGo', 'opencode-go', 'glm-5.3'], ['openscale', 'openscale', 'deepseek/deepseek-v4.1-flash'], ['local', 'local-llm', 'org/model:8b'],
   ]) {
     const value = JSON.stringify([catalog, id])
     h.field().onChange(value)

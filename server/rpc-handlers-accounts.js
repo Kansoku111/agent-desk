@@ -1,6 +1,6 @@
 // RPC handlers for provider accounts (API keys and the ChatGPT sign-in) and for
 // the usage page's admin key (see index.js).
-import { ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, DEEPSEEK_REF, LOCAL_LLM_REF, OPENCODE_GO_REF } from './credentials.js'
+import { ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, DEEPSEEK_REF, LOCAL_LLM_REF, OPENCODE_GO_REF, OPENSCALE_REF } from './credentials.js'
 import { fetchCostDays } from './claude-cost.js'
 import { SiwcClient } from './siwc-client.js'
 import { isWorkspaceId } from './dsh-config.js'
@@ -9,7 +9,7 @@ import { discoverLocalModels, normalizeBaseUrl } from './local-llm.js'
 import { afterSettingsCommit } from './settings.js'
 
 /** The credential refs of the API keys set in 設定 → アカウント, by provider. */
-const KEY_REFS = { anthropic: ANTHROPIC_REF, deepseek: DEEPSEEK_REF, opencodeGo: OPENCODE_GO_REF, commandCode: COMMAND_CODE_REF }
+const KEY_REFS = { anthropic: ANTHROPIC_REF, deepseek: DEEPSEEK_REF, opencodeGo: OPENCODE_GO_REF, commandCode: COMMAND_CODE_REF, openscale: OPENSCALE_REF }
 /** Key checks of the providers whose models join the catalog only with a key. */
 const CATALOG_KEY_CHECKS = { deepseek: checkDeepSeekKey, opencodeGo: checkOpenCodeGoKey }
 
@@ -55,7 +55,7 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
           check = await checkAnthropicKey(trimmed, null)
           if (check.status !== 'invalid') await setAnthropicWorkspace(null)
         }
-      } else if (provider === 'commandCode') {
+      } else if (['commandCode', 'openscale'].includes(provider)) {
         if (/\s/.test(trimmed)) throw new Error('キーに空白や改行が含まれています。キーだけを貼り付けてください。')
         // The public inventory does not authenticate; only an inference verifies this key and plan.
         check = { status: 'unverified' }
@@ -69,7 +69,7 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
       const next = await accounts()
       broadcast('accounts', { accounts: next })
       if (provider === 'anthropic') void refreshClaudeCost()
-      if (CATALOG_KEY_CHECKS[provider] || provider === 'commandCode') await updateModelCatalog({ forceCommandCode: provider === 'commandCode' })
+      if (CATALOG_KEY_CHECKS[provider] || ['commandCode', 'openscale'].includes(provider)) await updateModelCatalog({ forceCommandCode: provider === 'commandCode' })
       return { check, accounts: provider === 'commandCode' ? await accounts() : next }
     },
 
@@ -119,7 +119,7 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
       const next = await accounts()
       broadcast('accounts', { accounts: next })
       if (provider === 'anthropic') void refreshClaudeCost()
-      if (CATALOG_KEY_CHECKS[provider] || provider === 'commandCode') await updateModelCatalog()
+      if (CATALOG_KEY_CHECKS[provider] || ['commandCode', 'openscale'].includes(provider)) await updateModelCatalog()
       return { accounts: next }
     },
 

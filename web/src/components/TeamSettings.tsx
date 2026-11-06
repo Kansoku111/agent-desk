@@ -19,12 +19,12 @@ import { workflowEffortSupported, workflowLevels } from '../../../shared/workflo
 import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
 
 const MAX_CHILDREN = 12
-const PROVIDERS: TeamProvider[] = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
-const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
-type DshProvider = 'gpt' | 'codex' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
+const PROVIDERS: TeamProvider[] = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'openscale', 'commandCode', 'commandCodeClaude', 'local']
+const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', openscale: 'OpenScale', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
+type DshProvider = 'gpt' | 'codex' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'openscale' | 'commandCode' | 'commandCodeClaude' | 'local'
 /** Each dsh provider's models in the model list. */
-const CATALOG_PROVIDER = { gpt: 'openai-codex', codex: 'codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' } as const
-const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', codex: 'codex', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'command-code': 'commandCode', 'command-code-claude': 'commandCodeClaude', 'local-llm': 'local' }
+const CATALOG_PROVIDER = { gpt: 'openai-codex', codex: 'codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', openscale: 'openscale', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' } as const
+const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', codex: 'codex', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', openscale: 'openscale', 'command-code': 'commandCode', 'command-code-claude': 'commandCodeClaude', 'local-llm': 'local' }
 const teamModelGroups = (server: AppState) => modelGroups(server, true).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
 const modelValue = (entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? `claude:${entry.model}` : entry.provider === 'codex' ? `codex:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
 function pickerChoice(value: string): TeamModelChoice | null {
@@ -62,6 +62,7 @@ function fullConfig(saved: Config): Config {
     claudeApi: saved.claudeApi ?? OFF_PROVIDER,
     deepseek: saved.deepseek ?? OFF_PROVIDER,
     opencodeGo: saved.opencodeGo ?? OFF_PROVIDER,
+    openscale: saved.openscale ?? OFF_PROVIDER,
     commandCode: saved.commandCode ?? OFF_PROVIDER,
     commandCodeClaude: saved.commandCodeClaude ?? OFF_PROVIDER,
     local: saved.local ?? OFF_PROVIDER,
@@ -182,6 +183,7 @@ const PROVIDER_NOTE: Record<TeamProvider, string> = {
   claudeApi: 'Anthropic API（従量課金）',
   deepseek: 'DeepSeek API（従量課金）',
   opencodeGo: 'OpenCode Go サブスクリプション',
+  openscale: 'OpenScale（Lite は同時1エージェントまで）',
   commandCode: 'Command Code Provider API',
   commandCodeClaude: 'Command Code Provider API',
   local: '課金なし。小さく明確な作業向け',
@@ -192,6 +194,7 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
   const signedOut = provider === 'gpt' && !server.accounts.chatgpt.signedIn
   const noKey = (provider === 'deepseek' && !server.accounts.deepseek.configured) || (provider === 'claudeApi' && !server.accounts.claude.configured)
     || (provider === 'opencodeGo' && !server.accounts.opencodeGo?.configured)
+    || (provider === 'openscale' && !server.accounts.openscale?.configured)
     || (['commandCode', 'commandCodeClaude'].includes(provider) && !server.accounts.commandCode?.configured)
     || (provider === 'local' && !server.accounts.localLlm?.configured)
   return (
@@ -294,6 +297,7 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
           onClick={() => onChange({ freeModels: models.filter((_, i) => i !== index) })}><Trash2 size={15} /></button>
       </div>
     })}
+    {models.some((model) => model.provider === 'openscale') && <p className="team-warning">OpenScale Lite はリーダーや別タスクを含め同時に1エージェントまでです。並列数は自動制限されません。</p>}
     {models.some((model) => model.provider === 'claudeApi') && <p className="team-warning">Claude（API）は従量課金です。並列数や長い会話で費用が増えます。</p>}
   </section>
 }
@@ -503,7 +507,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const save = async () => {
     if (needsAuth && !auth.ready) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, openscale: draft.openscale, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }

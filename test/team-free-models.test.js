@@ -11,6 +11,7 @@ const jsx = (type, props) => ({ type, props })
 const ModelField = () => {}, Dropdown = () => {}, MenuItem = () => {}
 const choices = Array.from({ length: 15 }, (_, i) => ({ value: JSON.stringify(['openai-codex', 'model-' + i]), name: 'Model ' + i }))
 const claude = [{ value: 'claude:haiku', name: 'Haiku' }]
+const openscale = [{ value: JSON.stringify(['openscale', 'z-ai/glm-5.3-flash']), name: 'GLM OpenScale' }]
 const api = [{ value: JSON.stringify(['anthropic', 'haiku']), name: 'Haiku' }]
 const server = { catalog: { models: choices, effortsByModel: {}, fallbackEfforts: ['low', 'medium', 'high', 'max'].map((value) => ({ value })) } }
 const nodes = (node, match) => !node || typeof node !== 'object' ? []
@@ -22,7 +23,7 @@ function harness(initial = []) {
     react: { useState: () => [null, () => {}] },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     '../util': { parseModel: (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }, pickableEfforts: (items) => items },
-    './WorkflowModelField': { ModelField, modelGroups: () => [{ id: 'openai-codex', heading: 'GPT', note: '', models: choices }, { id: 'claude-code', heading: 'Claude Code', note: '', models: claude }, { id: 'anthropic', heading: 'Claude（API）', note: '', models: api }] },
+    './WorkflowModelField': { ModelField, modelGroups: () => [{ id: 'openai-codex', heading: 'GPT', note: '', models: choices }, { id: 'claude-code', heading: 'Claude Code', note: '', models: claude }, { id: 'anthropic', heading: 'Claude（API）', note: '', models: api }, { id: 'openscale', heading: 'OpenScale', note: '', models: openscale }] },
     './Popover': { Dropdown, MenuItem },
     './TerminalPickers': { claudeEfforts: () => ['low', 'medium', 'high'], claudeModelName: (_, id) => id },
   }
@@ -147,4 +148,10 @@ test('Claude Code and Claude API remain separate selections', () => {
   assert.deepEqual(h.config.freeModels.map(({ provider, effort }) => [provider, effort]), [['claude', null], ['claude', 'low'], ['claudeApi', null]])
   h.duplicate(2)
   assert.deepEqual(h.config.freeModels.map(({ provider, effort }) => [provider, effort]), [['claude', null], ['claude', 'low'], ['claudeApi', null], ['claudeApi', 'low']])
+})
+
+test('OpenScale can be selected as a free-mode child', () => {
+  const h = harness()
+  h.select('GLM OpenScale')
+  assert.deepEqual(h.config.freeModels, [{ provider: 'openscale', model: 'z-ai/glm-5.3-flash', effort: null }])
 })

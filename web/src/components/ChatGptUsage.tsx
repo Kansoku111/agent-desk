@@ -41,8 +41,8 @@ export function ChatGptLimits() {
       {usage?.status === 'error' && <p className="fine-print">取得できませんでした（{usage.message}）。</p>}
       {usage?.status === 'ok' && (
         <>
-          {usage.limitReached && <p className="form-warning">Codex の上限に達しています。公式 SIWC のアプリ別使用枠とは異なります。</p>}
-          {usage.windows.length === 0 && <p className="fine-print">このプランでは上限の情報がありません。</p>}
+          {usage.limitReached && <p className="form-warning">Codex の上限に達しています。</p>}
+          {usage.windows.length === 0 && <p className="fine-print">残量の情報がありません。</p>}
           {usage.windows.map((window) => (
             <div key={window.seconds} className="limit-row">
               <div className="limit-label">
@@ -64,20 +64,21 @@ export function ChatGptLimits() {
 /** A compact "remaining" chip for the composer while a GPT model is selected. */
 export function ChatGptLimitChip() {
   const usage = useStore((state) => state.server?.chatgptUsage ?? null)
-  if (usage?.status !== 'ok' || usage.windows.length === 0) return null
-  const tightest = usage.windows.reduce((low, window) => (remaining(window) < remaining(low) ? window : low))
-  // Reaching the limit is its own fact: keep the window's real number instead of inventing 0% left.
-  const left = remaining(tightest)
+  if (usage?.status !== 'ok') return null
   const reached = usage.limitReached
+  const tightest = usage.windows.length ? usage.windows.reduce((low, window) => (remaining(window) < remaining(low) ? window : low)) : null
+  if (!tightest && !reached) return null
+  // The limit may be reached without an exhausted or known window.
+  const left = tightest ? remaining(tightest) : null
   return (
     <button
       type="button"
-      className={`limit-chip ${reached || left <= 20 ? 'low' : ''}`}
+      className={`limit-chip ${reached || (left !== null && left <= 20) ? 'low' : ''}`}
       title={[...usage.windows.map(windowLine), 'クリックで詳細'].join('\n')}
       onClick={() => setState({ settingsOpen: 'accounts' })}
     >
       <Gauge size={13} />
-      <span>{reached ? `Codex 上限到達 · ${tightest.label} 残り ${left}%` : `Codex ${tightest.label} 残り ${left}%`}</span>
+      <span>Codex{reached ? ' 上限到達' : ''}{tightest && `${reached ? ' ·' : ''} ${tightest.label} 残り ${left}%`}</span>
     </button>
   )
 }

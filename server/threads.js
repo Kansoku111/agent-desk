@@ -834,6 +834,9 @@ export class ThreadManager extends EventEmitter {
     if (provider === 'deepseek-official' && !accounts.deepseek.configured) {
       throw new Error('DeepSeek のモデルを使うには、設定で DeepSeek の API キーを登録してください。')
     }
+    if (provider === 'openscale' && !accounts.openscale?.configured) {
+      throw new Error('OpenScale を使うには、設定 → アカウントで API キーを登録してください。')
+    }
     if (provider === 'opencode-go' && !accounts.opencodeGo?.configured) {
       throw new Error('OpenCode Go のモデルを使うには、設定で OpenCode Go の API キーを登録してください。')
     }

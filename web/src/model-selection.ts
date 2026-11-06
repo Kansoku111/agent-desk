@@ -5,6 +5,7 @@ export function providerReady(server: AppState, provider: string) {
   if (provider === 'openai-codex') return server.accounts.chatgpt.signedIn
   if (provider === 'anthropic') return server.accounts.claude.configured
   if (provider === 'deepseek-official') return server.accounts.deepseek.configured
+  if (provider === 'openscale') return Boolean(server.accounts.openscale?.configured)
   if (provider === 'opencode-go') return Boolean(server.accounts.opencodeGo?.configured)
   if (provider === 'command-code' || provider === 'command-code-claude') return Boolean(server.accounts.commandCode?.configured)
   if (provider === 'local-llm') return Boolean(server.accounts.localLlm?.configured)
@@ -69,7 +70,7 @@ export function pickDefaultModel(server: AppState, current: string | null): stri
     for (const value of preferred) if (usable(value)) return value
     // The public Command Code inventory includes models outside the user's plan.
     // Require an explicit choice rather than silently selecting a potentially billed model.
-    return models.find((model) => !['command-code', 'command-code-claude'].includes(model.provider)
+    return models.find((model) => !['command-code', 'command-code-claude', 'openscale'].includes(model.provider)
       && providerReady(server, model.provider) && (allowRetired || !model.retired))?.value ?? null
   }
   return pick(false) ?? pick(true)

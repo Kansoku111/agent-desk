@@ -67,7 +67,7 @@ function ClaudeWorkspace({ current, choices, onDone }: {
 }
 
 function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hint }: {
-  provider: 'anthropic' | 'deepseek' | 'opencodeGo' | 'commandCode'
+  provider: 'anthropic' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'openscale'
   title: string
   description: string
   consoleUrl: string
@@ -119,7 +119,7 @@ function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hin
       } else if (result.check.status === 'valid') toast(`${title} の API キーを保存しました`, 'success')
       else if (result.check.status === 'unreachable') setWarning('キーは保存しましたが、確認のための接続ができませんでした。ネットワークを確認してください。')
       else if (result.check.status === 'unknown') setWarning(`キーは保存しましたが、確認で予期しない応答（${result.check.httpStatus}）がありました。`)
-      else if (result.check.status === 'unverified') setWarning('キーを保存しました。認証とプランはモデルの初回利用時に確認されます。')
+      else if (result.check.status === 'unverified') setWarning(provider === 'openscale' ? 'キーを保存しました。認証・契約・請求は OpenScale で確認してください。' : 'キーを保存しました。認証とプランはモデルの初回利用時に確認されます。')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -314,6 +314,14 @@ export function AccountsSettings() {
         consoleUrl="https://commandcode.ai/studio"
         placeholder="API キー"
         hint="Go は API 非対応。一覧には契約対象外モデルも含まれます。キー・プランと請求は Command Code で確認してください。"
+      />
+      <ApiKeyCard
+        provider="openscale"
+        title="OpenScale（任意）"
+        description="API キー（標準モデル）"
+        consoleUrl="https://app.openscale.so/app/keys"
+        placeholder="API キー"
+        hint="Lite は同時に1エージェントまで。複数タスクやサブエージェントの同時実行にご注意ください。キー・契約と請求は OpenScale で確認してください。"
       />
       <LocalLlmCard />
     </div>

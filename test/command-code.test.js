@@ -53,6 +53,25 @@ test('the two official routes share a key and keep ZDR opt-in', () => {
   assert.equal(planSettingsUpdate(structuredClone(DEFAULT_SETTINGS), { commandCodeZdr: true }, 0).effects.homePatch, true)
 })
 
+test('only explicitly identified Command Code vision models accept images', () => {
+  const models = [
+    ['deepseek/deepseek-v4.1-flash', 'chat'],
+    ['deepseek/deepseek-v4-flash-vision-exp', 'chat'],
+    ['deepseek/deepseek-v4-flash', 'chat'],
+    ['deepseek/deepseek-v4.1-flash-fast', 'chat'],
+    ['constructor', 'chat'],
+    ['deepseek/deepseek-v4.1-flash', 'messages'],
+  ].map(([id, endpoint]) => ({ id, endpoint, name: id, contextWindow: 200000 }))
+  const routes = commandCodeRoutes(models)
+  const chat = Object.fromEntries(routes['command-code'].models.map(({ id, input }) => [id, input]))
+  assert.deepEqual(chat['deepseek/deepseek-v4.1-flash'], ['text', 'image'])
+  assert.deepEqual(chat['deepseek/deepseek-v4-flash-vision-exp'], ['text', 'image'])
+  for (const id of ['deepseek/deepseek-v4-flash', 'deepseek/deepseek-v4.1-flash-fast', 'constructor']) assert.deepEqual(chat[id], ['text'])
+  assert.deepEqual(routes['command-code-claude'].models[0].input, ['text'])
+  const config = YAML.parse(homePatch({ commandCodeRoutes: routes })).find((row) => row.id === 'llm-pi-ai').config.providers
+  assert.deepEqual(config['command-code'].models[0].input, ['text', 'image'])
+})
+
 test('official model-specific effort levels use only Provider API-compatible values', () => {
   const models = [
     { id: 'deepseek/deepseek-v4.1-flash', endpoint: 'chat' },

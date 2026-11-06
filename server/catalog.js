@@ -8,6 +8,7 @@ export const PROVIDER_LABELS = {
   anthropic: 'Claude',
   'deepseek-official': 'DeepSeek',
   'opencode-go': 'OpenCode Go',
+  openscale: 'OpenScale',
   'command-code': 'Command Code',
   'command-code-claude': 'Command Code（Claude）',
   'local-llm': 'ローカル LLM',
@@ -42,7 +43,7 @@ function matchesSignature(signature, models) {
   if (!requirements || typeof requirements !== 'object') return true
   const matches = (name, provider) => typeof requirements[name] !== 'boolean'
     || models.some((model) => model.provider === provider) === requirements[name]
-  if (!matches('deepseek', 'deepseek-official') || !matches('opencodeGo', 'opencode-go')) return false
+  if (!matches('deepseek', 'deepseek-official') || !matches('opencodeGo', 'opencode-go') || !matches('openscale', 'openscale')) return false
   if (Array.isArray(requirements.opencodeGoModels)) {
     const actual = models.filter((model) => model.provider === 'opencode-go').map((model) => model.id).sort()
     // parseConfigOptions omits dated aliases from the UI catalog.

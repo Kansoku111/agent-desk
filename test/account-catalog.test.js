@@ -201,6 +201,20 @@ test('saving and removing an OpenCode Go key adds and removes its catalog models
   for (const id of ['glm-5.3', 'kimi-k3', 'qwen3.8-max']) assert.ok(ids.includes(id), ids.join(', '))
 })
 
+test('OpenScale key adds only the two standard models and removal clears them', { timeout: 60_000 }, async (t) => {
+  await keyRefreshesCatalog(t, {
+    provider: 'openscale', account: 'openscale', catalogProvider: 'openscale',
+    probe: 'https://api.openscale.so/v1/models', expectedCheck: 'unverified',
+    afterAdded: async ({ added, waitFor }) => {
+      const ids = ['deepseek/deepseek-v4.1-flash', 'z-ai/glm-5.3-flash']
+      assert.deepEqual(added.catalog.models.filter((model) => model.provider === 'openscale').map((model) => model.id).sort(), ids)
+      const state = await waitFor((item) => ids.every((id) => (item.catalog.effortsByModel[JSON.stringify(['openscale', id])] ?? []).some((entry) => entry.value === 'high')))
+      const expected = { 'deepseek/deepseek-v4.1-flash': ['low', 'high', 'max'], 'z-ai/glm-5.3-flash': ['low', 'high'] }
+      for (const id of ids) assert.deepEqual(state.catalog.effortsByModel[JSON.stringify(['openscale', id])].map((entry) => entry.value).filter(Boolean), expected[id])
+    },
+  })
+})
+
 test('Command Code saves an unverified key and loads both official protocol routes', { timeout: 60_000 }, async (t) => {
   const body = { data: [
     { id: 'provider/fixture', name: 'Fixture', context_length: 100000, supported_endpoints: ['/chat/completions'] },

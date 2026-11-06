@@ -16,6 +16,10 @@ const MAX_MODELS = 2000
 const MAX_CONTEXT = 100_000_000
 // Unknown models still need a finite value until the provider supplies a limit.
 const UNKNOWN_OUTPUT = 8192
+// The inventory does not declare modalities; enable only explicitly identified vision models.
+// https://commandcode.ai/blog/deepseek-v4-1-flash-is-live-with-6x-usage
+// https://commandcode.ai/blog/deepseek-v4-flash-vision-exp-is-available-on-all-plans
+const CHAT_IMAGE_MODELS = new Set(['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-flash-vision-exp'])
 const outputLimit = (value, context) => Number.isSafeInteger(value) && value > 0 && value <= context ? value : undefined
 
 function knownOutput(model) {
@@ -102,7 +106,8 @@ export function commandCodeRoutes(models, { zdr = false, root = COMMAND_CODE_ROO
         const levels = commandCodeEfforts(id, endpoint)
         return {
           id, name, contextWindow, maxTokens: Math.min(knownOutput(model), contextOutputBudget(contextWindow)),
-          input: ['text'], reasoningEfforts: levels.length ? Object.fromEntries(levels.map((level) => [level, level])) : false,
+          input: endpoint === 'chat' && CHAT_IMAGE_MODELS.has(id) ? ['text', 'image'] : ['text'],
+          reasoningEfforts: levels.length ? Object.fromEntries(levels.map((level) => [level, level])) : false,
         }
       }),
     }

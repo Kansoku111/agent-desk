@@ -14,7 +14,7 @@ import { codeStamp, uiBuild } from './code-stamp.js'
 import { ChatGptLogin } from './chatgpt-login.js'
 import { Checkpoints } from './checkpoints.js'
 import {
-  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF,
+  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF, OPENSCALE_REF,
 } from './credentials.js'
 import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch, writeChatWebPatch } from './dsh-config.js'
 import { UpdateChecker } from './update-checks.js'
@@ -189,6 +189,7 @@ async function accounts() {
     claudeAdmin: { configured: Boolean(snapshot.refs[ANTHROPIC_ADMIN_REF]), masked: maskSecret(snapshot.refs[ANTHROPIC_ADMIN_REF]) },
     deepseek: { configured: Boolean(snapshot.refs[DEEPSEEK_REF]), masked: maskSecret(snapshot.refs[DEEPSEEK_REF]) },
     opencodeGo: { configured: Boolean(snapshot.refs[OPENCODE_GO_REF]), masked: maskSecret(snapshot.refs[OPENCODE_GO_REF]) },
+    openscale: { configured: Boolean(snapshot.refs[OPENSCALE_REF]), masked: maskSecret(snapshot.refs[OPENSCALE_REF]) },
     commandCode: {
       configured: Boolean(snapshot.refs[COMMAND_CODE_REF]), masked: maskSecret(snapshot.refs[COMMAND_CODE_REF]),
       modelsCheckedAt: commandCodeModels.checkedAt, modelsFailed: commandCodeModels.failed, modelsSkipped: commandCodeModels.skipped,
@@ -371,6 +372,9 @@ const catalogSignature = async (result) => JSON.stringify({
   deepseek: (await accounts()).deepseek.configured,
   // OpenCode Go's route is in the home patch only while its key is saved.
   opencodeGo: (await accounts()).opencodeGo.configured,
+  openscale: (await accounts()).openscale.configured,
+  // Bump when the offered OpenScale levels change so cached efforts are relearned.
+  openscaleReasoningLearn: (await accounts()).openscale.configured ? 2 : undefined,
   opencodeGoModels: (await accounts()).opencodeGo.configured
     ? opencodeGoServed() ?? [...(await installedModels(openCodeFetched())).keys()].sort()
     : [],
@@ -418,6 +422,7 @@ async function applyHomePatch() {
     localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
     opencodeGo: (await accounts()).opencodeGo.configured,
     opencodeGoModels: opencodeGoServed(),
+    openscale: (await accounts()).openscale.configured,
     commandCodeRoutes: (await accounts()).commandCode.configured ? commandCodeRoutes(commandCodeModels.models, { zdr: settings.commandCodeZdr }) : {},
   })
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })

@@ -81,6 +81,12 @@ test('unknown or invalid durations never appear as zero-hour windows', () => {
   }
 })
 
+test('an explicit limit survives when no windows are reported', () => {
+  const usage = normalizeCodexRateLimits({ rateLimits: { limitId: 'codex', rateLimitReachedType: 'rate_limit_reached', primary: null, secondary: null } })
+  assert.equal(usage.limitReached, true)
+  assert.deepEqual(usage.windows, [])
+})
+
 test('a full read can clear old windows and metadata, unlike a sparse notification', async () => {
   let body = snapshot()
   const tracker = new ChatGptUsage({ rateLimits: async () => body })

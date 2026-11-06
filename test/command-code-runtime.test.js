@@ -15,6 +15,55 @@ import { AcpRuntime } from '../server/runtime.js'
 import { TOOL_MODE_CONFIG } from '../server/ptc.js'
 import { turnUsage } from '../server/usage.js'
 
+for (const modelId of ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-flash-vision-exp']) test('real DSH sends a DeepSeek image attachment to the Command Code chat endpoint (' + modelId + ')', { timeout: 90000 }, async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-image-'))
+  const paths = appPaths(home)
+  const workspace = path.join(home, 'workspace')
+  await fs.mkdir(paths.dshHome, { recursive: true })
+  await fs.mkdir(workspace)
+  const sharp = (await import('sharp')).default
+  const image = (await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ee2244' } }).png().toBuffer()).toString('base64')
+  const requests = []
+  const server = http.createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    requests.push({ url: req.url, body: JSON.parse(raw) })
+    const base = { id: 'mock', object: 'chat.completion.chunk', created: 0, model: modelId }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: 'fixture reply' }, finish_reason: null }] }) + '\n\n')
+    res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\n')
+    res.end('data: [DONE]\n\n')
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const root = 'http://127.0.0.1:' + server.address().port + '/provider'
+  const routes = commandCodeRoutes([{ id: modelId, name: 'Test', contextWindow: 32768, endpoint: 'chat' }], { root })
+  const rows = YAML.parse(homePatch({ commandCodeRoutes: routes }))
+  rows.find((row) => row.id === 'acp').config = { provider: 'command-code', model: modelId }
+  await fs.writeFile(paths.homePatch, YAML.stringify(rows))
+  await new CredentialStore(paths.credentials).setRef(COMMAND_CODE_REF, 'fixture-not-a-real-key')
+  const runtime = new AcpRuntime({ mode: 'read-only', paths, onUpdate: () => {}, onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
+  t.after(async () => {
+    await runtime.stop()
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+    assert.equal(path.dirname(home), os.tmpdir())
+    await fs.rm(home, { recursive: true, force: true })
+  })
+  await runtime.start()
+  const session = await runtime.newSession(workspace)
+  const result = await runtime.prompt(session.sessionId, [
+    { type: 'text', text: 'fixture image' },
+    { type: 'image', mimeType: 'image/png', data: image },
+  ])
+  assert.equal(result.stopReason, 'end_turn')
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].url, '/provider/v1/chat/completions')
+  assert.equal(requests[0].body.model, modelId)
+  const user = requests[0].body.messages.find((message) => message.role === 'user')
+  assert.ok(user?.content.some((part) => part.type === 'image_url' && part.image_url?.url === `data:image/png;base64,${image}`), 'image bytes and MIME reach the HTTP request')
+})
+
 for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'default', 'low', 'xhigh', 'max', ...(endpoint === 'chat' ? ['ling-low', 'ling-medium', 'ling-high', 'ling1019-low', 'ling1019-medium', 'ling1019-high'] : [])]) {
   test('real DSH uses the Command Code ' + endpoint + ' route with credentials and ZDR (' + mode + ')', { timeout: 90000 }, async (t) => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-runtime-'))

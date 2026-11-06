@@ -7,6 +7,7 @@ import YAML from 'yaml'
 import { writeText } from './json-file.js'
 import { ANTHROPIC_REF, OPENCODE_GO_REF } from './credentials.js'
 import { LOCAL_PROVIDER } from './local-llm.js'
+import { openscaleRoute } from './openscale.js'
 import { isModelId } from './model-catalog.js'
 import { SIWC_KEY_REF, SIWC_RESOURCE } from './siwc-client.js'
 import { childPrompt } from './teams-prompts.js'
@@ -171,7 +172,7 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  */
 export function homePatch({
   anthropicWorkspaceId = null, modelOverrides = {}, catalogModels = {},
-  subagents = [], subagentsEnabled = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null, commandCodeRoutes = {},
+  subagents = [], subagentsEnabled = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null, commandCodeRoutes = {}, openscale = false,
 } = {}) {
   // dsh's default (5 tries, 10 s at most) gives up within about 15 s, shorter
   // than the minute-long upstream hiccups ChatGPT's backend has.
@@ -217,6 +218,7 @@ export function homePatch({
           } } : {}),
           ...(localRoute ? { [LOCAL_PROVIDER]: localRoute } : {}),
           ...commandCodeRoutes,
+          ...(openscale ? { openscale: openscaleRoute() } : {}),
         },
       },
     },

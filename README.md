@@ -9,6 +9,7 @@ ChatGPT のサブスクリプション、Claude の API キー、この PC に�
 
 - **GPT（ChatGPT サブスク）:** Agent Desk の名前で公式「Sign in with ChatGPT」に接続し、公開 Responses API で GPT チャットと Web 検索を使います。旧接続のユーザーは再サインインが必要です。
 - **Claude・DeepSeek・OpenCode Go（API キー）:** 通常のタスクで Claude を選ぶときは Anthropic の API キー、DeepSeek と OpenCode Go（GLM・Kimi・Qwen などの定額制サブスクリプション）は任意で API キーを登録して使います。Claude Code（CL）とチームの Claude の子は、下の別の経路です。
+- **OpenScale:** 設定 → アカウントで API キーを登録すると、標準の DeepSeek V4.1 Flash と GLM 5.3 Flash を選べます。キーの保存時には認証や契約を検証しません。推論レベルは DeepSeek V4.1 Flash が Low / High / Max、GLM 5.3 Flash が Low / High です（OpenScale が受け付ける他のレベルは、実測で思考量の違いを確認できたものだけを出しています。[測定の記録](docs/investigations/openscale-reasoning-levels.md)）。TMのリーダー・子にも選べます。Lite はリーダーや他タスクを含め同時1エージェントまでで、アプリは同時数を制限しません。Fast は対象外です。請求は OpenScale で確認してください。
 - **Command Code:** GOAT など API 対応プランのキーで公式 Provider API を使えます（Go は API 非対応）。[設定と制約](docs/command-code.md)。
 - **Codex 風の画面:** ワークスペースごとのタスク、コマンドと差分の表示、承認カードを備えます。
 - **Codex（GP）:** CLの右のGPから、公式Codexを実行エンジンにしたタスクをチャットUIで使えます。通常GPTとは別経路で、既存のCodexサインインを使います。[使い方と対応範囲](docs/codex.md)。

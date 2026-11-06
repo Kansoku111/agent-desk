@@ -24,6 +24,7 @@ export const DEEPSEEK_REF = 'DEEPSEEK_API_KEY'
 export const OPENCODE_GO_REF = 'OPENCODE_API_KEY'
 // The official Command Code Provider API, shared by its protocol routes.
 export const COMMAND_CODE_REF = 'COMMAND_CODE_API_KEY'
+export const OPENSCALE_REF = 'OPENSCALE_API_KEY'
 // Only for a local server that asks for a key (server/local-llm.js).
 export const LOCAL_LLM_REF = 'LOCAL_LLM_API_KEY'
 

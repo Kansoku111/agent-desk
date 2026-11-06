@@ -7,7 +7,7 @@ import { TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 export const PREFIX = '[Agent Desk チーム]'
 
 /** Each provider's models in the model list (catalog). */
-export const CATALOG_PROVIDER = { gpt: 'openai-codex', codex: 'codex', claude: 'anthropic', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' }
+export const CATALOG_PROVIDER = { gpt: 'openai-codex', codex: 'codex', claude: 'anthropic', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', openscale: 'openscale', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' }
 /** How each provider's children run, as the leader reads it. */
 const PROVIDER_WHAT = {
   gpt: 'GPT on the user\'s ChatGPT subscription',
@@ -16,6 +16,7 @@ const PROVIDER_WHAT = {
   claudeApi: 'Claude through dsh on the user\'s Anthropic API key, billed per token (credits depend on their plan)',
   deepseek: 'DeepSeek, billed per token to the user\'s DeepSeek API key (low cost)',
   opencodeGo: 'open models (GLM, Kimi, DeepSeek, Qwen and others) on the user\'s OpenCode Go subscription, with 5-hour, weekly and monthly usage limits',
+  openscale: 'models through the user’s OpenScale API key and plan; Lite allows one agent at a time',
   commandCode: 'models through the user’s Command Code Provider API and plan',
   commandCodeClaude: 'Claude models through the user’s Command Code Provider API and plan',
   local: 'a model on the user\'s own model server',

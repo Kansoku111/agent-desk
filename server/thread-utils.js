@@ -118,6 +118,8 @@ export function describeError(error, thread, runtime) {
     message = provider === 'openai-codex'
       ? 'ChatGPT の認証に失敗しました。設定から再度サインインしてください。'
       : 'API キーの認証に失敗しました。設定でキーを確認してください。'
+  } else if (provider === 'openscale' && /\b402\b|insufficient.{0,20}(credit|balance)/i.test(raw)) {
+    message = 'OpenScale の残高または契約を確認してください。請求状況は OpenScale の画面で確認できます。'
   } else if (/subscription_sharing_usage_limit_exceeded/i.test(raw)) {
     message = SIWC_LIMIT_TEXT
   } else if (/\b429\b|rate.?limit|usage limit|quota/i.test(raw)) {

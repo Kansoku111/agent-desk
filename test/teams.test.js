@@ -3080,6 +3080,7 @@ for (const [provider, catalogProvider, model, effort] of [
   ['claudeApi', 'anthropic', 'claude-haiku-5-5', 'low'],
   ['deepseek', 'deepseek-official', 'deepseek-v4-flash', 'medium'],
   ['opencodeGo', 'opencode-go', 'glm-5.3', null],
+  ['openscale', 'openscale', 'deepseek/deepseek-v4.1-flash', 'low'],
   ['commandCode', 'command-code', 'deepseek/flash', null],
   ['commandCodeClaude', 'command-code-claude', 'claude-test', null],
   ['local', 'local-llm', 'org/qwen:8b', 'low'],
@@ -4144,4 +4145,17 @@ test('eco accepts a Codex parent without changing its model route', async (t) =>
   assert.equal(parent.model, 'codex-model')
   assert.equal(parent.effort, 'low')
   assert.equal(codex.get(parent.id).mcpServers['agent-team'].env.AGENT_DESK_EXECUTION, '1')
+})
+
+test('OpenScale child choices retain model and effort through team creation and spawn', async (t) => {
+  const model = 'z-ai/glm-5.3-flash'
+  const config = mergeTeamConfig({}, { openscale: { enabled: true, low: { model, effort: 'low' } }, freeModels: [{ provider: 'openscale', model, effort: 'high' }] })
+  assert.equal(teamConfig(JSON.parse(JSON.stringify(config))).openscale.low.model, model)
+  assert.equal(config.freeModels[0].effort, 'high')
+  const f = await setup(t, { openscale: config.openscale })
+  await f.tool('spawn', { title: 'child', task: 'work', provider: 'openscale', tier: 'low' })
+  const child = f.team.children[0]
+  assert.equal(child.provider, 'openscale')
+  assert.equal(f.threads.threads.get(child.taskId).model, JSON.stringify(['openscale', model]))
+  assert.equal(f.threads.threads.get(child.taskId).effort, 'low')
 })

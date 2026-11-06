@@ -7,15 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-11-06
+
+### Added
+
+- Add Codex (GP) chat tasks and workflow integration using the separately signed-in Codex account; see [Codex](docs/codex.md) for scope and limitations.
+- Add OpenScale standard DeepSeek V4.1 Flash and GLM 5.3 Flash with explicit API-key configuration and model-specific reasoning levels. Authentication and plan eligibility are not verified when saving the key; see [README](README.md).
+- Enable image input for the two explicitly supported Command Code DeepSeek models in ordinary tasks; availability depends on the plan and upstream provider.
+
 ### Changed
 
 - Updated the bundled DeepSeek Harness (`@deepseek-ai/dsh` and `@deepseek-ai/dsh-atomic-write`) from 0.2.1-rc.5 to 0.2.2-rc.1 (bundled pi-ai 1.4.0 → 1.5.0); refreshed dependency notices. Followed dsh's changes: per-task PTC switching now registers the native or PTC tool executor instead of the removed `presentAs`, the steering patch reads the model selection from `agent.model.current()`, the PTC SDK and syntax-error hooks target `@deepseek-ai/dsh-tool-executor-ptc` and the new `vm-script` mode, the goal-tool hook only adds argument guidance (dsh now ignores unused `update_goal` fields), and OpenCode Go registry models match pi-ai's new endpoints so newly listed models are still added.
 - Connect the standard browser, desktop, history and image MCP servers concurrently when a session uses only those servers. Preserve sequential startup for other server sets and await teardown of started connections on failure.
 - Extend opt-in private GPT diagnostics with credential, HTTP, text-receive and ACP notification-return timings. Record missing observations explicitly without treating notification return as successful UI delivery.
 
+- Reduce GPT request latency and shorten PTC read results while preserving access to the full content.
+
 ### Fixed
 
 - Preserve useful PTC syntax-error locations in long programs containing Japanese, without inventing columns for unsupported character widths.
+- Keep GP model choices and drafts consistent, report GPT output speed accurately, clarify Codex usage limits, and retry update downloads.
+- Preserve selected team models and improve team configuration and Command Code runtime handling.
 
 ## [0.1.10] - 2026-11-05
 

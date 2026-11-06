@@ -12,13 +12,14 @@ import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { openProjectDialog } from './ProjectDialog'
 import { useWheelSelect } from './useWheelSelect'
 
-export const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'command-code', 'command-code-claude', 'local-llm']
+export const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'openscale', 'command-code', 'command-code-claude', 'local-llm']
 export const providerHeading = (server: AppState, provider: string) => provider === 'anthropic' ? 'Claude（API）' : server.catalog.providers[provider] ?? provider
 export const PROVIDER_NOTE: Record<string, string> = {
   'openai-codex': 'ChatGPT サブスクリプション',
   anthropic: 'Anthropic API キー',
   'deepseek-official': 'DeepSeek API キー',
   'opencode-go': 'OpenCode Go サブスクリプション',
+  openscale: '標準モード・契約を確認',
   'command-code': 'API・プラン対象を確認',
   'command-code-claude': 'API・プラン対象を確認',
   'local-llm': 'このネットワークのサーバー',
@@ -28,6 +29,7 @@ function modelName(server: AppState | null, value: string | null) {
   if (!value) return null
   const model = server?.catalog.models.find((entry) => entry.value === value)
   if (!model) return null
+  if (model.provider === 'openscale') return `OpenScale / ${model.name}`
   return ['command-code', 'command-code-claude'].includes(model.provider) ? `Command Code / ${model.name}` : model.name
 }
 

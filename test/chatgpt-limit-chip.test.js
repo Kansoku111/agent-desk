@@ -45,6 +45,25 @@ test('a chip that is not at the limit shows only the window number', () => {
   assert.doesNotMatch(chip.props.className, /\blow\b/)
 })
 
+test('a reached limit remains visible when no window is available', () => {
+  state.server.chatgptUsage = usage(true, [])
+  const chip = ChatGptLimitChip()
+  assert.ok(chip)
+  assert.equal(chipLabel(chip), 'Codex 上限到達')
+  assert.match(chip.props.className, /\blow\b/)
+
+  state.server.chatgptUsage = usage(false, [])
+  assert.equal(ChatGptLimitChip(), null)
+})
+
+test('the card distinguishes a reached limit from missing window information', () => {
+  state.server.chatgptUsage = usage(true, [])
+  const card = ChatGptLimits()
+  assert.match(text(card), /Codex の上限に達しています。/)
+  assert.match(text(card), /残量の情報がありません。/)
+  assert.doesNotMatch(text(card), /このプランでは上限の情報がありません。/)
+})
+
 test('a limit reached by an exhausted window still shows its 0%', () => {
   state.server.chatgptUsage = usage(true, [limitWindow('5時間', 18_000, 100)])
   const chip = ChatGptLimitChip()
