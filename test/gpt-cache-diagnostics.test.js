@@ -114,6 +114,33 @@ test('raw usage preserves reported values, explicit zero, missing and invalid de
   assert.doesNotMatch(JSON.stringify(records), /SECRET/)
 })
 
+test('diagnostics distinguish requested and effective reasoning context without retaining arbitrary values', async () => {
+  const { diagnostics, records } = capture()
+  const contexts = [undefined, 'auto', 'current_turn', 'all_turns', 'SECRET_CONTEXT', null]
+  const parallel = [undefined, false, true, 'SECRET_PARALLEL', null, 0]
+  const effective = ['all_turns', 'current_turn', undefined, 'auto', 'SECRET_EFFECTIVE', null]
+  for (let i = 0; i < contexts.length; i++) {
+    const body = payload()
+    body.reasoning.context = contexts[i]
+    body.parallel_tool_calls = parallel[i]
+    const before = structuredClone(body)
+    const observer = diagnostics.begin(body, 'SECRET_SESSION')
+    observer.event({ type: 'response.completed', response: { reasoning: { context: effective[i] } } })
+    observer.finish('completed')
+    assert.deepEqual(body, before)
+  }
+  const interrupted = diagnostics.begin(payload(), 'SECRET_SESSION')
+  interrupted.event({ type: 'response.created', response: { reasoning: { context: 'all_turns' } } })
+  interrupted.finish('interrupted')
+  await diagnostics.flush()
+  const requests = records.filter(r => r.event === 'request')
+  const results = records.filter(r => r.event === 'result')
+  assert.deepEqual(requests.slice(0, 6).map(r => r.reasoningContext), ['absent', 'auto', 'current_turn', 'all_turns', 'invalid', 'invalid'])
+  assert.deepEqual(requests.slice(0, 6).map(r => r.parallelToolCalls), ['absent', false, true, 'invalid', 'invalid', 'invalid'])
+  assert.deepEqual(results.map(r => r.reasoningContext), ['all_turns', 'current_turn', 'absent', 'invalid', 'invalid', 'invalid', 'unobserved'])
+  assert.doesNotMatch(JSON.stringify(records), /SECRET/)
+})
+
 test('text input, array input and absent input are not reported as the same prefix', async () => {
   const { diagnostics, records } = capture()
   for (const input of ['SECRET_ONE', 'SECRET_TWO', [], undefined, null]) diagnostics.begin({ input }, 'session').finish('completed')
@@ -258,7 +285,9 @@ test('process configuration is OFF by default and explicit local opt-in creates 
 
 test('wire boundary captures the normalized payload and the same attempt raw SSE usage', async () => {
   const { diagnostics, records } = capture()
-  const bytes = 'data: ' + JSON.stringify(terminal({ input_tokens: 100, output_tokens: 3, input_tokens_details: { cached_tokens: 80 }, output_tokens_details: { reasoning_tokens: 1 } })) + '\n\n'
+  const completed = terminal({ input_tokens: 100, output_tokens: 3, input_tokens_details: { cached_tokens: 80 }, output_tokens_details: { reasoning_tokens: 1 } })
+  completed.response.reasoning = { context: 'all_turns' }
+  const bytes = 'data: ' + JSON.stringify(completed) + '\n\n'
   const observedBodies = []
   let fingerprintedBody
   const options = withSiwc(model, { sessionId: 'SECRET_SESSION', onPayload: body => ({ ...body, temperature: 2 }) }, {
@@ -275,6 +304,8 @@ test('wire boundary captures the normalized payload and the same attempt raw SSE
   assert.equal(records[0].event, 'request')
   assert.equal(records[0].groupSource, 'session')
   assert.equal(records[1].id, records[0].id)
+  assert.equal(records[0].reasoningContext, 'absent')
+  assert.equal(records[1].reasoningContext, 'all_turns')
   assert.deepEqual(records[1].usage.cacheRead, { state: 'value', value: 80 })
   assert.equal(records[1].outcome, 'completed')
   assert.equal(observedBodies[0].temperature, undefined)

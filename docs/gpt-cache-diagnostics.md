@@ -28,6 +28,10 @@ usageの個別項目は、正数の `value`、明示0の `zero`、項目なし�
 
 `request` には固定の経路名 `official_responses`、実送信JSONの `reasoningEffort` と `serviceTier` も記録します。値は許可リスト内のものだけで、未指定は `absent`、想定外の値は `invalid` です。SIWCで削除されるservice tierは `absent` になり、上流が実際に適用した優先度までは分かりません。
 
+`request.reasoningContext` は推論履歴の指定（`auto`・`current_turn`・`all_turns`）、`request.parallelToolCalls` はツールの並列呼出指定（boolean）です。どちらも未指定は `absent`、想定外の値は `invalid` です。Codexとのモック比較で送信指定の差が見つかったため、effortと別に観測します。指定を書き換える機能ではありません。
+
+`result.reasoningContext` は終端応答の `reasoning.context` にある実適用値（`current_turn`・`all_turns`）です。項目が無ければ `absent`、想定外の値は `invalid`、終端未取得は `unobserved` です。要求が未指定でも実適用値は返り得るため、両者を同じ値とみなしません。過去のログにこの項目が無い場合は未記録であり、特定のmodeが適用された証拠には使えません。[公式の推論履歴仕様](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-across-calls)も、未指定時はモデル既定を使い、応答で実適用値を確認するよう説明しています。
+
 `result.transport` は応答を受け取った通信路で、`websocket` か `http` です。WebSocketから切り替えた試行は `http` になります。WebSocketの `headersMs` は最初のイベントを受けた時点で、HTTPのレスポンスヘッダーとは意味が異なるため、通信路をまたぐ比較には `terminalMs` か `firstTextMs` を使ってください。
 
 `result.startedAt` は試行観測開始の壁時計時刻です。`result.timing` は指紋記録直後・認証情報の取得前を起点とする単調時計の経過ミリ秒で、未到達の地点は `null` です。

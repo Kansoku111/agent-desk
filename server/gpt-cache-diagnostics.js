@@ -72,6 +72,7 @@ function responseObserver(id, lifecycle, record, now) {
   let terminal = null
   let transportUsed = 'http'
   let usage = { ...usageOf(null), state: 'unobserved' }
+  let reasoningContext = 'unobserved'
   return {
     mark,
     transport(kind) {
@@ -88,12 +89,16 @@ function responseObserver(id, lifecycle, record, now) {
       mark('terminalMs')
       terminal = event.type
       usage = usageOf(event.response)
+      const context = event.response?.reasoning?.context
+      // An omitted request uses a model default; only the terminal response
+      // can tell us which reasoning history the service actually rendered.
+      reasoningContext = context === undefined ? 'absent' : ['current_turn', 'all_turns'].includes(context) ? context : 'invalid'
     },
     finish(outcome, httpStatus) {
       if (lifecycle.finished) return
       mark('finishedMs')
       lifecycle.finished = true
-      record({ event: 'result', id, startedAt, timing, transport: transportUsed, outcome: OUTCOMES.has(outcome) ? outcome : 'unknown', ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), terminal, usage })
+      record({ event: 'result', id, startedAt, timing, transport: transportUsed, outcome: OUTCOMES.has(outcome) ? outcome : 'unknown', ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), terminal, usage, reasoningContext })
     },
   }
 }
@@ -188,7 +193,11 @@ export function createCacheDiagnostics({ directory, write, onStop = notifyStop, 
       const reasoningEffort = effort === undefined ? 'absent' : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) ? effort : 'invalid'
       const tier = payload.service_tier
       const serviceTier = tier === undefined ? 'absent' : ['auto', 'default', 'flex', 'priority'].includes(tier) ? tier : 'invalid'
-      record({ event: 'request', id, route: 'official_responses', reasoningEffort, serviceTier, series: group, groupSource, cacheKeyPresent: Object.hasOwn(payload, 'prompt_cache_key'), inputKind, inputItems: input.length, fingerprintComplete: complete, fingerprints, prefix })
+      const context = payload.reasoning?.context
+      const reasoningContext = context === undefined ? 'absent' : ['auto', 'current_turn', 'all_turns'].includes(context) ? context : 'invalid'
+      const parallel = payload.parallel_tool_calls
+      const parallelToolCalls = parallel === undefined ? 'absent' : typeof parallel === 'boolean' ? parallel : 'invalid'
+      record({ event: 'request', id, route: 'official_responses', reasoningEffort, reasoningContext, parallelToolCalls, serviceTier, series: group, groupSource, cacheKeyPresent: Object.hasOwn(payload, 'prompt_cache_key'), inputKind, inputItems: input.length, fingerprintComplete: complete, fingerprints, prefix })
       return responseObserver(id, lifecycle, record, now)
     },
     beginDelivery(sessionId) {
