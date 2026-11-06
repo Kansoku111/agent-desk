@@ -35,9 +35,11 @@ export function observeOutputSpeed(record, frame) {
     observeCache(delivery, 'mark', 'lastTextMs')
   }
   if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') meter.push(chunk.text)
+  else if (chunk?.type === 'usage') meter.usage(chunk.usage?.outputTokens)
   else if (chunk?.type === 'finish') meter.pause()
   else if (chunk?.type === 'tool-call-delta'
-    || (chunk?.type === 'block-start' && chunk.block?.type === 'tool-call')) meter.pause({ discard: true })
+    || (chunk?.type === 'block-start' && chunk.blockType === 'tool-call')) meter.pause({ discard: true })
+  else if (chunk?.type === 'block-start') meter.startBlock()
 }
 
 export async function finishOutputSpeed(record) {

@@ -99,6 +99,21 @@ test('cancel pauses immediately and ignores late streaming metadata', async (t) 
   assert.equal(s.active.turn.outputSpeed.tokensPerSecond, 25)
 })
 
+test('a billed-output basis survives into the saved turn; an unknown basis does not', async (t) => {
+  const f = await fixture(t)
+  await f.manager.send(f.thread.id, { text: 'test' })
+  await f.started.promise
+  const active = f.manager.active.get(f.thread.id)
+  const sessionId = f.manager.threads.get(f.thread.id).sessionId
+  f.manager.onUpdate(sessionId, metric({ tokensPerSecond: 20, state: 'streaming', estimated: true, basis: 'something-else' }))
+  assert.deepEqual(active.turn.outputSpeed, { tokensPerSecond: 20, state: 'streaming', estimated: true })
+  f.manager.onUpdate(sessionId, metric({ tokensPerSecond: 20, state: 'done', estimated: true, basis: 'usage' }))
+  f.finish.resolve()
+  await active.done
+  await f.manager.shutdown()
+  assert.deepEqual((await f.disk()).turns.at(-1).outputSpeed, { tokensPerSecond: 20, state: 'done', estimated: true, basis: 'usage' })
+})
+
 test('committed ACP text is not a live stream and never acquires a fabricated speed', async (t) => {
   const f = await fixture(t)
   await f.manager.send(f.thread.id, { text: 'test' })

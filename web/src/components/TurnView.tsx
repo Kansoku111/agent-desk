@@ -301,12 +301,14 @@ function FileChanges({ turn, workspace }: { turn: Turn; workspace: string }) {
 function OutputSpeed({ speed }: { speed: Turn['outputSpeed'] }) {
   if (!speed || speed.state === 'paused' || !Number.isFinite(speed.tokensPerSecond) || speed.tokensPerSecond <= 0) return null
   const state = speed.state
-  const detail = 'この応答の平均出力速度（本文・受信できる思考から推定）'
+  const detail = speed.basis === 'usage'
+    ? 'この応答の生成速度（課金された出力トークン数 ÷ 最初の受信から完了までの時間）'
+    : '現在の思考または本文ブロックの平均出力速度（受信した文字数から推定）'
   return (
     <span
       className={`output-speed ${state}`}
       title={`${detail}。通信のまとめ送りやモデルのトークン分割により誤差があります。`}
-      aria-label={`この応答の平均推定出力速度 毎秒${speed.tokensPerSecond}トークン`}
+      aria-label={`${speed.basis === 'usage' ? 'この応答の生成速度' : '推定出力速度'} 毎秒${speed.tokensPerSecond}トークン`}
     >
       ≈ {speed.tokensPerSecond.toLocaleString('en-US', { maximumFractionDigits: 1 })} t/s
     </span>

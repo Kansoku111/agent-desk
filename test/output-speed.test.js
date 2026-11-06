@@ -123,3 +123,75 @@ test('invalid/empty chunks do not start timers', (t) => {
   for (const value of ['', null, undefined, {}, 42]) f.meter.push(value)
   assert.equal(f.meter.timer, null)
 })
+
+// Shape of a real GPT-6.1 Sol response: short thinking summaries separated by
+// long silent hidden thinking, then a short text. It once displayed "0.1 t/s"
+// while the model was actually generating at about 20 t/s.
+function replaySolResponse(f, onTick = () => {}) {
+  f.meter.start()
+  f.at(0); f.meter.startBlock()
+  f.at(15_000); f.meter.push('**Assessing '); f.meter.push('arithmetic')
+  f.at(24_000); f.meter.push(' results**'); f.meter.tick(); onTick()
+  f.at(24_100); f.meter.startBlock()
+  f.at(38_000); f.meter.tick(); onTick()
+  f.meter.push('**Appending '); f.at(39_000); f.meter.push('ablation experiment results**'); f.meter.tick(); onTick()
+  f.at(47_900); f.meter.startBlock()
+}
+
+test('short thinking summaries split by hidden thinking never show a false near-zero speed', (t) => {
+  const f = fixture(t)
+  replaySolResponse(f, () => assert.equal(f.meter.published, null))
+  assert.equal(f.changes.filter(Boolean).length, 0)
+})
+
+test('text after hidden thinking is timed from its own block, not the silent thinking', (t) => {
+  const f = fixture(t)
+  replaySolResponse(f)
+  f.at(48_000); f.meter.push(text)
+  f.at(49_000); f.meter.push(text); f.meter.tick()
+  assert.equal(f.last().tokensPerSecond, 56)
+})
+
+test('the settled speed uses billed output over the receive span, including hidden thinking', (t) => {
+  const f = fixture(t)
+  replaySolResponse(f)
+  f.at(53_500); f.meter.usage(1227); f.meter.pause(); f.meter.finish()
+  assert.deepEqual(f.last(), { tokensPerSecond: 22.9, state: 'done', estimated: true, basis: 'usage' })
+})
+
+test('a response with no visible text can still settle from billed output', (t) => {
+  const f = fixture(t)
+  f.meter.start(); f.meter.startBlock()
+  f.at(20_000); f.meter.usage(400); f.meter.pause(); f.meter.finish()
+  assert.deepEqual(f.last(), { tokensPerSecond: 20, state: 'done', estimated: true, basis: 'usage' })
+})
+
+test('a sub-second buffered response is not turned into a huge billed rate', (t) => {
+  const f = fixture(t)
+  f.meter.start(); f.meter.startBlock()
+  f.at(100); f.meter.usage(100_000); f.meter.pause(); f.meter.finish()
+  assert.equal(f.changes.filter(Boolean).length, 0)
+})
+
+for (const output of [0, -1, NaN, undefined]) test(`unusable billed output ${output} keeps the visible-text average`, (t) => {
+  const f = fixture(t)
+  f.meter.start(); f.meter.push(text)
+  f.at(1000); f.meter.push(text); f.meter.usage(output); f.meter.pause(); f.meter.finish()
+  assert.deepEqual(f.last(), { tokensPerSecond: 56, state: 'done', estimated: true })
+})
+
+test('a too-small visible sample settles to nothing without billed output', (t) => {
+  const f = fixture(t)
+  f.meter.start(); f.meter.push('abcd')
+  f.at(5000); f.meter.push('abcd'); f.meter.tick(); f.meter.pause(); f.meter.finish()
+  assert.equal(f.changes.filter(Boolean).length, 0)
+})
+
+test('billed output from a discarded or earlier response does not reach the final speed', (t) => {
+  const f = fixture(t)
+  f.meter.start(); f.meter.startBlock()
+  f.at(10_000); f.meter.usage(5000); f.meter.pause()
+  f.at(20_000); f.meter.start(); f.meter.startBlock()
+  f.at(21_000); f.meter.pause({ discard: true }); f.meter.usage(9000); f.meter.finish()
+  assert.equal(f.changes.filter(Boolean).length, 0)
+})

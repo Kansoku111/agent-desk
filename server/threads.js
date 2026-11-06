@@ -1491,7 +1491,7 @@ export class ThreadManager extends EventEmitter {
         if (!Number.isFinite(speed?.tokensPerSecond) || speed.tokensPerSecond <= 0
           || speed.estimated !== true || !['streaming', 'paused', 'done'].includes(speed.state)) return
         if (active.cancelled && speed.state === 'streaming') return
-        turn.outputSpeed = { tokensPerSecond: speed.tokensPerSecond, state: speed.state, estimated: true }
+        turn.outputSpeed = { tokensPerSecond: speed.tokensPerSecond, state: speed.state, estimated: true, ...(speed.basis === 'usage' ? { basis: 'usage' } : {}) }
       }
       this.#publishSpeed(threadId, turn)
       return // Empty carrier updates must never create transcript items.

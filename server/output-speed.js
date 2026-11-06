@@ -1,7 +1,12 @@
-// Approximate received text throughput, never a provider decoding benchmark.
+// Live: approximate received text throughput. Settled: billed output over the
+// receive span when the provider reports it. Never a provider decoding benchmark.
 export const OUTPUT_SPEED_META = 'agentDesk/outputSpeed'
 export const SPEED_INTERVAL_MS = 300
 const MIN_SPAN_MS = 1000
+// GPT thinking summaries are one short heading (22-77 characters, about 5-19
+// tokens, in real GPT-6.1 Sol logs) after long hidden thinking. So few tokens
+// over that silence read as "0.1 t/s" while the model is generating at 20+ t/s.
+const MIN_VISIBLE_TOKENS = 25
 
 /** Additive even when a surrogate pair is split between chunks. */
 export function estimateOutputTokens(text) {
@@ -25,6 +30,9 @@ export class OutputSpeedMeter {
     this.lastAt = null
     this.tokens = 0
     this.lastRate = null
+    this.lastBasis = null
+    this.responseAt = null
+    this.billedRate = null
   }
 
   start() {
@@ -34,6 +42,9 @@ export class OutputSpeedMeter {
     this.firstAt = this.lastAt = null
     this.tokens = 0
     this.lastRate = null
+    this.lastBasis = null
+    this.responseAt = null
+    this.billedRate = null
     this.state = 'streaming'
     this.#publish(null, 'streaming')
   }
@@ -42,6 +53,7 @@ export class OutputSpeedMeter {
     if (this.state === 'done' || typeof text !== 'string' || !text.length) return
     if (this.state !== 'streaming') this.start()
     const now = this.now()
+    this.responseAt ??= now
     // The first batch has no observable generation interval; exclude it.
     if (this.firstAt === null) this.firstAt = now
     else this.tokens += estimateOutputTokens(text)
@@ -52,9 +64,30 @@ export class OutputSpeedMeter {
     }
   }
 
+  /**
+   * Hidden thinking happens between blocks, so the live window restarts at each
+   * one. Silence inside a block (network buffering, slow generation) still counts.
+   */
+  startBlock() {
+    if (this.state === 'done') return
+    if (this.state !== 'streaming') this.start()
+    this.responseAt ??= this.now()
+    this.firstAt = this.lastAt = null
+    this.tokens = 0
+    this.#publish(null, 'streaming')
+  }
+
+  /** Billed output includes hidden thinking and tool arguments, which text cannot show. */
+  usage(outputTokens) {
+    if (this.state !== 'streaming' || this.responseAt === null) return
+    if (!Number.isFinite(outputTokens) || outputTokens <= 0) return
+    const span = this.now() - this.responseAt
+    if (span >= MIN_SPAN_MS) this.billedRate = outputTokens * 1000 / span
+  }
+
   #rate(until) {
     // Eligibility is based on actual receive times, not a timer aging a burst.
-    if (this.firstAt === null || this.lastAt - this.firstAt < MIN_SPAN_MS) return null
+    if (this.firstAt === null || this.lastAt - this.firstAt < MIN_SPAN_MS || this.tokens < MIN_VISIBLE_TOKENS) return null
     return this.tokens * 1000 / (until - this.firstAt)
   }
 
@@ -67,8 +100,11 @@ export class OutputSpeedMeter {
 
   pause({ discard = false } = {}) {
     if (this.state === 'done') return
-    if (this.state === 'streaming') this.lastRate = this.#rate(this.lastAt)
-    if (discard) this.lastRate = null
+    if (this.state === 'streaming') {
+      this.lastRate = this.billedRate ?? this.#rate(this.lastAt)
+      this.lastBasis = this.billedRate === null ? null : 'usage'
+    }
+    if (discard) this.lastRate = this.lastBasis = null
     clearInterval(this.timer)
     this.timer = null
     this.state = 'paused'
@@ -79,12 +115,12 @@ export class OutputSpeedMeter {
     if (this.state === 'done') return
     this.pause()
     this.state = 'done'
-    this.#publish(this.lastRate, 'done')
+    this.#publish(this.lastRate, 'done', this.lastBasis)
   }
 
-  #publish(rate, state) {
+  #publish(rate, state, basis = null) {
     const snapshot = Number.isFinite(rate) && rate > 0
-      ? { tokensPerSecond: Math.max(0.1, Math.round(rate * 10) / 10), state, estimated: true } : null
+      ? { tokensPerSecond: Math.max(0.1, Math.round(rate * 10) / 10), state, estimated: true, ...(basis ? { basis } : {}) } : null
     if (JSON.stringify(snapshot) === JSON.stringify(this.published)) return
     this.published = snapshot
     this.onChange(snapshot)

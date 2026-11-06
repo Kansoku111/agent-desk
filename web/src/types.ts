@@ -328,6 +328,8 @@ export interface OutputSpeed {
   tokensPerSecond: number
   state: 'streaming' | 'paused' | 'done'
   estimated: true
+  /** Set when the settled value came from the provider's billed output tokens. */
+  basis?: 'usage'
 }
 
 export interface Turn {

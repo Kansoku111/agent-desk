@@ -165,7 +165,8 @@ async function mockServer(reply, streamDelayMs = 0) {
 test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-local-llm-'))
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-local-llm-ws-'))
-  const mock = await mockServer('ローカルからの返事', 180)
+  // Long enough for the live speed readout, which stays hidden below 25 visible tokens.
+  const mock = await mockServer('ローカルからの返事です。ストリーミング中の速度表示を確かめるために、少し長めの本文を返します。', 60)
   const hook = path.join(home, 'offline-fetch.mjs')
   // Only the mock server is reachable from the app server; dsh talks to it directly.
   await fs.writeFile(hook, `const real = globalThis.fetch; globalThis.fetch = async (url, init) => {
@@ -252,6 +253,7 @@ test('a task runs on a local model end to end', { timeout: 90_000 }, async (t) =
   const speed = done.turns.at(-1).outputSpeed
   assert.equal(speed.state, 'done')
   assert.equal(speed.estimated, true)
+  assert.equal(speed.basis, 'usage', 'the settled speed comes from the billed output reported through dsh')
   assert.ok(speed.tokensPerSecond > 0 && Number.isFinite(speed.tokensPerSecond))
   const chat = mock.requests.find((entry) => entry.url === '/v1/chat/completions')
   assert.equal(chat.headers.authorization, 'Bearer local')
