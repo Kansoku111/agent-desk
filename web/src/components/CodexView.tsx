@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, FolderOpen, Loader2, PanelLeftOpen, Paperclip, Square, X } from 'lucide-react'
 import { act, isImageAttachment, isTouch, loadCodexPermissions, request, setState, toast, uploadAttachment, upsertCodexTask, useStore } from '../store'
-import type { Attachment, CodexModel, CodexTaskSummary } from '../types'
+import type { Attachment, CodexTaskSummary } from '../types'
+import { getDraft, useDraft, useImeField } from '../drafts'
 import { workspaceLabel } from '../util'
 import { TurnView } from './TurnView'
 import { OpenInMenu } from './ThreadView'
@@ -18,15 +19,16 @@ export function CodexView({ taskId }: { taskId: string }) {
   const teamPanel = useStore((state) => state.teamPanel)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
-  const [models, setModels] = useState<CodexModel[]>([])
-  const [text, setText] = useState('')
+  const draftKey = `codex:${taskId}`
+  const [text, setText] = useDraft(draftKey)
+  const ime = useImeField()
   const [images, setImages] = useState<Attachment[]>([])
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const { scroller, stick, showJump, onScroll } = useConversationScroll(taskId, Boolean(task), turns)
-  useEffect(() => { void request<{ models: CodexModel[] }>('codex.models').then((result) => setModels(result.models)).catch(() => {}) }, [])
-  const choices = models.length ? models : initialModels ?? []
+  useEffect(() => { void request('codex.models').catch(() => {}) }, [])
+  const choices = initialModels ?? []
   if (!task) return <div className="main-empty">タスクが見つかりません</div>
   const working = task.status === 'running'
   const teamChild = team?.children.find((entry) => entry.kind === 'codex' && entry.taskId === taskId)
@@ -35,15 +37,15 @@ export function CodexView({ taskId }: { taskId: string }) {
     if (result) upsertCodexTask(result.task)
   }
   const send = async () => {
-    if (busy || uploading || (!text.trim() && !images.length)) return
-    const sentText = text, sentImages = images
+    const sentText = getDraft(draftKey), sentImages = images
+    if (busy || uploading || (!sentText.trim() && !sentImages.length)) return
     setBusy(true)
     const child = team?.children.find((entry) => entry.kind === 'codex' && entry.taskId === taskId)
     const result = child
       ? await act('team.message', { teamId: team!.id, childId: child.id, text: sentText.trim(), images: sentImages.map(({ file, mimeType, name }) => ({ file, mimeType, name })) })
       : await act('codex.task.send', { taskId, text: sentText.trim(), images: sentImages.map(({ file, mimeType, name }) => ({ file, mimeType, name })) })
     setBusy(false)
-    if (result) { setText((current) => current === sentText ? '' : current); setImages((current) => current === sentImages ? [] : current); stick.current = true }
+    if (result) { if (getDraft(draftKey) === sentText) setText(''); setImages((current) => current === sentImages ? [] : current); stick.current = true }
   }
   const addFiles = async (files: File[]) => {
     if (teamChild) return
@@ -80,13 +82,13 @@ export function CodexView({ taskId }: { taskId: string }) {
       {showJump && <button type="button" className="jump terminal-chat-jump" aria-label="最新へ移動" onClick={() => scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' })}><ArrowDown size={15} /></button>}
     </div><div className="composer">
       {images.length > 0 && <div className="attachments">{images.map((image) => <div className="attachment" key={image.file}><img src={image.previewUrl} alt={image.name} /><button type="button" className="attachment-remove" aria-label="添付を外す" onClick={() => setImages((current) => current.filter((entry) => entry.file !== image.file))}><X size={12} /></button></div>)}</div>}
-      <textarea rows={2} value={text} aria-label="メッセージ" placeholder={working ? '追加指示を入力…' : 'メッセージを入力…'} onChange={(event) => setText(event.target.value)} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void addFiles([...event.clipboardData.files]) } }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !isTouch()) { event.preventDefault(); void send() } }} />
+      <textarea {...ime.fieldProps} rows={2} value={text} aria-label="メッセージ" placeholder={working ? '追加指示を入力…' : 'メッセージを入力…'} onChange={(event) => setText(event.target.value)} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void addFiles([...event.clipboardData.files]) } }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !isTouch()) { event.preventDefault(); void send() } }} />
       <div className="composer-bar"><div className="composer-left">
         <button type="button" className="icon-button" aria-label="画像を添付" disabled={Boolean(teamChild)} onClick={() => input.current?.click()}><Paperclip size={16} /></button><input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={(event) => { void addFiles([...event.target.files ?? []]); event.target.value = '' }} />
         <select aria-label="モデル" value={task.model ?? ''} disabled={working || Boolean(team || task.ab)} onChange={(event) => { const model = choices.find((entry) => entry.id === event.target.value); if (model) void update({ model: model.id, effort: model.defaultEffort ?? model.efforts[0] ?? null }) }}><option value="" disabled>モデルを選択</option>{choices.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select>
         <select aria-label="推論レベル" value={task.effort ?? ''} disabled={working || Boolean(team || task.ab)} onChange={(event) => void update({ effort: event.target.value || null })}><option value="" disabled>推論レベル</option>{(choices.find((model) => model.id === task.model)?.efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select>
         <select aria-label="権限" value={task.permissionMode} disabled={working || Boolean(team || task.ab)} onChange={(event) => void update({ permissionMode: event.target.value as CodexTaskSummary['permissionMode'] })}><option value="read-only">読み取りのみ</option><option value="workspace-write">ワークスペース編集</option><option value="danger-full-access">フルアクセス</option></select>
-      </div><div className="composer-right"><button type="button" className="send-button" title={working ? '追加指示を送信' : '送信'} aria-label={working ? '追加指示を送信' : '送信'} disabled={busy || uploading || (!text.trim() && !images.length)} onClick={() => void send()}><ArrowUp size={17} /></button></div></div>
+      </div><div className="composer-right"><button type="button" className="send-button" title={working ? '追加指示を送信' : '送信'} aria-label={working ? '追加指示を送信' : '送信'} disabled={busy || uploading || (!text.trim() && !images.length)} onPointerDown={(event) => { event.preventDefault(); ime.confirm() }} onClick={() => void send()}><ArrowUp size={17} /></button></div></div>
     </div></div>{team && teamPanel && <TeamPanel team={team} />}</div>
   </div>
 }

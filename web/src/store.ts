@@ -459,6 +459,9 @@ function handleFrame(frame: any) {
       setState({ subagents: { ...state.subagents, [frame.threadId]: next } })
       break
     }
+    case 'codexModels':
+      updateServer({ codexModels: frame.models })
+      break
     case 'catalog':
       updateServer({ catalog: frame.catalog })
       break
