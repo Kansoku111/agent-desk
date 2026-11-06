@@ -148,9 +148,12 @@ test('app-server initializes under own identity with lean config, login/logout a
   assert.equal((await login(client)).signedIn, true)
   assert.deepEqual(opened, ['https://auth.openai.com/mock'])
   const config = await fs.readFile(path.join(client.home, 'config.toml'), 'utf8')
-  for (const feature of DISABLED_CODEX_FEATURES) assert.ok(config.includes(`${feature} = false`))
-  assert.match(config, /code_mode_host = true/)
-  assert.match(config, /image_generation = true/)
+  assert.match(config, /cli_auth_credentials_store = "file"/)
+  assert.doesNotMatch(config, /sandbox_mode|project_doc_max_bytes|\[features\]/)
+  const args = client.defaultArgs()
+  for (const feature of DISABLED_CODEX_FEATURES) assert.ok(args.includes(`features.${feature}=false`))
+  assert.ok(args.includes('features.code_mode_host=true'))
+  assert.ok(args.includes('features.image_generation=true'))
   const methods = (await fs.readFile(path.join(client.home, 'mock-methods.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
   assert.deepEqual(methods[0].params.clientInfo, {
     name: 'agent_desk',
@@ -345,7 +348,7 @@ test('runtime housekeeping removes only process diagnostics, keeps account files
   })
   assert.equal(await fs.readFile(path.join(client.home, 'account-state.sqlite'), 'utf8'), 'keep account state')
   assert.equal(await fs.readFile(path.join(client.home, 'mock-auth'), 'utf8'), 'mock')
-  assert.deepEqual(await fs.readdir(path.join(client.home, '.sandbox')), [])
+  assert.deepEqual(await fs.readdir(path.join(client.home, '.sandbox')), ['sandbox.2026-10-21.log'])
 })
 test('runtime cleanup defers locked state and explicit stop still reports other failures', async t => {
   const { client } = await setup(t)

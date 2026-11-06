@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Loader2, PanelLeftOpen, Square, Trash2 } from 'lucide-react'
-import { act, loadAgentTurns, loadThread, navigate, setState, useStore } from '../store'
+import { act, loadAgentTurns, loadCodexTask, loadThread, navigate, setState, useStore } from '../store'
 import type { AbConfig, AbJob, AbRun, AppState, Turn, UsageScore } from '../types'
 import { UsageCost } from './UsageCost'
 import { scoresUpTo } from '../../../shared/usage-score.js'
@@ -63,7 +63,7 @@ export function useAbConfig() {
 }
 
 export function AbConfigFields({ server, config, change, busy = false }: { server: AppState; config: AbConfig; change: (patch: Partial<AbConfig>) => void; busy?: boolean }) {
-  const groups = modelGroups(server)
+  const groups = modelGroups(server, true)
   const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
   const shared = Array.isArray(server.settings.usageFallbackRoutes)
   const target = shared ? usageFallbackChoice(server.settings.usageFallbackRoutes, config.leader) : null
@@ -90,7 +90,7 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
   const [busy, setBusy] = useState(false)
   const close = () => setState({ abStart: null })
   if (!server) return null
-  const groups = modelGroups(server)
+  const groups = modelGroups(server, true)
   const valid = (value: string) => groups.some((group) => group.models.some((model) => model.value === value))
   const requiredKeys: ('a' | 'b' | 'leader' | 'implementer')[] = config ? (['a', 'b', 'leader', 'implementer'] as const).filter((key) => key !== 'implementer' || config.delegate) : []
   const required = config ? requiredKeys.map((key) => config[key]) : []
@@ -126,13 +126,13 @@ export function AbStartDialog({ workspace }: { workspace: string }) {
 /** The job's own conversation (its task or Claude Code session), loaded while it works or its report is open. */
 function useJobTurns(job: AbJob, wanted: boolean): Turn[] | undefined {
   const handle = job.handle
-  const claude = handle?.kind === 'claude'
-  const turns = useStore((state) => (handle ? (claude ? state.agentTurns[handle.id] : state.turns[handle.id]) : undefined))
+  const kind = handle?.kind
+  const turns = useStore((state) => (handle ? (kind === 'claude' ? state.agentTurns[handle.id] : kind === 'codex' ? state.codexTurns[handle.id] : state.turns[handle.id]) : undefined))
   const missing = turns === undefined
   useEffect(() => {
     if (!handle || !wanted || !missing) return
-    void (claude ? loadAgentTurns(handle.id) : loadThread(handle.id))
-  }, [handle?.id, claude, wanted, missing])
+    void (kind === 'claude' ? loadAgentTurns(handle.id) : kind === 'codex' ? loadCodexTask(handle.id) : loadThread(handle.id))
+  }, [handle?.id, kind, wanted, missing])
   return turns
 }
 

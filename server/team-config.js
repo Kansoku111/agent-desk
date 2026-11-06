@@ -10,12 +10,12 @@ import { assertToolMode } from './ptc.js'
  * Anthropic, DeepSeek, OpenCode Go and Command Code API keys, and their own machine), Claude
  * as a Claude Code task.
  */
-export const TEAM_PROVIDERS = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
-/** Claude Code leads in a terminal; the other providers lead as dsh tasks. */
+export const TEAM_PROVIDERS = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
+/** Providers that can lead a team. */
 export const LEADER_PROVIDERS = TEAM_PROVIDERS
-const EXTRA_DSH_LEADERS = ['claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
+const EXTRA_DSH_LEADERS = ['codex', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
 export const TEAM_TIERS = ['low', 'mid']
-export const PROVIDER_NAMES = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
+export const PROVIDER_NAMES = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
 export const MAX_CHILDREN_LIMIT = 12
 export const MAX_TEAM_MODELS = 12
 export const TEAM_MODEL_MODES = ['tiers', 'free']
@@ -51,6 +51,8 @@ export const TEAM_DEFAULTS = {
   // offered to the leader.
   // GPT: the ChatGPT subscription.
   gpt: { enabled: false, low: { enabled: true, model: null, effort: 'medium' }, mid: { enabled: true, model: null, effort: 'high' } },
+  // Codex CLI uses its own account and model list, separate from dsh GPT.
+  codex: { enabled: false, low: { enabled: true, model: null, effort: 'medium' }, mid: { enabled: true, model: null, effort: 'high' } },
   // Claude Code with the user's own, explicitly confirmed auth/billing mode.
   claude: { enabled: false, low: { enabled: true, model: 'haiku', effort: null }, mid: { enabled: true, model: 'sonnet', effort: null } },
   // Claude through dsh and their Anthropic API key, billed per token.
@@ -98,6 +100,7 @@ export function teamConfig(saved) {
     fallbackEffort: typeof value.fallbackEffort === 'string' ? value.fallbackEffort : '',
     ...Object.fromEntries(SWITCHES.map((name) => [name, typeof value[name] === 'boolean' ? value[name] : TEAM_DEFAULTS[name]])),
     gpt: provider('gpt'),
+    codex: provider('codex'),
     claude: provider('claude'),
     claudeApi: provider('claudeApi'),
     deepseek: provider('deepseek'),

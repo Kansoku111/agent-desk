@@ -45,6 +45,19 @@ code_mode_host = true
 image_generation = true
 `
 }
+// Shared authentication settings must not impose image-only restrictions on work threads.
+export async function prepareCodexHome(home) {
+  await fs.mkdir(home, { recursive: true, mode: 0o700 })
+  await writeFileAtomic(path.join(home, 'config.toml'), '# Managed by Agent Desk; shared authentication configuration.\ncli_auth_credentials_store = "file"\n', { mode: 0o600 })
+}
+export function imageCodexOverrides(home) {
+  return [
+    'model_reasoning_effort="low"', 'project_doc_max_bytes=0', 'sandbox_mode="read-only"',
+    'approval_policy="never"', `model_instructions_file=${JSON.stringify(path.join(home, 'image-instructions.txt'))}`,
+    ...DISABLED_CODEX_FEATURES.map(feature => `features.${feature}=false`),
+    'features.code_mode_host=true', 'features.image_generation=true',
+  ].flatMap(value => ['-c', value])
+}
 export function codexEnvironment(home, source = process.env) {
   const env = Object.fromEntries(Object.entries(source).filter(([name]) => !/^(CODEX_|OPENAI_|CHATGPT_)/i.test(name)))
   return {
@@ -53,7 +66,7 @@ export function codexEnvironment(home, source = process.env) {
     CODEX_MANAGED_BY_NPM: '1'
   }
 }
-export const CODEX_SIGNIN_HINT = '画像生成と利用上限を使うには、設定 → アカウント → 画像生成と利用上限（Codex）でサインインしてください。'
+export const CODEX_SIGNIN_HINT = '画像生成と利用上限を使うには、設定 → アカウント → Codex（GP・画像生成）でサインインしてください。'
 export class CodexAppServer extends EventEmitter {
   constructor({
     home,
@@ -93,15 +106,21 @@ export class CodexAppServer extends EventEmitter {
       recursive: true,
       mode: 0o700
     })
-    await writeFileAtomic(path.join(this.home, 'config.toml'), leanCodexConfig(this.home), {
-      mode: 0o600
-    })
+    await prepareCodexHome(this.home)
     const instructions = 'You create images.\n'
       + 'When asked, call the image generation tool exactly once with a detailed prompt, '
       + 'then reply with only: done\n'
     await writeFileAtomic(path.join(this.home, 'image-instructions.txt'), instructions, {
       mode: 0o600,
     })
+  }
+  defaultArgs() {
+    return [
+      ...imageCodexOverrides(this.home),
+      '-c', `sqlite_home=${JSON.stringify(this.runtimeHome)}`,
+      '-c', `log_dir=${JSON.stringify(path.join(this.runtimeHome, 'log'))}`,
+      'app-server', '--listen', 'stdio://',
+    ]
   }
   start() {
     if (this.stopping) return this.stopping.then(() => this.start())
@@ -119,11 +138,7 @@ export class CodexAppServer extends EventEmitter {
     await fs.mkdir(this.runtimeHome, { recursive: true, mode: 0o700 })
     if (generation !== this.startGeneration) throw new Error('Codex app-server stopped during startup')
     // Image threads are ephemeral; keep their diagnostic DB/logs ephemeral too.
-    const args = this.args ?? [
-      '-c', `sqlite_home=${JSON.stringify(this.runtimeHome)}`,
-      '-c', `log_dir=${JSON.stringify(path.join(this.runtimeHome, 'log'))}`,
-      'app-server', '--listen', 'stdio://',
-    ]
+    const args = this.args ?? this.defaultArgs()
     const child = this.spawnImpl(this.command ?? bundledCodex(), args, {
       cwd: this.cwd,
       env: codexEnvironment(this.home),
@@ -153,14 +168,7 @@ export class CodexAppServer extends EventEmitter {
         return
       }
       if (message.method && message.id !== undefined) {
-        // This image-only runtime never grants shell/file/network escalation or arbitrary client tools.
-        child.stdin.write(JSON.stringify({
-          id: message.id,
-          error: {
-            code: -32601,
-            message: 'Agent Desk image runtime does not allow this operation'
-          }
-        }) + '\n')
+        this.serverRequest(child, message)
       } else if (message.id !== undefined) {
         const request = this.pending.get(message.id)
         if (!request) return
@@ -179,6 +187,12 @@ export class CodexAppServer extends EventEmitter {
     })
     this.notify('initialized', {})
     this.scheduleIdle()
+  }
+  serverRequest(child, message) {
+    // Image requests are always rejected, irrespective of listeners.
+    child.stdin.write(JSON.stringify({ id: message.id, error: {
+      code: -32601, message: 'Agent Desk image runtime does not allow this operation'
+    } }) + '\n')
   }
   fail(error) {
     for (const request of this.pending.values()) {
@@ -597,19 +611,7 @@ For references, edit/follow the attached local images. Call the tool exactly onc
         if (error.code !== 'ENOENT') console.warn('[agent-desk] Codex runtime cleanup deferred:', error.message)
       })
     }
-    const sandboxLogs = path.join(this.home, '.sandbox')
-    for (const name of await fs.readdir(sandboxLogs).catch(() => [])) {
-      if (!/^sandbox\.\d{4}-\d{2}-\d{2}\.log$/.test(name)) continue
-      const file = path.resolve(sandboxLogs, name)
-      if (path.dirname(file) !== sandboxLogs) throw new Error('Invalid sandbox log cleanup target')
-      if ((await fs.lstat(file)).isFile()) {
-        await fs.rm(file, { force: true }).catch(error => {
-          // Another app-owned Codex process may still have this diagnostic log open.
-          if (!['EBUSY', 'EPERM', 'ENOENT'].includes(error.code)) throw error
-          if (error.code !== 'ENOENT') console.warn('[agent-desk] Codex sandbox log cleanup deferred:', error.message)
-        })
-      }
-    }
+    // Shared .sandbox logs may belong to the persistent work process.
   }
 
   stop() {

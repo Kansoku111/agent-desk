@@ -15,7 +15,7 @@ import type { AuthConsentState } from '../team-auth-consent'
 
 const providers: { id: TeamProvider; name: string; catalog?: string }[] = [
   { id: 'claude', name: 'Claude Code' }, { id: 'claudeApi', name: 'Claude（API）', catalog: 'anthropic' },
-  { id: 'gpt', name: 'GPT', catalog: 'openai-codex' }, { id: 'deepseek', name: 'DeepSeek', catalog: 'deepseek-official' },
+  { id: 'gpt', name: 'GPT', catalog: 'openai-codex' }, { id: 'codex', name: 'Codex', catalog: 'codex' }, { id: 'deepseek', name: 'DeepSeek', catalog: 'deepseek-official' },
   { id: 'opencodeGo', name: 'OpenCode Go', catalog: 'opencode-go' },
   { id: 'commandCode', name: 'Command Code', catalog: 'command-code' },
   { id: 'commandCodeClaude', name: 'Command Code（Claude）', catalog: 'command-code-claude' },
@@ -133,7 +133,7 @@ type ExecutionModels = ReturnType<typeof useExecutionModels>
 export function ExecutionModelFields({ models, starting = false }: { models: ExecutionModels; starting?: boolean }) {
   const { server, choice, latest, modelsReady, changeModels, levels, selection } = models
   if (!server || !selection) return null
-  const groups = modelGroups(server)
+  const groups = modelGroups(server, true)
   const leaderGroups = groups.map((group) => ({
     ...group,
     models: group.models.filter((entry) => (group.id === 'claude-code' && /^claude:(?:claude-)?(?:opus|sonnet)(?:-|$)/i.test(entry.value)) || selection.leaderModels.some((model) => model.value === entry.value)),
@@ -151,8 +151,9 @@ export function ExecutionModelFields({ models, starting = false }: { models: Exe
         effort={choice.childEffort} efforts={workflowOptions(choice.childEffort, levels.child)} onEffort={(childEffort) => changeModels({ childEffort })}
         allowClearUnavailableEffort onChange={(value) => { const child = executionChildChoice(server, value); if (child) changeModels(child) }} />
     </section>
-    <FallbackSummary server={server} value={shared ? target?.model ?? '' : choice.leaderFallback} effort={shared ? target?.effort ?? '' : choice.fallbackEffort}
-      shared={shared} sourceSelected={Boolean(selection.leader)} disabled={disabled} />
+    {selection.leader.startsWith('codex:') ? <p className="muted">Codexリーダーのフォールバックには対応していません。{(shared ? target?.model : choice.leaderFallback) && 'フォールバック設定を解除してください。'}</p>
+      : <FallbackSummary server={server} value={shared ? target?.model ?? '' : choice.leaderFallback} effort={shared ? target?.effort ?? '' : choice.fallbackEffort}
+        shared={shared} sourceSelected={Boolean(selection.leader)} disabled={disabled} />}
     <div className="ex-options">
       <PtcToggle mode={choice.toolMode} disabled={disabled} onChange={(toolMode) => changeModels({ toolMode })} />
       <button type="button" className={`chip plan-implement-chip ${choice.planImplement ? 'on' : ''}`} aria-label="計画 → 実装" aria-pressed={choice.planImplement}
@@ -172,12 +173,12 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
   const [starting, setStarting] = useState(false)
   const close = () => setState({ executionStart: null })
   if (!server?.settings.agentTeams || !selection) return null
-  const groups = modelGroups(server)
+  const groups = modelGroups(server, true)
   const shared = Array.isArray(server.settings.usageFallbackRoutes)
   const target = shared ? usageFallbackChoice(server.settings.usageFallbackRoutes, selection.leader) : null
   const fallback = shared ? target?.model ?? '' : choice.leaderFallback
   const effort = shared ? target?.effort ?? '' : choice.fallbackEffort
-  const fallbackReady = !fallback || (groups.some((group) => group.models.some((entry) => entry.value === fallback)) && fallback !== selection.leader && workflowEffortSupported(effort, workflowLevels(server.catalog, fallback)))
+  const fallbackReady = !fallback || (!selection.leader.startsWith('codex:') && !fallback.startsWith('codex:') && groups.some((group) => group.models.some((entry) => entry.value === fallback)) && fallback !== selection.leader && workflowEffortSupported(effort, workflowLevels(server.catalog, fallback)))
   const usesClaude = modelsReady && (selection.leader.startsWith('claude:') || provider === 'claude' || fallback.startsWith('claude:') || Boolean(server.settings.usageFallbackRoutes?.some((route) => route.model.startsWith('claude:'))))
   const start = async () => {
     const current = { ...latest.current }
@@ -193,7 +194,8 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       if (!await act('execution.configure', { workspace, checks })) return
       const choices = structuredClone(server.settings.agentTeams!) as TeamSettings
       for (const item of providers) choices[item.id] = { enabled: item.id === provider, low: { enabled: true, model: item.id === provider ? model : null, effort: item.id === provider ? childEffort || null : null }, mid: { enabled: false, model: null, effort: null } }
-      choices.leaderProvider = leader.startsWith('claude:') ? 'claude' : 'gpt'
+      choices.leaderProvider = leader.startsWith('claude:') ? 'claude' : leader.startsWith('codex:') ? 'codex' : 'gpt'
+      if (leader.startsWith('codex:')) choices.dshLeader = { provider: 'codex', model: leader.slice(6), effort: leaderEffort || null }
       choices.leader = { model: leader.startsWith('claude:') ? leader.slice(7) : 'opus', effort: leaderEffort || null }
       choices.gptLeader = { model: null, effort: leaderEffort || null }
       choices.leaderFallback = current.leaderFallback

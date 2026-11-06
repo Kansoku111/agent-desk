@@ -105,6 +105,13 @@ export class HistoryStore {
           id: kind + ':' + record.id })
       }
     }
+    const codexIds = await json(path.join(this.home, 'codex-tasks.json'), [])
+    if (Array.isArray(codexIds)) {
+      for (const id of new Set(codexIds)) {
+        if (typeof id !== 'string' || !SAFE_ID.test(id)) continue
+        sessions.push({ kind: 'codex', id: 'codex:' + id, taskId: id })
+      }
+    }
     const dir = path.join(this.home, 'team-agents')
     let names
     try { names = await fs.readdir(dir) } catch (error) { if (error.code !== 'ENOENT') throw error; names = [] }
@@ -119,6 +126,10 @@ export class HistoryStore {
   async load(session) {
     let record = session.record
     if (session.kind === 'team') record = await json(session.file, null)
+    if (session.kind === 'codex') {
+      record = await json(path.join(this.home, 'codex-tasks', session.taskId + '.json'), null)
+      if (record?.id !== session.taskId) throw new Error('Session is unavailable')
+    }
     if (!record || typeof record.workspace !== 'string') throw new Error('Session is unavailable')
     let messages, skipped = 0
     if (session.kind === 'terminal') {
@@ -140,7 +151,7 @@ export class HistoryStore {
       if (!file) throw new Error('Claude Code transcript is unavailable')
       ;({ messages, skipped } = await claudeMessages(file))
     } else {
-      const doc = session.kind === 'team' ? record : await json(path.join(this.home, 'threads', record.id + '.json'), null)
+      const doc = session.kind === 'team' || session.kind === 'codex' ? record : await json(path.join(this.home, 'threads', record.id + '.json'), null)
       if (!doc) throw new Error('Saved conversation is unavailable')
       messages = turnMessages(doc.turns)
     }
@@ -198,7 +209,7 @@ export class HistoryStore {
 
   async read(args = {}) {
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Expected an argument object')
-    if (typeof args.session_id !== 'string' || !/^(thread|terminal|team):[a-zA-Z0-9_-]{1,128}$/.test(args.session_id)) throw new Error('Invalid session_id; use an ID returned by search')
+    if (typeof args.session_id !== 'string' || !/^(thread|terminal|team|codex):[a-zA-Z0-9_-]{1,128}$/.test(args.session_id)) throw new Error('Invalid session_id; use an ID returned by search')
     const message = integer(args.message, 0, Number.MAX_SAFE_INTEGER, 'message')
     const offset = integer(args.offset, 0, Number.MAX_SAFE_INTEGER, 'offset')
     const maxChars = integer(args.max_chars, 4000, 12000, 'max_chars')

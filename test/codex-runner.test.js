@@ -1,0 +1,457 @@
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { test } from 'node:test'
+import { EventEmitter } from 'node:events'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { CodexRunner } from '../server/codex-runner.js'
+
+class FakeWorkServer extends EventEmitter {
+  constructor() { super(); this.calls = []; this.responses = []; this.nextThread = 0; this.nextTurn = 0; this.active = 0; this.account = { type: 'chatgpt', email: 'a@example.test', workspaceName: 'One' } }
+  async use(fn) { this.active++; try { return await fn() } finally { this.active-- } }
+  async rawRequest(method, params = {}) {
+    this.calls.push({ method, params })
+    switch (method) {
+      case 'account/read': return { account: this.account }
+      case 'model/list': return { data: [{ model: 'gpt-test', displayName: 'Test', isDefault: true, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] }
+      case 'thread/start': return { thread: { id: `thread-${++this.nextThread}` } }
+      case 'thread/resume': return { thread: { id: params.threadId } }
+      case 'turn/start': return { turn: { id: `turn-${++this.nextTurn}` } }
+      default: return {}
+    }
+  }
+  respond(id, result) { this.responses.push({ id, result }) }
+  reject(id, error) { this.responses.push({ id, error }) }
+  async stop() { this.emit('stopped', new Error('stopped')) }
+  notify(method, params) { this.emit('notification', method, params) }
+  complete(threadId, turnId, status = 'completed') { this.notify('turn/completed', { threadId, turn: { id: turnId, status, items: [] } }) }
+}
+
+async function waitFor(check) {
+  const deadline = Date.now() + 3000
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting for fake Codex')
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+async function setup(t) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-runner-'))
+  const server = new FakeWorkServer()
+  const runner = await new CodexRunner({ home: dir, attachmentsDir: dir, server, instructions: () => 'global instruction', stopTimeoutMs: 100 }).load()
+  t.after(async () => { await runner.shutdown(); await fs.rm(dir, { recursive: true, force: true }) })
+  return { dir, server, runner }
+}
+async function start(runner, id, text = 'hello') {
+  runner.run(id, text)
+  await waitFor(() => runner.live.get(id)?.turnId)
+  const live = runner.live.get(id)
+  return { threadId: runner.get(id).sessionId, turnId: live.turnId }
+}
+async function finish(runner, server, id, ids, status = 'completed') {
+  server.complete(ids.threadId, ids.turnId, status)
+  await waitFor(() => !runner.running(id))
+}
+
+test('create and complete, strict selection, instructions and persistent thread resume', async t => {
+  const { dir, server, runner } = await setup(t)
+  await assert.rejects(runner.create({ workspace: dir, model: 'missing' }), /モデル/)
+  await assert.rejects(runner.create({ workspace: dir, model: 'gpt-test', effort: 'max' }), /推論レベル/)
+  const task = await runner.create({ workspace: dir, model: 'gpt-test', effort: 'high', instructions: 'task instruction', mcpServers: { test: { command: 'x' } } })
+  const first = await start(runner, task.id)
+  assert.equal(server.active, 1)
+  const thread = server.calls.find(x => x.method === 'thread/start').params
+  assert.equal(thread.model, 'gpt-test')
+  assert.equal(thread.ephemeral, false)
+  assert.equal(thread.developerInstructions, 'global instruction\n\ntask instruction')
+  assert.deepEqual(thread.config.mcp_servers, { test: { command: 'x' } })
+  const turn = server.calls.find(x => x.method === 'turn/start').params
+  assert.equal(turn.effort, 'high')
+  assert.equal(turn.model, 'gpt-test')
+  server.notify('item/completed', { threadId: first.threadId, turnId: first.turnId, item: { id: 'answer', type: 'agentMessage', text: 'done' } })
+  await finish(runner, server, task.id, first)
+  assert.equal(runner.turns(task.id)[0].status, 'done')
+  assert.equal(runner.turns(task.id)[0].items[0].text, 'done')
+  const second = await start(runner, task.id, 'next')
+  assert.equal(second.threadId, first.threadId)
+  assert.equal(server.calls.filter(x => x.method === 'thread/start').length, 1)
+  assert.equal(server.calls.find(x => x.method === 'thread/resume').params.threadId, first.threadId)
+  await finish(runner, server, task.id, second)
+})
+
+test('steer sends one additional instruction and stop waits for completed interruption', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  const ids = await start(runner, task.id)
+  assert.equal(await runner.steer(task.id, 'extra'), true)
+  const sent = server.calls.filter(x => x.method === 'turn/steer')
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].params.expectedTurnId, ids.turnId)
+  assert.equal(sent[0].params.input[0].text, 'extra')
+  assert.equal(runner.turns(task.id)[0].items[0].text, 'extra')
+  let stopped = false
+  const stopping = runner.stop(task.id).then(() => { stopped = true })
+  await waitFor(() => server.calls.some(x => x.method === 'turn/interrupt'))
+  assert.equal(stopped, false)
+  assert.equal(runner.running(task.id), true)
+  server.complete(ids.threadId, ids.turnId, 'interrupted')
+  await stopping
+  assert.equal(runner.turns(task.id)[0].status, 'cancelled')
+})
+
+test('read-only and AB approval requests are declined; approvals belong to their task', async t => {
+  const { dir, server, runner } = await setup(t)
+  const ro = await runner.create({ workspace: dir, permissionMode: 'read-only' })
+  const ab = await runner.create({ workspace: dir, ab: { side: 'a' } })
+  const a = await runner.create({ workspace: dir })
+  const b = await runner.create({ workspace: dir })
+  const ids = await Promise.all([ro, ab, a, b].map(task => start(runner, task.id)))
+  for (let i = 0; i < 4; i++) server.emit('request', { id: i + 1, method: 'item/commandExecution/requestApproval', params: { threadId: ids[i].threadId, turnId: ids[i].turnId, command: 'test' } })
+  assert.deepEqual(server.responses.slice(0, 2), [{ id: 1, result: { decision: 'decline' } }, { id: 2, result: { decision: 'decline' } }])
+  assert.equal(runner.pendingPermissions(a.id).length, 1)
+  assert.throws(() => runner.respondPermission(b.id, '3', 'accept'), /承認/)
+  runner.respondPermission(a.id, '3', 'decline')
+  assert.deepEqual(server.responses.at(-1), { id: 3, result: { decision: 'decline' } })
+  server.emit('request', { id: 9, method: 'unrecognized', params: { threadId: ids[2].threadId } })
+  assert.equal(server.responses.at(-1).error.code, -32601)
+  for (let i = 0; i < 4; i++) await finish(runner, server, [ro, ab, a, b][i].id, ids[i])
+})
+
+test('restart marks an in-flight persisted turn interrupted without resending it', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  const ids = await start(runner, task.id)
+  const server2 = new FakeWorkServer()
+  const restored = await new CodexRunner({ home: dir, attachmentsDir: dir, server: server2 }).load()
+  assert.equal(restored.get(task.id).status, 'stopped')
+  assert.equal(restored.turns(task.id)[0].status, 'cancelled')
+  assert.match(restored.turns(task.id)[0].error.message, /中断/)
+  assert.equal(server2.calls.length, 0)
+  const resumed = await start(restored, task.id, 'manual continuation')
+  assert.equal(resumed.threadId, ids.threadId)
+  assert.equal(server2.calls.filter(x => x.method === 'thread/start').length, 0)
+  assert.equal(server2.calls.filter(x => x.method === 'turn/start').length, 1)
+  await finish(restored, server2, task.id, resumed)
+  await restored.shutdown()
+  await finish(runner, server, task.id, ids)
+})
+
+test('thread notifications are isolated and total token usage is charged as per-turn delta', async t => {
+  const { dir, server, runner } = await setup(t)
+  const a = await runner.create({ workspace: dir })
+  const b = await runner.create({ workspace: dir })
+  const [first, other] = await Promise.all([start(runner, a.id), start(runner, b.id)])
+  server.notify('item/agentMessage/delta', { threadId: first.threadId, turnId: first.turnId, itemId: 'a', delta: 'A' })
+  server.notify('item/agentMessage/delta', { threadId: other.threadId, turnId: other.turnId, itemId: 'b', delta: 'B' })
+  server.notify('thread/tokenUsage/updated', { threadId: first.threadId, turnId: first.turnId, tokenUsage: { total: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, totalTokens: 110 }, modelContextWindow: 1000 } })
+  await finish(runner, server, a.id, first)
+  assert.deepEqual(runner.turns(a.id)[0].items.map(x => x.text), ['A'])
+  assert.deepEqual(runner.turns(b.id)[0].items.map(x => x.text), ['B'])
+  assert.equal(runner.turns(a.id)[0].usage.input, 80)
+  const second = await start(runner, a.id, 'again')
+  server.notify('thread/tokenUsage/updated', { threadId: second.threadId, turnId: second.turnId, tokenUsage: { total: { inputTokens: 160, cachedInputTokens: 30, outputTokens: 25, totalTokens: 185 }, modelContextWindow: 1000 } })
+  await finish(runner, server, a.id, second)
+  assert.equal(runner.turns(a.id)[1].usage.input, 50)
+  assert.equal(runner.turns(a.id)[1].usage.cacheRead, 10)
+  assert.equal(runner.turns(a.id)[1].usage.output, 15)
+  await finish(runner, server, b.id, other)
+})
+
+function deferred() {
+  let resolve
+  const promise = new Promise(done => { resolve = done })
+  return { promise, resolve }
+}
+
+test('transport stops with pending approval even when responding throws', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  const ids = await start(runner, task.id)
+  server.emit('request', { id: 17, method: 'item/commandExecution/requestApproval', params: { ...ids, command: 'cmd' } })
+  assert.equal(runner.pendingPermissions(task.id).length, 1)
+  const live = runner.live.get(task.id)
+  server.child = null
+  server.respond = () => { throw new Error('Codex transport closed') }
+  server.emit('stopped', new Error('process exited'))
+  await live.done.promise
+  assert.equal(runner.running(task.id), false)
+  assert.equal(runner.pendingPermissions(task.id).length, 0)
+  assert.equal(runner.turns(task.id)[0].status, 'error')
+})
+
+test('stopped during initial save or thread start never starts a turn', async t => {
+  for (const stage of ['save', 'thread/start']) {
+    await t.test(stage, async t => {
+      const { dir, server, runner } = await setup(t)
+      const task = await runner.create({ workspace: dir })
+      const gate = deferred(), entered = deferred(), executionEnded = deferred()
+      t.after(() => gate.resolve())
+      const use = server.use.bind(server)
+      server.use = async fn => { try { return await use(fn) } finally { if (server.active === 0) executionEnded.resolve() } }
+      if (stage === 'save') {
+        const writer = runner.writers.get(task.id), flush = writer.flush.bind(writer)
+        let first = true
+        writer.flush = async () => {
+          if (first) { first = false; entered.resolve(); await gate.promise }
+          return flush()
+        }
+      } else {
+        const raw = server.rawRequest.bind(server)
+        server.rawRequest = async (method, params) => {
+          const result = await raw(method, params)
+          if (method === 'thread/start') { entered.resolve(); await gate.promise }
+          return result
+        }
+      }
+      runner.run(task.id, 'hello')
+      await entered.promise
+      const live = runner.live.get(task.id)
+      server.emit('stopped', new Error('process exited'))
+      await live.done.promise
+      gate.resolve()
+      await executionEnded.promise
+      assert.equal(server.calls.filter(x => x.method === 'turn/start').length, 0)
+      assert.equal(runner.turns(task.id)[0].status, 'error')
+    })
+  }
+})
+
+test('early completion retains live lock until turn/start response', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  const gate = deferred(), entered = deferred()
+  t.after(() => gate.resolve())
+  const raw = server.rawRequest.bind(server)
+  server.rawRequest = async (method, params) => {
+    const result = await raw(method, params)
+    if (method === 'turn/start') {
+      server.complete(params.threadId, result.turn.id)
+      entered.resolve()
+      await gate.promise
+    }
+    return result
+  }
+  runner.run(task.id, 'first')
+  await entered.promise
+  assert.equal(runner.running(task.id), true)
+  assert.throws(() => runner.run(task.id, 'duplicate'), /作業中/)
+  assert.equal(runner.turns(task.id).length, 1)
+  gate.resolve()
+  await waitFor(() => !runner.running(task.id))
+  assert.equal(runner.turns(task.id)[0].status, 'done')
+  assert.equal(server.calls.filter(x => x.method === 'turn/start').length, 1)
+})
+
+test('missing usage invalidates baseline until the next observed total rebases', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  const usage = (ids, input, output) => server.notify('thread/tokenUsage/updated', { threadId: ids.threadId, turnId: ids.turnId, tokenUsage: { total: { inputTokens: input, cachedInputTokens: 0, outputTokens: output, totalTokens: input + output } } })
+  const a = await start(runner, task.id, 'one')
+  usage(a, 100, 10)
+  await finish(runner, server, task.id, a)
+  const b = await start(runner, task.id, 'missing')
+  await finish(runner, server, task.id, b)
+  const c = await start(runner, task.id, 'rebase')
+  usage(c, 300, 30)
+  await finish(runner, server, task.id, c)
+  assert.equal(runner.turns(task.id)[1].usage, undefined)
+  assert.equal(runner.turns(task.id)[2].usage, undefined)
+  const d = await start(runner, task.id, 'after rebase')
+  usage(d, 350, 38)
+  await finish(runner, server, task.id, d)
+  assert.equal(runner.turns(task.id)[3].usage.input, 50)
+  assert.equal(runner.turns(task.id)[3].usage.output, 8)
+})
+
+test('account identity is checked despite model cache and is hidden in summaries', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  assert.equal('accountKey' in task, false)
+  assert.equal('accountKey' in runner.get(task.id), false)
+  assert.equal('accountKey' in runner.list()[0], false)
+  const stored = JSON.parse(await fs.readFile(path.join(dir, 'codex-tasks', task.id + '.json'), 'utf8'))
+  assert.match(stored.accountKey, /^[a-f0-9]{64}$/)
+  assert.ok(!JSON.stringify(stored).includes('a@example.test'))
+  const listCount = server.calls.filter(x => x.method === 'model/list').length
+  const reads = server.calls.filter(x => x.method === 'account/read').length
+  await runner.models()
+  assert.equal(server.calls.filter(x => x.method === 'account/read').length, reads + 1)
+  assert.equal(server.calls.filter(x => x.method === 'model/list').length, listCount)
+  const ids = await start(runner, task.id)
+  await finish(runner, server, task.id, ids)
+  for (const account of [
+    { type: 'chatgpt', email: 'other@example.test', workspaceName: 'One' },
+    { type: 'chatgpt', email: 'a@example.test', workspaceName: 'Two' },
+  ]) {
+    server.account = account
+    const calls = server.calls.filter(x => x.method === 'thread/resume' || x.method === 'turn/start').length
+    runner.run(task.id, 'must not resume')
+    await waitFor(() => !runner.running(task.id))
+    assert.match(runner.turns(task.id).at(-1).error.message, /サインイン先が変わりました/)
+    assert.equal(server.calls.filter(x => x.method === 'thread/resume' || x.method === 'turn/start').length, calls)
+  }
+})
+
+test('lean AB and research team restrict tools and network; other readonly modes retain network', async t => {
+  for (const scenario of [
+    { name: 'lean AB', ab: { writable: false, lean: true }, restricted: true },
+    { name: 'research team', team: { executionMode: 'research' }, restricted: true },
+    { name: 'non-lean AB', ab: { writable: false, lean: false }, restricted: false },
+    { name: 'ordinary readonly', restricted: false },
+  ]) {
+    await t.test(scenario.name, async t => {
+      const { dir, server, runner } = await setup(t)
+      const task = await runner.create({ workspace: dir, permissionMode: 'read-only', ab: scenario.ab, team: scenario.team })
+      const ids = await start(runner, task.id)
+      const thread = server.calls.find(call => call.method === 'thread/start').params
+      const turn = server.calls.find(call => call.method === 'turn/start').params
+      assert.equal(turn.sandboxPolicy.type, 'readOnly')
+      assert.equal(turn.sandboxPolicy.networkAccess, !scenario.restricted)
+      if (scenario.restricted) {
+        assert.equal(thread.config.web_search, 'disabled')
+        assert.equal(thread.config['features.shell_tool'], false)
+        assert.equal(thread.config['features.unified_exec'], false)
+      } else {
+        assert.equal(thread.config.web_search, 'cached')
+        assert.equal(thread.config['features.shell_tool'], true)
+        assert.equal(thread.config['features.unified_exec'], true)
+      }
+      await finish(runner, server, task.id, ids)
+    })
+  }
+})
+
+test('research team can resume the same thread with write configuration', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir, permissionMode: 'read-only', team: { executionMode: 'research' } })
+  const first = await start(runner, task.id)
+  const research = server.calls.find(call => call.method === 'thread/start').params
+  assert.equal(research.config.web_search, 'disabled')
+  assert.equal(research.config['features.shell_tool'], false)
+  assert.equal(research.config['features.unified_exec'], false)
+  assert.equal(server.calls.find(call => call.method === 'turn/start').params.sandboxPolicy.networkAccess, false)
+  await finish(runner, server, task.id, first)
+  await runner.configure(task.id, { permissionMode: 'workspace-write', team: { executionMode: 'write' } })
+  const second = await start(runner, task.id, 'write')
+  const resumed = server.calls.find(call => call.method === 'thread/resume').params
+  const turn = server.calls.filter(call => call.method === 'turn/start').at(-1).params
+  assert.equal(resumed.threadId, first.threadId)
+  assert.equal(second.threadId, first.threadId)
+  assert.equal(resumed.sandbox, 'workspace-write')
+  assert.equal(resumed.config.web_search, 'cached')
+  assert.equal(resumed.config['features.shell_tool'], true)
+  assert.equal(resumed.config['features.unified_exec'], true)
+  assert.equal(turn.sandboxPolicy.type, 'workspaceWrite')
+  assert.equal(turn.sandboxPolicy.networkAccess, true)
+  await finish(runner, server, task.id, second)
+})
+
+test('model reroute interrupts and reports error without attributing usage to the selected model', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir, model: 'gpt-test', effort: 'low' })
+  const ids = await start(runner, task.id)
+  server.notify('thread/tokenUsage/updated', { ...ids, tokenUsage: { total: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } } })
+  server.notify('model/rerouted', { ...ids, fromModel: 'gpt-test', toModel: 'gpt-test', reason: 'test' })
+  assert.equal(server.calls.filter(x => x.method === 'turn/interrupt').length, 0)
+  server.notify('model/rerouted', { ...ids, fromModel: 'gpt-test', toModel: 'different-model', reason: 'test' })
+  const interrupt = server.calls.filter(x => x.method === 'turn/interrupt')
+  assert.equal(interrupt.length, 1)
+  assert.deepEqual(interrupt[0].params, ids)
+  const notice = runner.turns(task.id)[0].items.find(item => item.type === 'notice')
+  assert.equal(notice.level, 'warning')
+  assert.match(notice.text, /different-model/)
+  await finish(runner, server, task.id, ids, 'interrupted')
+  const turn = runner.turns(task.id)[0]
+  assert.equal(turn.status, 'error')
+  assert.match(turn.error.message, /different-model/)
+  assert.equal(turn.usage, undefined)
+  assert.equal(turn.totalScore.priced, 0)
+  assert.equal(turn.totalScore.unpriced, 1)
+})
+
+test('model cache cannot return account A after account B list fails', async t => {
+  const { server, runner } = await setup(t)
+  const raw = server.rawRequest.bind(server)
+  let failB = true
+  server.rawRequest = async (method, params) => {
+    const result = await raw(method, params)
+    if (method !== 'model/list') return result
+    if (server.account.email === 'b@example.test' && failB) throw new Error('model list failed')
+    result.data[0].model = server.account.email === 'b@example.test' ? 'model-b' : 'model-a'
+    return result
+  }
+  assert.equal((await runner.models())[0].id, 'model-a')
+  server.account = { type: 'chatgpt', email: 'b@example.test', workspaceName: 'Two' }
+  await assert.rejects(runner.models(), /model list failed/)
+  failB = false
+  assert.equal((await runner.models())[0].id, 'model-b')
+  assert.equal(server.calls.filter(x => x.method === 'model/list').length, 3)
+})
+
+test('stopped invalidates cached models and rejects a pending list from the old connection', async t => {
+  const { server, runner } = await setup(t)
+  await runner.models()
+  await runner.models()
+  assert.equal(server.calls.filter(x => x.method === 'model/list').length, 1)
+  server.emit('stopped', new Error('connection lost'))
+  await runner.models()
+  assert.equal(server.calls.filter(x => x.method === 'model/list').length, 2)
+  const gate = deferred(), entered = deferred()
+  t.after(() => gate.resolve())
+  const raw = server.rawRequest.bind(server)
+  server.rawRequest = async (method, params) => {
+    const result = await raw(method, params)
+    if (method === 'model/list') { entered.resolve(); await gate.promise }
+    return result
+  }
+  const pending = runner.models({ refresh: true })
+  await entered.promise
+  server.emit('stopped', new Error('connection lost again'))
+  gate.resolve()
+  await assert.rejects(pending, /接続状態が変わりました/)
+  await runner.models()
+  assert.equal(server.calls.filter(x => x.method === 'model/list').length, 4)
+})
+
+test('null account email never reuses cached models or resumes an unverifiable session', async t => {
+  const { dir, server, runner } = await setup(t)
+  server.account = { type: 'chatgpt', email: null, workspaceName: 'One' }
+  await runner.models()
+  await runner.models()
+  assert.equal(server.calls.filter(x => x.method === 'model/list').length, 2)
+  const task = await runner.create({ workspace: dir })
+  const ids = await start(runner, task.id)
+  await finish(runner, server, task.id, ids)
+  const requests = server.calls.filter(x => x.method === 'turn/start').length
+  runner.run(task.id, 'resume')
+  await waitFor(() => !runner.running(task.id))
+  assert.match(runner.turns(task.id).at(-1).error.message, /照合できません/)
+  assert.equal(server.calls.filter(x => x.method === 'thread/resume').length, 0)
+  assert.equal(server.calls.filter(x => x.method === 'turn/start').length, requests)
+})
+
+test('concurrent model selections retain the identity of their own returned list', async t => {
+  const { dir, server, runner } = await setup(t)
+  const gate = deferred(), entered = deferred()
+  t.after(() => gate.resolve())
+  const raw = server.rawRequest.bind(server)
+  server.rawRequest = async (method, params) => {
+    const email = server.account.email
+    const result = await raw(method, params)
+    if (method === 'model/list' && email === 'a@example.test') { entered.resolve(); await gate.promise }
+    return result
+  }
+  const creatingA = runner.create({ workspace: dir })
+  await entered.promise
+  server.account = { type: 'chatgpt', email: 'b@example.test', workspaceName: 'Two' }
+  const taskB = await runner.create({ workspace: dir })
+  gate.resolve()
+  const taskA = await creatingA
+  const recordA = JSON.parse(await fs.readFile(path.join(dir, 'codex-tasks', taskA.id + '.json'), 'utf8'))
+  const recordB = JSON.parse(await fs.readFile(path.join(dir, 'codex-tasks', taskB.id + '.json'), 'utf8'))
+  const key = (email, workspace) => createHash('sha256').update(JSON.stringify([email, workspace])).digest('hex')
+  assert.equal(recordA.accountKey, key('a@example.test', 'One'))
+  assert.equal(recordB.accountKey, key('b@example.test', 'Two'))
+  assert.equal('accountKey' in taskA, false)
+  assert.equal('accountKey' in taskB, false)
+})

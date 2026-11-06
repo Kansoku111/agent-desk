@@ -144,6 +144,46 @@ test('authenticated observer dispatch rejects leader capability before any actio
   assert.equal(calls[0][1], 'task')
 })
 
+test('Codex leader and child use their runtime and team execution guard', async () => {
+  const { manager, team, calls } = fixture('codex')
+  team.leaderKind = 'codex'
+  let running = false
+  manager.guardExecution = record => { calls.push(['guard', record.id]) }
+  manager.refreshCodexLeader = async id => { calls.push(['refresh', id]) }
+  manager.codex = { get: id => ({ id, workspace: '/work' }), running: () => running,
+    run: (id, text) => calls.push(['run', id, text]),
+    steer: async (id, text) => { calls.push(['codexSteer', id, text]); return true },
+    stop: async id => calls.push(['codexStop', id]) }
+  await observerSend(manager, 'team', 'leader', 'go')
+  assert.deepEqual(calls.map(call => call[0]), ['guard', 'refresh', 'guard', 'run'])
+  calls.length = 0
+  await observerSend(manager, 'team', 'child', 'go')
+  assert.deepEqual(calls.map(call => call[0]), ['guard', 'guard', 'run'])
+  calls.length = 0
+  running = true
+  assert.equal((await observerSend(manager, 'team', 'child', 'go')).method, 'steer')
+  await observerStop(manager, 'team', 'child')
+  await observerStop(manager, 'team', 'leader')
+  assert.deepEqual(calls.map(call => call[0]), ['guard', 'codexSteer', 'codexStop', 'codexStop'])
+})
+
+test('Codex sends refuse guarded, AB, awaiting and stale leader requests', async () => {
+  const { manager, team, child, calls } = fixture('codex')
+  team.leaderKind = 'codex'
+  let ab = false
+  manager.codex = { get: id => ({ id, ab }), running: () => false, run: () => calls.push(['run']) }
+  manager.guardExecution = () => { if (!ab && child.blocked) throw new Error('blocked') }
+  manager.refreshCodexLeader = async () => { team.leaderId = 'replacement' }
+  ab = true
+  await assert.rejects(observerSend(manager, 'team', 'child', 'go'), /AB/)
+  ab = false; child.blocked = true
+  await assert.rejects(observerSend(manager, 'team', 'child', 'go'), /blocked/)
+  child.blocked = false; child.awaiting = true
+  await assert.rejects(observerSend(manager, 'team', 'child', 'go'), /作業待ち/)
+  await assert.rejects(observerSend(manager, 'team', 'leader', 'go'), /宛先が変更/)
+  assert.deepEqual(calls, [])
+})
+
 test('stop uses the recipient user-facing stop path and validates scope', async () => {
   const { manager, team, calls } = fixture('agent')
   await observerStop(manager, 'team', 'child')

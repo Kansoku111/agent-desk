@@ -19,16 +19,17 @@ import { workflowEffortSupported, workflowLevels } from '../../../shared/workflo
 import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
 
 const MAX_CHILDREN = 12
-const PROVIDERS: TeamProvider[] = ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
-const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
-type DshProvider = 'gpt' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
+const PROVIDERS: TeamProvider[] = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
+const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
+type DshProvider = 'gpt' | 'codex' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
 /** Each dsh provider's models in the model list. */
-const CATALOG_PROVIDER = { gpt: 'openai-codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' } as const
-const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'command-code': 'commandCode', 'command-code-claude': 'commandCodeClaude', 'local-llm': 'local' }
-const teamModelGroups = (server: AppState) => modelGroups(server).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
-const modelValue = (entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? `claude:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
+const CATALOG_PROVIDER = { gpt: 'openai-codex', codex: 'codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' } as const
+const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', codex: 'codex', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'command-code': 'commandCode', 'command-code-claude': 'commandCodeClaude', 'local-llm': 'local' }
+const teamModelGroups = (server: AppState) => modelGroups(server, true).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
+const modelValue = (entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? `claude:${entry.model}` : entry.provider === 'codex' ? `codex:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
 function pickerChoice(value: string): TeamModelChoice | null {
   if (value.startsWith('claude:')) return { provider: 'claude', model: value.slice(7), effort: null }
+  if (value.startsWith('codex:')) return { provider: 'codex', model: value.slice(6), effort: null }
   const parsed = parseModel(value)
   const provider = parsed && CATALOG_TO_TEAM[parsed.provider]
   return parsed && provider ? { provider, model: parsed.id, effort: null } : null
@@ -57,6 +58,7 @@ function fullConfig(saved: Config): Config {
     modelMode: saved.modelMode ?? 'tiers',
     defaultModelMode: saved.defaultModelMode ?? 'tiers',
     freeModels: saved.freeModels ?? [],
+    codex: saved.codex ?? OFF_PROVIDER,
     claudeApi: saved.claudeApi ?? OFF_PROVIDER,
     deepseek: saved.deepseek ?? OFF_PROVIDER,
     opencodeGo: saved.opencodeGo ?? OFF_PROVIDER,
@@ -93,7 +95,7 @@ function dshModels(server: AppState, provider: DshProvider = 'gpt') {
 
 /** The reasoning levels of a dsh model, as the model list knows them. */
 function dshEfforts(server: AppState, id: string | null, provider: DshProvider = 'gpt') {
-  const known = id ? server.catalog.effortsByModel[JSON.stringify([CATALOG_PROVIDER[provider], id])] : undefined
+  const known = id ? server.catalog.effortsByModel[provider === 'codex' ? `codex:${id}` : JSON.stringify([CATALOG_PROVIDER[provider], id])] : undefined
   return pickableEfforts(known ?? server.catalog.fallbackEfforts).map((effort) => effort.value)
 }
 
@@ -175,6 +177,7 @@ function TierRow({ server, config, provider, tier, label, note, onChange }: {
 
 const PROVIDER_NOTE: Record<TeamProvider, string> = {
   gpt: 'ChatGPT サブスクリプション',
+  codex: 'Codex CLI のアカウント',
   claude: 'Claude Code 自身の認証と課金',
   claudeApi: 'Anthropic API（従量課金）',
   deepseek: 'DeepSeek API（従量課金）',
@@ -427,7 +430,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
   const fallback = shared ? target?.model ?? '' : draft.leaderFallback ?? ''
   const effort = shared ? target?.effort ?? '' : draft.fallbackEffort ?? ''
   const needsAuth = needsClaudeAuth({ ...draft, leaderFallback: fallback }) || Boolean(server.settings.usageFallbackRoutes?.some((route) => route.model.startsWith('claude:')))
-  const fallbackReady = !fallback || (fallback !== leaderValue && teamModelGroups(server).some((group) => group.models.some((model) => model.value === fallback)) && workflowEffortSupported(effort, workflowLevels(server.catalog, fallback)))
+  const fallbackReady = !fallback || (draft.leaderProvider !== 'codex' && !fallback.startsWith('codex:') && fallback !== leaderValue && teamModelGroups(server).some((group) => group.models.some((model) => model.value === fallback)) && workflowEffortSupported(effort, workflowLevels(server.catalog, fallback)))
   const start = async () => {
     if (!fallbackReady || (needsAuth && !auth.ready)) return
     setStarting(true)
@@ -445,7 +448,8 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
         </p>
         <p className="muted">Claude の自動処理には「Claude（API）」の子を推奨します。選択は自動で変更せず、API 利用は従量課金です。</p>
         <LeaderSection server={server} config={draft} onChange={change} />
-        <FallbackSummary server={server} value={fallback} effort={effort} shared={shared} sourceSelected={Boolean(leaderValue)} disabled={starting} />
+        {draft.leaderProvider === 'codex' ? <p className="muted">Codexリーダーのフォールバックには対応していません。{fallback && 'フォールバック設定を解除してください。'}</p>
+          : <FallbackSummary server={server} value={fallback} effort={effort} shared={shared} sourceSelected={Boolean(leaderValue)} disabled={starting} />}
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
           <LeanChildrenSwitch config={draft} onChange={change} />
@@ -499,7 +503,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const save = async () => {
     if (needsAuth && !auth.ready) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
@@ -516,8 +520,9 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
           <ChildCount config={draft} onChange={change} />
         </section>
         <ChildModels server={server} config={draft} onChange={change} />
-        <FallbackSummary server={server} value={teamFallback} effort={teamFallbackEffort} shared={Boolean(team.sharedFallbackPolicy)}
-          sourceSelected={Boolean(currentLeader)} disabled={saving} frozen />
+        {team.leaderKind === 'codex' ? <p className="muted">Codexリーダーのフォールバックには対応していません。</p>
+          : <FallbackSummary server={server} value={teamFallback} effort={teamFallbackEffort} shared={Boolean(team.sharedFallbackPolicy)}
+            sourceSelected={Boolean(currentLeader)} disabled={saving} frozen />}
         {team.leaderFallbackUsed && <p className="muted">このチームではフォールバックを使用済みです。</p>}
         {!anyChildOn(draft) && <p className="team-warning">子に使うモデルを少なくとも一つ選んでください。</p>}
         {showAuth && <ClaudeAuthConsent key={authRevision} workspace={team.workspace} teamId={team.id} onChange={setAuth} />}

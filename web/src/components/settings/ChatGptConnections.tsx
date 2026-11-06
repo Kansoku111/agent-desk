@@ -65,7 +65,7 @@ export function ChatGptConnections() {
       <section className="account-card">
         <div className="account-head">
           <div>
-            <h3>画像生成と利用上限（Codex）</h3>
+            <h3>Codex（GP・画像生成）</h3>
             <p className="muted">GPT チャットとは別のサインインです。</p>
           </div>
           {codex?.signedIn && <span className="badge success">接続済み</span>}

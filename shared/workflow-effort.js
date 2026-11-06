@@ -42,7 +42,7 @@ export function workflowTeamEfforts(config, catalog, leaderModel, providers) {
   for (const [provider, catalogProvider] of Object.entries(providers)) {
     const tier = config[provider]?.low
     if (!config[provider]?.enabled || !tier?.enabled || !tier.model) continue
-    const model = provider === 'claude' ? `claude:${tier.model}` : catalog.models?.find((entry) => entry.provider === catalogProvider && entry.id === tier.model)?.value ?? JSON.stringify([catalogProvider, tier.model])
+    const model = provider === 'claude' ? `claude:${tier.model}` : provider === 'codex' ? `codex:${tier.model}` : catalog.models?.find((entry) => entry.provider === catalogProvider && entry.id === tier.model)?.value ?? JSON.stringify([catalogProvider, tier.model])
     tier.effort = workflowEffort(tier.effort, workflowLevels(catalog, model))
   }
 }

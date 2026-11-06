@@ -1,7 +1,7 @@
 // App state plus the WebSocket connection to the Agent Desk server.
 import { useSyncExternalStore } from 'react'
 import type {
-  TaskPresetSource, TaskPresetKind, AppState, Attachment, ClaudeAuthConfirmation, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
+  TaskPresetSource, TaskPresetKind, AppState, Attachment, ClaudeAuthConfirmation, CodexPermission, CodexTaskSummary, LoginState, ModelUpdate, PermissionMode, SubagentInfo, TeamSettings, TeamSummary, TerminalSummary, ThreadSummary, Turn,
 } from './types'
 import { Outbox, readQueues, type QueuedMessage } from './outbox'
 import { RpcClient, requestErrorMessage } from './rpc-client'
@@ -10,7 +10,7 @@ import { notificationRoute, notificationText, type TaskNotification } from './no
 import { beginCreateIntent, completeCreateIntent, createIntentFingerprint } from './create-intent'
 export type { QueuedMessage } from './outbox'
 
-type Route = { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string } | { view: 'ab'; id: string } | { view: 'preset'; id: string }
+type Route = { view: 'codex'; id: string } | { view: 'home' } | { view: 'thread'; id: string } | { view: 'terminal'; id: string } | { view: 'agent'; id: string } | { view: 'ab'; id: string } | { view: 'preset'; id: string }
 export type SettingsTab = 'accounts' | 'models' | 'teams' | 'personalize' | 'skills' | 'usage' | 'general' | 'remote' | 'about'
 
 interface Toast {
@@ -26,6 +26,8 @@ export interface State {
   turns: Record<string, Turn[]>
   /** The turns of a team's Claude children that were opened, by their session id. */
   agentTurns: Record<string, Turn[]>
+  codexTurns: Record<string, Turn[]>
+  codexPermissions: Record<string, CodexPermission[]>
   /** Each loaded task's subagents, oldest first. */
   subagents: Record<string, SubagentInfo[]>
   /** Whether the subagent panel shows beside a task that has subagents. */
@@ -124,7 +126,7 @@ function forgetToken() {
 function readRoute(): Route {
   try {
     const saved = JSON.parse(sessionStorage.getItem(ROUTE_KEY) ?? 'null')
-    if (['thread', 'terminal', 'agent', 'ab', 'preset'].includes(saved?.view) && typeof saved.id === 'string') return saved
+    if (['thread', 'terminal', 'agent', 'ab', 'preset', 'codex'].includes(saved?.view) && typeof saved.id === 'string') return saved
   } catch {}
   return { view: 'home' }
 }
@@ -162,6 +164,8 @@ let state: State = {
   server: null,
   turns: {},
   agentTurns: {},
+  codexTurns: {},
+  codexPermissions: {},
   subagents: {},
   subagentPanel: readSubagentPanel(),
   subagentFocus: null,
@@ -327,22 +331,41 @@ function handleFrame(frame: any) {
         draft.effort = server.settings.defaultEffort || draft.effort || 'medium'
       }
       const route = (state.route.view === 'thread' && !server.threads.some((thread) => thread.id === (state.route as { id: string }).id))
+        || (state.route.view === 'codex' && !(server.codexTasks ?? []).some((task) => task.id === (state.route as { id: string }).id))
         || (state.route.view === 'terminal' && !server.terminals.some((terminal) => terminal.id === (state.route as { id: string }).id))
         || (state.route.view === 'agent' && !teamChildOf(server, state.route.id))
         || (state.route.view === 'ab' && !(server.ab ?? []).some((run) => run.id === (state.route as { id: string }).id))
         || (state.route.view === 'preset' && !(server.taskPresets ?? []).some((run) => run.id === (state.route as { id: string }).id))
         ? { view: 'home' as const }
         : state.route
-      setState({ server, connection: 'open', draft, route, turns: {}, agentTurns: {}, subagents: {} })
+      setState({ server, connection: 'open', draft, route, turns: {}, agentTurns: {}, codexTurns: {}, codexPermissions: {}, subagents: {} })
       for (const threadId of Object.keys(state.queued)) {
         if (!server.threads.some((thread) => thread.id === threadId)) forgetQueued(threadId)
       }
       // A turn may have ended while the connection was down, so its `thread` event was missed.
       flushQueues()
+      if (route.view === 'codex') void loadCodexTask(route.id)
       if (route.view === 'thread') void loadThread(route.id)
       if (route.view === 'agent') void loadAgentTurns(route.id)
       announceNewModels(server.modelUpdate)
       for (const listener of helloListeners) listener()
+      break
+    }
+    case 'codexTask':
+      upsertCodexTask(frame.task)
+      if (state.route.view === 'codex' && state.route.id === frame.task.id) void loadCodexPermissions(frame.task.id)
+      break
+    case 'codexTaskRemoved':
+      updateServer({ codexTasks: (state.server?.codexTasks ?? []).filter((task) => task.id !== frame.taskId) })
+      if (state.route.view === 'codex' && state.route.id === frame.taskId) navigate({ view: 'home' })
+      break
+    case 'codexTurn': {
+      const turns = state.codexTurns[frame.taskId]
+      if (!turns) break
+      const index = turns.findIndex((turn) => turn.id === frame.turn.id)
+      const turn = shareTurn(turns[index], frame.turn)
+      const next = index >= 0 ? turns.map((entry, i) => i === index ? turn : entry) : [...turns, turn]
+      setState({ codexTurns: { ...state.codexTurns, [frame.taskId]: next } })
       break
     }
     case 'terminal':
@@ -508,17 +531,56 @@ function announceNewModels(update: ModelUpdate | undefined) {
 
 function notify(frame: TaskNotification) {
   const route = notificationRoute(frame)
-  const viewing = state.route.view === route.view && state.route.id === frame.threadId && !document.hidden
+  const viewing = state.route.view === route.view && state.route.id === route.id && !document.hidden
   if (viewing) return
   const text = notificationText(frame)
   if (document.hidden && state.server?.settings.notifications && 'Notification' in window && Notification.permission === 'granted') {
-    const notification = new Notification('Agent Desk', { body: text, tag: frame.threadId })
+    const notification = new Notification('Agent Desk', { body: text, tag: route.id })
     notification.onclick = () => {
       window.focus()
       navigate(route)
     }
   }
   if (!document.hidden) toast(text, frame.status === 'error' ? 'error' : 'info')
+}
+
+// ------------------------------------------------------------------ Codex tasks
+
+export function upsertCodexTask(task: CodexTaskSummary) {
+  if (!state.server) return
+  updateServer({ codexTasks: [...(state.server.codexTasks ?? []).filter((entry) => entry.id !== task.id), task].sort((a, b) => b.updatedAt - a.updatedAt) })
+}
+
+export async function loadCodexPermissions(taskId: string) {
+  const result = await act<{ permissions: CodexPermission[] }>('codex.task.permissions', { taskId })
+  if (result) setState((current) => ({ codexPermissions: { ...current.codexPermissions, [taskId]: result.permissions } }))
+}
+
+export async function loadCodexTask(taskId: string) {
+  // Record frames arriving while the snapshot request is in flight.
+  setState((current) => ({ codexTurns: { ...current.codexTurns, [taskId]: current.codexTurns[taskId] ?? [] } }))
+  const before = state.codexTurns[taskId]
+  const result = await act<{ task: CodexTaskSummary; turns: Turn[]; permissions: CodexPermission[] }>('codex.task.get', { taskId })
+  if (result) {
+    const live = state.codexTurns[taskId]
+    const turns = live === before ? result.turns : [...result.turns.filter((turn) => !live.some((entry) => entry.id === turn.id)), ...live]
+    const currentTask = state.server?.codexTasks?.find((task) => task.id === taskId)
+    if (!currentTask || currentTask.updatedAt <= result.task.updatedAt) upsertCodexTask(result.task)
+    setState((current) => ({ codexTurns: { ...current.codexTurns, [taskId]: turns }, codexPermissions: { ...current.codexPermissions, [taskId]: result.permissions } }))
+  }
+}
+
+export async function startCodexTask(workspace: string) {
+  if (!state.server?.accounts.codex?.signedIn) {
+    toast('GPを使うには設定でCodexにサインインしてください')
+    setState({ settingsOpen: 'accounts', ...(isNarrow() ? { sidebarOpen: false } : {}) })
+    return false
+  }
+  const result = await act<{ task: CodexTaskSummary }>('codex.task.create', { workspace })
+  if (!result) return false
+  upsertCodexTask(result.task)
+  navigate({ view: 'codex', id: result.task.id })
+  return true
 }
 
 // ------------------------------------------------------------------ Claude Code tasks
@@ -579,16 +641,19 @@ function upsertTeam(team: TeamSummary) {
   const removedChild = previous?.children.find((child) => child.kind === route.view && child.taskId === route.id
     && !team.children.some((entry) => entry.id === child.id))
   updateServer({ teams: [...(server.teams ?? []).filter((entry) => entry.id !== team.id), team] })
-  if (removedChild || (previous && previous.leaderId !== team.leaderId && route.view === previous.leaderKind && route.id === previous.leaderId)) navigate({ view: team.leaderKind === 'thread' ? 'thread' : 'terminal', id: team.leaderId })
+  if (removedChild || (previous && previous.leaderId !== team.leaderId && route.view === previous.leaderKind && route.id === previous.leaderId)) navigate({ view: team.leaderKind, id: team.leaderId })
 }
 
 /** Starts an agent team in a project (or My PC): its Claude Code leader opens to talk to. */
 /** Starts a team in the folder with the choices of the start dialog; its leader (Claude Code or GPT) opens. */
 export async function startTeam(workspace: string, choices: TeamSettings, authConfirmation?: ClaudeAuthConfirmation, execution?: { leaderModel?: string; planImplement: boolean }) {
-  const result = await act<{ team: TeamSummary; terminal?: TerminalSummary; thread?: ThreadSummary }>('team.create', { workspace, choices, authConfirmation, execution })
+  const result = await act<{ team: TeamSummary; terminal?: TerminalSummary; thread?: ThreadSummary; codex?: CodexTaskSummary }>('team.create', { workspace, choices, authConfirmation, execution })
   if (!result) return false
   upsertTeam(result.team)
-  if (result.thread) {
+  if (result.codex) {
+    upsertCodexTask(result.codex)
+    navigate({ view: 'codex', id: result.codex.id })
+  } else if (result.thread) {
     upsertThread(result.thread)
     navigate({ view: 'thread', id: result.thread.id })
   } else if (result.terminal) {
@@ -607,7 +672,7 @@ export function setTeamPanel(open: boolean) {
 }
 
 /** The task of a team's child: its dsh task, or the view of its headless Claude Code. */
-export function openTeamChild(child: { kind: 'thread' | 'agent'; taskId: string | null }) {
+export function openTeamChild(child: { kind: 'thread' | 'agent' | 'codex'; taskId: string | null }) {
   if (child.taskId) navigate({ view: child.kind, id: child.taskId })
 }
 
@@ -633,6 +698,7 @@ export function navigate(route: Route) {
   try {
     sessionStorage.setItem(ROUTE_KEY, JSON.stringify(route))
   } catch {}
+  if (route.view === 'codex') void loadCodexTask(route.id)
   if (route.view === 'thread' && !state.turns[route.id]) void loadThread(route.id)
   else if (route.view === 'thread' && !state.subagents[route.id]) void loadSubagents(route.id)
   else if (route.view === 'agent') void loadAgentTurns(route.id)

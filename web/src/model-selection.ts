@@ -1,6 +1,7 @@
 import type { AppState, CatalogModel, TeamProvider } from './types'
 
 export function providerReady(server: AppState, provider: string) {
+  if (provider === 'codex') return Boolean(server.accounts.codex?.signedIn)
   if (provider === 'openai-codex') return server.accounts.chatgpt.signedIn
   if (provider === 'anthropic') return server.accounts.claude.configured
   if (provider === 'deepseek-official') return server.accounts.deepseek.configured
@@ -29,7 +30,7 @@ export function claudeCodeModels(server: AppState) {
     .filter((model) => isModelVisible(server, model))
 }
 
-const EXECUTION_ROUTES: Partial<Record<TeamProvider, string>> = { claudeApi: 'anthropic', gpt: 'openai-codex', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' }
+const EXECUTION_ROUTES: Partial<Record<TeamProvider, string>> = { codex: 'codex', claudeApi: 'anthropic', gpt: 'openai-codex', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' }
 
 /** Translate a picker value to EX's persisted provider/model pair, without changing routes. */
 export function executionChildChoice(server: AppState, value: string): { provider: TeamProvider; model: string } | null {
@@ -55,7 +56,7 @@ export function executionModelSelection(server: AppState, provider: string, lead
 
 /** A visible, connected model for a new task. Never fall back to a hidden choice. */
 export function pickDefaultModel(server: AppState, current: string | null): string | null {
-  const models = visibleModels(server)
+  const models = visibleModels(server).filter((model) => model.provider !== 'codex')
   // Prefer available models over possibly retired ones explicitly shown by the user.
   const pick = (allowRetired: boolean) => {
     const usable = (value: string | null) => {

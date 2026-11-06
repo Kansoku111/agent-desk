@@ -143,6 +143,43 @@ test('team children expose retained conversation text, not launch configuration'
   assert.doesNotMatch(JSON.stringify(read), /TEAM_SECRET/)
 })
 
+test('Codex history resolves only indexed tasks and exposes dialogue without private fields', async t => {
+  const f = await fixture(t)
+  const record = { id: 'work-1', title: 'Codex task', workspace: f.workspace, updatedAt: f.at,
+    accountKey: 'CODEX_PRIVATE_ACCOUNT', model: 'CODEX_PRIVATE_MODEL', instructions: 'CODEX_PRIVATE_INSTRUCTIONS',
+    mcpServers: { service: { args: ['CODEX_PRIVATE_ARGS'] } }, turns: [{ id: 'c-turn', startedAt: f.at, endedAt: f.at + 1,
+      user: { text: 'Codex user dialogue', images: [{ data: 'CODEX_PRIVATE_IMAGE' }] }, items: [
+        { type: 'thought', text: 'CODEX_PRIVATE_THOUGHT' },
+        { type: 'tool', input: { args: 'CODEX_PRIVATE_TOOL' }, output: 'CODEX_PRIVATE_OUTPUT' },
+        { type: 'agent', text: 'Codex assistant dialogue' },
+        { type: 'steer', text: 'Codex follow-up', at: f.at + 1 },
+      ] }] }
+  await f.write('codex-tasks.json', ['work-1', 'work-1', '../outside', 'x'.repeat(129), 3, 'missing', 'mismatch'])
+  await f.write('codex-tasks/work-1.json', record)
+  await f.write('codex-tasks/mismatch.json', { ...record, id: 'another' })
+  await f.write('codex-tasks/orphan.json', { ...record, id: 'orphan', turns: [{ user: { text: 'ORPHAN_SECRET' }, items: [] }] })
+  const sessions = await f.store.sessions()
+  assert.equal(sessions.filter(s => s.kind === 'codex' && s.id === 'codex:work-1').length, 1)
+  const result = await f.store.search({ query: 'Codex', limit: 20 })
+  assert.equal(result.results.length, 3)
+  assert.deepEqual(result.results.map(hit => hit.session_id), ['codex:work-1', 'codex:work-1', 'codex:work-1'])
+  assert.deepEqual(result.results.map(hit => hit.role), ['user', 'assistant', 'user'])
+  assert.equal((await f.store.read({ session_id: 'codex:work-1', message: 1 })).text, 'Codex assistant dialogue')
+  assert.equal((await f.store.read({ session_id: 'codex:work-1', message: 2 })).text, 'Codex follow-up')
+  assert.equal((await f.store.search({ query: 'CODEX_PRIVATE', all_workspaces: true })).results.length, 0)
+  assert.doesNotMatch(JSON.stringify(result), /CODEX_PRIVATE/)
+  assert.equal((await f.store.search({ query: 'ORPHAN_SECRET', all_workspaces: true })).results.length, 0)
+  await assert.rejects(f.store.read({ session_id: 'codex:orphan' }), /not found/)
+  await assert.rejects(f.store.read({ session_id: 'codex:../outside' }), /Invalid session_id/)
+  await assert.rejects(f.store.read({ session_id: 'codex:mismatch' }), /unavailable/)
+  await f.write('codex-tasks/work-1.json', { ...record, workspace: f.other })
+  assert.equal((await f.store.search({ query: 'Codex user dialogue' })).results.length, 0)
+  assert.equal((await f.store.search({ query: 'Codex user dialogue', all_workspaces: true })).results.length, 1)
+  await f.write('codex-tasks.json', [])
+  assert.equal((await f.store.search({ query: 'Codex user dialogue', all_workspaces: true })).results.length, 0)
+  await assert.rejects(f.store.read({ session_id: 'codex:work-1' }), /not found/)
+})
+
 test('history switch is opt-in, validates booleans and triggers the existing idle restart', () => {
   assert.equal(DEFAULT_SETTINGS.historyTool, false)
   assert.equal(migrateSettings({}).historyTool, false)

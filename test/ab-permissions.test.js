@@ -112,6 +112,29 @@ test('AB adapter creates the implementation session unsandboxed and consultation
   assert.equal(created[1].permissionMode, full)
 })
 
+test('AB Codex jobs use the dedicated runner and preserve permissions and ownership', async () => {
+  const calls = []
+  const codex = Object.assign(new EventEmitter(), {
+    async create(input) { calls.push(['create', input]); return { id: `C${calls.length}` } },
+    run(id, text, options) { calls.push(['run', id, text, options]) },
+    async stop(id) { calls.push(['stop', id]) },
+    async remove(id) { calls.push(['remove', id]) },
+  })
+  const runner = new AbRunner({ threads: new EventEmitter(), agents: new EventEmitter(), codex })
+  const handle = await runner.start({ runId: 'R', jobId: 'J', workspace: '/project', model: 'codex:model', effort: 'low', text: 'task', instructions: 'instructions', writable: false, lean: true })
+  assert.deepEqual(handle, { kind: 'codex', id: 'C1' })
+  assert.equal(calls[0][1].permissionMode, 'read-only')
+  assert.equal(calls[0][1].model, 'model')
+  assert.deepEqual(calls[0][1].ab, { runId: 'R', jobId: 'J', writable: false, lean: true })
+  const finished = once(runner, 'finished')
+  codex.emit('finished', { id: handle.id, status: 'done', text: 'report', denials: [] })
+  assert.deepEqual((await finished)[0], { runId: 'R', jobId: 'J', status: 'completed', text: 'report', error: undefined, denials: [] })
+  await runner.remove(handle)
+  assert.deepEqual(calls.slice(-2), [['stop', handle.id], ['remove', handle.id]])
+  await runner.start({ runId: 'R', jobId: 'K', workspace: '/project', model: 'codex:model', text: 'implement', instructions: '', writable: true })
+  assert.equal(calls.at(-2)[1].permissionMode, full)
+})
+
 test('AB records actual Windows provisioning failure even without an approval request', async (t) => {
   const f = await fixture(t)
   const runner = new AbRunner({ threads: f.manager, agents: new EventEmitter() })

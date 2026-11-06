@@ -18,7 +18,7 @@ export function observerStatus(manager, teamId) {
   const summary = manager.summary(team)
   const leader = team.leaderKind === 'thread'
     ? manager.threads.threads.get(team.leaderId)
-    : manager.terminals.status(team.leaderId)
+    : team.leaderKind === 'codex' ? manager.codex?.get(team.leaderId) : manager.terminals.status(team.leaderId)
   const leaderRecord = team.leaderKind === 'terminal' ? manager.terminals.records?.get(team.leaderId) : leader
   const queue = [...(manager.delivering?.get(teamId)?.items ?? []), ...(team.queue ?? [])]
   return {
@@ -30,7 +30,7 @@ export function observerStatus(manager, teamId) {
       approval: Boolean(leader?.pendingApproval || leader?.activity === 'approval'),
     },
     children: summary.children.map(({ id, name, title, state, updatedAt, lastReport, pending, kind, taskId }) => {
-      const record = kind === 'thread' ? manager.threads.threads.get(taskId) : kind === 'agent' ? manager.agents.get?.(taskId) : null
+      const record = kind === 'thread' ? manager.threads.threads.get(taskId) : kind === 'agent' ? manager.agents.get?.(taskId) : kind === 'codex' ? manager.codex?.get(taskId) : null
       const recorded = [updatedAt, record?.updatedAt].filter(Number.isFinite)
       return { id, name, title, state, updatedAt: recorded.length ? Math.max(...recorded) : null, lastReport, pending }
     }),
@@ -68,6 +68,7 @@ export async function observerChildTurns(manager, teamId, childId, limit = 5) {
   let turns
   if (child.kind === 'thread') turns = (await manager.threads.get(taskId)).turns
   else if (child.kind === 'agent') turns = manager.agents.turns(taskId)
+  else if (child.kind === 'codex') turns = manager.codex?.turns(taskId)
   if (!Array.isArray(turns)) throw new Error('この子の会話を読み取れません')
   if (manager.teams.get(teamId) !== team || !team.children.includes(child) || child.taskId !== taskId) throw new Error('この子の会話は見つかりません')
 

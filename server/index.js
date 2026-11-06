@@ -41,6 +41,9 @@ import { ChatGptUsage } from './chatgpt-usage.js'
 import { AUTH_REQUIRED } from './claude-auth.js'
 import { mergeClaudeLimits, readSavedClaudeLimits } from './claude-limits.js'
 import { CODEX_VERSION, CodexAppServer } from './codex-app-server.js'
+import { CodexWorkServer } from './codex-work-server.js'
+import { CodexRunner } from './codex-runner.js'
+import { createCodexHandlers } from './rpc-handlers-codex.js'
 import { accountModelAdditions, markRetired, retiredModels, withCodexModelLimits } from './codex-models.js'
 import { appPaths, projectRoot } from './paths.js'
 import { PERMISSION_MODES, RuntimePool } from './runtime.js'
@@ -137,6 +140,9 @@ await fsp.mkdir(paths.myPc, { recursive: true })
 
 const credentials = new CredentialStore(paths.credentials)
 const codexApp = new CodexAppServer({ home: paths.codexHome, openUrl: openExternal })
+const codexWork = new CodexWorkServer({ home: paths.codexHome, cwd: paths.myPc })
+const codex = await new CodexRunner({ home: paths.home, server: codexWork, attachmentsDir: paths.attachmentsDir,
+  instructions: () => effectiveCustomInstructions(settings) }).load()
 
 // Agent teams (teams.js) give their leader's Claude Code its flags.
 let teams = null
@@ -162,7 +168,7 @@ const terminals = await new TerminalManager({
   log,
 }).load()
 /** Whether an agent or a Claude Code task is working: the app must not exit or be replaced then. */
-const busy = () => threads.busy || terminals.busy || agents.busy || teams.busy || ab.busy || abAgents.busy || presets.busy || presetAgents.busy
+const busy = () => codex.busy || threads.busy || terminals.busy || agents.busy || teams.busy || ab.busy || abAgents.busy || presets.busy || presetAgents.busy
 
 async function accounts() {
   let snapshot = { refs: {}, records: {} }
@@ -319,7 +325,12 @@ const modelUpdateState = () => ({
     : null,
 })
 /** The catalog as the UI gets it: models the account's list no longer has are marked `retired`. */
-const catalogState = (snapshot = catalog.snapshot()) => markRetired(snapshot, codexLimits.availability, settings.modelAutoUpdate !== false)
+const catalogState = (snapshot = catalog.snapshot()) => {
+  const result = markRetired(snapshot, codexLimits.availability, settings.modelAutoUpdate !== false)
+  const models = codex.modelCache.map(model => ({ provider: 'codex', id: model.id, name: model.name, value: 'codex:' + model.id, templates: [] }))
+  return { ...result, models: [...result.models, ...models], effortsByModel: { ...result.effortsByModel,
+    ...Object.fromEntries(codex.modelCache.map(model => ['codex:' + model.id, model.efforts.map(value => ({ value, name: value }))])) } }
+}
 async function syncModelCatalog() {
   let result
   try {
@@ -491,7 +502,9 @@ teams = await new TeamManager({
   threads,
   terminals,
   agents,
+  codex,
   catalog,
+  catalogState: () => catalogState(),
   getSettings: () => settings.agentTeams,
   imageMcp: claudeImageMcp,
   modelVisibility: () => settings.modelVisibility,
@@ -502,18 +515,36 @@ teams = await new TeamManager({
   log,
 }).load()
 
+codex.executionGuard = (record, context) => teams.guardExecution(record, context)
+codex.on('session', task => broadcast('codexTask', { task }))
+codex.on('turn', ({ id, turn }) => broadcast('codexTurn', { taskId: id, turn }))
+codex.on('removed', ({ id }) => broadcast('codexTaskRemoved', { taskId: id }))
+codex.on('fault', error => log('Codex task:', error.message))
+codex.on('approval', ({ id }) => {
+  const task = codex.get(id)
+  if (task && !task.ab && !task.team?.childId) broadcast('notify', { kind: 'codex', taskId: id, title: task.title, status: 'approval' })
+})
+codex.on('finished', ({ id, status }) => {
+  const task = codex.get(id)
+  if (task && !task.ab && !task.team?.childId) broadcast('notify', { kind: 'codex', taskId: id, title: task.title, status: status === 'stopped' ? 'cancelled' : status })
+})
+codex.on('models', models => {
+  broadcast('codexModels', { models })
+  broadcast('catalog', { catalog: catalogState() })
+})
+
 const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'),
   preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
-const abRunner = new AbRunner({ threads, agents: abAgents, attachmentsDir: paths.attachmentsDir, instructions: () => effectiveCustomInstructions(settings),
+const abRunner = new AbRunner({ threads, agents: abAgents, codex, attachmentsDir: paths.attachmentsDir, instructions: () => effectiveCustomInstructions(settings),
   guard: (record) => teams.guardExecution(record) })
-const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalog.data,
+const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalogState(),
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
   validateImages: async (images, config) => {
     const saved = await abImages(paths.attachmentsDir, images)
-    if (saved.length) assertAbImageModels(config, catalog.data.models)
+    if (saved.length) assertAbImageModels(config, catalogState().models)
     return saved
   },
-  validateModel: (value) => validateAbModel(value, catalog.data, settings.modelVisibility),
+  validateModel: (value) => validateAbModel(value, catalogState(), settings.modelVisibility),
   authorize: async ({ workspace, config, authConfirmation }) => {
     if ([config.a, config.b, config.leader, config.implementer, config.leaderFallback].some((value) => value?.startsWith('claude:'))) {
       await teams.confirmAbAuth(workspace, authConfirmation)
@@ -632,8 +663,8 @@ terminals.on('approval-needed', ({ terminalId, title }) => broadcast('notify', {
 teams.on('team', (team) => broadcast('team', { team }))
 teams.on('removed', ({ teamId }) => broadcast('teamRemoved', { teamId }))
 // The leader needs the user (ask_user), or a child's approval waited too long for the leader.
-teams.on('ask', ({ leaderId, leaderKind, text }) => broadcast('notify', { kind: 'team-ask', terminal: leaderKind !== 'thread', threadId: leaderId, title: text }))
-teams.on('stuck', ({ leaderId, leaderKind, title }) => broadcast('notify', { kind: 'approval-needed', terminal: leaderKind !== 'thread', threadId: leaderId, title }))
+teams.on('ask', ({ leaderId, leaderKind, text }) => broadcast('notify', { kind: 'team-ask', codex: leaderKind === 'codex', terminal: leaderKind === 'terminal', threadId: leaderId, taskId: leaderKind === 'codex' ? leaderId : undefined, status: leaderKind === 'codex' ? 'approval' : undefined, title: text }))
+teams.on('stuck', ({ leaderId, leaderKind, title }) => broadcast('notify', { kind: 'approval-needed', codex: leaderKind === 'codex', terminal: leaderKind === 'terminal', threadId: leaderId, taskId: leaderKind === 'codex' ? leaderId : undefined, status: leaderKind === 'codex' ? 'approval' : undefined, title }))
 terminals.on('turn-finished', () => {
   if (restartPending) void restartRuntimesWhenIdle()
 })
@@ -649,7 +680,21 @@ codexApp.on('login', state => {
   broadcast('codexLogin', { codexLogin: state }, { localOnly: true })
   if (state.phase === 'done') void refreshChatGptUsage()
 })
-codexApp.on('account', () => { void accounts().then(next => broadcast('accounts', { accounts: next })) })
+let codexAccountRefresh = Promise.resolve()
+let lastCodexAccount = null
+codexApp.on('account', account => {
+  void accounts().then(next => broadcast('accounts', { accounts: next }))
+  const identity = JSON.stringify([account.signedIn, account.email])
+  if (identity === lastCodexAccount) return
+  lastCodexAccount = identity
+  codex.invalidateModels()
+  codexAccountRefresh = codexAccountRefresh.catch(() => {}).then(async () => {
+    // Work processes must reload the credential file after a sign-in change.
+    if (codex.busy) return
+    await codexWork.stop()
+    if (account.signedIn) await codex.models({ refresh: true })
+  }).catch(error => log('Codex models:', error.message))
+})
 codexApp.on('rateLimits', body => { chatgptUsageTracker.update(body) })
 async function refreshChatGptUsage() {
   return chatgptUsageTracker.refresh()
@@ -836,6 +881,8 @@ async function fullState(client) {
     fastModels: currentFastModels(),
     threads: threads.list(),
     terminals: terminals.list(),
+    codexTasks: codex.list({ includeOwned: true }),
+    codexModels: codex.modelCache,
     teams: teams.list(),
     ab: ab.list(),
     taskPresets: presets.list(),
@@ -883,7 +930,7 @@ const handlers = {
   ...createThreadHandlers({ paths, threads, teams, codexApp, subagents, mutateSettings }),
   ...createWorkspaceHandlers({ paths, getSettings, mutateSettings }),
   ...createAccountHandlers({
-    appVersion: APP_VERSION, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost,
+    appVersion: APP_VERSION, credentials, login, codexApp, codex, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost,
     updateModelCatalog, refreshChatGptUsage, getChatgptUsage: () => chatgptUsage, refreshUsageHistory, usageState,
     updateSettings: (patch) => settingsService.update(patch),
   }),
@@ -893,6 +940,7 @@ const handlers = {
     checkEquivalentPricing: () => equivalentPricing.refresh({ force: true }),
   }),
   ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
+  ...createCodexHandlers({ paths, codex, teams, mutateSettings }),
 
   ...createAbHandlers(ab),
   'preset.inspect': ({ source }) => presets.inspect(source),
@@ -1050,6 +1098,7 @@ async function shutdown(code = 0) {
   await agents.shutdown().catch((error) => log('team agents shutdown:', error.message))
   await catalogWarmTask?.catch((error) => log('catalog warm shutdown:', error.message))
   await catalog.flush().catch((error) => log('catalog shutdown:', error.message))
+  await codex.shutdown().catch((error) => log('Codex shutdown:', error.message))
   await codexApp.stop().catch(() => {})
   await remote.close().catch(() => {})
   await fsp.rm(serverInfoFile, { force: true }).catch(() => {})

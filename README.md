@@ -11,6 +11,7 @@ ChatGPT のサブスクリプション、Claude の API キー、この PC に�
 - **Claude・DeepSeek・OpenCode Go（API キー）:** 通常のタスクで Claude を選ぶときは Anthropic の API キー、DeepSeek と OpenCode Go（GLM・Kimi・Qwen などの定額制サブスクリプション）は任意で API キーを登録して使います。Claude Code（CL）とチームの Claude の子は、下の別の経路です。
 - **Command Code:** GOAT など API 対応プランのキーで公式 Provider API を使えます（Go は API 非対応）。[設定と制約](docs/command-code.md)。
 - **Codex 風の画面:** ワークスペースごとのタスク、コマンドと差分の表示、承認カードを備えます。
+- **Codex（GP）:** CLの右のGPから、公式Codexを実行エンジンにしたタスクをチャットUIで使えます。通常GPTとは別経路で、既存のCodexサインインを使います。[使い方と対応範囲](docs/codex.md)。
 - **Claude Code（CL）:** この PC の Claude Code を、アプリ内のターミナルでタスクとして動かします。認証と料金は Claude Code 自身のもの（サブスクリプションなど）で、Agent Desk に登録した API キーは使いません。
 - **エージェントチーム（TM）:** リーダーをモデルピッカーから選び、作業を分けてGPT・Claude・DeepSeek・OpenCode Go・Command Code の子エージェントに任せます。Claude Code のリーダーと子は通常の認証を引き継ぎ、本人のサブスクリプション・API キー・クラウド認証を制限しません。**自動で進むチーム作業には、dsh の「Claude（API）」の子を推奨します。** 登録済みの Anthropic API キーを使い、Claude Code とは別の実行方式・会話履歴です。子は初期設定ですべてオフです。既存の選択・モデル・履歴は維持し、子の API への移行、自動での有効化、別経路へのフォールバックはしません。
   - 開始画面とチーム設定では、モデルを呼ばずに `claude auth status` を調べ、個人情報を除いた認証方式だけを表示します。Claude Code の課金経路への明示的な確認を認証方式ごとに保存し、同じ方式ならほかのチームにも使います（トークンやアカウント情報は保存しません）。CLI の起動・再開と子の各ターンの前に再確認し、認証方式が変わったら再同意が必要です。不明なら別途、不明な課金経路のリスクへの明示的な同意も必要で、ログアウト状態では実行できません。通常の CL を直接始めるときには追加しませんが、共通フォールバックで Claude Code を起動する場合は確認します。
@@ -77,7 +78,7 @@ npm start
 ## クイックスタート（初期設定）
 
 1. 左下の「設定」を開き、「アカウント」タブを選びます。
-2. 「GPT チャットと Web 検索（公式）」の **Continue with ChatGPT** を押し、ブラウザで Agent Desk の登録と ChatGPT プラン使用を承認します。以前の Codex OAuth 接続はチャット・検索には再利用しません。画像生成と利用上限の表示は、別カード「画像生成と利用上限（Codex）」で追加サインインします。
+2. 「GPT チャットと Web 検索（公式）」の **Continue with ChatGPT** を押し、ブラウザで Agent Desk の登録と ChatGPT プラン使用を承認します。以前の Codex OAuth 接続はチャット・検索には再利用しません。GP・画像生成とCodexの利用上限の表示は、別カード「Codex（GP・画像生成）」で追加サインインします。
 3. Claude を使う場合は、Anthropic の API キーを貼り付けて保存します。保存時にキーが有効か確認します。
    - 貼り付けるのは、キーを作成したときに一度だけ表示される `sk-ant-api…` で始まる文字列です。Console の一覧に出る `apikey_…` はキーの ID なので使えません。
    - ワークスペースを限定しない個人キーやサービスアカウントキーでは、使うワークスペースの指定が必要です。保存後に表示される欄で選ぶか、`wrkspc_…` の ID を入力してください。
@@ -93,6 +94,7 @@ npm start
 詳しい説明は、以下の日本語のドキュメントにあります。
 
 - [機能の詳細](docs/features.md): できること、権限モード
+- [Codex（GP）](docs/codex.md): Codex実行のタスク、認証と対応範囲
 - [Command Code](docs/command-code.md): 公式 API の設定と制約
 - [エージェントチーム](docs/team.md): TM のリーダーと子エージェントの使い方
 - [スマホから使う](docs/remote.md): Tailscale 経由での接続

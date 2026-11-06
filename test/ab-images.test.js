@@ -22,6 +22,12 @@ async function fixture(t) {
   return { dir, images, bytes, cleanups }
 }
 
+test('AB image validation accepts only a catalogued Codex route', () => {
+  const config = { a: 'codex:model', b: 'codex:model', leader: 'codex:model', delegate: false }
+  assert.doesNotThrow(() => assertAbImageModels(config, [{ provider: 'codex', value: 'codex:model' }]))
+  assert.throws(() => assertAbImageModels(config, []))
+})
+
 test('AB validates uploaded IDs, MIME, existence and bounds rather than trusting paths', async (t) => {
   const { dir, images } = await fixture(t)
   assert.deepEqual(await abImages(dir, [{ ...images[0], mimeType: 'text/plain' }]), [images[0]])

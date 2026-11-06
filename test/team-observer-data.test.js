@@ -40,6 +40,19 @@ for (const kind of ['thread', 'agent']) test(kind + ' child conversation is limi
   assert.doesNotMatch(JSON.stringify(result), /private thought|tool output/)
 })
 
+test('Codex leader status and child transcript use Codex records', async () => {
+  const { manager, team, turns } = fixture('codex')
+  team.leaderKind = 'codex'
+  manager.codex = { get: id => id === 'leader' ? { state: 'running', updatedAt: 12, pendingApproval: true } : { updatedAt: 15 }, turns: () => turns }
+  const status = observerStatus(manager, 'team')
+  assert.equal(status.leader.state, 'running')
+  assert.equal(status.leader.approval, true)
+  assert.equal(status.children[0].updatedAt, 15)
+  const result = await observerChildTurns(manager, 'team', 'child', 1)
+  assert.deepEqual(result.turns[0].messages, ['answer 11'])
+  assert.doesNotMatch(JSON.stringify(result), /private thought|tool output/)
+})
+
 test('TeamManager exposes the readers without leader tools', async () => {
   const { manager } = fixture()
   Object.setPrototypeOf(manager, TeamManager.prototype)

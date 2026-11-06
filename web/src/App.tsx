@@ -7,6 +7,7 @@ import { ExecutionStartDialog } from './components/ExecutionSettings'
 import { Sidebar } from './components/Sidebar'
 import { AbStartDialog, AbView } from './components/Ab'
 import { ThreadView } from './components/ThreadView'
+import { CodexView } from './components/CodexView'
 import { PresetView, TaskPresetDialogs } from './components/TaskPresets'
 import { AgentView } from './components/AgentView'
 import { FileMenuHost } from './components/FileRef'
@@ -85,6 +86,7 @@ export function App() {
   const updating = useStore((state) => state.server?.updates?.app?.phase === 'installing')
   const title = useStore((state) => {
     const { route } = state
+    if (route.view === 'codex') return state.server?.codexTasks?.find((task) => task.id === route.id)?.title
     if (route.view === 'thread') return state.server?.threads.find((thread) => thread.id === route.id)?.title
     if (route.view === 'terminal') return state.server?.terminals.find((terminal) => terminal.id === route.id)?.title
     if (route.view === 'agent') return state.server && teamChildOf(state.server, route.id)?.child.title
@@ -146,7 +148,7 @@ export function App() {
               <WifiOff size={14} /> {remoteHost ? 'PC との接続が切れました。再接続しています…' : 'サーバーとの接続が切れました。再接続しています…'}
             </div>
           )}
-        {route.view === 'thread' ? <ThreadView threadId={route.id} />
+        {route.view === 'codex' ? <CodexView key={route.id} taskId={route.id} /> : route.view === 'thread' ? <ThreadView threadId={route.id} />
           : route.view === 'terminal' ? <Suspense fallback={null}><TerminalView key={route.id} terminalId={route.id} /></Suspense>
             : route.view === 'agent' ? <AgentView taskId={route.id} /> : route.view === 'ab' ? <AbView key={route.id} id={route.id} />
               : route.view === 'preset' ? <PresetView key={route.id} id={route.id} /> : <Home />}

@@ -31,6 +31,15 @@ const server = {
   accounts: { chatgpt: { signedIn: false }, claude: { configured: true }, deepseek: { configured: false }, opencodeGo: { configured: true } },
 }
 
+test('Codex workflow models require explicit opt-in and a connected account', () => {
+  const gp = { provider: 'codex', id: 'gp', name: 'GP', value: 'codex:gp' }
+  const state = { ...server, catalog: { ...server.catalog, models: [...server.catalog.models, gp] }, accounts: { ...server.accounts, codex: { signedIn: true } } }
+  assert.equal(workflow.modelGroups(state).some((group) => group.id === 'codex'), false)
+  assert.deepEqual(workflow.modelGroups(state, true).find((group) => group.id === 'codex').models, [gp])
+  state.accounts.codex.signedIn = false
+  assert.equal(workflow.modelGroups(state, true).some((group) => group.id === 'codex'), false)
+})
+
 test('Claude Code and Claude API remain separate groups and choices', () => {
   const groups = workflow.modelGroups(server)
   const code = groups.find((group) => group.id === 'claude-code')

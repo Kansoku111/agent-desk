@@ -100,7 +100,7 @@
   --shadow-composer: 0 6px 24px rgba(0, 0, 0, 0.06);
   --radius: 10px;
   --radius-lg: 22px;
-  --sidebar-width: 268px;
+  --sidebar-width: 380px;
   --group-tint: 0.08;
   --group-icon-lightness: 42%;
   --column: 768px;
@@ -1018,6 +1018,12 @@ select:focus {
   position: static;
   padding-right: 4px;
   opacity: 1;
+}
+
+@media (max-width: 420px) {
+  .task-group-head { flex-wrap: wrap; }
+  .task-group-head:hover .task-group-toggle, .task-group-head:focus-within .task-group-toggle { flex-basis: 100%; }
+  @media (hover: none) { .task-group-toggle { flex-basis: 100%; } }
 }
 
 .task-group-actions .icon-button:hover {
@@ -3428,7 +3434,7 @@ select:focus {
     position: fixed;
     inset: 0 auto 0 0;
     z-index: 60;
-    width: min(86vw, var(--sidebar-width));
+    width: 90vw;
     box-shadow: var(--shadow-menu);
   }
 
@@ -4232,6 +4238,7 @@ select:focus {
 .task-start-button.ex-button { --task-action-color: var(--green); }
 .task-start-button.tm-button { --task-action-color: var(--focus); }
 .task-start-button.cl-button { --task-action-color: var(--amber); }
+.task-start-button.gp-button { --task-action-color: var(--green); }
 
 .task-group-actions .task-start-button:is(:hover, :focus-visible) {
   background: color-mix(in srgb, var(--task-action-color) 14%, transparent);

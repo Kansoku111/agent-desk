@@ -236,6 +236,24 @@ function filePath(input: Record<string, unknown>) {
   return str(input.file_path ?? input.path ?? input.filePath ?? input.target_file ?? '')
 }
 
+/** Codex fileChange carries one unified diff per file in a single tool item. */
+function patchChanges(input: Record<string, unknown>) {
+  if (!Array.isArray(input.changes)) return null
+  return input.changes.flatMap((value: unknown) => {
+    if (!value || typeof value !== 'object') return []
+    const change = value as Record<string, unknown>
+    if (typeof change.path !== 'string' || !change.path) return []
+    const diff = typeof change.diff === 'string' ? change.diff : ''
+    let added = 0, removed = 0
+    for (const line of diff.split('\n')) {
+      if (line.startsWith('+') && !line.startsWith('+++ ')) added++
+      else if (line.startsWith('-') && !line.startsWith('--- ')) removed++
+    }
+    const kind = change.kind && typeof change.kind === 'object' ? (change.kind as Record<string, unknown>).type : null
+    return [{ path: change.path, diff, added, removed, created: kind === 'add' }]
+  })
+}
+
 const BROWSER_VERBS: Record<string, string> = {
   new_page: 'ブラウザで開く',
   navigate_page: 'ページを移動',
@@ -342,6 +360,14 @@ function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary 
     }
   }
   if (name === 'edit' || name === 'str_replace_editor' || name === 'multi_edit') {
+    const changes = patchChanges(input)
+    if (changes) {
+      const target = changes.length === 1 ? relativePath(changes[0].path, workspace) : `${changes.length} ファイル`
+      const text = output || changes.map((change) => `${change.path}\n${change.diff}`).join('\n\n')
+      return { icon: 'edit', verb: '編集', target,
+        ...(item.status === 'completed' ? { added: changes.reduce((sum, change) => sum + change.added, 0), removed: changes.reduce((sum, change) => sum + change.removed, 0) } : {}),
+        detail: text ? { kind: 'code', text } : null }
+    }
     const path = relativePath(filePath(input), workspace)
     if (item.status === 'failed') return { icon: 'edit', verb: '編集', target: path, detail: output ? { kind: 'code', text: output } : null }
     const before = str(input.old_string ?? input.old_str)
@@ -407,6 +433,18 @@ export function fileChanges(turn: Turn, workspace?: string | null): FileChange[]
   const byPath = new Map<string, FileChange>()
   for (const item of turn.items) {
     if (item.type !== 'tool' || item.status !== 'completed') continue
+    const changes = item.name.toLowerCase() === 'edit' ? patchChanges((item.input ?? {}) as Record<string, unknown>) : null
+    if (changes) {
+      for (const change of changes) {
+        const path = relativePath(change.path, workspace)
+        const entry = byPath.get(path) ?? { path, added: 0, removed: 0, created: false }
+        entry.added += change.added
+        entry.removed += change.removed
+        entry.created ||= change.created
+        byPath.set(path, entry)
+      }
+      continue
+    }
     const summary = summarizeTool(item, workspace)
     if (summary.icon !== 'edit' && summary.icon !== 'create') continue
     if (!summary.target) continue

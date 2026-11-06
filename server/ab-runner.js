@@ -11,11 +11,12 @@ export function abClaudeArgs({ writable, lean, instructions }) {
 }
 
 export class AbRunner extends EventEmitter {
-  constructor({ threads, agents, instructions = () => '', guard = () => {}, stopTimeoutMs = 10_000, attachmentsDir }) {
+  constructor({ threads, agents, codex, instructions = () => '', guard = () => {}, stopTimeoutMs = 10_000, attachmentsDir }) {
     super()
     this.attachmentsDir = attachmentsDir
     this.threads = threads
     this.agents = agents
+    this.codex = codex
     this.instructions = instructions
     this.guard = guard
     this.stopTimeoutMs = stopTimeoutMs
@@ -51,6 +52,13 @@ export class AbRunner extends EventEmitter {
       this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: status === 'done' ? 'completed' : status, text, error,
         denials: (denials ?? []).map((entry) => describeTool(entry?.tool_name, entry?.tool_input)), ...(score ? { score } : {}) })
     })
+    codex?.on('finished', ({ id, status, text, error, denials, score }) => {
+      const owner = this.owned.get(id)
+      if (!owner || owner.kind !== 'codex') return
+      this.owned.delete(id)
+      this.emit('finished', { runId: owner.runId, jobId: owner.jobId, status: status === 'done' ? 'completed' : status, text, error,
+        denials: (denials ?? []).map((entry) => typeof entry === 'string' ? entry : describeTool(entry?.tool_name, entry?.tool_input)), ...(score ? { score } : {}) })
+    })
     // The event carries NO requestId. Read the registered pending requests;
     // respondPermission is synchronous and must not be treated as a Promise.
     threads.on('approval-needed', ({ threadId }) => {
@@ -75,6 +83,18 @@ export class AbRunner extends EventEmitter {
     const { runId, jobId, model, effort = '', toolMode = 'native', workspace, text, images = [], writable, lean, instructions } = input
     this.guard({ workspace })
     const owner = { runId, jobId, writable, denials: [], deniedIds: new Set() }
+    if (model.startsWith('codex:')) {
+      if (!this.codex) throw new Error('Codexを利用できません')
+      const session = await this.codex.create({ workspace, model: model.slice(6), effort: effort || null,
+        permissionMode: abJobPermission(writable), instructions, mcpServers: {}, ab: { runId, jobId, writable, lean } })
+      this.owned.set(session.id, { ...owner, kind: 'codex' })
+      try { this.codex.run(session.id, text, { images }) } catch (error) {
+        this.owned.delete(session.id)
+        await this.codex.remove(session.id)
+        throw error
+      }
+      return { kind: 'codex', id: session.id }
+    }
     if (model.startsWith('claude:')) {
       const blocks = await claudeImageBlocks(this.attachmentsDir, images)
       const session = await this.agents.create({ workspace, model: model.slice(7), effort: effort || null,
@@ -104,7 +124,8 @@ export class AbRunner extends EventEmitter {
     await this.stop(handle)
     this.owned.delete(handle.id)
     if (handle.kind === 'claude') await this.agents.remove(handle.id)
-    else if (this.threads.threads.has(handle.id)) await this.threads.remove(handle.id)
+    else if (handle.kind === 'codex') await this.codex.remove(handle.id)
+    else if (handle.kind === 'thread' && this.threads.threads.has(handle.id)) await this.threads.remove(handle.id)
   }
   async stop(handle) {
     if (!handle) return
@@ -116,10 +137,14 @@ export class AbRunner extends EventEmitter {
         const exited = this.agents.live.get(handle.id)?.exited
         this.agents.stop(handle.id)
         await exited
-      } else {
+      } else if (handle.kind === 'codex') {
+        await this.codex.stop(handle.id)
+      } else if (handle.kind === 'thread') {
         const done = this.threads.active.get(handle.id)?.done
         await this.threads.cancel(handle.id)
         await done
+      } else {
+        throw new Error('不明なAB担当の種類です。停止を確認できません')
       }
     }
     try {

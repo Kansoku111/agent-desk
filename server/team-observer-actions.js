@@ -11,7 +11,7 @@ function destination(manager, teamId, target) {
   if (target === 'leader') return { team, child: null, id: team.leaderId, kind: team.leaderKind, name: 'リーダー' }
   if (typeof target !== 'string' || !target) throw new Error('宛先を指定してください')
   const child = team.children.find((entry) => entry.id === target)
-  if (!child?.taskId || !['thread', 'agent'].includes(child.kind)) throw new Error('この子は見つかりません')
+  if (!child?.taskId || !['thread', 'agent', 'codex'].includes(child.kind)) throw new Error('この子は見つかりません')
   return { team, child, id: child.taskId, kind: child.kind, name: child.name }
 }
 
@@ -38,6 +38,24 @@ export async function observerSend(manager, teamId, target, message) {
       if (delivery === 'uncertain') return { target: dest.name, text, delivery, method: 'steer' }
     } else if (dest.kind === 'terminal') {
       await manager.terminals.sendMessage(dest.id, text, undefined, guard)
+    } else if (dest.kind === 'codex') {
+      const codex = manager.codex
+      const record = codex?.get(dest.id)
+      if (!record) throw new Error('宛先のタスクが見つかりません')
+      if (record.ab) throw new Error('ABの判定中は直接送信できません')
+      manager.guardExecution(record)
+      if (!dest.child && manager.fallingBack?.has(teamId)) throw new Error('リーダーの切り替え中は送信できません')
+      if (codex.running(dest.id)) {
+        const steered = await codex.steer(dest.id, text)
+        if (!steered) throw new Error('割り込みを送信できませんでした。宛先の会話を確認してください')
+        return { target: dest.name, text, delivery: 'sent', method: 'steer' }
+      }
+      if (dest.child?.awaiting) throw new Error('この子は作業待ちのため直接送信できません')
+      if (!dest.child) await manager.refreshCodexLeader(dest.id)
+      guard()
+      if (codex.running(dest.id) || dest.child?.awaiting || (!dest.child && manager.fallingBack?.has(teamId))) throw new Error('宛先の状態が変わったため送信しませんでした')
+      manager.guardExecution(codex.get(dest.id))
+      codex.run(dest.id, text)
     } else {
       const thread = manager.threads.threads.get(dest.id)
       if (!thread) throw new Error('宛先のタスクが見つかりません')
@@ -73,6 +91,9 @@ export async function observerStop(manager, teamId, target) {
   if (current.id !== dest.id || current.kind !== dest.kind) throw new Error('宛先が変更されたため停止しませんでした')
   if (dest.kind === 'agent') manager.stopChild(teamId, dest.child.id)
   else if (dest.kind === 'thread') await manager.threads.cancel(dest.id)
-  else if (!manager.terminals.interrupt(dest.id, null)) throw new Error('リーダーは動いていません')
+  else if (dest.kind === 'codex') {
+    if (!manager.codex?.get(dest.id)) throw new Error('宛先のタスクが見つかりません')
+    await manager.codex.stop(dest.id)
+  } else if (!manager.terminals.interrupt(dest.id, null)) throw new Error('リーダーは動いていません')
   return { target: dest.name, requested: true }
 }

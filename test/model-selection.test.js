@@ -17,6 +17,21 @@ function server(modelVisibility, defaultModel = null) {
   }
 }
 
+test('Codex is selectable only on its own route, never as a new dsh default', () => {
+  const state = server({})
+  const gp = { provider: 'codex', id: 'gpt-example', value: 'codex:gpt-example', name: 'Example', description: null }
+  state.accounts.codex = { signedIn: true }
+  state.catalog.models = [gp]
+  state.settings.defaultModel = gp.value
+  assert.equal(pickDefaultModel(state, gp.value), null)
+  assert.deepEqual(executionChildChoice(state, gp.value), { provider: 'codex', model: gp.id })
+  assert.equal(executionModelSelection(state, 'codex', gp.value, gp.id).model, gp.id)
+  assert.equal(executionModelSelection(state, 'codex', gp.value, gp.id).leader, '')
+  state.accounts.codex.signedIn = false
+  assert.equal(executionChildChoice(state, gp.value), null)
+  assert.equal(executionModelSelection(state, 'codex', '', gp.id).model, '')
+})
+
 test('EX restores exact available choices and clears unavailable models without fallback', () => {
   const state = server({})
   const valid = executionModelSelection(state, 'claudeApi', sol.value, claude.id)

@@ -13,10 +13,10 @@ export const CLAUDE_CODE = [{ value: 'claude:opus', name: 'Opus' }, { value: 'cl
 interface ModelGroup { id: string; heading: string; note: string; models: { value: string; name: string }[]; empty?: string; status?: string }
 
 /** The models a field offers, grouped and named as in the composer's model menu. */
-export function modelGroups(server: AppState): ModelGroup[] {
+export function modelGroups(server: AppState, allowCodex = false): ModelGroup[] {
   const byProvider = new Map<string, { value: string; name: string; id: string }[]>()
   for (const model of visibleModels(server)) {
-    if (model.retired || !providerReady(server, model.provider)) continue
+    if ((!allowCodex && model.provider === 'codex') || model.retired || !providerReady(server, model.provider)) continue
     byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model])
   }
   const order = [...new Set([...PROVIDER_ORDER, ...byProvider.keys()])].filter((provider) => byProvider.has(provider))

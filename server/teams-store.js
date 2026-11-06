@@ -10,13 +10,15 @@ export function restoreTeams(saved, getSettings) {
   const teams = []
   for (const team of Array.isArray(saved?.teams) ? saved.teams : []) {
     if (typeof team?.id !== 'string' || typeof team.leaderId !== 'string' || typeof team.secret !== 'string') continue
+    // Legacy teams lacked leaderKind; an explicit unknown kind must never become a terminal.
+    if (team.leaderKind != null && !['thread', 'terminal', 'codex'].includes(team.leaderKind)) continue
     team.children = (Array.isArray(team.children) ? team.children : [])
       // Claude children used to be terminal tasks; those are plain Claude Code tasks now.
-      .filter((child) => child?.kind === 'thread' || child?.kind === 'agent')
+      .filter((child) => child?.kind === 'thread' || child?.kind === 'agent' || child?.kind === 'codex')
       .map((child) => ({ pending: [], followups: [], reports: [], ...child }))
     team.queue = Array.isArray(team.queue) ? team.queue.filter((item) => item.kind !== 'approval') : []
     team.asks = Array.isArray(team.asks) ? team.asks : []
-    team.leaderKind = team.leaderKind === 'thread' ? 'thread' : 'terminal'
+    team.leaderKind = team.leaderKind === 'thread' ? 'thread' : team.leaderKind === 'codex' ? 'codex' : 'terminal'
     team.config = teamConfig({ ...(team.config ?? getSettings()), toolMode: team.config?.toolMode ?? 'native' })
     teams.push(team)
   }

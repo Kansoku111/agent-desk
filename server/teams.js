@@ -28,7 +28,7 @@ import { usageFallbackChoice } from '../shared/usage-fallback.js'
 import { carryoverText } from './thread-utils.js'
 import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
-import { CATALOG_PROVIDER, childTask, clip, describeTool, executionTask, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
+import { CATALOG_PROVIDER, childPrompt, childTask, clip, describeTool, executionTask, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { leaderGuides, readPlaybook } from './team-playbooks.js'
 import { markOf, reportsMessage, reportText } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
@@ -133,7 +133,7 @@ export class TeamManager extends EventEmitter {
    * @param {() => { policies: object[], playbooks: object[] }} [options.guides]  the user's policies and playbooks for leaders (team-playbooks.js)
    */
   constructor({
-    file, dir, attachmentsDir, threads, terminals, agents, catalog, getSettings, apiUrl, instructions = () => '', guides = () => ({ policies: [], playbooks: [] }), authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
+    file, dir, attachmentsDir, threads, terminals, agents, codex, catalog, catalogState = () => catalog.data, getSettings, apiUrl, instructions = () => '', guides = () => ({ policies: [], playbooks: [] }), authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
     node = process.execPath, script = mcpScript, log = () => {}, now = Date.now, gatherMs = REPORT_GATHER_MS, usageFallbackRoutes = () => null, modelVisibility = () => ({}), imageMcp = () => null,
   }) {
     super()
@@ -145,6 +145,8 @@ export class TeamManager extends EventEmitter {
     this.threads = threads
     this.terminals = terminals
     this.agents = agents
+    this.codex = codex
+    this.catalogState = catalogState
     this.catalog = catalog
     this.getSettings = getSettings
     this.imageMcp = imageMcp
@@ -177,6 +179,7 @@ export class TeamManager extends EventEmitter {
     this.execution = new ExecutionVerifier({ dir: path.join(dir, 'execution'), now })
     this.executionReview = new ExecutionReview({ dir: path.join(dir, 'execution', 'reviews') })
     this.exPending = new Set()
+    this.codexDeliveries = new Set()
     this.removingChildren = new Set()
     this.workingLeaders = new Set()
     this.fallingBack = new Set()
@@ -213,6 +216,9 @@ export class TeamManager extends EventEmitter {
     agents.on('session', (session) => this.#onAgent(session))
     agents.on('finished', (info) => this.#onAgentFinished(info))
     agents.on('removed', ({ id }) => this.#onTaskRemoved(id))
+    codex?.on('session', (session) => this.#onAgent(session))
+    codex?.on('finished', (info) => this.#onAgentFinished(info, 'codex'))
+    codex?.on('removed', ({ id }) => this.#onTaskRemoved(id))
   }
 
   /**
@@ -260,7 +266,7 @@ export class TeamManager extends EventEmitter {
     const members = [[team.leaderKind, team.leaderId], ...team.children.filter((child) => child.taskId).map((child) => [child.kind, child.taskId])]
     for (const [kind, id] of members) {
       const record = kind === 'thread' ? this.threads.threads.get(id)
-        : kind === 'terminal' ? this.terminals.records?.get(id) : this.agents.get(id)
+        : kind === 'terminal' ? this.terminals.records?.get(id) : kind === 'codex' ? this.codex?.get(id) : kind === 'agent' ? this.agents.get(id) : null
       if (!record) continue
       const turns = kind === 'thread' ? this.threads.turns?.get(id) : null
       team.scoreMembers[id] = record.score ?? (turns ? scoresUpTo(turns).at(-1) ?? emptyScore() : team.scoreMembers[id] ?? null)
@@ -318,7 +324,7 @@ export class TeamManager extends EventEmitter {
     this.stopping = true
     for (const team of this.teams.values()) if (team.execution) team.execution.stopped = true
     await this.execution.stop()
-    await Promise.allSettled([...this.exPending, ...this.observerOutboxTasks])
+    await Promise.allSettled([...this.exPending, ...this.observerOutboxTasks, ...this.codexDeliveries])
     for (const approval of this.approvals.values()) clearTimeout(approval.timer)
     for (const timer of this.retries.values()) clearTimeout(timer)
     for (const entry of this.delivering.values()) clearTimeout(entry.timer)
@@ -333,7 +339,7 @@ export class TeamManager extends EventEmitter {
 
   summary(team) {
     this.#captureScores(team)
-    const leader = team.leaderKind === 'thread' ? null : this.terminals.status(team.leaderId)
+    const leader = team.leaderKind === 'terminal' ? this.terminals.status(team.leaderId) : null
     let delivery = 'idle'
     if (this.delivering.has(team.id)) delivery = 'delivering'
     else if (team.deliveryFailed) delivery = 'failed'
@@ -404,16 +410,17 @@ export class TeamManager extends EventEmitter {
       if (thread.status === 'error' || child.reports.at(-1)?.kind === 'error') return 'error'
       return 'idle'
     }
-    const session = this.agents.get(child.taskId)
+    const runner = child.kind === 'codex' ? this.codex : this.agents
+    const session = runner?.get(child.taskId)
     if (!session) return 'removed'
-    if (session.state === 'running') return 'running'
+    if (runner.running(child.taskId)) return 'running'
     if (child.closed) return 'closed'
     if (session.lastStatus === 'error' || child.reports.at(-1)?.kind === 'error') return 'error'
     return 'idle'
   }
 
   #modelName(child) {
-    return modelName(child, this.catalog.data.models)
+    return modelName(child, this.catalogState().models)
   }
 
   #label(child) {
@@ -668,7 +675,8 @@ export class TeamManager extends EventEmitter {
   toolModeBusy(team) {
     const leaderBusy = team.leaderKind === 'thread'
       ? this.threads.threads.get(team.leaderId)?.status === 'running'
-      : this.terminals.status(team.leaderId)?.activity === 'running'
+      : team.leaderKind === 'codex' ? this.codex?.running(team.leaderId)
+        : this.terminals.status(team.leaderId)?.activity === 'running'
     return Boolean(leaderBusy || this.delivering.has(team.id)
       || team.children.some((child) => ['working', 'verifying'].includes(child.execution?.phase) || (child.taskId ? this.#childBusy(child) : !child.closed)))
   }
@@ -676,7 +684,7 @@ export class TeamManager extends EventEmitter {
   #childBusy(child) {
     if (!child.taskId) return true
     if (child.kind === 'thread') return this.threads.threads.get(child.taskId)?.status === 'running'
-    return this.agents.running(child.taskId)
+    return (child.kind === 'codex' ? this.codex : this.agents)?.running(child.taskId) ?? false
   }
 
   // ---------------------------------------------------------------- files
@@ -702,7 +710,7 @@ export class TeamManager extends EventEmitter {
     const team = this.teams.get(record.team?.id)
     if (!team || record.team.role !== 'leader' || team.retiredLeaders?.some((entry) => entry.id === record.id)) return null
     return leaderLaunch({
-      team, config: this.config(team), models: this.catalog.data.models, dir: this.#teamDir(team),
+      team, config: this.config(team), models: this.catalogState().models, dir: this.#teamDir(team),
       node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(), guides: this.#guides(team), imageMcp: this.imageMcp(team.workspace),
     })
   }
@@ -739,7 +747,7 @@ export class TeamManager extends EventEmitter {
     const team = thread.team?.role === 'leader' ? this.teams.get(thread.team.id) : null
     if (!team || team.retiredLeaders?.some((entry) => entry.id === thread.id)) return null
     return leaderMcpServer({
-      team, config: this.config(team), models: this.catalog.data.models, dir: this.#teamDir(team),
+      team, config: this.config(team), models: this.catalogState().models, dir: this.#teamDir(team),
       node: this.node, script: this.script, apiUrl: this.apiUrl(), guides: this.#guides(team),
     })
   }
@@ -766,7 +774,7 @@ export class TeamManager extends EventEmitter {
 
   /** The providers and tiers the leader may use, for its instructions and `status`. */
   #tierLines(config) {
-    return tierLines(config, this.catalog.data.models)
+    return tierLines(config, this.catalogState().models)
   }
 
   async inspectClaudeAuth({ workspace, teamId } = {}) {
@@ -813,10 +821,11 @@ export class TeamManager extends EventEmitter {
     const now = this.now()
     const gpt = config.leaderProvider === 'gpt'
     const dshLeader = config.leaderProvider !== 'claude'
-    if (execution && !['claude', 'gpt'].includes(config.leaderProvider)) throw new Error('ecoの親モデルを選んでください')
+    const codexLeader = config.leaderProvider === 'codex'
+    if (execution && !['claude', 'gpt', 'codex'].includes(config.leaderProvider)) throw new Error('ecoの親モデルを選んでください')
     const team = {
       id: randomUUID(), secret: randomBytes(24).toString('hex'), workspace: String(workspace ?? ''), leaderId: '',
-      leaderKind: dshLeader ? 'thread' : 'terminal', config, createdAt: now, updatedAt: now, seq: 0, children: [], queue: [], asks: [],
+      leaderKind: codexLeader ? 'codex' : dshLeader ? 'thread' : 'terminal', config, createdAt: now, updatedAt: now, seq: 0, children: [], queue: [], asks: [],
     }
     if (execution) {
       if (!path.isAbsolute(team.workspace)) throw new Error('作業フォルダを指定してください')
@@ -828,18 +837,18 @@ export class TeamManager extends EventEmitter {
       if (execution.planImplement != null && typeof execution.planImplement !== 'boolean') throw new Error('計画→実装の設定が不正です')
       team.execution = { metrics: { childTurns: 0, parentTurns: 0, parentReports: 0, verifications: 0, repairs: 0 }, stopped: false, planImplement: execution.planImplement === true }
       if (execution.leaderModel) {
-        if (typeof execution.leaderModel !== 'string' || !this.catalog.data.models.some((model) => model.value === execution.leaderModel && ['anthropic', 'openai-codex'].includes(model.provider))) throw new Error('親モデルが見つかりません')
+        if (typeof execution.leaderModel !== 'string' || !this.catalogState().models.some((model) => model.value === execution.leaderModel && ['anthropic', 'openai-codex', 'codex'].includes(model.provider))) throw new Error('親モデルが見つかりません')
         team.execution.leaderModel = execution.leaderModel
-        team.leaderKind = 'thread'
+        team.leaderKind = execution.leaderModel.startsWith('codex:') ? 'codex' : 'thread'
       }
     }
     if (execution) {
       const id = config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model
       const leaderModel = team.execution.leaderModel ?? (gpt ? this.catalog.data.models.find((model) => model.provider === 'openai-codex' && model.id === id)?.value ?? JSON.stringify(['openai-codex', id]) : undefined)
-      workflowTeamEfforts(config, this.catalog.data, leaderModel, CATALOG_PROVIDER)
+      workflowTeamEfforts(config, this.catalogState(), leaderModel, CATALOG_PROVIDER)
       team.execution.strictEffort = true
     }
-    const current = team.execution?.leaderModel ?? (dshLeader ? JSON.stringify([CATALOG_PROVIDER[config.leaderProvider], config.leaderProvider === 'gpt' ? config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels.find((entry) => entry.provider === 'gpt')?.model : null) : config.dshLeader?.model]) : 'claude:' + (config.leader.model ?? ''))
+    const current = team.execution?.leaderModel ?? (codexLeader ? `codex:${config.dshLeader?.model ?? ''}` : dshLeader ? JSON.stringify([CATALOG_PROVIDER[config.leaderProvider], config.leaderProvider === 'gpt' ? config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels.find((entry) => entry.provider === 'gpt')?.model : null) : config.dshLeader?.model]) : 'claude:' + (config.leader.model ?? ''))
     const routes = this.usageFallbackRoutes()
     if (Array.isArray(routes)) {
       // Freeze the full ordered policy so a later manual leader-model change
@@ -851,12 +860,14 @@ export class TeamManager extends EventEmitter {
       team.sharedFallbackPolicy = true
     }
     if (config.leaderFallback) {
+      if (team.leaderKind === 'codex' || config.leaderFallback.startsWith('codex:')) throw new Error('Codexリーダーのフォールバックはまだ利用できません')
       try { validateAbModel(config.leaderFallback, this.catalog.data) } catch { throw new Error('フォールバック先のモデルを選び直してください') }
       config.fallbackEffort = workflowEffort(config.fallbackEffort, workflowLevels(this.catalog.data, config.leaderFallback))
       if (!workflowEffortSupported(config.fallbackEffort, workflowLevels(this.catalog.data, config.leaderFallback))) throw new Error('フォールバック先の推論レベルを選び直してください')
       if (config.leaderFallback === current) throw new Error('フォールバック先はリーダーと別のモデルを選んでください')
     }
     if (authConfirmation) await this.#confirmAuth(team, authConfirmation, false)
+    if (team.leaderKind === 'codex') return this.#createCodexLed(team, config, current)
     if (dshLeader || team.execution?.leaderModel) return this.#createDshLed(team, config)
     this.teams.set(team.id, team)
     let terminal
@@ -874,6 +885,41 @@ export class TeamManager extends EventEmitter {
     await this.#save()
     this.#emit(team)
     return { team: this.summary(team), terminal }
+  }
+
+  #codexLeaderOptions(team) {
+    const server = leaderMcpServer({ team, config: this.config(team), models: this.catalogState().models, dir: this.#teamDir(team),
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), guides: this.#guides(team) })
+    const env = Object.fromEntries(server.env.map(({ name, value }) => [name, value]))
+    const instructions = fs.readFileSync(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8')
+    delete env.AGENT_DESK_TEAM_INSTRUCTIONS
+    const image = this.imageMcp(team.workspace)
+    return { instructions,
+      mcpServers: { 'agent-team': { command: server.command, args: server.args, env }, ...(image ? { imagegen: image } : {}) } }
+  }
+
+  async refreshCodexLeader(id) {
+    const found = this.#byTask(id)
+    if (!found || found.child || found.team.leaderKind !== 'codex') throw new Error('Codexリーダーが見つかりません')
+    await this.codex.configure(id, this.#codexLeaderOptions(found.team))
+  }
+
+  async #createCodexLed(team, config, value) {
+    if (!this.codex) throw new Error('Codexを利用できません')
+    try { validateAbModel(value, this.catalogState(), this.modelVisibility()) } catch { throw new Error('Codexリーダーのモデルを選び直してください') }
+    this.teams.set(team.id, team)
+    let session
+    try {
+      session = await this.codex.create({ workspace: team.workspace, model: value.slice(6),
+        effort: (team.execution ? config.gptLeader.effort : config.dshLeader?.effort) ?? null,
+        permissionMode: config.leaderBypass ? 'danger-full-access' : 'workspace-write',
+        ...this.#codexLeaderOptions(team), team: { id: team.id, role: 'leader' } })
+    } catch (error) { this.teams.delete(team.id); throw error }
+    team.workspace = session.workspace
+    team.leaderId = session.id
+    await this.#save()
+    this.#emit(team)
+    return { team: this.summary(team), codex: session }
   }
 
   async #createDshLed(team, config) {
@@ -928,8 +974,7 @@ export class TeamManager extends EventEmitter {
     for (const child of team.children) {
       if (!child.taskId) continue
       try {
-        if (child.kind === 'thread') await this.threads.remove(child.taskId)
-        else await this.agents.remove(child.taskId)
+        await this.#removeTask(child.kind, child.taskId)
       } catch (error) {
         this.log(`team ${teamId}: removing child ${child.name}:`, error.message)
       }
@@ -943,6 +988,8 @@ export class TeamManager extends EventEmitter {
       }
       if (team.leaderKind === 'thread') {
         if (this.threads.threads.has(team.leaderId)) await this.threads.remove(team.leaderId)
+      } else if (team.leaderKind === 'codex') {
+        if (this.codex?.get(team.leaderId)) await this.codex.remove(team.leaderId)
       } else if (this.terminals.records.has(team.leaderId)) await this.terminals.remove(team.leaderId)
     } finally {
       // The team is gone from memory already: a failed leader removal still leaves it out of the saved teams and the lists.
@@ -966,7 +1013,7 @@ export class TeamManager extends EventEmitter {
   #exChildConflict(message, workspace, team, child) {
     const state = child.kind === 'thread'
       ? { status: this.threads.threads.get(child.taskId)?.status ?? '不明' }
-      : { running: child.taskId ? this.agents.running(child.taskId) : null }
+      : { running: child.taskId ? this.#childBusy(child) : null }
     return executionConflict(message, workspace, {
       kind: team.execution ? 'ecoの子' : 'チームの子', title: `${child.name}: ${child.title}`, id: child.id,
       teamId: team.id, taskId: child.taskId, workspace: team.workspace,
@@ -1003,6 +1050,14 @@ export class TeamManager extends EventEmitter {
         && workspacesOverlap(thread.workspace, team.workspace)) {
         throw executionConflict('同じフォルダで別のタスクが作業中です', team.workspace, { ...thread, kind: 'thread' }, {
           status: thread.status, permissionMode: thread.permissionMode ?? '不明',
+        })
+      }
+    }
+    for (const record of this.codex?.list({ includeOwned: true }) ?? []) {
+      if (record.id !== team.leaderId && record.id !== except?.taskId && this.codex.running(record.id)
+        && record.permissionMode !== 'read-only' && workspacesOverlap(record.workspace, team.workspace)) {
+        throw executionConflict('同じフォルダでCodexが作業中です', team.workspace, { ...record, kind: 'codex' }, {
+          status: record.status ?? 'running', permissionMode: record.permissionMode ?? '不明',
         })
       }
     }
@@ -1282,11 +1337,17 @@ export class TeamManager extends EventEmitter {
     }
     const { model, effort } = selected
     provider = selected.provider
+    if (provider === 'codex') {
+      if (!this.codex) throw new Error('Codexを利用できません')
+      const catalog = this.catalogState()
+      try { validateAbModel(`codex:${model}`, catalog, this.modelVisibility()) } catch { throw new Error('Codexの子モデルを選び直してください') }
+      if (effort && !workflowEffortSupported(effort, workflowLevels(catalog, `codex:${model}`))) throw new Error('Codexの子の推論レベルを選び直してください')
+    }
     this.#checkRoom(team)
     const now = this.now()
     const child = {
       id: randomUUID(), name: this.#childName(team, args.name), title, provider, tier: selected.tier, model, effort: effort ?? null,
-      kind: provider === 'claude' ? 'agent' : 'thread', taskId: null, createdAt: now, updatedAt: now,
+      kind: provider === 'claude' ? 'agent' : provider === 'codex' ? 'codex' : 'thread', taskId: null, createdAt: now, updatedAt: now,
       closed: false, awaiting: true, pending: [], followups: [], reports: [], ...(args.tools === true ? { tools: true } : {}),
     }
     if (execution) { child.execution = { ...execution, task }; team.execution.stopped = false }
@@ -1337,6 +1398,21 @@ export class TeamManager extends EventEmitter {
         if (team.execution?.planImplement && child.execution?.mode === 'write') await this.#save({ required: true })
         await this.threads.send(thread.id, { text: childTask(child.name, title, task) }, { guard: startGuard })
         await this.threads.update(thread.id, { title: taskTitle })
+      } else if (child.kind === 'codex') {
+        const imageMcp = !this.#lean(team, child) && child.execution?.mode !== 'research' ? this.imageMcp(team.workspace) : null
+        const session = await this.codex.create({
+          workspace: team.workspace, model: child.model, effort: child.effort,
+          permissionMode: child.execution?.mode === 'research' ? 'read-only' : 'danger-full-access', permissionPolicy: 'deny',
+          instructions: childPrompt(child.name),
+          mcpServers: imageMcp ? { imagegen: imageMcp } : {},
+          team: { id: team.id, childId: child.id, ...(child.execution ? { executionMode: child.execution.mode } : {}) },
+        })
+        taskId = child.taskId = session.id
+        if (!this.teams.has(team.id)) throw new Error('team was removed')
+        startGuard()
+        if (team.execution?.planImplement && child.execution?.mode === 'write') await this.#save({ required: true })
+        startGuard()
+        this.codex.run(session.id, `# Task from the team leader: ${title}\n\n${task}`)
       } else {
         const session = await this.agents.create({
           workspace: team.workspace, model: child.model, effort: child.effort, args: this.#agentArgs(team, child),
@@ -1394,6 +1470,9 @@ export class TeamManager extends EventEmitter {
       assertStarting()
       if (child.kind === 'thread') {
         await this.threads.implementResearch(child.taskId)
+      } else if (child.kind === 'codex') {
+        const imageMcp = !this.#lean(team, child) ? this.imageMcp(team.workspace) : null
+        await this.codex.configure(child.taskId, { permissionMode: 'danger-full-access', mcpServers: imageMcp ? { imagegen: imageMcp } : {}, team: { id: team.id, childId: child.id, executionMode: 'write' } })
       } else {
         await this.agents.setArgs(child.taskId, this.#agentArgs(team, child))
       }
@@ -1404,6 +1483,8 @@ export class TeamManager extends EventEmitter {
         await this.threads.update(child.taskId, { title: child.name === title ? title : `${child.name}: ${title}` })
         assertStarting()
         await this.#toThread(child, body, guard)
+      } else if (child.kind === 'codex') {
+        await this.#toCodex(child, body, guard)
       } else {
         this.#toAgent(child, body)
       }
@@ -1425,7 +1506,10 @@ export class TeamManager extends EventEmitter {
 
   /** Async, so a removal that throws at once (a task already gone) is a rejection too. */
   async #removeTask(kind, taskId) {
-    return kind === 'thread' ? this.threads.remove(taskId) : this.agents.remove(taskId)
+    if (kind === 'thread') return this.threads.remove(taskId)
+    if (kind === 'agent') return this.agents.remove(taskId)
+    if (kind === 'codex') return this.codex.remove(taskId)
+    throw new Error('不明な子タスクの種類です')
   }
 
   async #send(team, args, guard = this.#stopGuard(team), { executionRetry = false } = {}) {
@@ -1510,11 +1594,15 @@ export class TeamManager extends EventEmitter {
       // and moving its read-only task; finish that move before resuming the writer.
       if (child.execution?.research) {
         if (child.kind === 'thread') await this.threads.implementResearch(child.taskId)
-        else await this.agents.setArgs(child.taskId, this.#agentArgs(team, child))
+        else if (child.kind === 'codex') {
+          const imageMcp = !this.#lean(team, child) ? this.imageMcp(team.workspace) : null
+          await this.codex.configure(child.taskId, { permissionMode: 'danger-full-access', mcpServers: imageMcp ? { imagegen: imageMcp } : {}, team: { id: team.id, childId: child.id, executionMode: 'write' } })
+        } else await this.agents.setArgs(child.taskId, this.#agentArgs(team, child))
         if (team.execution.stopped) throw new Error('ecoは作業開始前に停止されました')
       }
       guard()
-      how = child.kind === 'thread' ? await this.#toThread(child, body, guard) : this.#toAgent(child, body)
+      how = child.kind === 'thread' ? await this.#toThread(child, body, guard)
+        : child.kind === 'codex' ? await this.#toCodex(child, body, guard) : this.#toAgent(child, body)
     } catch (error) {
       child.awaiting = false
       if (committed) {
@@ -1576,6 +1664,20 @@ export class TeamManager extends EventEmitter {
     return '送りました'
   }
 
+  async #toCodex(child, body, guard) {
+    if (!this.codex?.get(child.taskId)) throw new Error(`子「${child.name}」のタスクは削除されています`)
+    if (this.codex.running(child.taskId)) {
+      const steered = await this.codex.steer(child.taskId, body)
+      guard()
+      if (steered) return '作業中のところへ割り込みで渡しました'
+      child.pending.push(body)
+      return 'いまの作業が終わりしだい渡します'
+    }
+    guard()
+    this.codex.run(child.taskId, body)
+    return '送りました'
+  }
+
   /** A Claude child takes a message as its next turn, which resumes its conversation; one that works reads it at its next step. */
   #toAgent(child, body) {
     if (!this.agents.get(child.taskId)) throw new Error(`子「${child.name}」のタスクは削除されています`)
@@ -1606,7 +1708,8 @@ export class TeamManager extends EventEmitter {
         this.#report(team, child, 'error', `リーダーからの指示を渡せませんでした: ${error.message}`)
       }
     } else {
-      if (!this.agents.get(child.taskId) || this.agents.running(child.taskId)) return
+      const runner = child.kind === 'codex' ? this.codex : this.agents
+      if (!runner?.get(child.taskId) || runner.running(child.taskId)) return
       const text = [...child.pending, ...followups.map((entry) => entry.text)].join('\n\n')
       // Only the leader's work is awaited; a turn of the user's alone reports as the user's own.
       const fromLeader = child.pending.length > 0
@@ -1614,7 +1717,7 @@ export class TeamManager extends EventEmitter {
       child.followups = []
       if (fromLeader) child.awaiting = true
       try {
-        this.agents.run(child.taskId, text)
+        runner.run(child.taskId, text)
       } catch (error) {
         child.followups = followups
         if (fromLeader) {
@@ -1747,6 +1850,8 @@ export class TeamManager extends EventEmitter {
     }
     if (child.kind === 'thread') {
       if (this.threads.threads.get(child.taskId)?.status === 'running') await this.threads.cancel(child.taskId)
+    } else if (child.kind === 'codex') {
+      await this.codex.stop(child.taskId)
     } else {
       this.agents.stop(child.taskId)
     }
@@ -1922,6 +2027,7 @@ export class TeamManager extends EventEmitter {
       this.userStopped.add(child.id)
       try {
         if (child.kind === 'thread') await this.threads.cancel(child.taskId)
+        else if (child.kind === 'codex') await this.codex.stop(child.taskId)
         else this.agents.stop(child.taskId)
       } catch (error) {
         this.userStopped.delete(child.id)
@@ -1951,6 +2057,7 @@ export class TeamManager extends EventEmitter {
       if (this.fallingBack.has(team.id) || team.leaderFallbackPending) throw new Error('リーダーの切り替え中はフォールバックを変更できません')
       if (team.leaderFallbackUsed) throw new Error('このチームではフォールバックを使用済みです')
       if (next.leaderFallback) {
+        if (team.leaderKind === 'codex' || next.leaderFallback.startsWith('codex:')) throw new Error('Codexリーダーのフォールバックはまだ利用できません')
         try { validateAbModel(next.leaderFallback, this.catalog.data) } catch { throw new Error('フォールバック先のモデルを選び直してください') }
         next.fallbackEffort = workflowEffort(next.fallbackEffort, workflowLevels(this.catalog.data, next.leaderFallback))
         if (!workflowEffortSupported(next.fallbackEffort, workflowLevels(this.catalog.data, next.leaderFallback))) throw new Error('フォールバック先の推論レベルを選び直してください')
@@ -2070,6 +2177,7 @@ export class TeamManager extends EventEmitter {
     const gather = this.#gatherWait(team)
     if (gather > 0) return this.#later(`gather:${team.id}`, () => this.#pump(team), gather)
     if (team.leaderKind === 'thread') return this.#pumpThread(team)
+    if (team.leaderKind === 'codex') return this.#pumpCodex(team)
     const status = this.terminals.status(team.leaderId)
     if (!status) return
     // An attach may be inspecting auth before its prompt-less launch. Do not
@@ -2094,6 +2202,37 @@ export class TeamManager extends EventEmitter {
     if (quiet < TYPING_QUIET_MS) return this.#later(team.id, () => this.#pump(team), TYPING_QUIET_MS - quiet)
     const items = this.#take(team)
     this.#deliver(team, items, () => this.terminals.sendMessage(team.leaderId, this.#leaderMessage(team, items)))
+  }
+
+  #pumpCodex(team) {
+    if (this.stopping || !this.codex?.get(team.leaderId) || this.codex.running(team.leaderId)) return
+    const items = this.#take(team)
+    const entry = { items, timer: null }
+    this.delivering.set(team.id, entry)
+    const guard = this.#stopGuard(team)
+    const delivery = (async () => {
+      try {
+        await this.#save({ required: true })
+        guard()
+        await this.refreshCodexLeader(team.leaderId)
+        guard()
+        if (this.stopping) throw new Error('アプリを終了しています')
+        this.codex.run(team.leaderId, this.#leaderMessage(team, items))
+        await this.codex.waitForStart?.(team.leaderId)
+        team.deliveryFailed = false
+      } catch (error) {
+        if (this.teams.has(team.id)) { team.queue.unshift(...items); team.deliveryFailed = true }
+        this.log(`team ${team.id}: could not hand the Codex leader a report:`, error.message)
+      } finally {
+        if (this.delivering.get(team.id) === entry) this.delivering.delete(team.id)
+        void this.#save()
+        this.#emit(team)
+        if (!this.stopping && this.teams.has(team.id)) this.#pump(team)
+      }
+    })()
+    this.codexDeliveries.add(delivery)
+    void delivery.finally(() => this.codexDeliveries.delete(delivery))
+    this.#emit(team)
   }
 
   /**
@@ -2595,20 +2734,32 @@ export class TeamManager extends EventEmitter {
     const observerTeam = [...this.teams.values()].find((team) => team.observer?.kind === 'agent' && team.observer.id === session.id)
     if (observerTeam) { this.#emit(observerTeam); return }
     const found = this.#byTask(session.id)
-    if (found?.child) {
+    if (found?.child || (found && found.team.leaderKind === 'codex')) {
       if (this.#captureScores(found.team)) void this.#save()
       this.#emit(found.team)
     }
   }
 
-  #onAgentFinished({ id, status, text, error, denials, usage }) {
+  #onAgentFinished({ id, status, text, error, denials, usage }, kind = 'agent') {
+    if (kind === 'codex' && status === 'stopped' && this.stopping) return
+    if (kind === 'codex' && status === 'stopped') status = 'cancelled'
     const observerTeam = [...this.teams.values()].find((team) => team.observer?.kind === 'agent' && team.observer.id === id)
     if (observerTeam) {
       if (status === 'done' && observerTeam.observer.carryover) { delete observerTeam.observer.carryover; void this.#save() }
       return
     }
     const found = this.#byTask(id)
-    if (!found?.child) return
+    if (kind === 'codex' && found && !found.child && found.team.leaderKind === 'codex') {
+      if (status === 'error' && isLeaderUsageLimit(error) && (found.team.config?.leaderFallback || found.team.usageFallbackRoutes?.length)) {
+        found.team.leaderFallbackError = 'Codexリーダーのフォールバックはまだ利用できません。モデルと作業状態を確認してください。'
+        void this.#save()
+      }
+      if (found.team.execution) {
+        found.team.execution.usage = [...(found.team.execution.usage ?? []), { role: 'parent', taskId: id, at: this.now(), usage: usage ?? null, status }].slice(-500)
+      }
+      return this.#onLeaderFinished(found.team)
+    }
+    if (!found?.child || found.child.kind !== kind) return
     const { team, child } = found
     if (team.execution) {
       team.execution.metrics.childTurns++
@@ -2617,14 +2768,14 @@ export class TeamManager extends EventEmitter {
     }
     const byUser = this.userStopped.delete(child.id)
     // A session being removed reports nothing: its record is dropped before its turn ends (claude-runner remove).
-    if (!this.agents.get(id) || this.removingChildren.has(child.id)) return
+    if (!(kind === 'codex' ? this.codex : this.agents)?.get(id) || this.removingChildren.has(child.id)) return
     if (this.#reportsTurn(child)) {
       if (status === 'error' && this.#resumeLater(team, child, error)) return this.#emit(team)
       const extra = child.awaiting ? {} : { unasked: true }
       child.awaiting = false
       const resumed = this.#resumedNote(child, status)
       // What would have asked for an approval was denied (nobody is there to answer): the leader decides what to do.
-      const denied = (denials ?? []).map((entry) => `- ${describeTool(entry?.tool_name, entry?.tool_input)}`)
+      const denied = (denials ?? []).map((entry) => `- ${typeof entry === 'string' ? entry : describeTool(entry?.tool_name, entry?.tool_input)}`)
       const note = denied.length ? `（承認が必要なため実行されなかった操作）\n${denied.join('\n')}` : ''
       if (status === 'error') this.#report(team, child, 'error', [resumed, error, text, note].filter(Boolean).join('\n\n'), extra)
       else if (status === 'cancelled') this.#report(team, child, 'cancelled', text, byUser ? { ...extra, byUser } : extra)
@@ -2658,7 +2809,7 @@ export class TeamManager extends EventEmitter {
       }
       try {
         if (child.kind === 'thread') this.threads.send(child.taskId, { text: RESUME_TEXT }, { guard: this.#stopGuard(team) }).catch(failed)
-        else this.agents.run(child.taskId, RESUME_TEXT)
+        else (child.kind === 'codex' ? this.codex : this.agents).run(child.taskId, RESUME_TEXT)
       } catch (error) {
         failed(error)
       }

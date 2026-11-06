@@ -50,6 +50,7 @@ export function ModelPicker({ value, onChange }: { value: string | null; onChang
   const { groups, order, selectable } = useMemo(() => {
     const groups = new Map<string, CatalogModel[]>()
     for (const model of server ? visibleModels(server) : []) {
+      if (model.provider === 'codex') continue
       const list = groups.get(model.provider) ?? []
       list.push(model)
       groups.set(model.provider, list)

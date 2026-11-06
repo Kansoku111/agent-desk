@@ -4,13 +4,13 @@ import {
   Archive, ArchiveRestore, ArrowLeft, Folder, FolderOpen, FolderPlus, Loader2, Monitor, MoreHorizontal, PanelLeftClose, Palette, Pencil, Plus,
   CheckSquare, ChevronDown, ChevronUp, Copy, Pin, PinOff, Search, Settings, SquarePen, Trash2, X,
 } from 'lucide-react'
-import { act, getState, isNarrow, navigate, request, setState, startTerminal, toast, useStore } from '../store'
+import { act, getState, isNarrow, navigate, request, setState, startCodexTask, startTerminal, toast, useStore } from '../store'
 import { selectThreadRange } from '../thread-selection'
 import { groupRows, visibleRows, MAX_ROWS, VISIBLE_ROWS } from '../task-rows'
 import { threadMarkdown } from '../thread-transcript'
 import { abMarkdown } from '../ab-transcript'
 import { ConfirmDialog, Modal } from './Modal'
-import type { AbRun, TerminalSummary, ThreadSummary, Turn } from '../types'
+import type { AbRun, CodexTaskSummary, TerminalSummary, ThreadSummary, Turn } from '../types'
 import { copyText, parseModel, relativeTime, workspaceLabel } from '../util'
 import { PROJECT_HUES, projectColor } from '../projectColors'
 import { Dropdown, MenuItem } from './Popover'
@@ -424,6 +424,34 @@ function TerminalRow({ terminal, active, selection }: { terminal: TerminalSummar
   )
 }
 
+function CodexRow({ task, active, selection }: { task: CodexTaskSummary; active: boolean; selection: ThreadSelection }) {
+  const team = useLedTeam(task.id)
+  const leads = task.team?.role === 'leader'
+  const [renaming, setRenaming] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [title, setTitle] = useState(task.title)
+  const save = () => { setRenaming(false); if (title.trim() && title.trim() !== task.title) void act('codex.task.update', { taskId: task.id, title: title.trim() }) }
+  const copy = async () => {
+    const turns = getState().codexTurns[task.id] ?? (await act<{ turns: Turn[] }>('codex.task.get', { taskId: task.id }))?.turns
+    if (!turns) return
+    try { await copyText(threadMarkdown(task, turns)); toast('履歴をコピーしました', 'success') } catch { toast('コピーできませんでした', 'error') }
+  }
+  return <li className={`thread-row ${active ? 'active' : ''} ${selection.enabled && selection.selected.has(task.id) ? 'selected' : ''}`}>
+    {selection.enabled && <input type="checkbox" className="thread-checkbox" aria-label={`${task.title} を選択`} checked={selection.selected.has(task.id)} disabled={selection.busy} onChange={() => {}} onClick={(event) => selection.toggle(task.id, event.shiftKey)} />}
+    {renaming ? <input className="rename-input" autoFocus aria-label="タスク名" value={title} onChange={(event) => setTitle(event.target.value)} onBlur={save} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenaming(false) }} /> : <button type="button" className="thread-button" title={task.title} disabled={selection.busy} onClick={(event) => selection.enabled || event.ctrlKey || event.metaKey || event.shiftKey ? selection.toggle(task.id, event.shiftKey) : navigate({ view: 'codex', id: task.id })}>
+      {leads ? <span className="cl-mark tm-mark small" aria-label="エージェントチーム">TM</span> : <span className="cl-mark small">GP</span>}{task.pinned && <Pin size={12} className="thread-pin" />}<span className="thread-title">{task.title}</span><span className="thread-meta">{task.pendingApproval || teamNeedsUser(team) ? <span className="status-dot approval" title="承認・確認待ち" /> : task.status === 'running' || team?.children.some((child) => child.state === 'running' || child.state === 'approval') ? <Loader2 size={13} className="spin" /> : task.status === 'error' ? <span className="status-dot error" title="エラー" /> : <span className="thread-time">{relativeTime(task.updatedAt)}</span>}</span>
+    </button>}
+    {!renaming && !selection.enabled && <Dropdown placement="bottom" align="right" width={180} className="thread-actions" trigger={({ toggle }) => <button type="button" className="icon-button small" aria-label="GPの操作" onClick={toggle}><MoreHorizontal size={14} /></button>}>{(close) => <>
+      <MenuItem icon={<Pencil size={14} />} label="名前を変更" onSelect={() => { close(); setTitle(task.title); setRenaming(true) }} />
+      <MenuItem icon={<Copy size={14} />} label="履歴をコピー" onSelect={() => { close(); void copy() }} />
+      <MenuItem icon={task.pinned ? <PinOff size={14} /> : <Pin size={14} />} label={task.pinned ? 'ピン留めを解除' : 'ピン留め'} onSelect={() => { close(); void act('codex.task.update', { taskId: task.id, pinned: !task.pinned }) }} />
+      <MenuItem icon={task.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />} label={task.archived ? 'アーカイブから戻す' : 'アーカイブ'} onSelect={() => { close(); void act('codex.task.update', { taskId: task.id, archived: !task.archived }) }} />
+      <MenuItem icon={<Trash2 size={14} />} label={leads ? 'チームを削除' : '削除'} danger onSelect={() => { close(); setRemoving(true) }} />
+    </>}</Dropdown>}
+    {removing && <ConfirmDialog title={leads ? 'チームを削除' : 'GPタスクを削除'} body={<p>{leads ? `リーダーと子 ${team?.children.length ?? 0} 人のタスクと報告を削除します。` : '履歴を削除します。'}作業フォルダは削除しません。</p>} confirmLabel="削除" danger onClose={() => setRemoving(false)} onConfirm={() => void act('codex.task.remove', { taskId: task.id })} />}
+  </li>
+}
+
 interface Group {
   path: string
   label: string
@@ -432,6 +460,7 @@ interface Group {
   threads: ThreadSummary[]
   terminals: TerminalSummary[]
   ab: AbRun[]
+  codex: CodexTaskSummary[]
 }
 
 function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, activeId, searching, selection }: {
@@ -452,6 +481,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
   const more = Math.min(rows.filter((row) => !row.pinned).length, MAX_ROWS) - VISIBLE_ROWS
   const hasRows = rows.length > 0 || draftHere
   const [renaming, setRenaming] = useState(false)
+  const [startingCodex, setStartingCodex] = useState(false)
   const [colorOpen, setColorOpen] = useState(false)
   const [savingColor, setSavingColor] = useState(false)
   const [name, setName] = useState(group.label)
@@ -518,6 +548,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
             onClick={() => void startTerminal(group.path)}>
             CL
           </button>
+          <button type="button" className="icon-button small task-start-button gp-button" title="Codex で新しいタスク" aria-label={`${group.label} で GP を始める`} disabled={startingCodex} onClick={async () => { setStartingCodex(true); try { await startCodexTask(group.path) } finally { setStartingCodex(false) } }}>GP</button>
           <button type="button" className="icon-button small new-task-button" title="新しいタスク" aria-label={`${group.label} で新しいタスク`} onClick={() => newTaskIn(group.path)}>
             <Plus size={14} />
           </button>
@@ -592,6 +623,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
           )}
           {shownRows.map((row) => (row.thread
             ? <ThreadRow key={row.id} thread={row.thread} active={activeId === row.id} selection={selection} />
+            : row.codex ? <CodexRow key={row.id} task={row.codex} active={activeId === row.id} selection={selection} />
             : row.ab ? <AbRow key={row.id} run={row.ab} active={activeId === row.id} selection={selection} />
             : <TerminalRow key={row.id} terminal={row.terminal!} active={activeId === row.id} selection={selection} />))}
         </ul>
@@ -611,6 +643,7 @@ export function Sidebar() {
   const threads = useStore((state) => state.server?.threads) ?? []
   const terminals = useStore((state) => state.server?.terminals) ?? []
   const ab = useStore((state) => state.server?.ab) ?? []
+  const codex = useStore((state) => state.server?.codexTasks) ?? []
   const workspaces = useStore((state) => state.server?.settings.workspaces) ?? []
   const myPc = useStore((state) => state.server?.app.myPc) ?? ''
   const names = useStore((state) => state.server?.settings.projectNames)
@@ -644,7 +677,7 @@ export function Sidebar() {
     const visible = threads.filter((thread) => !thread.team?.childId && thread.team?.role !== 'observer' && !thread.ab && !thread.preset && shown(thread))
     const visibleTerminals = terminals.filter((terminal) => shown(terminal))
     // My PC first, then projects in recent-use order, then any project only a task remembers.
-    const order = [myPc, ...workspaces, ...threads.map((thread) => thread.workspace), ...terminals.map((terminal) => terminal.workspace), ...ab.map((run) => run.workspace)].filter(Boolean)
+    const order = [myPc, ...workspaces, ...threads.map((thread) => thread.workspace), ...terminals.map((terminal) => terminal.workspace), ...ab.map((run) => run.workspace), ...codex.map((task) => task.workspace)].filter(Boolean)
     const result: Group[] = []
     for (const path of new Set(order)) {
       const pc = path === myPc
@@ -656,17 +689,18 @@ export function Sidebar() {
         threads: visible.filter((thread) => thread.workspace === path),
         terminals: visibleTerminals.filter((terminal) => terminal.workspace === path),
         ab: ab.filter((run) => run.workspace === path && shown({ ...run, archived: Boolean(run.archived) })),
+        codex: codex.filter((task) => task.workspace === path && !task.ab && (!task.team || task.team.role === 'leader') && shown(task)),
       })
     }
-    const any = (group: Group) => group.threads.length > 0 || group.terminals.length > 0 || group.ab.length > 0
+    const any = (group: Group) => group.threads.length > 0 || group.terminals.length > 0 || group.ab.length > 0 || group.codex.length > 0
     // Searching or browsing the archive shows only groups with matches; otherwise projects stay listed.
     return needle || archived
       ? result.filter(any)
       : result.filter((group) => group.pc || any(group) || workspaces.includes(group.path))
-  }, [threads, terminals, ab, workspaces, myPc, names, colors, needle, archived])
+  }, [threads, terminals, ab, codex, workspaces, myPc, names, colors, needle, archived])
 
   // Search/archive changes cannot leave hidden tasks selected for deletion.
-  const activeId = route.view === 'thread' || route.view === 'terminal' || route.view === 'ab' ? route.id : null
+  const activeId = route.view === 'thread' || route.view === 'terminal' || route.view === 'ab' || route.view === 'codex' ? route.id : null
   const rowsOf = (group: Group) => visibleRows(groupRows(group), expandedPaths.includes(group.path), Boolean(needle), activeId)
   const availableIds = new Set(groups.flatMap((group) => rowsOf(group).map((row) => row.id)))
   const selectedIds = selected.filter((id) => availableIds.has(id))
@@ -711,6 +745,7 @@ export function Sidebar() {
     for (const threadId of ids) {
       try {
         if (ab.some((run) => run.id === threadId)) await request('ab.remove', { runId: threadId })
+        else if (codex.some((task) => task.id === threadId)) await request('codex.task.remove', { taskId: threadId })
         else if (terminalIds.has(threadId)) await request('terminal.remove', { terminalId: threadId })
         else await request('thread.remove', { threadId })
       } catch {
@@ -746,7 +781,7 @@ export function Sidebar() {
     accounts?.localLlm?.configured && 'ローカル LLM',
   ].filter(Boolean)
   const archivedCount = threads.filter((thread) => thread.archived && !thread.team?.childId && thread.team?.role !== 'observer').length
-    + terminals.filter((terminal) => terminal.archived).length
+    + terminals.filter((terminal) => terminal.archived).length + codex.filter((task) => task.archived && !task.ab && (!task.team || task.team.role === 'leader')).length
 
   return (
     <aside className="sidebar" aria-label="タスク">

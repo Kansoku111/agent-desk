@@ -25,7 +25,7 @@ export async function claudeImageBlocks(dir, images) {
 export function assertAbImageModels(config, models) {
   for (const key of ['a', 'b', 'leader', ...(config.delegate ? ['implementer'] : []), ...(config.leaderFallback ? ['leaderFallback'] : [])]) {
     const value = config[key]
-    if (!value.startsWith('claude:') && !models.some((model) => model.value === value && ['anthropic', 'openai-codex'].includes(model.provider))) {
+    if (!value.startsWith('claude:') && !models.some((model) => model.value === value && ['anthropic', 'openai-codex', 'codex'].includes(model.provider))) {
       throw new Error('画像付きABではClaude / ChatGPTモデルを選んでください。このモデルの画像入力には対応していません')
     }
   }

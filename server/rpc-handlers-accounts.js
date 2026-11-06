@@ -14,7 +14,7 @@ const KEY_REFS = { anthropic: ANTHROPIC_REF, deepseek: DEEPSEEK_REF, opencodeGo:
 const CATALOG_KEY_CHECKS = { deepseek: checkDeepSeekKey, opencodeGo: checkOpenCodeGoKey }
 
 /** Handlers for accounts and usage; index.js merges them into the request table. */
-export function createAccountHandlers({ appVersion, credentials, login, codexApp, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost, updateModelCatalog, refreshChatGptUsage, getChatgptUsage, refreshUsageHistory, usageState, updateSettings, discoverModels = discoverLocalModels }) {
+export function createAccountHandlers({ appVersion, credentials, login, codexApp, codex, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost, updateModelCatalog, refreshChatGptUsage, getChatgptUsage, refreshUsageHistory, usageState, updateSettings, discoverModels = discoverLocalModels }) {
   return {
     // Connects (or reconnects) the local server: its models are read now and kept in the settings.
     'localLlm.set': async ({ baseURL, key }) => {
@@ -127,10 +127,14 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
       login.start(method === 'device' ? 'device' : 'browser')
       return { login: login.state }
     },
-    'codex.login': async ({ method } = {}) => ({ codexLogin: await codexApp.loginStart(method === 'device' ? 'device' : 'browser') }),
+    'codex.login': async ({ method } = {}) => {
+      if (codex?.busy) throw new Error('Codex の作業を停止してからサインインしてください')
+      return { codexLogin: await codexApp.loginStart(method === 'device' ? 'device' : 'browser') }
+    },
     'codex.cancel': () => codexApp.cancelLogin(),
     'codex.account': async () => ({ account: await codexApp.account() }),
     'codex.logout': async () => {
+      if (codex?.busy) throw new Error('Codex の作業を停止してからサインアウトしてください')
       await codexApp.logout()
       const next = await accounts()
       broadcast('accounts', { accounts: next })

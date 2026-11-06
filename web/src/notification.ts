@@ -1,9 +1,9 @@
 export interface TaskNotification {
-  kind: string; threadId: string; title: string; status?: string; terminal?: boolean; ab?: boolean
+  kind: string; threadId?: string; taskId?: string; title: string; status?: string; terminal?: boolean; ab?: boolean; codex?: boolean
 }
 
-export function notificationRoute(frame: TaskNotification): { view: 'ab' | 'terminal' | 'thread'; id: string } {
-  return { view: frame.ab ? 'ab' : frame.terminal ? 'terminal' : 'thread', id: frame.threadId }
+export function notificationRoute(frame: TaskNotification): { view: 'codex' | 'ab' | 'terminal' | 'thread'; id: string } {
+  return { view: frame.codex || frame.kind === 'codex' ? 'codex' : frame.ab ? 'ab' : frame.terminal ? 'terminal' : 'thread', id: frame.taskId ?? frame.threadId ?? '' }
 }
 
 export function notificationText(frame: TaskNotification) {
@@ -14,7 +14,7 @@ export function notificationText(frame: TaskNotification) {
   }
   const prefix = frame.ab && ab[frame.kind]
   if (prefix) return `${prefix}: ${frame.title}`
-  return frame.kind === 'approval-needed' ? `承認待ち: ${frame.title}`
+  return frame.kind === 'approval-needed' || frame.status === 'approval' ? `承認待ち: ${frame.title}`
     : frame.kind === 'team-ask' ? `チームのリーダーが確認を求めています: ${frame.title}`
       : frame.status === 'error' ? `エラーで停止: ${frame.title}`
         : frame.status === 'cancelled' ? `停止しました: ${frame.title}` : `完了しました: ${frame.title}`

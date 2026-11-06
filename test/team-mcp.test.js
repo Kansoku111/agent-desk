@@ -75,6 +75,7 @@ test('the team MCP server lists its tools and forwards calls with the team secre
     const spawn = listed.result.tools.find((tool) => tool.name === 'spawn')
     assert.deepEqual(spawn.inputSchema.required, ['title', 'task'])
     assert.equal(spawn.inputSchema.properties.model.type, 'string')
+    assert.ok(spawn.inputSchema.properties.provider.enum.includes('codex'))
     assert.deepEqual(spawn.inputSchema.properties.effort.type, ['string', 'null'])
     assert.match(spawn.inputSchema.properties.effort.description, /null.*default/)
     assert.match(spawn.description, /evenly/)

@@ -248,8 +248,8 @@ async function setup(t, settings = {}, options = {}) {
   }).load()
   holder.manager = manager
   t.after(() => manager.stop())
-  const { team, terminal, thread } = await manager.create({ workspace })
-  const leader = (terminal ?? thread).id
+  const { team, terminal, thread, codex } = await manager.create({ workspace })
+  const leader = (terminal ?? thread ?? codex).id
   if (terminal) terminals.set(leader, { ready: true })
   const raw = manager.teams.get(team.id)
   const tool = (name, args = {}) => manager.call(team.id, raw.secret, name, args)
@@ -3976,4 +3976,172 @@ test('a child whose task was not made when the app stopped is dropped, and the l
   manager.start()
   assert.deepEqual(team.children, [])
   assert.match(typed().at(-1), /子の作業を始める前に止まりました/)
+})
+
+
+function fakeCodex() {
+  const sessions = new Map(), calls = []
+  const runner = Object.assign(new EventEmitter(), {
+    sessions, calls,
+    list: () => [...sessions.values()],
+    get: (id) => sessions.get(id) ?? null,
+    running: (id) => Boolean(sessions.get(id)?.running),
+    async create(input) { const session = { id: `codex-${sessions.size + 1}`, ...input, running: false }; sessions.set(session.id, session); calls.push(['create', input]); return session },
+    run(id, text) { const session = sessions.get(id); if (session.running) throw new Error('busy'); session.running = true; calls.push(['run', id, text]); return session },
+    async waitForStart(id) { if (runner.rejectStart) { sessions.get(id).running = false; throw new Error('preflight failed') } return 'turn-accepted' },
+    async steer(id, text) { calls.push(['steer', id, text]); return false },
+    async configure(id, input) { calls.push(['configure', id, input]); Object.assign(sessions.get(id), input) },
+    async stop(id) { calls.push(['stop', id]); if (runner.running(id)) runner.finish(id, '', 'stopped') },
+    async remove(id) { calls.push(['remove', id]); sessions.delete(id); runner.emit('removed', { id }) },
+    finish(id, text, status = 'done') { sessions.get(id).running = false; runner.emit('finished', { id, status, text, denials: [] }) },
+  })
+  return runner
+}
+const codexConfig = { enabled: true, low: { enabled: true, model: 'codex-model', effort: 'low' }, mid: { enabled: false, model: null, effort: null } }
+const codexCatalog = { ...CATALOG.data, models: [...CATALOG.data.models, { value: 'codex:codex-model', provider: 'codex', id: 'codex-model', name: 'Codex model' }], effortsByModel: { 'codex:codex-model': [{ value: 'low' }] } }
+
+test('Codex child uses dedicated runner for launch, reports, steer, stop and deletion', async (t) => {
+  const codex = fakeCodex()
+  const f = await setup(t, { codex: codexConfig }, { codex, catalogState: () => codexCatalog })
+  await f.tool('spawn', { title: 'child', task: 'work', provider: 'codex', tier: 'low' })
+  const child = f.team.children[0], session = codex.get(child.taskId)
+  assert.equal(child.kind, 'codex')
+  assert.equal(session.permissionMode, 'danger-full-access')
+  assert.deepEqual(session.team, { id: f.team.id, childId: child.id })
+  assert.match(session.instructions, /child agent/)
+  await f.tool('send', { child: child.id, message: 'follow up' })
+  assert.deepEqual(child.pending, ['[リーダーから]\nfollow up'])
+  codex.finish(child.taskId, 'first report')
+  await tick()
+  assert.equal(codex.running(child.taskId), true)
+  await f.manager.stopAll(f.team.id)
+  assert.ok(codex.calls.some(([op, id]) => op === 'stop' && id === child.taskId))
+  await f.manager.removeChild(f.team.id, child.id)
+  assert.equal(codex.get(child.taskId), null)
+})
+
+test('eco Codex research becomes writer in the same session after acceptance', async (t) => {
+  const codex = fakeCodex()
+  const f = await setupExecution(t, { codex, catalogState: () => codexCatalog }, { codex: codexConfig })
+  await f.tool('spawn', { ...exTask, provider: 'codex', mode: 'research' })
+  const child = f.team.children[0], id = child.taskId
+  assert.equal(codex.get(id).permissionMode, 'read-only')
+  codex.finish(id, 'research findings')
+  await f.tool('close', { child: child.id, reason: '根拠を確認した' })
+  await f.tool('implement', { child: child.id, title: 'implement', task: 'apply findings', criteria: 'done', checks: [] })
+  assert.equal(child.taskId, id)
+  assert.equal(codex.get(id).permissionMode, 'danger-full-access')
+  assert.deepEqual(codex.get(id).team, { id: f.team.id, childId: child.id, executionMode: 'write' })
+  assert.ok(codex.calls.some(([op, taskId]) => op === 'configure' && taskId === id))
+  await assert.rejects(f.tool('spawn', { ...exTask, provider: 'codex' }), /作業|終わっていません/)
+})
+
+test('eco keeps accepted Codex research read-only when permission switching fails', async (t) => {
+  const codex = fakeCodex()
+  const f = await setupExecution(t, { codex, catalogState: () => codexCatalog }, { codex: codexConfig })
+  await f.tool('spawn', { ...exTask, provider: 'codex', mode: 'research' })
+  const child = f.team.children[0], id = child.taskId
+  codex.finish(id, 'research findings')
+  await f.tool('close', { child: child.id, reason: '根拠を確認した' })
+  codex.configure = async () => { throw new Error('switch failed') }
+  await assert.rejects(f.tool('implement', { child: child.id, title: 'write', task: 'work', criteria: 'done', checks: [] }), /switch failed/)
+  assert.equal(child.execution.mode, 'research')
+  assert.equal(child.closed, true)
+  assert.equal(codex.get(id).permissionMode, 'read-only')
+  assert.equal(codex.calls.filter(([op]) => op === 'run').length, 1)
+})
+
+test('Codex child config and interrupted ownership survive restore without auto-running', async (t) => {
+  const codex = fakeCodex()
+  const f = await setup(t, { codex: codexConfig }, { codex, catalogState: () => codexCatalog })
+  await f.tool('spawn', { title: 'child', task: 'work', provider: 'codex', tier: 'low' })
+  const child = f.team.children[0]
+  await f.manager.writes
+  const { restoreTeams } = await import('../server/teams-store.js')
+  const saved = JSON.parse(await fs.readFile(path.join(f.dir, 'teams.json'), 'utf8'))
+  const restored = restoreTeams(saved, () => ({}))[0]
+  assert.equal(restored.children[0].kind, 'codex')
+  assert.equal(restored.children[0].taskId, child.taskId)
+  assert.equal(restored.config.codex.low.model, 'codex-model')
+  codex.sessions.get(child.taskId).running = false
+  f.manager.start()
+  assert.equal(child.awaiting, false)
+  assert.equal(child.reports.at(-1).kind, 'error')
+  assert.match(child.reports.at(-1).text, /再起動/)
+  assert.equal(codex.calls.filter(([op]) => op === 'run').length, 1)
+})
+
+test('eco excludes an unrelated running Codex writer but not an idle or read-only one', async (t) => {
+  const codex = fakeCodex()
+  const f = await setupExecution(t, { codex, catalogState: () => codexCatalog }, { codex: codexConfig })
+  const other = await codex.create({ workspace: f.workspace, permissionMode: 'danger-full-access' })
+  codex.run(other.id, 'work')
+  await assert.rejects(f.tool('spawn', { ...exTask, provider: 'codex' }), /Codexが作業中/)
+  other.permissionMode = 'read-only'
+  await f.tool('spawn', { ...exTask, provider: 'codex', mode: 'research' })
+  other.running = false
+})
+
+test('Codex leader mounts team MCP and receives child reports on its next turn', async (t) => {
+  const codex = fakeCodex()
+  const f = await setup(t, { leaderProvider: 'codex', dshLeader: { provider: 'codex', model: 'codex-model', effort: 'low' } }, { codex, catalogState: () => codexCatalog })
+  const leader = codex.get(f.leader)
+  assert.equal(f.team.leaderKind, 'codex')
+  assert.deepEqual(leader.team, { id: f.team.id, role: 'leader' })
+  assert.match(leader.instructions, /you are the leader/)
+  assert.equal(leader.mcpServers['agent-team'].env.AGENT_DESK_TEAM_ID, f.team.id)
+  codex.run(f.leader, 'user task')
+  await f.tool('spawn', { title: 'child', task: 'research', provider: 'gpt', tier: 'low' })
+  const child = f.team.children[0]
+  f.threads.finish(child.taskId, 'child evidence')
+  assert.equal(f.team.queue.length, 1)
+  codex.finish(f.leader, 'waiting')
+  for (let i = 0; i < 50 && !codex.running(f.leader); i++) await wait(10)
+  assert.equal(codex.running(f.leader), true)
+  assert.match(codex.calls.filter(([op, id]) => op === 'run' && id === f.leader).at(-1)[2], /child evidence/)
+  await f.manager.removeTeam(f.team.id)
+  assert.equal(codex.get(f.leader), null)
+})
+
+test('Codex leader retains reports if preflight fails before accepting a turn', async (t) => {
+  const codex = fakeCodex()
+  const f = await setup(t, { leaderProvider: 'codex', dshLeader: { provider: 'codex', model: 'codex-model', effort: 'low' } }, { codex, catalogState: () => codexCatalog })
+  codex.run(f.leader, 'user task')
+  await f.tool('spawn', { title: 'child', task: 'research', provider: 'gpt', tier: 'low' })
+  f.threads.finish(f.team.children[0].taskId, 'must not be lost')
+  codex.rejectStart = true
+  codex.finish(f.leader, 'waiting')
+  for (let i = 0; i < 50 && !f.team.deliveryFailed; i++) await wait(10)
+  assert.equal(f.team.deliveryFailed, true)
+  assert.equal(f.team.queue.length, 1)
+  assert.match(f.team.queue[0].text, /must not be lost/)
+  codex.rejectStart = false
+  f.manager.retryDelivery(f.team.id)
+  for (let i = 0; i < 50 && !codex.running(f.leader); i++) await wait(10)
+  assert.equal(codex.running(f.leader), true)
+  assert.equal(f.team.queue.length, 0)
+})
+
+test('Codex leader restoration keeps kind and unsupported fallback is rejected', async (t) => {
+  const codex = fakeCodex()
+  const f = await setup(t, { leaderProvider: 'codex', dshLeader: { provider: 'codex', model: 'codex-model', effort: 'low' } }, { codex, catalogState: () => codexCatalog })
+  await f.manager.writes
+  const { restoreTeams } = await import('../server/teams-store.js')
+  const saved = JSON.parse(await fs.readFile(path.join(f.dir, 'teams.json'), 'utf8'))
+  const restored = restoreTeams(saved, () => ({}))
+  assert.equal(restored[0].leaderKind, 'codex')
+  assert.equal(restored[0].leaderId, f.leader)
+  assert.throws(() => f.manager.updateConfig(f.team.id, { leaderFallback: '["openai-codex","gpt-6-luna"]' }), /フォールバックはまだ利用できません/)
+  saved.teams[0].leaderKind = 'unknown'
+  assert.deepEqual(restoreTeams(saved, () => ({})), [])
+})
+
+test('eco accepts a Codex parent without changing its model route', async (t) => {
+  const codex = fakeCodex()
+  const f = await setup(t, {}, { codex, catalogState: () => codexCatalog })
+  const { team, codex: parent } = await f.manager.create({ workspace: f.workspace, choices: { leaderProvider: 'codex', dshLeader: { provider: 'codex', model: 'codex-model', effort: 'low' }, gptLeader: { effort: 'low' } }, execution: { leaderModel: 'codex:codex-model' } })
+  assert.equal(team.leaderKind, 'codex')
+  assert.equal(parent.model, 'codex-model')
+  assert.equal(parent.effort, 'low')
+  assert.equal(codex.get(parent.id).mcpServers['agent-team'].env.AGENT_DESK_EXECUTION, '1')
 })

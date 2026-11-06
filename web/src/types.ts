@@ -39,6 +39,16 @@ export interface TaskPresetRun {
   changedFiles?: { path: string; status: string }[]; patch?: string; originalPatch?: string; record?: string
 }
 
+export interface CodexTaskSummary {
+  id: string; title: string; workspace: string; model: string | null; effort: string | null
+  permissionMode: Exclude<PermissionMode, 'chat-web'>; sessionId: string | null
+  status: 'idle' | 'running' | 'done' | 'error' | 'stopped'; pendingApproval: boolean
+  createdAt: number; updatedAt: number; archived: boolean; pinned: boolean
+  score?: UsageScore; team?: { id: string; childId?: string; role?: string } | null; ab?: { runId: string; jobId: string } | null
+}
+export interface CodexPermission { requestId: string; kind: 'command' | 'file' | 'tool'; title: string; details?: string }
+export interface CodexModel { id: string; name: string; efforts: string[]; defaultEffort?: string }
+
 export interface ThreadSummary {
   preset?: { runId: string; browser?: boolean }
   fallbackTo?: { kind: 'terminal'; id: string }
@@ -101,7 +111,7 @@ export interface TerminalSummary {
 }
 
 /** Who a team's children run on (Claude (API), DeepSeek, OpenCode Go and local: as a dsh task on the user's API key or own server). */
-export type TeamProvider = 'gpt' | 'claude' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
+export type TeamProvider = 'gpt' | 'codex' | 'claude' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
 /** A Claude Code or dsh model can lead a team. */
 export type TeamLeaderProvider = TeamProvider
 export type TeamTier = 'low' | 'mid'
@@ -122,7 +132,7 @@ export interface TeamChild {
   modelName: string
   effort: string | null
   /** `agent`: Claude Code run headless; its turns come with team.childTurns and `agentTurn` frames. */
-  kind: 'thread' | 'agent'
+  kind: 'thread' | 'agent' | 'codex'
   taskId: string | null
   state: TeamChildState
   closed: boolean
@@ -180,7 +190,7 @@ export interface TeamSummary {
   leaderId: string
   score?: UsageScore
   /** `terminal`: Claude Code leads; `thread`: a dsh task leads. */
-  leaderKind: 'terminal' | 'thread'
+  leaderKind: 'terminal' | 'thread' | 'codex'
   observer?: { id: string; kind: 'thread' | 'agent'; model: string; effort: string | null; running: boolean; history: { id: string; kind: 'thread' | 'agent' }[] }
   /** The team's own settings: chosen when it started, changed in its panel since. */
   config?: TeamSettings
@@ -229,6 +239,7 @@ export interface TeamSettings {
   batchReports?: boolean
   /** Children start without the browser, desktop and image tools unless the leader asks (older saves lack it: off). */
   leanChildren?: boolean
+  codex?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   gpt: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   claude: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   /** Older saves lack it (off). */
@@ -622,6 +633,8 @@ export interface AppState {
   fastModels: Record<FastProvider, Record<string, string>>
   taskPresets?: TaskPresetRun[]
   threads: ThreadSummary[]
+  codexTasks: CodexTaskSummary[]
+  codexModels: CodexModel[]
   terminals: TerminalSummary[]
   teams: TeamSummary[]
   ab?: AbRun[]
