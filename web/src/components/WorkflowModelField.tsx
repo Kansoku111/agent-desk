@@ -47,14 +47,14 @@ function selectedName(groups: ModelGroup[], value: string | null) {
   return model.name
 }
 
-export function ModelField({ label, labelAction, value, groups, disabled, onChange, effort, efforts, onEffort, allowClearUnavailableEffort = false, allowDefaultEffort = false, unavailableEfforts = [] }: {
+export function ModelField({ label, labelAction, value, groups, disabled, onChange, effort, efforts, effortsKnown = true, onEffort, allowClearUnavailableEffort = false, allowDefaultEffort = false, unavailableEfforts = [] }: {
   label: string; labelAction?: ReactNode; value: string; groups: ModelGroup[]; disabled: boolean; onChange: (value: string) => void
-  effort: string; efforts: string[]; onEffort: (value: string) => void; allowClearUnavailableEffort?: boolean; allowDefaultEffort?: boolean; unavailableEfforts?: string[]
+  effort: string; efforts: string[]; effortsKnown?: boolean; onEffort: (value: string) => void; allowClearUnavailableEffort?: boolean; allowDefaultEffort?: boolean; unavailableEfforts?: string[]
 }) {
   const clearUnavailableEffort = allowClearUnavailableEffort && !efforts.length && Boolean(effort)
   const effortChoices = (clearUnavailableEffort ? [''] : allowDefaultEffort && efforts.length ? ['', ...efforts] : efforts)
     .filter((level) => !unavailableEfforts.includes(level))
-  const effortName = clearUnavailableEffort ? `${effortLabel(effort)}（非対応）` : !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : allowDefaultEffort ? '既定' : '中'
+  const effortName = !effortsKnown ? effort ? `${effortLabel(effort)}（未確認）` : '未確認' : clearUnavailableEffort ? `${effortLabel(effort)}（非対応）` : !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : allowDefaultEffort ? '既定' : '中'
   const name = selectedName(groups, value)
   const modelWheel = useWheelSelect<HTMLButtonElement>(disabled ? [] : groups.flatMap((group) => group.models.map((model) => model.value)), value, onChange)
   const effortWheel = useWheelSelect<HTMLButtonElement>(disabled || !value ? [] : effortChoices, effortChoices.includes(effort) ? effort : null, onEffort)

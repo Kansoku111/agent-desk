@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronRight, Plus, Trash2 } from 'lucide-react'
-import { act, setState, startTeam, useStore } from '../store'
+import { act, request, setState, startTeam, useStore } from '../store'
 import type { AppState, TeamModelChoice, TeamPolicy, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
 import { isModelVisible } from '../model-selection'
 import { effortLabel, parseModel, pickableEfforts, workspaceLabel } from '../util'
@@ -97,7 +97,7 @@ function dshModels(server: AppState, provider: DshProvider = 'gpt') {
 /** The reasoning levels of a dsh model, as the model list knows them. */
 function dshEfforts(server: AppState, id: string | null, provider: DshProvider = 'gpt') {
   const known = id ? server.catalog.effortsByModel[provider === 'codex' ? `codex:${id}` : JSON.stringify([CATALOG_PROVIDER[provider], id])] : undefined
-  return pickableEfforts(known ?? server.catalog.fallbackEfforts).map((effort) => effort.value)
+  return pickableEfforts(known ?? (provider === 'codex' ? [] : server.catalog.fallbackEfforts)).map((effort) => effort.value)
 }
 
 /** A model and its reasoning level, side by side. */
@@ -284,6 +284,7 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
         }}><Plus size={14} /></button>
       return <div className="team-free-model-row" key={`${value}:${index}`}>
         <ModelField label={`モデル ${index + 1}`} labelAction={duplicate} value={value} groups={choices} disabled={false} effort={entry.effort ?? ''}
+          effortsKnown={entry.provider !== 'codex' || server.catalog.effortsByModel[value] !== undefined}
           efforts={levels} unavailableEfforts={Array.from(otherEfforts, (level) => level ?? '')} allowDefaultEffort
           onChange={(next) => {
             if (next === value) return
@@ -303,6 +304,12 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
 }
 
 function ChildModels({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
+  const codexSignedIn = Boolean(server.accounts.codex?.signedIn)
+  const codexModelCount = server.codexModels.length
+  useEffect(() => {
+    // Idle shutdown clears Codex's catalog; opening team settings must relearn it.
+    if (codexSignedIn && !codexModelCount) void request('codex.models').catch(() => {})
+  }, [codexSignedIn, codexModelCount])
   return <>
     <section className="account-card"><div className="setting compact">
       <h3>モデルの選び方</h3>

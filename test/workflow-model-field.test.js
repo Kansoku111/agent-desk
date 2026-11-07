@@ -40,6 +40,25 @@ test('Codex workflow models require explicit opt-in and a connected account', ()
   assert.equal(workflow.modelGroups(state, true).some((group) => group.id === 'codex'), false)
 })
 
+test('effort labels distinguish an unknown catalog from confirmed unsupported levels', async () => {
+  const { ModelField } = await load('../web/src/components/WorkflowModelField.tsx', {
+    ...common, './Pickers': pickers,
+    '../util': { parseModel, effortLabel: value => ({ max: '最大', xhigh: '最高' }[value] ?? value) },
+    './useWheelSelect': { useWheelSelect: () => ({}) },
+  })
+  const nodes = node => !node || typeof node !== 'object' ? []
+    : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)]
+  const label = props => {
+    const tree = ModelField({ label: 'モデル 1', value: 'codex:gpt-6-luna', groups: [], disabled: false, onChange() {}, onEffort() {}, ...props })
+    return nodes(tree).find(node => node.props?.className === 'ab-effort-menu').props.trigger({}).props['aria-label']
+  }
+  for (const effort of ['max', 'xhigh']) {
+    assert.match(label({ effort, efforts: [], effortsKnown: false }), /未確認/)
+    assert.doesNotMatch(label({ effort, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }), /非対応|未確認/)
+    assert.match(label({ effort, efforts: ['low', 'medium', 'high'] }), /非対応/)
+  }
+})
+
 test('Claude Code and Claude API remain separate groups and choices', () => {
   const groups = workflow.modelGroups(server)
   const code = groups.find((group) => group.id === 'claude-code')
