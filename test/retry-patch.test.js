@@ -7,7 +7,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry'
-import { patchPayloadSource, patchPiAiSource, PAYLOAD_KEY, replayGuard, RETRYABLE_KEY, retryableCheck } from '../server/retry-patch.js'
+import { patchPiAiSource, patchRetrySource, RETRYABLE_KEY, retryableCheck } from '../server/retry-patch.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -39,7 +39,7 @@ test('the installed dsh-llm-pi-ai takes the retry patch, and still parses', () =
   assert.ok(patched, 'dsh-llm-pi-ai no longer matches retry-patch.js; update the patch for this dsh')
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-desk-retry-')), 'index.mjs')
   try {
-    fs.writeFileSync(file, patchPayloadSource(patched) ?? patched)
+    fs.writeFileSync(file, patched)
     execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' })
   } finally {
     fs.rmSync(path.dirname(file), { recursive: true, force: true })
@@ -114,55 +114,21 @@ test('a rate limit is a rate limit again, and a hard limit stays a hard limit', 
 
 test('leaves an unexpected dsh-llm-pi-ai alone', () => {
   assert.equal(patchPiAiSource('export const x = 1'), null)
-  assert.equal(patchPayloadSource('export const x = 1'), null)
 })
 
-test('the installed dsh-llm-pi-ai takes the payload patch, and hands pi-ai the hook', () => {
-  const patched = patchPayloadSource(patchPiAiSource(installedSource()))
-  assert.ok(patched, 'dsh-llm-pi-ai no longer matches patchPayloadSource; update the patch for this dsh')
-  const start = patched.indexOf('function profileOptions(')
-  const profileOptions = new Function(`${patched.slice(start, patched.indexOf('\n}', start) + 2)} return profileOptions`)()
-  const key = Symbol.for(PAYLOAD_KEY)
-  const hook = () => undefined
-  globalThis[key] = hook
-  try {
-    const options = profileOptions({}, 'off', 'k')
-    assert.equal(options.onPayload, hook)
-    assert.equal(options.maxRetries, 0)
-    assert.equal(options.apiKey, 'k')
-  } finally {
-    delete globalThis[key]
-  }
+test('retry compatibility patches classification only and never injects a payload rewrite', () => {
+  const original = installedSource()
+  const patched = patchRetrySource(original)
+  assert.ok(patched)
+  const begin = original.indexOf('function profileOptions(')
+  const end = original.indexOf('\n}', begin) + 2
+  const profile = original.slice(begin, end)
+  assert.ok(patched.includes(profile), 'retry handling must preserve the provider options and payload')
+  assert.doesNotMatch(patched, /agentDesk.onProviderPayload/)
 })
 
-const reasoning = (id) => ({ type: 'reasoning', id, summary: [], encrypted_content: `enc-${id}` })
-const user = (text) => ({ role: 'user', content: [{ type: 'input_text', text }] })
-
-test('replayGuard drops the replayed reasoning once the same request is sent a third time', () => {
-  const logs = []
-  const guard = replayGuard((message) => logs.push(message))
-  const body = { model: 'gpt', prompt_cache_key: 's1', input: [user('hi'), reasoning('rs_a'), { type: 'function_call', call_id: 'c1' }, { type: 'function_call_output', call_id: 'c1', output: 'x' }] }
-  assert.equal(guard(body), undefined)
-  assert.equal(guard(structuredClone(body)), undefined)
-  const third = guard(structuredClone(body))
-  assert.deepEqual(third.input.map((item) => item.type ?? item.role), ['user', 'function_call', 'function_call_output'])
-  assert.equal(third.model, 'gpt')
-  assert.equal(logs.length, 1)
-  // Later requests of the session leave the same item out but keep newer reasoning.
-  const next = guard({ ...body, input: [...body.input, reasoning('rs_b'), user('more')] })
-  assert.deepEqual(next.input.filter((item) => item.type === 'reasoning').map((item) => item.id), ['rs_b'])
-})
-
-test('replayGuard leaves other sessions, new requests and non-Responses bodies alone', () => {
-  const guard = replayGuard()
-  const body = { prompt_cache_key: 's1', input: [user('hi'), reasoning('rs_a'), user('go')] }
-  guard(body)
-  guard(body)
-  guard(body)
-  assert.equal(guard({ prompt_cache_key: 's2', input: body.input }), undefined)
-  // A request that grew since the last one is a new request, not a retry.
-  const fresh = replayGuard()
-  for (let n = 1; n <= 5; n += 1) assert.equal(fresh({ prompt_cache_key: 's', input: [reasoning('rs_a'), ...Array.from({ length: n }, (_, i) => user(`m${i}`))] }), undefined)
-  assert.equal(guard({ messages: [] }), undefined)
-  assert.equal(guard(undefined), undefined)
+test('runaway tool arguments stay terminal even when the provider text also mentions a transient error', () => {
+  const classify = classifier(patchRetrySource(installedSource()))
+  for (const suffix of ['', ' network timeout', ' 503 server error', ' 429 rate limit'])
+    assert.equal(classify('SIWC_TOOL_ARGUMENT_RUNAWAY' + suffix), 'PI_AI_ERROR')
 })

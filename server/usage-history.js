@@ -31,7 +31,7 @@ export function localDay(time) {
  */
 export function pricingSignature(pricing) {
   const entries = [...pricing.entries()].filter(([key]) => isBilledModel(key)).sort(([a], [b]) => a.localeCompare(b))
-  return createHash('sha256').update(JSON.stringify({ billing: 'metered-only', unpriced: 'counted', responses: 'own-assistant-and-compaction', rates: entries })).digest('hex').slice(0, 16)
+  return createHash('sha256').update(JSON.stringify({ billing: 'metered-only', unpriced: 'counted', responses: 'own-assistant-compaction-and-attempt', rates: entries })).digest('hex').slice(0, 16)
 }
 
 // `unpriced` counts billed responses whose price is unknown; `cost` sums only the priced ones.
@@ -46,6 +46,10 @@ function addTotals(into, from) {
   into.reasoning += from.reasoning
   if (from.cost !== null) into.cost = (into.cost ?? 0) + from.cost
   into.unpriced = (into.unpriced ?? 0) + (from.unpriced ?? 0)
+  for (const key of ['interruptedRequests', 'usageIncomplete']) {
+    const count = (into[key] ?? 0) + (from[key] ?? 0)
+    if (count) into[key] = count
+  }
   return into
 }
 
@@ -71,23 +75,25 @@ function addResponses(days, events, pricing) {
     }
     if (typeof event?.time !== 'number') continue
     const response = recordedModelResponse(event)
-    const usage = response?.usage
-    if (!usage) continue
+    if (!response) continue
+    const usage = response.usage
     added = true
     const source = response.source
     const model = source.provider && source.model ? `${source.provider}/${source.model}` : 'unknown'
     const day = (days[localDay(event.time)] ??= {})
     const totals = (day[model] ??= emptyTotals())
-    const price = priceResponse(pricing, model, usage, event.time)
+    const price = usage ? priceResponse(pricing, model, usage, event.time) : null
     addTotals(totals, {
       requests: 1,
-      input: usage.inputTokens ?? 0,
-      output: usage.outputTokens ?? 0,
-      cacheRead: usage.cacheReadTokens ?? 0,
-      cacheWrite: usage.cacheWriteTokens ?? 0,
-      reasoning: usage.reasoningTokens ?? 0,
+      input: usage?.inputTokens ?? 0,
+      output: usage?.outputTokens ?? 0,
+      cacheRead: usage?.cacheReadTokens ?? 0,
+      cacheWrite: usage?.cacheWriteTokens ?? 0,
+      reasoning: usage?.reasoningTokens ?? 0,
       cost: price,
-      unpriced: price === null && isBilledModel(model) ? 1 : 0,
+      unpriced: price === null && (isBilledModel(model) || model === 'unknown') ? 1 : 0,
+      ...(response.interrupted ? { interruptedRequests: 1 } : {}),
+      ...(!usage ? { usageIncomplete: 1 } : {}),
     })
   }
   return added
@@ -132,6 +138,7 @@ export function summarizeHistory(files, now = Date.now()) {
           point.cost += totals.cost ?? 0
           point.unpriced += totals.unpriced ?? 0
           point.tokens += totals.input + totals.output + totals.cacheRead + totals.cacheWrite
+          if (totals.usageIncomplete) point.usageIncomplete = true
           daily.set(day, point)
         }
       }
@@ -258,7 +265,7 @@ export class UsageHistory extends EventEmitter {
           if (texts[index] === null) continue
           const events = []
           for (const line of texts[index].split('\n')) {
-            if (!line.includes('assistant/message') && !line.includes('compaction/summary') && !line.includes('session/end-seed')) continue
+            if (!line.includes('assistant/message') && !line.includes('assistant/attempt') && !line.includes('compaction/summary') && !line.includes('session/end-seed')) continue
             try {
               events.push(JSON.parse(line))
             } catch {}

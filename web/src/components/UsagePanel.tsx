@@ -13,7 +13,7 @@ const money = (value: number | null | undefined) => (value ? formatUsd(value) : 
 const priced = (cost: number | null, unpriced: number) => (unpriced > 0 ? (cost ? `≥ ${money(cost)}` : '—') : cost === null ? '—' : money(cost))
 /** An estimate: '約' for a known amount (zero when no billed usage), otherwise as priced. */
 const estimate = (cost: number | null, unpriced: number) => (unpriced > 0 ? priced(cost, unpriced) : `約 ${money(cost)}`)
-const modelName = (model: string) => model.split('/').slice(1).join('/') || model
+const modelName = (model: string) => model === 'unknown' ? '不明' : model.split('/').slice(1).join('/') || model
 const shortDay = (day: string) => `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}`
 const fetchedLabel = (at: number) => new Date(at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
@@ -218,8 +218,8 @@ function LocalUsageCard({ local }: { local: LocalUsage }) {
       </div>
 
       <div className="usage-tiles">
-        <Tile label="今日" value={estimate(local.today.cost, local.today.unpriced)} sub={`全モデルで ${formatTokens(tokensOf(local.today))} トークン`} />
-        <Tile label="今月" value={estimate(local.month.cost, local.month.unpriced)} sub={`全モデルで ${formatTokens(tokensOf(local.month))} トークン`} />
+        <Tile label="今日" value={estimate(local.today.cost, local.today.unpriced)} sub={`全モデルで ${local.today.usageIncomplete ? '≥ ' : ''}${formatTokens(tokensOf(local.today))} トークン`} />
+        <Tile label="今月" value={estimate(local.month.cost, local.month.unpriced)} sub={`全モデルで ${local.month.usageIncomplete ? '≥ ' : ''}${formatTokens(tokensOf(local.month))} トークン`} />
         <Tile label="全期間" value={estimate(local.all.cost, local.all.unpriced)} sub={local.since ? `${local.since} から` : undefined} />
       </div>
       <h4 className="usage-caption">過去 30 日の API 概算料金</h4>
@@ -229,7 +229,7 @@ function LocalUsageCard({ local }: { local: LocalUsage }) {
           key: point.day,
           label: shortDay(point.day),
           value: point.cost,
-          title: `${point.day}: ${estimate(point.cost, point.unpriced)} · ${formatTokensExact(point.tokens)} トークン`,
+          title: `${point.day}: ${estimate(point.cost, point.unpriced)} · ${point.usageIncomplete ? '≥ ' : ''}${formatTokensExact(point.tokens)} トークン`,
         }))}
       />
 
@@ -253,11 +253,11 @@ function LocalUsageCard({ local }: { local: LocalUsage }) {
                 return (
                   <tr key={entry.model}>
                     <td title={entry.model}>{modelName(entry.model)}</td>
-                    <td>{totals.requests}</td>
+                    <td title={totals.interruptedRequests ? `中断 ${totals.interruptedRequests} 回を含みます` : undefined}>{totals.requests}</td>
                     <td title={`キャッシュ読み込み ${formatTokensExact(totals.cacheRead)} · 書き込み ${formatTokensExact(totals.cacheWrite)}`}>
-                      {formatTokens(totals.input + totals.cacheRead + totals.cacheWrite)}
+                      {totals.usageIncomplete ? '≥ ' : ''}{formatTokens(totals.input + totals.cacheRead + totals.cacheWrite)}
                     </td>
-                    <td>{formatTokens(totals.output)}</td>
+                    <td>{totals.usageIncomplete ? '≥ ' : ''}{formatTokens(totals.output)}</td>
                     <td>{priced(totals.cost, totals.unpriced)}</td>
                   </tr>
                 )

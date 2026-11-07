@@ -16,8 +16,6 @@
 // PI_AI_ERROR, so dsh retries what pi-ai itself would. A WebSocket closed for
 // a message that is too big (1009) stays an error: it would fail again.
 
-import { createHash } from 'node:crypto'
-
 /** Where retry-hook.js puts pi-ai's check, for the patched module to call. */
 export const RETRYABLE_KEY = 'agentDesk.isRetryableProviderError'
 
@@ -29,6 +27,7 @@ export const RETRYABLE_KEY = 'agentDesk.isRetryableProviderError'
  * limits by their wording (its quota, billing and free-tier wording).
  */
 export const TERMINAL_RULE = [
+  'if (/SIWC_TOOL_ARGUMENT_RUNAWAY/.test(message)) return "PI_AI_ERROR";',
   'if (/subscription[_\\s]sharing[_\\s]usage[_\\s]/i.test(message)) return "PI_AI_ERROR";',
   'if (/\\b(?:401|403)\\b/.test(message)) return "AUTH";',
   `if (/\\b429\\b/.test(message) && globalThis[Symbol.for(${JSON.stringify(RETRYABLE_KEY)})]?.(message) === false) return QUOTA_EXCEEDED_CODE;`,
@@ -52,72 +51,10 @@ export function patchPiAiSource(source) {
   return `${patched.slice(0, start)}\n\t${TERMINAL_RULE}${patched.slice(start)}`
 }
 
-// Retries cannot get past a reasoning item the Codex backend can no longer
-// read. dsh replays the encrypted reasoning of earlier GPT replies with every
-// request, and the backend answers a request carrying such an item with
-// `server_error` ("An error occurred while processing your request") within a
-// second, every time. One bad reply then fails each later request in the task.
-// The second patch hands pi-ai an `onPayload` hook ({@link replayGuard}) that
-// sends the replayed reasoning no more once the same request has failed twice.
-
-/** Where retry-hook.js puts the payload hook, for the patched module to pass to pi-ai. */
-export const PAYLOAD_KEY = 'agentDesk.onProviderPayload'
-
-/** dsh-llm-pi-ai's source with the payload hook added, or null when it does not look as expected. */
-export function patchPayloadSource(source) {
-  const anchor = /function profileOptions\(profile, reasoning, apiKey\) \{(?:(?!\n\})[\s\S])*?\n\t\tmaxRetries: 0\n\t\};/.exec(source)
-  if (!anchor) return null
-  const at = anchor.index + anchor[0].length - '\n\t};'.length
-  return `${source.slice(0, at)},\n\t\tonPayload: globalThis[Symbol.for(${JSON.stringify(PAYLOAD_KEY)})]${source.slice(at)}`
-}
-
-/** Both patches retry-hook.js applies, or null unless both match (the strict update gate). */
-export function patchRetrySource(source) {
-  const classified = patchPiAiSource(source)
-  return classified && patchPayloadSource(classified)
-}
-
-/** How often the same request is sent before its replayed reasoning is left out. */
-const SENDS_BEFORE_DROP = 3
-const MAX_SESSIONS = 200
-
-/**
- * pi-ai's `onPayload` hook. A retry sends the same input again, so the third
- * send of one input means it failed twice: its replayed reasoning items are
- * dropped then, and from the later requests of the same session (pi-ai's
- * `prompt_cache_key`), which carry them too. Reasoning from newer replies is
- * kept. Bodies without OpenAI Responses input pass through unchanged.
- * @param {(message: string) => void} [log]
- */
-export function replayGuard(log = () => {}) {
-  const sessions = new Map()
-  return (body) => {
-    if (!Array.isArray(body?.input) || body.input.length === 0) return undefined
-    const key = `${body.model ?? ''}:${body.prompt_cache_key ?? ''}`
-    let state = sessions.get(key)
-    if (!state) {
-      state = { fingerprint: null, sends: 0, dropped: new Set() }
-      sessions.set(key, state)
-      if (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value)
-    }
-    const fingerprint = createHash('sha256').update(JSON.stringify(body.input)).digest('hex')
-    state.sends = fingerprint === state.fingerprint ? state.sends + 1 : 1
-    state.fingerprint = fingerprint
-    if (state.sends === SENDS_BEFORE_DROP) {
-      const before = state.dropped.size
-      for (const item of body.input) if (isReplayedReasoning(item)) state.dropped.add(item.id)
-      if (state.dropped.size > before) log(`the same request failed twice; leaving out ${state.dropped.size - before} replayed reasoning items`)
-    }
-    if (state.dropped.size === 0) return undefined
-    const input = body.input.filter((item) => !(isReplayedReasoning(item) && state.dropped.has(item.id)))
-    return input.length === body.input.length ? undefined : { ...body, input }
-  }
-}
-
-function isReplayedReasoning(item) {
-  return item?.type === 'reasoning' && typeof item.id === 'string'
-    && typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0
-}
+// Retrying a transport failure is not evidence that encrypted reasoning is
+// corrupt. Preserve the payload; never discard model context just because the
+// same request was sent several times.
+export const patchRetrySource = patchPiAiSource
 
 /** pi-ai's check, as the patched rule calls it: true for a transient provider failure. */
 export function retryableCheck(isRetryableAssistantError) {

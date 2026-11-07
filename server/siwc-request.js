@@ -4,6 +4,7 @@ import { explainSiwcUsage } from './siwc-usage-error.js'
 import { SiwcClient, SIWC_RESOURCE, SIWC_KEY_PLACEHOLDER, redactSiwc } from './siwc-client.js'
 import { configuredCacheDiagnostics, observeCache } from './gpt-cache-diagnostics.js'
 import { configuredSiwcSocket } from './siwc-socket.js'
+import { SiwcArgumentGuard } from './siwc-stream-guard.js'
 export const SIWC_UNSUPPORTED_FIELDS = [
   'background', 'conversation', 'max_output_tokens', 'max_tool_calls', 'metadata',
   'moderation', 'multi_agent', 'prompt', 'prompt_cache_retention', 'safety_identifier',
@@ -74,11 +75,16 @@ export function requireCompleted(response, observation) {
     data = [],
     terminal = null
   const decoder = new TextDecoder()
+  const argumentsGuard = new SiwcArgumentGuard()
   function line(value) {
     if (!value) {
       if (data.length) {
         let event
         try { event = JSON.parse(data.join('\n')) } catch {/* SDK will handle malformed events. */}
+        try { argumentsGuard.observe(event) } catch (error) {
+          observeCache(observation, 'finish', 'argument_runaway')
+          throw error
+        }
         if (event?.type === 'error') {
           // SIWC may send metadata before rejecting a request. The HTTP headers
           // are already 200 then; retain the streamed status so a permanent 4xx

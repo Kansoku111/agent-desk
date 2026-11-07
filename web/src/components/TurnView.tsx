@@ -317,9 +317,10 @@ function OutputSpeed({ speed }: { speed: Turn['outputSpeed'] }) {
 
 /** Older Codex turns stored a fixed 1, not an observed model-response count. */
 export function usageRequestDetail(usage: TurnUsage) {
-  if (usage.requestsExact === false) return usage.requests > 0 ? `リクエスト ${usage.requests} 回以上` : 'リクエスト数 不明'
+  const interrupted = usage.interruptedRequests ? `（中断 ${usage.interruptedRequests} 回）` : ''
+  if (usage.requestsExact === false) return (usage.requests > 0 ? `リクエスト ${usage.requests} 回以上` : 'リクエスト数 不明') + interrupted
   if (usage.requestsExact === undefined && usage.models.some((model) => model.startsWith('codex/'))) return 'リクエスト数 不明'
-  return `リクエスト ${usage.requests} 回`
+  return `リクエスト ${usage.requests} 回` + interrupted
 }
 
 /** Old Codex totals were priced as a single response; their context tier is unknown. */
@@ -330,15 +331,17 @@ export function legacyCodexEstimate(usage: TurnUsage, previous = false) {
 /** Per-turn tokens with cumulative API-equivalent USD; metered estimates stay in the detail. */
 function UsageLine({ usage, taskCost, speed, score, previousLegacyEstimate }: { usage: TurnUsage; taskCost: number | null; speed: Turn['outputSpeed']; score?: UsageScore | null; previousLegacyEstimate?: boolean }) {
   const inputTotal = usage.input + usage.cacheRead + usage.cacheWrite
+  const lowerBound = usage.usageIncomplete ? '≥ ' : ''
   const detail = [
     usageRequestDetail(usage),
-    `入力 ${formatTokensExact(usage.input)}`,
+    `入力 ${lowerBound}${formatTokensExact(usage.input)}`,
     usage.cacheRead ? `キャッシュ読み込み ${formatTokensExact(usage.cacheRead)}` : null,
     usage.cacheWrite ? `キャッシュ書き込み ${formatTokensExact(usage.cacheWrite)}` : null,
-    `出力 ${formatTokensExact(usage.output)}`,
-    usage.reasoning ? `うち推論 ${formatTokensExact(usage.reasoning)}` : null,
+    `出力 ${lowerBound}${formatTokensExact(usage.output)}`,
+    usage.reasoning ? `うち推論 ${usage.reasoningIncomplete ? '≥ ' : ''}${formatTokensExact(usage.reasoning)}` : null,
+    usage.usageIncomplete ? '使用量を取得できなかったリクエストは未算定です。' : null,
     usage.models.length ? `モデル: ${usage.models.map(usageModelId).join(', ')}` : null,
-    usage.cost !== null ? `このターンの従量課金概算 ${formatUsd(usage.cost)}` : null,
+    usage.cost !== null ? `このターンの従量課金概算 ${lowerBound}${formatUsd(usage.cost)}` : null,
     usage.cost !== null && taskCost !== null && taskCost > usage.cost ? `このセッションの従量課金概算累計 ${formatUsd(taskCost)}` : null,
     usage.cost !== null ? 'モデルの単価に基づく概算です。正確な請求額は各社の管理画面で確認してください。' : null,
     usage.cost !== null && usage.models.some((model) => model.startsWith('deepseek-official/'))
@@ -347,9 +350,9 @@ function UsageLine({ usage, taskCost, speed, score, previousLegacyEstimate }: { 
   return (
     <div className="usage-line" title={detail}>
       <UsageCost score={score} detail={detail} unreliable={legacyCodexEstimate(usage, previousLegacyEstimate)} />
-      <span>· 入力 {formatTokens(inputTotal)}</span>
+      <span>· 入力 {lowerBound}{formatTokens(inputTotal)}</span>
       {usage.cacheRead > 0 && <span className="usage-sub">（キャッシュ {formatTokens(usage.cacheRead)}）</span>}
-      <span>· 出力 {formatTokens(usage.output)}</span>
+      <span>· 出力 {lowerBound}{formatTokens(usage.output)}</span>
       <OutputSpeed speed={speed} />
     </div>
   )

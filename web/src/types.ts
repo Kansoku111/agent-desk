@@ -406,6 +406,10 @@ export interface TurnUsage {
   requests: number
   /** False means some model responses were not observed; absent on older records. */
   requestsExact?: boolean
+  /** Interrupted outcomes are counted in requests, not added to it. */
+  interruptedRequests?: number
+  usageIncomplete?: boolean
+  reasoningIncomplete?: boolean
   input: number
   output: number
   cacheRead: number
@@ -665,6 +669,9 @@ export interface AppState {
 /** Tokens summed over many responses; `cost` (USD) only for per-token billed models; `unpriced` counts billed responses with no known price. */
 export interface UsageTotals {
   requests: number
+  interruptedRequests?: number
+  /** Number of requests whose token counts are unavailable. */
+  usageIncomplete?: number
   input: number
   output: number
   cacheRead: number
@@ -682,7 +689,7 @@ export interface LocalUsage {
   since: string | null
   providers: Record<string, { today: UsageTotals; month: UsageTotals; all: UsageTotals }>
   models: { model: string; month: UsageTotals; all: UsageTotals }[]
-  daily: { day: string; cost: number; tokens: number; unpriced: number }[]
+  daily: { day: string; cost: number; tokens: number; unpriced: number; usageIncomplete?: boolean }[]
   updatedAt: number
 }
 

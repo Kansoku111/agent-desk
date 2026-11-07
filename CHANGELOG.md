@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop pathological SIWC function-argument padding instead of retrying it; preserve code-string whitespace, ordinary long reasoning, and encrypted reasoning on transient retries.
+- Include interrupted dsh requests in turn and history accounting, mark unavailable usage and partial reasoning as lower bounds, and retain existing saved estimates.
+
 ## [0.1.12] - 2026-11-07
 
 ### Added

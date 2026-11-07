@@ -150,7 +150,7 @@ function ownSessionEvents(events) {
   return cut < 0 ? events : events.slice(cut + 1)
 }
 
-const isResponse = (line) => line.includes('assistant/message') || line.includes('compaction/summary') || line.includes('session/end-seed')
+const isResponse = (line) => line.includes('assistant/message') || line.includes('assistant/attempt') || line.includes('compaction/summary') || line.includes('session/end-seed')
 const isResponseOrEnd = (line) => isResponse(line) || line.includes('turn/end')
 
 /**
@@ -247,6 +247,10 @@ export function mergeUsage(a, b) {
   total.cost = a.cost === null && b.cost === null ? null : (a.cost ?? 0) + (b.cost ?? 0)
   total.models = [...new Set([...a.models, ...b.models])]
   total.score = addScores(a.score, b.score)
+  const interrupted = (a.interruptedRequests ?? 0) + (b.interruptedRequests ?? 0)
+  if (interrupted) total.interruptedRequests = interrupted
+  if (a.usageIncomplete || b.usageIncomplete) total.usageIncomplete = true
+  if (a.reasoningIncomplete || b.reasoningIncomplete) total.reasoningIncomplete = true
   return total
 }
 
@@ -373,20 +377,42 @@ export function responseCost(rates, usage) {
   return parts.reduce((sum, [key, count]) => sum + (count ? active[key] * count : 0), 0) / 1_000_000
 }
 
-/** A durable model response; a compaction's replacement user message is not another call. */
+// Interrupted providers can emit a synthetic all-zero usage after streaming
+// output. It is not evidence of a free request. Keep known counts, never invent
+// a model route or token count when the durable attempt did not record them.
+function interruptedUsage(usage) {
+  if (!usage || typeof usage !== 'object') return undefined
+  const keys = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens']
+  if ([...keys, 'reasoningTokens', 'totalTokens', 'cacheWrite1hTokens'].some(key => !Number.isSafeInteger(usage[key] ?? 0) || (usage[key] ?? 0) < 0)
+    || (usage.reasoningTokens ?? 0) > (usage.outputTokens ?? 0)
+    || (usage.cacheWrite1hTokens ?? 0) > (usage.cacheWriteTokens ?? 0)
+    || !keys.some(key => usage[key] > 0)) return undefined
+  return usage
+}
+
+/** A durable request outcome; replacement user messages are not more calls. */
 export function recordedModelResponse(event) {
   const data = event?.data
-  let source, id
+  let source, id, usage = data?.usage, interrupted = false
   if (event?.type === 'assistant/message') {
     source = data?.message?.source ?? {}
     id = data?.message?.id ?? event.seq
+    interrupted = data?.interrupted === true
+    if (interrupted) usage = interruptedUsage(usage)
+  } else if (event?.type === 'assistant/attempt') {
+    source = data?.source ?? {}
+    id = event.seq
+    interrupted = true
+    const stream = Array.isArray(data?.stream) ? data.stream : []
+    const latest = stream.findLast(item => item?.type === 'chunk' && item.chunk?.type === 'usage')
+    usage = interruptedUsage(latest?.chunk?.usage)
   } else if (event?.type === 'compaction/summary' && (data?.llmStreamCall === true || data?.usage)) {
     // Template-only compactions do not spend a model request. Older summaries
     // may report usage without the newer llmStreamCall marker.
     source = data ?? {}
     id = data?.compactionId ?? event.seq
   } else return null
-  return { id: id == null ? event : `${event.type}:${id}`, source, usage: data?.usage }
+  return { id: id == null ? event : `${event.type}:${id}`, source, usage, ...(interrupted ? { interrupted: true } : {}) }
 }
 
 /**
@@ -413,7 +439,10 @@ export function summarizeUsage(events, since, pricing, until = Infinity) {
     const { source, usage } = response
     if (source.provider && source.model) models.add(`${source.provider}/${source.model}`)
     total.requests += 1
+    if (response.interrupted) total.interruptedRequests = (total.interruptedRequests ?? 0) + 1
+    if (!usage || usage.reasoningTokens === undefined) total.reasoningIncomplete = true
     if (!usage) {
+      total.usageIncomplete = true
       total.score = addScores(total.score, null)
       continue
     }

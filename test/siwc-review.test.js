@@ -4,13 +4,14 @@ import fs from 'node:fs/promises'
 import YAML from 'yaml'
 import { createRequire, findPackageJSON } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { patchPiAiSource, RETRYABLE_KEY, retryableCheck, replayGuard } from '../server/retry-patch.js'
+import { patchPiAiSource, RETRYABLE_KEY, retryableCheck } from '../server/retry-patch.js'
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry'
 import { applyCatalogAdditions, configuredModelCatalog, shippedCatalog } from '../server/model-catalog.js'
 import { newerModels, readFetchedCatalog } from '../server/model-updates.js'
 import { homePatch } from '../server/dsh-config.js'
 import { SIWC_API, SIWC_BASE_URL } from '../server/siwc-route.js'
 import { withSiwc } from '../server/siwc-request.js'
+import { SIWC_ARGUMENT_RUNAWAY, SIWC_ARGUMENT_WHITESPACE_LIMIT } from '../server/siwc-stream-guard.js'
 import { SIWC_LIMIT_CODE, SIWC_LIMIT_MESSAGE, SIWC_LIMIT_TEXT, explainSiwcUsage } from '../server/siwc-usage-error.js'
 import { describeError } from '../server/thread-utils.js'
 import { stream } from '@earendil-works/pi-ai/api/openai-responses'
@@ -60,31 +61,19 @@ test('DSH retry policy restores eight retries while usage/auth/4xx stay terminal
     delete globalThis[Symbol.for(RETRYABLE_KEY)]
   }
 })
-test('replay guard keeps distinct same-length requests and drops only old encrypted reasoning on third identical send', () => {
-  const guard = replayGuard()
-  const make = text => ({
-    model: 'gpt-mock',
-    prompt_cache_key: 'same',
-    input: [{
-      type: 'reasoning',
-      id: 'encrypted',
-      encrypted_content: 'cipher'
-    }, {
-      type: 'reasoning',
-      id: 'summary',
-      summary: []
-    }, {
-      role: 'user',
-      content: text
-    }]
-  })
-  assert.equal(guard(make('one')), undefined)
-  assert.equal(guard(make('two')), undefined)
-  assert.equal(guard(make('one')), undefined)
-  assert.equal(guard(make('one')), undefined)
-  const changed = guard(make('one'))
-  assert.ok(!changed.input.some(item => item.id === 'encrypted'))
-  assert.ok(changed.input.some(item => item.id === 'summary'))
+test('SIWC keeps encrypted reasoning on repeated identical sends and does not mutate it', async () => {
+  const options = withSiwc(model, {}, { client: { auth: async () => ({ access_token: 'fixture' }) } })
+  const body = { model: model.id, prompt_cache_key: 'same', input: [
+    { type: 'reasoning', id: 'encrypted', encrypted_content: 'cipher' },
+    { type: 'reasoning', id: 'summary', summary: [] },
+    { role: 'user', content: 'continue' },
+  ] }
+  const before = structuredClone(body)
+  for (let send = 0; send < 10; send++) {
+    const changed = await options.onPayload(body, model)
+    assert.deepEqual(changed.input, before.input)
+    assert.deepEqual(body, before)
+  }
 })
 test('installed, bundled, old fetched and custom GPT catalogs all normalize to public SIWC', async t => {
   const oldModel = {
@@ -326,4 +315,23 @@ test('the DSH installed provider retains streamed rejection status for retry cla
     assert.equal(classifier(result.errorMessage), classification, result.errorMessage)
     assert.equal(calls, 1)
   }
+})
+
+test('the installed GPT SDK preserves the runaway marker as a non-retryable provider failure', async () => {
+  const piPackage = findPackageJSON('@earendil-works/pi-ai', pathToFileURL(require.resolve('@deepseek-ai/dsh-llm-pi-ai')))
+  const { stream: dshStream } = await import(new URL('./dist/api/openai-responses.js', pathToFileURL(piPackage)).href)
+  let calls = 0
+  const events = [
+    { type: 'response.output_item.added', output_index: 0, item: { id: 'fixture-fc', type: 'function_call', call_id: 'fixture-call', name: 'run_code', arguments: '' } },
+    { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fixture-fc', delta: '{"code":"ok"' + ' '.repeat(SIWC_ARGUMENT_WHITESPACE_LIMIT + 1) },
+  ]
+  const options = withSiwc(model, { maxRetries: 0 }, {
+    client: { auth: async () => ({ access_token: 'mock-only' }) }, diagnostics: null,
+    fetch: async () => { calls++; return new Response(events.map(e => 'data: ' + JSON.stringify(e) + '\n\n').join('')) },
+  })
+  const result = await dshStream(model, { messages: [{ role: 'user', content: 'fixture', timestamp: 0 }] }, options).result()
+  assert.equal(calls, 1)
+  assert.equal(result.stopReason, 'error')
+  assert.ok(result.errorMessage.includes(SIWC_ARGUMENT_RUNAWAY), result.errorMessage)
+  assert.equal((await classify())(result.errorMessage), 'PI_AI_ERROR')
 })
