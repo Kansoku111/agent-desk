@@ -355,6 +355,8 @@ export interface Turn {
   items: TurnItem[]
   usage?: TurnUsage
   totalScore?: UsageScore
+  /** The cumulative GP estimate includes an unchanged, pre-fix GP turn. */
+  previousLegacyEstimate?: boolean
   /** Approximate received text throughput; never a provider decoding benchmark. */
   outputSpeed?: OutputSpeed
   /** Workspace snapshots around the turn; `changed` counts the files the turn changed. */
@@ -398,6 +400,8 @@ export type RestoreAction = 'restore' | 'recreate' | 'delete'
 /** Tokens a turn consumed; `cost` (USD) only for per-token billed routes. */
 export interface TurnUsage {
   requests: number
+  /** False means some model responses were not observed; absent on older records. */
+  requestsExact?: boolean
   input: number
   output: number
   cacheRead: number

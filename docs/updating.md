@@ -48,6 +48,8 @@ dsh と同梱の Codex は `package.json` で版を固定しているため、�
 2. `npm install --save-exact --no-audit --no-fund @deepseek-ai/dsh@<版> @deepseek-ai/dsh-atomic-write@<版>`
 3. `node --test test/*-patch.test.js test/dsh-compatibility.test.js` を実行します。Agent Desk は dsh のソースに独自のフック（`server/*-patch.js`）を当てています。上流のコードが変わると、ここが失敗します。パッチの正規表現を新しいソースに合わせてください。フックの目的は各 `*-patch.js` の冒頭のコメントにあります。`fs-search` フックは検索出力を最大1 MiB・glob 1,000行／grep 5,000レコードで打ち切り、完全な行だけを部分結果として返します。部分結果では総件数を断定せず、全件リストとして保存しません。通常の検索・全件リストの保存と、本当のエラー・キャンセルの扱いは維持します。glob の更新日時順は維持するため、結果収集の打ち切りであり、ディレクトリ走査時間そのものを保証する上限ではありません。
    `goal-tool` フックは目標更新（`update_goal`）の引数説明だけを補います。未使用の項目は省略し、全項目が必要な経路では `objective: ""`・`max_goal_rounds: 0`・`blocked_reason: ""` を使うよう案内します。0.2.1-rc.5 までは、`edit` 以外で渡された不要な項目を dsh が拒否し、このフックがエラー文を「問題の項目と修正した呼び出し例」に書き換えていました。0.2.2-rc.1 以降は dsh が不要な項目を無視するため、エラー文の書き換えはしません（`test/goal-tool-patch.test.js` が、無視されることを確かめます。再び拒否されるようになったら、そのテストが失敗します）。権限・リビジョン・停止条件の検証は変更しません。このフックもソースの一致・構文・実際のロード結果を更新時に検証します。
+   `reasoning-usage` フックはpi-aiが報告した正の推論トークン内訳をdshへ引き渡します。欠落とゼロを区別できない値は記録せず、出力総数や料金には加算しません。`test/reasoning-usage-patch.test.js` と `test/reasoning-usage-runtime.test.js` で確認します。
+
    `compaction` フックは、巨大な先頭メッセージのため通常の保持量で範囲が作れない場合だけ、最近の保持量を減らして最小の安全な先頭範囲を要約します。`context-overflow` フックは、ローカル予算を超えた正常な ChatGPT／Claude 応答を超過エラーに変換しないようにします。APIが返した超過エラーと出力ゼロの長さ制限は維持します。`test/context-compaction-runtime.test.js` と上記パッチテストで確認します。
 4. `node scripts/check-dsh.mjs` で、新しい dsh が実際に起動し、セッションを作ってモデルを選べることを確かめます。最後の行に `"ok":true` が出れば成功です。
 5. 「共通」の確認とコミットをします。

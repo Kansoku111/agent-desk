@@ -315,11 +315,23 @@ function OutputSpeed({ speed }: { speed: Turn['outputSpeed'] }) {
   )
 }
 
+/** Older Codex turns stored a fixed 1, not an observed model-response count. */
+export function usageRequestDetail(usage: TurnUsage) {
+  if (usage.requestsExact === false) return usage.requests > 0 ? `リクエスト ${usage.requests} 回以上` : 'リクエスト数 不明'
+  if (usage.requestsExact === undefined && usage.models.some((model) => model.startsWith('codex/'))) return 'リクエスト数 不明'
+  return `リクエスト ${usage.requests} 回`
+}
+
+/** Old Codex totals were priced as a single response; their context tier is unknown. */
+export function legacyCodexEstimate(usage: TurnUsage, previous = false) {
+  return previous || (usage.requestsExact === undefined && usage.models.some((model) => model.startsWith('codex/')))
+}
+
 /** Per-turn tokens with cumulative API-equivalent USD; metered estimates stay in the detail. */
-function UsageLine({ usage, taskCost, speed, score }: { usage: TurnUsage; taskCost: number | null; speed: Turn['outputSpeed']; score?: UsageScore | null }) {
+function UsageLine({ usage, taskCost, speed, score, previousLegacyEstimate }: { usage: TurnUsage; taskCost: number | null; speed: Turn['outputSpeed']; score?: UsageScore | null; previousLegacyEstimate?: boolean }) {
   const inputTotal = usage.input + usage.cacheRead + usage.cacheWrite
   const detail = [
-    `リクエスト ${usage.requests} 回`,
+    usageRequestDetail(usage),
     `入力 ${formatTokensExact(usage.input)}`,
     usage.cacheRead ? `キャッシュ読み込み ${formatTokensExact(usage.cacheRead)}` : null,
     usage.cacheWrite ? `キャッシュ書き込み ${formatTokensExact(usage.cacheWrite)}` : null,
@@ -334,7 +346,7 @@ function UsageLine({ usage, taskCost, speed, score }: { usage: TurnUsage; taskCo
   ].filter(Boolean).join('\n')
   return (
     <div className="usage-line" title={detail}>
-      <UsageCost score={score} detail={detail} />
+      <UsageCost score={score} detail={detail} unreliable={legacyCodexEstimate(usage, previousLegacyEstimate)} />
       <span>· 入力 {formatTokens(inputTotal)}</span>
       {usage.cacheRead > 0 && <span className="usage-sub">（キャッシュ {formatTokens(usage.cacheRead)}）</span>}
       <span>· 出力 {formatTokens(usage.output)}</span>
@@ -435,8 +447,8 @@ export const TurnView = memo(function TurnView({ turn, workspace, taskCost = nul
         <div className="turn-status"><X size={13} /> 停止しました</div>
       )}
       {turn.status === 'error' && turn.error && <TurnError error={turn.error} />}
-      {!running && turn.usage && <UsageLine usage={turn.usage} taskCost={taskCost} speed={turn.outputSpeed} score={taskScore ?? turn.totalScore ?? turn.usage.score} />}
-      {!running && !turn.usage && <div className="usage-line"><UsageCost score={taskScore ?? turn.totalScore} /><OutputSpeed speed={turn.outputSpeed} /></div>}
+      {!running && turn.usage && <UsageLine usage={turn.usage} taskCost={taskCost} speed={turn.outputSpeed} score={taskScore ?? turn.totalScore ?? turn.usage.score} previousLegacyEstimate={turn.previousLegacyEstimate} />}
+      {!running && !turn.usage && <div className="usage-line"><UsageCost score={taskScore ?? turn.totalScore} unreliable={turn.previousLegacyEstimate} /><OutputSpeed speed={turn.outputSpeed} /></div>}
       {!running && <RestoreControls threadId={threadId} turn={turn} busy={threadBusy} undoable={undoable} />}
     </section>
   )

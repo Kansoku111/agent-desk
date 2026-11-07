@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Price Codex turns per model response instead of applying one context tier to the turn total; mark missing counts as unknown and preserve earlier saved estimates. Preserve reported reasoning-token breakdowns through the dsh adapter.
 - Compact oversized imported history even when the recent tail is shorter than the retention budget, and preserve successful ChatGPT/Claude responses above the local context budget instead of reporting a false overflow.
 - Reload missing Codex model capabilities when opening team settings, and show saved reasoning levels as unconfirmed until discovery completes instead of incorrectly marking `max`/`xhigh` unsupported after idle shutdown.
 - Pass the selected Codex reasoning level to a new conversation itself, not only to each turn, so GPT `max`/`xhigh`/`high` no longer run lighter than the label (and than DSH or the Codex CLI at the same level). New conversations at higher levels now take longer and use more tokens; lower the level to keep the old cost. Existing conversations keep the level they were created with (resuming ignores the setting), and changing the level inside one conversation still applies only weakly.

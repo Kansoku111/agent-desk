@@ -13,6 +13,7 @@ import { patchMcpStartupSource } from './mcp-startup-patch.js'
 import { patchRetrySource } from './retry-patch.js'
 import { patchCompactionSource } from './compaction-patch.js'
 import { patchContextOverflowSource } from './context-overflow-patch.js'
+import { patchReasoningUsageSource } from './reasoning-usage-patch.js'
 import { patchOutputSpeedSource } from './output-speed-patch.js'
 import { patchFsSearchSource } from './fs-search-patch.js'
 import { patchGoalToolSource } from './goal-tool-patch.js'
@@ -30,6 +31,7 @@ const HOOKS = [
   { name: 'steer', module: 'acp', patch: patchAcpSource },
   { name: 'retry', module: 'llm', patch: patchRetrySource },
   { name: 'context-overflow', module: 'llm', patch: patchContextOverflowSource },
+  { name: 'reasoning-usage', module: 'llm', patch: patchReasoningUsageSource },
   { name: 'compaction', module: 'compaction', patch: patchCompactionSource },
   { name: 'goal', module: 'acp', patch: patchGoalSource },
   { name: 'goal-wait', module: 'goalDriver', patch: patchGoalDriverSource },

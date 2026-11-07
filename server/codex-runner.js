@@ -7,7 +7,8 @@ import { readJson, writeJson, debouncedWriter } from './json-file.js'
 import { abImages } from './ab-images.js'
 import { applyCodexEvent } from './codex-events.js'
 import { CodexOutputSpeedMeter } from './codex-output-speed.js'
-import { loadPricing, scoreResponse } from './usage.js'
+import { CodexUsageAccumulator, isLegacyCodexUsage } from './codex-usage.js'
+import { loadPricing } from './usage.js'
 import { addScores, emptyScore } from '../shared/usage-score.js'
 
 const MODES = ['read-only', 'workspace-write', 'danger-full-access']
@@ -60,8 +61,12 @@ export class CodexRunner extends EventEmitter {
       const record = await readJson(path.join(this.dir, id + '.json'), null)
       if (!record) continue
       if (record.id !== id || !Array.isArray(record.turns) || !MODES.includes(record.permissionMode)) throw new Error('Codex タスクの形式が不正です')
-      // A persisted in-flight request is not proof that Codex accepted or finished it. Never replay it.
+      // Keep historical estimates unchanged, including on turns interrupted by a restart.
+      let legacyEstimate = false
       for (const turn of record.turns) {
+        if (legacyEstimate) turn.previousLegacyEstimate = true
+        if (isLegacyCodexUsage(turn.usage)) legacyEstimate = true
+        // A persisted in-flight request is not proof Codex accepted it. Never replay it.
         if (turn.status !== 'running') continue
         turn.status = 'cancelled'
         delete turn.outputSpeed
@@ -204,6 +209,7 @@ export class CodexRunner extends EventEmitter {
     if (typeof text !== 'string' || (!text.trim() && !images.length)) throw new Error('メッセージが空です')
     const turn = { id: randomUUID(), startedAt: this.now(), endedAt: null, status: 'running', stopReason: null, error: null, user: { text, images }, items: [] }
     const live = { turn, turnId: null, startAcknowledged: false, earlyCompletion: null, ended: false, stopping: false, ready: deferred(), done: deferred(), denials: [], baseline: record.tokenTotal, baselineKnown: record.turns.length === 0 || record.tokenTotal !== null, usage: null }
+    live.usageAccounting = new CodexUsageAccumulator(live.baseline, live.baselineKnown)
     live.speed = new CodexOutputSpeedMeter({ now: this.speedNow, onChange: speed => {
       if (speed) turn.outputSpeed = speed
       else delete turn.outputSpeed
@@ -318,7 +324,10 @@ export class CodexRunner extends EventEmitter {
     if (live.turnId && incomingId && incomingId !== live.turnId) return
     if (!live.stopping) live.speed.event(method, params)
     if (method === 'turn/started') { live.turnId = params.turn.id; live.ready.resolve(live.turnId); return }
-    if (method === 'thread/tokenUsage/updated') { live.usage = params.tokenUsage; return }
+    if (method === 'thread/tokenUsage/updated') {
+      if (live.usageAccounting.observe(params.tokenUsage)) live.usage = params.tokenUsage
+      return
+    }
     if (method === 'model/rerouted' && params.toModel !== this.#record(id).model) {
       live.refusal = 'Codex が別のモデル（' + params.toModel + '）へ切り替えたため停止しました。モデルを確認してから再開してください。'
       live.turn.items.push({ type: 'notice', id: randomUUID(), level: 'warning', text: live.refusal })
@@ -386,14 +395,14 @@ export class CodexRunner extends EventEmitter {
     record.status = status
     record.updatedAt = this.now()
     let score = { points: 0, priced: 0, unpriced: 1 }
+    // Keep old scores unchanged, but flag cumulative amounts that include them.
+    if (record.turns.some(previous => previous !== turn && isLegacyCodexUsage(previous.usage))) turn.previousLegacyEstimate = true
     if (live.usage?.total && live.baselineKnown && !live.refusal) {
-      const total = live.usage.total, baseline = live.baseline ?? {}
-      const count = key => Math.max(0, (total[key] ?? 0) - (baseline[key] ?? 0))
-      const input = count('inputTokens'), cached = count('cachedInputTokens'), cacheWrite = count('cacheWriteInputTokens'), output = count('outputTokens')
-      score = scoreResponse(await loadPricing(), 'openai-codex/' + record.model, { inputTokens: Math.max(0, input - cached - cacheWrite), cacheReadTokens: cached, cacheWriteTokens: cacheWrite, outputTokens: output }, turn.startedAt, 1)
-      turn.usage = { requests: 1, input: Math.max(0, input - cached - cacheWrite), output, cacheRead: cached, cacheWrite, reasoning: count('reasoningOutputTokens'), cost: null, models: ['codex/' + record.model], score }
+      turn.usage = live.usageAccounting.summarize(await loadPricing(), record.model, turn.startedAt) ?? undefined
+      if (turn.usage) score = turn.usage.score
     }
-    record.tokenTotal = live.usage?.total ?? null
+    // A rejected final total cannot be used as the next turn's baseline.
+    record.tokenTotal = live.usageAccounting.latestRejected ? null : live.usage?.total ?? null
     if (live.usage?.last) record.usage = { used: live.usage.last.totalTokens ?? 0, size: live.usage.modelContextWindow ?? 0 }
     record.score = addScores(record.score ?? emptyScore(), score)
     turn.totalScore = record.score
