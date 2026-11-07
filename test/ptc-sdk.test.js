@@ -62,3 +62,14 @@ test('the real SDK renderer is patched once without altering argument docs or th
   assert.ok(py>=0)
   assert.equal(patched.slice(patched.indexOf('function renderToolsSdkPy(')),source.slice(py))
 })
+
+test('the TypeScript run_code instructions gain one batching line after the Promise.all line, and the Python ones do not', async () => {
+  const source=await fs.readFile(require.resolve('@deepseek-ai/dsh-tool-executor-ptc'),'utf8')
+  const patched=patchPtcSdkSource(source)
+  const line=patched.split('\n').find(l=>l.startsWith('- Every \\`run_code\\` call costs a model round trip.'))
+  assert.ok(line)
+  assert.equal(patched.split(line).length,2)
+  assert.ok(patched.indexOf('under \\`Promise.all\\`')<patched.indexOf(line))
+  assert.ok(!patched.includes('under \\`asyncio.gather\\` (safe calls run concurrently; mutating calls run alone, in submission order). Sequence dependent work with \\`await\\`.\n- Every'))
+  assert.equal(patchPtcSdkSource(source.replace('\\`Promise.all\\`','\\`Promise.allSettled\\`')),null)
+})

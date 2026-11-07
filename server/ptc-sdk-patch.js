@@ -19,9 +19,18 @@ const SHARED_LOOP = "\tconst outputTypes = [];\n\tfor (const schema of sorted) {
 const OUTPUT = "\t\t`interface ToolOutputMap {${outputMembers.length > 0 ? `\\n${outputMembers.join(\"\\n\")}\\n` : \"\"}}`,"
 const SHARED_OUTPUT = "\t\t...(shared.aliases.length > 0 ? [shared.aliases.join(\"\\n\\n\")] : []),\n\t\t`interface ToolOutputMap {${shared.members.length > 0 ? `\\n${shared.members.join(\"\\n\")}\\n` : \"\"}}`,"
 
+// The TypeScript flavor's end of the "Inside the program" list (the Python flavor says asyncio.gather).
+const PARALLEL_TAIL = "(safe calls run concurrently; mutating calls run alone, in submission order). Sequence dependent work with \\`await\\`.\n"
+const PARALLEL = "- Independent read-only calls MAY overlap under \\`Promise.all\\` " + PARALLEL_TAIL
+// The model otherwise spends one run_code per step (read, write, test), and every
+// run_code is a model round trip. Given as task text, this line cut run_code calls
+// by 40-50% on small tasks (docs/investigations/gpt-siwc-regression-20261107.md);
+// the effect as a system prompt line is not yet measured.
+const BATCH = "- Every `run_code` call costs a model round trip. Put the reads, the write that depends on them and the check that verifies it in one program (read the files, write, then run the tests) instead of one program per step; split only where you must see an output before choosing the next step.\n".replaceAll('`', '\\`')
+
 export function patchPtcSdkSource(source) {
   if (source.includes('agentDeskShareOutputs') || source.split('outputMembers').length !== 5
-    || [LOOP, OUTPUT].some(anchor => source.split(anchor).length !== 2)) return null
+    || [LOOP, OUTPUT, PARALLEL].some(anchor => source.split(anchor).length !== 2)) return null
   const imports = 'import { shareOutputTypes as agentDeskShareOutputs } from ' + JSON.stringify(new URL('./ptc-sdk-patch.js', import.meta.url).href) + ';\n'
-  return imports + source.replace(LOOP, SHARED_LOOP).replace(OUTPUT, SHARED_OUTPUT)
+  return imports + source.replace(LOOP, SHARED_LOOP).replace(OUTPUT, SHARED_OUTPUT).replace(PARALLEL, () => PARALLEL + BATCH)
 }
