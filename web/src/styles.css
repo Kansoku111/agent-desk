@@ -2049,6 +2049,13 @@ select:focus {
 }
 
 /* changes */
+.codex-question-card fieldset { border: 0; margin: 14px 0; padding: 0; min-width: 0; }
+.codex-question-card legend { font-weight: 600; }
+.codex-question-card p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.codex-question-option { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0; cursor: pointer; }
+.codex-question-option > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.codex-question-option small { display: block; color: var(--text-muted); white-space: pre-wrap; }
+.codex-question-option input[type="text"], .codex-question-option input[type="password"] { display: block; width: 100%; margin-top: 6px; }
 
 .changes-card {
   overflow: hidden;
@@ -4489,10 +4496,20 @@ button.terminal-status.active {
 }
 
 .terminal-input {
-  display: flex;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: 38px 1fr 38px;
+  align-items: end;
   gap: 6px;
   margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-composer);
+}
+
+.terminal-input:focus-within {
+  border-color: color-mix(in srgb, var(--text) 30%, var(--border-strong));
 }
 
 /* Messages written to a team's Claude child while it works. */
@@ -4501,13 +4518,15 @@ button.terminal-status.active {
 }
 
 .terminal-input textarea {
-  flex: 1;
-  min-height: 38px;
-  max-height: 120px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: var(--bg-elevated);
+  grid-column: 1 / -1;
+  grid-row: 1;
+  width: 100%;
+  min-height: 52px;
+  max-height: 200px;
+  padding: 6px 10px;
+  border: 0;
+  outline: none;
+  background: transparent;
   color: var(--text);
   resize: none;
   field-sizing: content;
@@ -4518,15 +4537,17 @@ button.terminal-status.active {
 }
 
 .terminal-attach {
+  grid-column: 1;
+  grid-row: 2;
   position: relative;
   display: inline-grid;
   flex: none;
   place-items: center;
   width: 38px;
   height: 38px;
-  border: 1px solid var(--border-strong);
+  border: 0;
   border-radius: 10px;
-  background: var(--bg-elevated);
+  background: transparent;
   color: var(--text-muted);
   touch-action: manipulation;
 }
@@ -4551,6 +4572,8 @@ button.terminal-status.active {
 }
 
 .terminal-send {
+  grid-column: 3;
+  grid-row: 2;
   display: inline-grid;
   flex: none;
   place-items: center;

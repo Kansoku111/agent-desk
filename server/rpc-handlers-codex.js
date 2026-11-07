@@ -74,5 +74,10 @@ export function createCodexHandlers({ codex, teams, paths, getSettings, mutateSe
       codex.respondPermission(taskId, requestId, decision)
       return { accepted: true }
     },
+    'codex.task.answer': ({ taskId, requestId, answers }) => {
+      task(taskId)
+      codex.respondUserInput(taskId, requestId, answers)
+      return { accepted: true }
+    },
   }
 }

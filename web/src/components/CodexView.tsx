@@ -6,6 +6,8 @@ import { getDraft, useDraft, useImeField } from '../drafts'
 import { workspaceLabel } from '../util'
 import { TurnView } from './TurnView'
 import { CodexModelPicker } from './CodexModelPicker'
+import { CodexPermissionPicker } from './CodexPermissionPicker'
+import { CodexQuestionCard } from './CodexQuestionCard'
 import { OpenInMenu } from './ThreadView'
 import { TeamPanel, TeamToggle } from './TeamPanel'
 import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
@@ -76,7 +78,9 @@ export function CodexView({ taskId }: { taskId: string }) {
       <div className="scroller" ref={scroller} onScroll={onScroll}><div className="column">
         {!turns && <div className="loading-turns"><Loader2 size={14} className="spin" /> 読み込み中…</div>}
         {turns?.map((turn) => <TurnView key={turn.id} turn={turn} workspace={task.workspace} threadId={taskId} threadBusy={false} undoable={false} />)}
-        {permissions?.map((permission) => <div className="approval-card" key={permission.requestId} role="alertdialog" aria-label="実行の承認">
+        {permissions?.map((permission) => permission.kind === 'user-input'
+          ? <CodexQuestionCard key={permission.requestId} taskId={taskId} permission={permission} />
+          : <div className="approval-card" key={permission.requestId} role="alertdialog" aria-label="実行の承認">
           <div className="approval-head">{permission.title}</div>{permission.details && <pre className="approval-command">{permission.details}</pre>}
           <div className="approval-actions">{(['accept', 'decline', 'cancel'] as const).map((decision) => <button type="button" className={decision === 'accept' ? 'button primary' : 'button'} key={decision} onClick={async () => {
             const result = await act('codex.task.respond', { taskId, requestId: permission.requestId, decision })
@@ -91,7 +95,7 @@ export function CodexView({ taskId }: { taskId: string }) {
       <div className="composer-bar"><div className="composer-left">
         <button type="button" className="icon-button" aria-label="画像を添付" disabled={Boolean(teamChild)} onClick={() => input.current?.click()}><Paperclip size={16} /></button><input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={(event) => { void addFiles([...event.target.files ?? []]); event.target.value = '' }} />
         <CodexModelPicker task={task} models={choices} disabled={working || Boolean(task.team || team || task.ab)} onChange={update} />
-        <select aria-label="権限" value={task.permissionMode} disabled={working || Boolean(task.team || team || task.ab)} onChange={(event) => void update({ permissionMode: event.target.value as CodexTaskSummary['permissionMode'] })}><option value="read-only">読み取りのみ</option><option value="workspace-write">ワークスペース編集</option><option value="danger-full-access">フルアクセス</option></select>
+        <CodexPermissionPicker value={task.permissionMode} disabled={working || Boolean(task.team || team || task.ab)} onChange={(permissionMode) => void update({ permissionMode })} />
       </div><div className="composer-right"><button type="button" className="send-button" title={working ? '追加指示を送信' : '送信'} aria-label={working ? '追加指示を送信' : '送信'} disabled={busy || uploading || (!text.trim() && !images.length)} onPointerDown={(event) => { event.preventDefault(); ime.confirm() }} onClick={() => void send()}><ArrowUp size={17} /></button></div></div>
     </div></div>{team && teamPanel && <TeamPanel team={team} />}{presetOpen && <TaskPresetRuns source={{ kind: 'codex', id: taskId }} onClose={() => setPresetOpen(false)} />}</div>
   </div>

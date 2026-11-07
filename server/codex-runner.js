@@ -268,7 +268,7 @@ export class CodexRunner extends EventEmitter {
         // The selected level must also be the conversation's own level. Sent only with turn/start, it reaches the model as a mid-conversation
         // update that applies weakly (measured: max ran like medium to high). thread/start honours this; thread/resume ignores it (measured: the
         // resumed thread kept medium), so a conversation keeps the level it was created with and a later change still applies only weakly.
-        config: { ...(record.effort ? { model_reasoning_effort: record.effort } : {}), mcp_servers: record.mcpServers ?? {}, 'features.multi_agent': false, 'features.goals': false, 'features.hooks': false, 'features.plugins': false, web_search: leanResearch ? 'disabled' : 'cached', 'features.shell_tool': !leanResearch, 'features.unified_exec': !leanResearch } }
+        config: { ...(record.effort ? { model_reasoning_effort: record.effort } : {}), mcp_servers: record.mcpServers ?? {}, 'features.default_mode_request_user_input': !record.ab && !record.team?.childId, 'features.multi_agent': false, 'features.goals': false, 'features.hooks': false, 'features.plugins': false, web_search: leanResearch ? 'disabled' : 'cached', 'features.shell_tool': !leanResearch, 'features.unified_exec': !leanResearch } }
       const result = record.sessionId
         ? await this.server.rawRequest('thread/resume', { ...params, threadId: record.sessionId, excludeTurns: true })
         : await this.server.rawRequest('thread/start', { ...params, ephemeral: false, serviceName: 'agent_desk_tasks' })
@@ -355,6 +355,19 @@ export class CodexRunner extends EventEmitter {
   #request({ id: requestId, method, params = {} }) {
     const id = this.sessions.get(params.threadId)
     const record = this.records.get(id), live = this.live.get(id)
+    if (method === 'item/tool/requestUserInput') {
+      // Background workers report blockers to their owner; they must not wait for a hidden form.
+      if (!record || !live || live.ended || live.stopping || (live.turnId && params.turnId !== live.turnId) || record.ab || record.team?.childId) {
+        this.server.respond(requestId, { answers: {} })
+        return
+      }
+      if (params.isBlocking !== false) live.speed.pause({ discard: true })
+      this.permissions.set(String(requestId), { rawId: requestId, taskId: id, turnId: params.turnId,
+        kind: 'user-input', title: 'Codex からの質問', questions: params.questions })
+      this.#emit(record)
+      this.emit('approval', { id, requestId: String(requestId) })
+      return
+    }
     const known = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)
     if (!known) { this.server.reject(requestId, { code: -32601, message: 'Agent Desk does not expose this client operation' }); return }
     if (live && !live.ended && (!live.turnId || params.turnId === live.turnId)) live.speed.pause({ discard: true })
@@ -374,11 +387,29 @@ export class CodexRunner extends EventEmitter {
     if (!['accept', 'decline', 'cancel'].includes(decision)) throw new Error('承認の選択が不正です')
     const pending = this.permissions.get(String(requestId)), live = this.live.get(id)
     if (!pending || pending.taskId !== id || !live || live.ended || live.stopping) throw new Error('この承認はすでに終了しています')
+    if (pending.kind === 'user-input') throw new Error('この質問には回答を送信してください')
     const record = this.#record(id)
     if (record.permissionMode === 'read-only' || record.ab || record.permissionPolicy === 'deny') throw new Error('この担当では権限を拡張できません')
     this.server.respond(pending.rawId, { decision })
     this.permissions.delete(String(requestId))
     this.#emit(record)
+  }
+
+  respondUserInput(id, requestId, answers) {
+    const pending = this.permissions.get(String(requestId)), live = this.live.get(id)
+    if (!pending || pending.taskId !== id || pending.kind !== 'user-input' || !live || live.ended || live.stopping) throw new Error('この質問はすでに終了しています')
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new Error('回答の形式が不正です')
+    const entries = Object.entries(answers)
+    // An empty map dismisses the whole prompt. Partial or unknown answers must not silently resolve it.
+    if (entries.length && (entries.length !== pending.questions.length || pending.questions.some(question => {
+      const answer = Object.hasOwn(answers, question.id) ? answers[question.id]?.answers : null
+      return !Array.isArray(answer) || answer.length !== 1 || typeof answer[0] !== 'string' || !answer[0].trim()
+        || (question.options?.length && !question.isOther && !question.options.some(option => option.label === answer[0]))
+    }))) throw new Error('すべての質問に有効な回答を入力してください')
+    const response = Object.fromEntries(entries.map(([key, value]) => [key, { answers: value.answers }]))
+    this.server.respond(pending.rawId, { answers: response })
+    this.permissions.delete(String(requestId))
+    this.#emit(this.#record(id))
   }
 
   async #finish(id, live, status, message) {
@@ -387,7 +418,7 @@ export class CodexRunner extends EventEmitter {
     live.speed.finish()
     live.ready.resolve(null)
     const record = this.#record(id), turn = live.turn
-    for (const [key, pending] of this.permissions) if (pending.taskId === id) { try { this.server.respond(pending.rawId, { decision: 'cancel' }) } catch {} this.permissions.delete(key) }
+    for (const [key, pending] of this.permissions) if (pending.taskId === id) { try { this.server.respond(pending.rawId, pending.kind === 'user-input' ? { answers: {} } : { decision: 'cancel' }) } catch {} this.permissions.delete(key) }
     turn.status = status === 'done' ? 'done' : status === 'stopped' ? 'cancelled' : 'error'
     turn.stopReason = status
     turn.error = message ? { message: String(message) } : null

@@ -115,6 +115,21 @@ test('opening an unpriced Command Code turn recovers its equivalent without inve
   assert.equal(calls, 1, 'an already priced score is not recalculated')
 })
 
+test('opening an unpriced OpenScale turn recovers its equivalent', async (t) => {
+  const f = await fixture(t, { getTurnUsage: (args) => turnUsage(args) })
+  const model = 'deepseek/deepseek-v4.1-flash'
+  await savedTurn(f, { ...usage, models: ['openscale/' + model], score: { points: 0, priced: 0, unpriced: 1 } })
+  const events = [{ type: 'session', id: 'old-session' }, { type: 'assistant/message', seq: 1, time: 110,
+    data: { message: { id: 'answer', source: { provider: 'openscale', model } }, usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 1000 } } }, { type: 'turn/end', time: 150 }]
+  const file = path.join(f.paths.dshHome, 'sessions', 'work', 'old-session', 'session.v4.jsonl.zstd')
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(file, zlib.zstdCompressSync(Buffer.from(events.map((entry) => JSON.stringify(entry)).join('\n') + '\n')))
+  const recovered = (await f.manager.get(f.thread.id)).turns[0].usage
+  assert.ok(Math.abs(recovered.score.points * 0.002 - 0.0000114) < 1e-12)
+  assert.equal(recovered.score.unpriced, 0)
+  assert.equal(recovered.cost, null)
+})
+
 test('partly missing Terra usage remains explicitly unpriced after recovery', async (t) => {
   const prior = { ...terra, requests: 2, score: { points: 0, priced: 0, unpriced: 2 } }
   const recovered = { ...prior, score: { points: 0.2, priced: 1, unpriced: 1 } }

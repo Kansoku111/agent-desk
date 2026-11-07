@@ -6,6 +6,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { CodexRunner } from '../server/codex-runner.js'
+import { createCodexHandlers } from '../server/rpc-handlers-codex.js'
 
 class FakeWorkServer extends EventEmitter {
   constructor() { super(); this.calls = []; this.responses = []; this.nextThread = 0; this.nextTurn = 0; this.active = 0; this.account = { type: 'chatgpt', email: 'a@example.test', workspaceName: 'One' } }
@@ -52,6 +53,73 @@ async function finish(runner, server, id, ids, status = 'completed') {
   server.complete(ids.threadId, ids.turnId, status)
   await waitFor(() => !runner.running(id))
 }
+
+const inputQuestions = [
+  { id: 'style', header: '方式', question: '方式を選択', isOther: true, isSecret: false, options: [{ label: 'A', description: '方式A' }, { label: 'B', description: '方式B' }] },
+  { id: 'detail', header: '補足', question: '補足を入力', isOther: false, isSecret: true, options: null },
+]
+
+test('GP receives structured questions in read-only too and answers through RPC without persisting secrets', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir, permissionMode: 'read-only' })
+  const ids = await start(runner, task.id)
+  assert.equal(server.calls.find(call => call.method === 'thread/start').params.config['features.default_mode_request_user_input'], true)
+  server.emit('request', { id: 77, method: 'item/tool/requestUserInput', params: { ...ids, questions: inputQuestions, isBlocking: true } })
+  assert.equal(server.responses.length, 0)
+  assert.equal(runner.get(task.id).pendingApproval, true)
+  assert.deepEqual(runner.pendingPermissions(task.id), [{ requestId: '77', kind: 'user-input', title: 'Codex からの質問', questions: inputQuestions }])
+  const handlers = createCodexHandlers({ codex: runner })
+  const answers = { style: { answers: ['A'] }, detail: { answers: ['synthetic-secret'] } }
+  assert.throws(() => runner.respondUserInput('other-task', '77', answers), /終了/)
+  assert.throws(() => runner.respondPermission(task.id, '77', 'accept'), /回答/)
+  for (const invalid of [null, [], { style: { answers: ['A'] } }, { ...answers, detail: { answers: [] } }, { ...answers, detail: { answers: [1] } }]) {
+    assert.throws(() => runner.respondUserInput(task.id, '77', invalid), /回答/)
+  }
+  assert.equal(server.responses.length, 0)
+  assert.deepEqual(handlers['codex.task.answer']({ taskId: task.id, requestId: '77', answers }), { accepted: true })
+  assert.deepEqual(server.responses.at(-1), { id: 77, result: { answers } })
+  assert.equal(runner.get(task.id).pendingApproval, false)
+  assert.throws(() => runner.respondUserInput(task.id, '77', answers), /終了/)
+  await finish(runner, server, task.id, ids)
+  assert.ok(!(await fs.readFile(path.join(dir, 'codex-tasks', task.id + '.json'), 'utf8')).includes('synthetic-secret'))
+})
+
+test('GP questions support free text, skip, server resolution and interruption cleanup', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  const ids = await start(runner, task.id)
+  const ask = (id, questions = inputQuestions) => server.emit('request', { id, method: 'item/tool/requestUserInput', params: { ...ids, questions } })
+  ask('free')
+  const answers = { style: { answers: ['別の方式'] }, detail: { answers: ['補足'] } }
+  runner.respondUserInput(task.id, 'free', answers)
+  assert.deepEqual(server.responses.at(-1).result, { answers })
+  ask('restricted', [{ ...inputQuestions[0], isOther: false }])
+  assert.throws(() => runner.respondUserInput(task.id, 'restricted', { style: { answers: ['invalid'] } }), /回答/)
+  runner.respondUserInput(task.id, 'restricted', {})
+  assert.deepEqual(server.responses.at(-1), { id: 'restricted', result: { answers: {} } })
+  ask('resolved')
+  server.notify('serverRequest/resolved', { threadId: ids.threadId, requestId: 'resolved' })
+  assert.equal(runner.pendingPermissions(task.id).length, 0)
+  ask('interrupted')
+  await finish(runner, server, task.id, ids, 'interrupted')
+  assert.deepEqual(server.responses.at(-1), { id: 'interrupted', result: { answers: {} } })
+  assert.equal(runner.pendingPermissions(task.id).length, 0)
+})
+
+test('unknown, stale and background-worker questions cannot create hidden waits', async t => {
+  const { dir, server, runner } = await setup(t)
+  for (const extra of [{ ab: { side: 'a' } }, { team: { childId: 'child' } }, {}]) {
+    const task = await runner.create({ workspace: dir, ...extra })
+    const ids = await start(runner, task.id)
+    server.emit('request', { id: 'stale', method: 'item/tool/requestUserInput', params: { ...ids, turnId: extra.ab || extra.team ? ids.turnId : 'old-turn', questions: inputQuestions } })
+    assert.deepEqual(server.responses.at(-1), { id: 'stale', result: { answers: {} } })
+    assert.equal(runner.pendingPermissions(task.id).length, 0)
+    if (extra.ab || extra.team) assert.equal(server.calls.filter(call => call.method === 'thread/start').at(-1).params.config['features.default_mode_request_user_input'], false)
+    await finish(runner, server, task.id, ids)
+  }
+  server.emit('request', { id: 'unknown', method: 'item/tool/requestUserInput', params: { threadId: 'unknown', questions: inputQuestions } })
+  assert.deepEqual(server.responses.at(-1), { id: 'unknown', result: { answers: {} } })
+})
 
 test('create and complete, strict selection, instructions and persistent thread resume', async t => {
   const { dir, server, runner } = await setup(t)

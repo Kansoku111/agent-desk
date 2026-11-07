@@ -1,5 +1,15 @@
 {
   "models": {
+    "openscale/deepseek/deepseek-v4.1-flash": {
+      "source": "https://openscale.so/pricing",
+      "checkedAt": "2026-11-06",
+      "rates": { "input": 0.06, "output": 0.24, "cacheRead": 0.003 }
+    },
+    "openscale/z-ai/glm-5.3-flash": {
+      "source": "https://openscale.so/pricing",
+      "checkedAt": "2026-11-06",
+      "rates": { "input": 0.12, "output": 0.4, "cacheRead": 0.024 }
+    },
     "openai-codex/gpt-6.1-terra": {
       "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
       "checkedAt": "2026-10-27",

@@ -5,6 +5,19 @@ import { loadPricing, priceResponse, resetPricing, responseCost, scoreResponse, 
 import { accountModelAdditions } from '../server/codex-models.js'
 import { configuredModelCatalog } from '../server/model-catalog.js'
 
+test('OpenScale standard models use published API rates for equivalents only', async () => {
+  const rates = await loadPricing()
+  for (const [key, expected] of [
+    ['openscale/deepseek/deepseek-v4.1-flash', 0.303],
+    ['openscale/z-ai/glm-5.3-flash', 0.544],
+  ]) {
+    const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 1_000_000 }
+    assert.ok(Math.abs(scoreResponse(rates, key, usage, 0).points * 0.002 - expected) < 1e-12)
+    assert.equal(priceResponse(rates, key, usage, 0), null)
+    assert.equal(scoreResponse(rates, key, { cacheWriteTokens: 1 }, 0).unpriced, 1)
+  }
+})
+
 const sol = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }
 const luna = { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
 const pricing = new Map([['openai-codex/sol', sol], ['openai-codex/luna', luna]])

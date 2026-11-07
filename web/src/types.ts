@@ -46,7 +46,11 @@ export interface CodexTaskSummary {
   createdAt: number; updatedAt: number; archived: boolean; pinned: boolean
   score?: UsageScore; team?: { id: string; childId?: string; role?: string } | null; ab?: { runId: string; jobId: string } | null
 }
-export interface CodexPermission { requestId: string; kind: 'command' | 'file' | 'tool'; title: string; details?: string }
+export interface CodexQuestion {
+  id: string; header: string; question: string; isOther: boolean; isSecret: boolean
+  options: { label: string; description: string }[] | null
+}
+export interface CodexPermission { requestId: string; kind: 'command' | 'file' | 'tool' | 'user-input'; title: string; details?: string; questions?: CodexQuestion[] }
 export interface CodexModel { id: string; name: string; efforts: string[]; defaultEffort?: string }
 
 export interface ThreadSummary {

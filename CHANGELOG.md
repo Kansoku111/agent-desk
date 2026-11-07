@@ -7,15 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-11-07
+
+### Added
+
+- Answer Codex questions in chat, including free-text answers when allowed; background team and AB workers continue to report blockers to their owner.
+- Use task presets from GP tasks and choose their models directly.
+
 ### Fixed
 
 - Price Codex turns per model response instead of applying one context tier to the turn total; mark missing counts as unknown and preserve earlier saved estimates. Preserve reported reasoning-token breakdowns through the dsh adapter.
 - Compact oversized imported history even when the recent tail is shorter than the retention budget, and preserve successful ChatGPT/Claude responses above the local context budget instead of reporting a false overflow.
 - Reload missing Codex model capabilities when opening team settings, and show saved reasoning levels as unconfirmed until discovery completes instead of incorrectly marking `max`/`xhigh` unsupported after idle shutdown.
 - Pass the selected Codex reasoning level to a new conversation itself, not only to each turn, so GPT `max`/`xhigh`/`high` no longer run lighter than the label (and than DSH or the Codex CLI at the same level). New conversations at higher levels now take longer and use more tokens; lower the level to keep the old cost. Existing conversations keep the level they were created with (resuming ignores the setting), and changing the level inside one conversation still applies only weakly.
+- Show API-equivalent amounts for OpenScale standard models using its published per-token rates, separate from actual billing.
 
 ### Changed
 
+- Use a compact Codex permission picker, remember GP model, effort and permission defaults, and display GP streaming output speed.
+- Allow changing PTC in existing team settings.
 - Updated the bundled Codex app-server (`@openai/codex`) from 0.166.0 to 0.167.0.
 - Tell PTC agents to batch the reads, the write that depends on them and the check into one `run_code`. On one of two small test tasks this halved `run_code` calls and cut time and cost by about 30%; the other changed little.
 
