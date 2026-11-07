@@ -24,8 +24,8 @@ const PARALLEL_TAIL = "(safe calls run concurrently; mutating calls run alone, i
 const PARALLEL = "- Independent read-only calls MAY overlap under \\`Promise.all\\` " + PARALLEL_TAIL
 // The model otherwise spends one run_code per step (read, write, test), and every
 // run_code is a model round trip. Given as task text, this line cut run_code calls
-// by 40-50% on small tasks (docs/investigations/gpt-siwc-regression-20261107.md);
-// the effect as a system prompt line is not yet measured.
+// by 40-50% on small tasks (docs/investigations/gpt-siwc-regression-20261107.md),
+// and the same as a line in this system prompt on task D; task F saw little change.
 const BATCH = "- Every `run_code` call costs a model round trip. Put the reads, the write that depends on them and the check that verifies it in one program (read the files, write, then run the tests) instead of one program per step; split only where you must see an output before choosing the next step.\n".replaceAll('`', '\\`')
 
 export function patchPtcSdkSource(source) {
