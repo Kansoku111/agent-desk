@@ -157,7 +157,7 @@ export function planSettingsUpdate(current, patch, now) {
   if (owns(patch, 'taskPresets')) {
     assertRecord(patch.taskPresets, 'taskPresets')
     next.taskPresets = { ...structuredClone(DEFAULT_SETTINGS.taskPresets), ...current.taskPresets }
-    for (const role of ['delegate', 'review', 'reviewDsh', 'reviewClaude']) {
+    for (const role of ['delegate', 'review', 'reviewDsh', 'reviewClaude', 'reviewSelected']) {
       if (!owns(patch.taskPresets, role)) continue
       const value = patch.taskPresets[role]
       assertRecord(value, 'taskPresets.' + role)

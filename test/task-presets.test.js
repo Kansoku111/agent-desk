@@ -521,6 +521,19 @@ test('interrupted runs restore as attention without replaying any model calls', 
   assert.equal(restored.goalWaiting(f.parent), true)
 })
 
+test('unified reviewer settings accept either harness and take precedence for new requests', async (t) => {
+  const f = await fixture(t)
+  f.config.taskPresets.reviewDsh = { model: 'D', effort: 'low' }
+  const update = planSettingsUpdate(f.config, { taskPresets: { reviewSelected: { model: 'C', effort: 'low' } } }, Date.now())
+  f.config.taskPresets = update.settings.taskPresets
+  await assert.rejects(f.start({ kind: 'review', reviewMode: 'opinion', expectedModel: 'D', expectedEffort: 'low' }), /設定が更新/)
+  const run = await f.start({ kind: 'review', reviewMode: 'opinion', expectedModel: 'C', expectedEffort: 'low' })
+  assert.equal(run.model, 'C')
+  assert.equal(run.permissionMode, 'read-only')
+  assert.equal(planSettingsUpdate(update.settings, { taskPresets: { reviewSelected: { model: 'claude:haiku', effort: 'low' } } }, Date.now()).settings.taskPresets.reviewSelected.model, 'claude:haiku')
+  assert.throws(() => planSettingsUpdate(update.settings, { taskPresets: { reviewSelected: { model: 42 } } }, Date.now()))
+})
+
 test('preset settings have no runtime restart effect; dedicated workers mount no default MCP', () => {
   const { settings, effects } = planSettingsUpdate(DEFAULT_SETTINGS, { taskPresets: { delegate: { model: 'B', effort: 'low' } } }, Date.now())
   assert.equal(settings.taskPresets.delegate.model, 'B')

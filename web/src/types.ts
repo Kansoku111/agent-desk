@@ -473,7 +473,7 @@ export interface Settings extends UsageDisplay {
   projectColors: Record<string, number>
   contextLimits: Record<'openai-codex' | 'anthropic', number | null>
   /** Global subagent switch; older saves default to enabled. */
-  taskPresets?: Record<TaskPresetKind, { model: string | null; effort: string | null }> & Partial<Record<'reviewDsh' | 'reviewClaude', { model: string | null; effort: string | null }>>
+  taskPresets?: Record<TaskPresetKind, { model: string | null; effort: string | null }> & Partial<Record<'reviewDsh' | 'reviewClaude' | 'reviewSelected', { model: string | null; effort: string | null }>>
   subagentsEnabled?: boolean
   /** Model of each fixed-model subagent tool; null leaves the tool out. */
   subagentModels: Record<'openai-codex' | 'anthropic', string | null>

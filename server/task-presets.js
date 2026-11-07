@@ -154,8 +154,8 @@ export class TaskPresets extends EventEmitter {
     const known = [...this.runs.values()].find((run) => run.requestId === requestId)
     if (known) { if (known.fingerprint !== fingerprint) throw new Error('同じ要求IDに異なる設定は使えません'); return { run: this.summary(known) } }
     const record = await this.source(source, true)
-    const config = kind === 'review' && harness ? reviewModelChoice(this.settings(), harness) : this.settings().taskPresets?.[kind]
-    if (!config?.model) throw new Error('設定 → モデルで担当モデルを選択してください')
+    const config = kind === 'review' && harness ? reviewModelChoice(this.settings(), harness) : kind === 'review' ? this.settings().taskPresets?.reviewSelected ?? this.settings().taskPresets?.review : this.settings().taskPresets?.[kind]
+    if (!config?.model) throw new Error('開始画面で担当モデルを選択してください')
     if (harness && config.model.startsWith('claude:') !== (harness === 'claude')) throw new Error('選択したハーネスのモデルを設定してください')
     this.validateModel(config.model)
     const levels = workflowLevels(this.catalog(), config.model)

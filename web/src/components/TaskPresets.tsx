@@ -28,22 +28,21 @@ export function TaskPresetModels() {
   const [saving, setSaving] = useState(false)
   if (!server) return null
   const groups = modelGroups(server)
-  const change = async (role: 'delegate' | 'reviewDsh' | 'reviewClaude', model: string, effort: string) => {
+  const change = async (role: 'delegate' | 'reviewSelected', model: string, effort: string) => {
     setSaving(true)
     await act('settings.update', { patch: { taskPresets: { [role]: { model: model || null, effort: effort || null } } } })
     setSaving(false)
   }
   return <section className="account-card">
     <div className="account-head"><h3>タスクのプリセット</h3></div>
-    <div className="ab-model-grid">{(['delegate', 'reviewDsh', 'reviewClaude'] as const).map((role) => {
-      const choice = role === 'delegate' ? server.settings.taskPresets?.delegate : reviewModelChoice(server.settings, role === 'reviewClaude' ? 'claude' : 'dsh')
+    <div className="ab-model-grid">{(['delegate', 'reviewSelected'] as const).map((role) => {
+      const choice = role === 'delegate' ? server.settings.taskPresets?.delegate : server.settings.taskPresets?.reviewSelected ?? reviewModelChoice(server.settings, 'claude')
       const model = choice?.model ?? ''
       const levels = workflowLevels(server.catalog, model)
       const effort = workflowEffort(choice?.effort ?? '', levels)
-      const roleGroups = role === 'delegate' ? groups : groups.filter((group) => role === 'reviewClaude' ? group.id === 'claude-code' : group.id !== 'claude-code')
-      const available = roleGroups.some((group) => group.models.some((entry) => entry.value === model))
-      const label = role === 'delegate' ? LABEL.delegate : role === 'reviewClaude' ? '独立レビュー / Claude Code' : '独立レビュー / DSH'
-      return <ModelField key={role} label={label + (model && !available ? '（利用不可）' : '')} value={model} groups={roleGroups} disabled={saving}
+      const available = groups.some((group) => group.models.some((entry) => entry.value === model))
+      const label = role === 'delegate' ? LABEL.delegate : LABEL.review
+      return <ModelField key={role} label={label + (model && !available ? '（利用不可）' : '')} value={model} groups={groups} disabled={saving}
         effort={effort} efforts={workflowOptions(effort, levels)} allowClearUnavailableEffort
         onEffort={(value) => void change(role, model, value)}
         onChange={(value) => void change(role, value, workflowEffort(effort, workflowLevels(server.catalog, value), true))} />
@@ -51,10 +50,46 @@ export function TaskPresetModels() {
   </section>
 }
 
+type PresetChoice = { model: string | null; effort: string | null }
+
+// Save every explicit choice, including when the dialog is subsequently cancelled.
+function usePresetChoice(role: 'delegate' | 'reviewSelected', initial: PresetChoice | undefined) {
+  const [choice, setChoice] = useState<PresetChoice>(() => initial ?? { model: null, effort: null })
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const save = async (next: PresetChoice) => {
+    setSaving(true); setSaveError('')
+    try {
+      await request('settings.update', { patch: { taskPresets: { [role]: next } } })
+      setChoice(next)
+      return true
+    } catch (cause) {
+      setSaveError(cause instanceof Error ? cause.message : String(cause))
+      return false
+    } finally { setSaving(false) }
+  }
+  return { choice, saving, saveError, save }
+}
+
+function PresetModelPicker({ server, choice, disabled, onChange }: {
+  server: AppState; choice: PresetChoice; disabled: boolean; onChange: (choice: PresetChoice) => void
+}) {
+  const groups = modelGroups(server)
+  const model = choice.model ?? ''
+  const levels = workflowLevels(server.catalog, model)
+  const effort = workflowEffort(choice.effort ?? '', levels)
+  const available = groups.some((group) => group.models.some((entry) => entry.value === model))
+  return <ModelField label={model && !available ? '担当モデル（利用不可）' : '担当モデル'} value={model} groups={groups} disabled={disabled}
+    effort={effort} efforts={workflowOptions(effort, levels)} allowClearUnavailableEffort
+    onEffort={(value) => onChange({ model, effort: value || null })}
+    onChange={(value) => onChange({ model: value, effort: workflowEffort(effort, workflowLevels(server.catalog, value), true) || null })} />
+}
+
 function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
   const server = useStore((state) => state.server)
   const [inspection, setInspection] = useState<Inspection | null>(null)
-  const [harness, setHarness] = useState<'dsh' | 'claude'>(source.kind === 'terminal' ? 'dsh' : 'claude')
+  const preset = usePresetChoice('reviewSelected', server?.settings.taskPresets?.reviewSelected ?? (server ? reviewModelChoice(server.settings, source.kind === 'terminal' ? 'dsh' : 'claude') : undefined))
+  const legacyChoice = useRef(!server?.settings.taskPresets?.reviewSelected)
   const [mode, setMode] = useState<'opinion' | 'fix'>('opinion')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -67,19 +102,19 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
     return () => { alive = false }
   }, [source.id, source.kind])
   if (!server) return null
-  const choice = reviewModelChoice(server.settings, harness)
-  const model = choice?.model ?? ''
+  const model = preset.choice.model ?? ''
+  const harness = model.startsWith('claude:') ? 'claude' : 'dsh'
   const groups = modelGroups(server)
   const group = groups.find((entry) => entry.models.some((item) => item.value === model))
   const selected = group?.models.find((item) => item.value === model)
-  const effort = workflowEffort(choice?.effort ?? '', workflowLevels(server.catalog, model))
+  const effort = workflowEffort(preset.choice.effort ?? '', workflowLevels(server.catalog, model))
   const ready = selected && workflowEffortSupported(effort, workflowLevels(server.catalog, model))
   const start = async () => {
-    if (!inspection || busy) return
-    const payload = { source, kind: 'review', harness, reviewMode: mode, expectedModel: model, expectedEffort: effort }
+    if (!inspection || busy || preset.saving) return
+    setBusy(true); setError('')
+    const payload = { source, kind: 'review', ...(legacyChoice.current ? { harness } : {}), reviewMode: mode, expectedModel: model, expectedEffort: effort }
     const fingerprint = JSON.stringify(payload)
     if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: crypto.randomUUID() }
-    setBusy(true); setError('')
     try {
       const result = await request<{ run: TaskPresetRun }>('preset.create', { ...payload, requestId: intent.current.id, authConfirmation: auth.confirmation })
       setState({ presetStart: null })
@@ -87,21 +122,18 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     setBusy(false)
   }
-  return <Modal title="独立レビュー" onClose={busy ? () => {} : close} width={560}>
+  return <Modal title="独立レビュー" onClose={busy || preset.saving ? () => {} : close} width={560}>
     <div className="modal-body preset-form">
-      <fieldset className="preset-switch"><legend>担当</legend>
-        {([['dsh', 'DSH'], ['claude', 'Claude Code']] as const).map(([value, label]) => <label key={value}><input type="radio" name="review-harness" value={value} checked={harness === value} disabled={busy} onChange={() => setHarness(value)} />{label}</label>)}
-      </fieldset>
+      <PresetModelPicker server={server} choice={preset.choice} disabled={busy || preset.saving} onChange={(value) => { void preset.save(value).then((saved) => { if (saved) { legacyChoice.current = false; if (Boolean(value.model?.startsWith('claude:')) !== (harness === 'claude')) setAuth({ ready: false }) } }) }} />
       <fieldset className="preset-switch"><legend>方法</legend>
         {([['opinion', '意見を聞く'], ['fix', 'レビューして修正']] as const).map(([value, label]) => <label key={value}><input type="radio" name="review-mode" value={value} checked={mode === value} disabled={busy} onChange={() => setMode(value)} />{label}</label>)}
       </fieldset>
-      <div className="preset-model-line"><strong>{selected ? group!.heading + ' / ' + selected.name : model ? '設定済みの担当モデルを利用できません' : '担当モデルが未設定です'}</strong><span className="muted">{effort ? effortLabel(effort) : '推論指定なし'} · {harness === 'claude' ? 'フルアクセス' : mode === 'opinion' ? '読み取り専用' : '作業フォルダーに書き込み'}</span>
-        <button type="button" className="link-button" disabled={busy} onClick={() => { close(); setState({ settingsOpen: 'models' }) }}>設定</button></div>
+      <div className="preset-model-line muted">{group && <span>{group.heading}{group.note ? ' · ' + group.note : ''}</span>}<span>{harness === 'claude' ? 'フルアクセス' : mode === 'opinion' ? '読み取り専用' : '作業フォルダーに書き込み'}</span></div>
       {harness === 'claude' && inspection && selected && <ClaudeAuthConsent workspace={inspection.workspace} taskPreset onChange={setAuth} />}
-      {error && <p className="team-warning" role="alert">{error}</p>}
+      {(preset.saveError || error) && <p className="team-warning" role="alert">{preset.saveError || error}</p>}
       {mode === 'opinion' && <div className="preset-start-note muted">完了後、元のセッションへ自動で返します。</div>}
-      <div className="modal-actions"><button type="button" className="button" disabled={busy} onClick={close}>キャンセル</button>
-        <button type="button" className="button primary" disabled={busy || !inspection || !ready || (harness === 'claude' && !auth.ready)} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
+      <div className="modal-actions"><button type="button" className="button" disabled={busy || preset.saving} onClick={close}>キャンセル</button>
+        <button type="button" className="button primary" disabled={busy || preset.saving || !inspection || !ready || (harness === 'claude' && !auth.ready)} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
     </div>
   </Modal>
 }
@@ -109,6 +141,7 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
 function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPresetKind }) {
   const server = useStore((state) => state.server)
   const [inspection, setInspection] = useState<Inspection | null>(null)
+  const preset = usePresetChoice('delegate', server?.settings.taskPresets?.delegate)
   const [error, setError] = useState('')
   const [instruction, setInstruction] = useState('')
   const [browser, setBrowser] = useState(false)
@@ -125,15 +158,15 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
     return () => { alive = false }
   }, [source.id, source.kind])
   if (!server) return null
-  const model = server.settings.taskPresets?.[kind]?.model ?? ''
+  const model = preset.choice.model ?? ''
   const groups = modelGroups(server)
-  const selectedGroup = groups.find((group) => group.models.some((entry) => entry.value === model))
-  const selected = selectedGroup?.models.find((entry) => entry.value === model)
-  const effort = workflowEffort(server.settings.taskPresets?.[kind]?.effort ?? '', workflowLevels(server.catalog, model))
+  const group = groups.find((entry) => entry.models.some((item) => item.value === model))
+  const selected = Boolean(group)
+  const effort = workflowEffort(preset.choice.effort ?? '', workflowLevels(server.catalog, model))
   const cli = model.startsWith('claude:')
   const ready = selected && workflowEffortSupported(effort, workflowLevels(server.catalog, model))
   const start = async () => {
-    if (!inspection || busy) return
+    if (!inspection || busy || preset.saving) return
     const payload = { source, kind, instruction, browser, permissionMode: cli ? 'danger-full-access' : permission, checkIds, command, expectedModel: model, expectedEffort: effort }
     const fingerprint = JSON.stringify(payload)
     if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: crypto.randomUUID() }
@@ -145,10 +178,10 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     setBusy(false)
   }
-  return <Modal title={LABEL[kind]} onClose={busy ? () => {} : close} width={560}>
+  return <Modal title={LABEL[kind]} onClose={busy || preset.saving ? () => {} : close} width={560}>
     <div className="modal-body preset-form">
-      <div className="preset-model-line"><strong>{selected ? selectedGroup!.heading + ' / ' + selected.name : model ? '設定済みの担当モデルを利用できません' : '担当モデルが未設定です'}</strong><span className="muted">{effort ? effortLabel(effort) : '推論指定なし'} · {cli || permission === 'danger-full-access' ? 'フルアクセス' : '作業フォルダーに書き込み'}</span>
-        <button type="button" className="link-button" disabled={busy} onClick={() => { close(); setState({ settingsOpen: 'models' }) }}>設定</button></div>
+      <PresetModelPicker server={server} choice={preset.choice} disabled={busy || preset.saving} onChange={(value) => { void preset.save(value).then((saved) => { if (saved && Boolean(value.model?.startsWith('claude:')) !== cli) setAuth({ ready: false }) }) }} />
+      <div className="preset-model-line muted">{group && <span>{group.heading}{group.note ? ' · ' + group.note : ''}</span>}<span>{cli || permission === 'danger-full-access' ? 'フルアクセス' : '作業フォルダーに書き込み'}</span></div>
       <textarea aria-label="追加指示" rows={3} maxLength={8000} placeholder="追加指示（任意）" value={instruction} disabled={busy} onChange={(event) => setInstruction(event.target.value)} />
       <details><summary>実行設定</summary><div className="preset-options">
         {cli ? <p className="muted">Claude Codeはフルアクセスで実行します。</p> : <label>権限<select value={permission} disabled={busy} onChange={(event) => setPermission(event.target.value)}><option value="workspace-write">作業フォルダーへの書き込み</option><option value="danger-full-access">フルアクセス</option></select></label>}
@@ -159,10 +192,10 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
         <label>追加の検証コマンド<input value={command} maxLength={4000} placeholder="例: npm test" disabled={busy} onChange={(event) => setCommand(event.target.value)} /></label>
       </div></details>
       {cli && inspection && <ClaudeAuthConsent workspace={inspection.workspace} taskPreset onChange={setAuth} />}
-      {error && <p className="team-warning" role="alert">{error}</p>}
+      {(preset.saveError || error) && <p className="team-warning" role="alert">{preset.saveError || error}</p>}
       <div className="preset-start-note muted">{kind === 'review' ? '別モデルが指摘箇所の修正・検証まで行います。' : '現在のモデルが指示を作り、子が実作業と確認を行います。'} 完了後、親には自動送信しません。</div>
-      <div className="modal-actions"><button type="button" className="button" disabled={busy} onClick={close}>キャンセル</button>
-        <button type="button" className="button primary" disabled={busy || !inspection || !ready || (cli && !auth.ready)} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
+      <div className="modal-actions"><button type="button" className="button" disabled={busy || preset.saving} onClick={close}>キャンセル</button>
+        <button type="button" className="button primary" disabled={busy || preset.saving || !inspection || !ready || (cli && !auth.ready)} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
     </div>
   </Modal>
 }
