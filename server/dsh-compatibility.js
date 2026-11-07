@@ -11,6 +11,8 @@ import { patchGoalSource, patchGoalDriverSource } from './goal-patch.js'
 import { patchMcpTimeoutSource } from './mcp-timeout-patch.js'
 import { patchMcpStartupSource } from './mcp-startup-patch.js'
 import { patchRetrySource } from './retry-patch.js'
+import { patchCompactionSource } from './compaction-patch.js'
+import { patchContextOverflowSource } from './context-overflow-patch.js'
 import { patchOutputSpeedSource } from './output-speed-patch.js'
 import { patchFsSearchSource } from './fs-search-patch.js'
 import { patchGoalToolSource } from './goal-tool-patch.js'
@@ -27,6 +29,8 @@ const HOOKS = [
   { name: 'opencode-catalog', module: null },
   { name: 'steer', module: 'acp', patch: patchAcpSource },
   { name: 'retry', module: 'llm', patch: patchRetrySource },
+  { name: 'context-overflow', module: 'llm', patch: patchContextOverflowSource },
+  { name: 'compaction', module: 'compaction', patch: patchCompactionSource },
   { name: 'goal', module: 'acp', patch: patchGoalSource },
   { name: 'goal-wait', module: 'goalDriver', patch: patchGoalDriverSource },
   { name: 'goal-tool', module: 'goalTool', patch: patchGoalToolSource },
@@ -44,8 +48,8 @@ export function runtimeHookArgs() {
   return HOOKS.flatMap(({ name }) => ['--import', new URL(`./${name}-hook.js`, import.meta.url).href])
 }
 
-export function composeCompatibilityPatches({ acp, llm, search, goalTool, goalDriver, ptcRuntime, tools }) {
-  const sources = { acp, llm, search, goalTool, goalDriver, ptcRuntime, tools }
+export function composeCompatibilityPatches({ acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, tools }) {
+  const sources = { acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, tools }
   for (const hook of HOOKS) {
     if (!hook.patch) continue
     const patched = hook.patch(sources[hook.module])
@@ -93,6 +97,7 @@ export function resolveCompatibilityModules(root) {
   const base = packageFile('@deepseek-ai/dsh-base', dsh)
   const acp = createRequire(acpApp).resolve('@deepseek-ai/dsh-acp')
   const llm = createRequire(base).resolve('@deepseek-ai/dsh-llm-pi-ai')
+  const compaction = createRequire(base).resolve('@deepseek-ai/dsh-compaction-basic')
   const search = createRequire(base).resolve('@deepseek-ai/dsh-tool-fs-search')
   const goalTool = createRequire(base).resolve('@deepseek-ai/dsh-tool-goal')
   const goalDriver = createRequire(base).resolve('@deepseek-ai/dsh-goal-round-driver')
@@ -101,7 +106,7 @@ export function resolveCompatibilityModules(root) {
   // declarations. That moved from dsh-tools to dsh-tool-executor-ptc in 0.2.2-rc.1.
   const tools = createRequire(base).resolve('@deepseek-ai/dsh-tool-executor-ptc')
   // A changed entrypoint no longer matches the hooks' URL filters.
-  for (const [file, name] of [[acp, 'dsh-acp'], [llm, 'dsh-llm-pi-ai'], [search, 'dsh-tool-fs-search'], [goalTool, 'dsh-tool-goal'], [goalDriver, 'dsh-goal-round-driver'], [ptcRuntime, 'dsh-ptc-runtime-node'], [tools, 'dsh-tool-executor-ptc']]) {
+  for (const [file, name] of [[acp, 'dsh-acp'], [llm, 'dsh-llm-pi-ai'], [compaction, 'dsh-compaction-basic'], [search, 'dsh-tool-fs-search'], [goalTool, 'dsh-tool-goal'], [goalDriver, 'dsh-goal-round-driver'], [ptcRuntime, 'dsh-ptc-runtime-node'], [tools, 'dsh-tool-executor-ptc']]) {
     if (!file.replaceAll('\\', '/').endsWith(`/@deepseek-ai/${name}/lib/index.js`)) {
       throw new Error(`${name}: module entrypoint no longer matches the runtime hook: ${file}`)
     }
@@ -109,7 +114,7 @@ export function resolveCompatibilityModules(root) {
   const pi = packageFile('@earendil-works/pi-ai', llm)
   // retry-hook imports the app's pi-ai, which may differ from dsh's nested copy.
   const retryPi = packageFile('@earendil-works/pi-ai', path.join(root, 'server', 'retry-hook.js'))
-  return { acp, llm, search, goalTool, goalDriver, ptcRuntime, tools, pi, retryPi }
+  return { acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, tools, pi, retryPi }
 }
 
 async function verifyActualHookChain(modules, expected) {
@@ -118,7 +123,7 @@ async function verifyActualHookChain(modules, expected) {
   // the result of their nextLoad chain. Do not evaluate any dsh module: replacing
   // its final source with an empty module prevents all upstream side effects.
   for (const { name } of HOOKS) await import(new URL(`./${name}-hook.js`, import.meta.url).href)
-  const targets = new Map(['acp', 'llm', 'search', 'goalTool', 'goalDriver', 'ptcRuntime', 'tools'].map((key) => [
+  const targets = new Map(['acp', 'llm', 'compaction', 'search', 'goalTool', 'goalDriver', 'ptcRuntime', 'tools'].map((key) => [
     `${pathToFileURL(modules[key]).href}?agent-desk-compatibility`, key,
   ]))
   const seen = new Set()
@@ -147,6 +152,7 @@ export async function verifyDshCompatibility({ root = fileURLToPath(new URL('../
     const sources = composeCompatibilityPatches({
       acp: await fs.readFile(modules.acp, 'utf8'),
       llm: await fs.readFile(modules.llm, 'utf8'),
+      compaction: await fs.readFile(modules.compaction, 'utf8'),
       ptcRuntime: await fs.readFile(modules.ptcRuntime, 'utf8'),
       tools: await fs.readFile(modules.tools, 'utf8'),
       search: await fs.readFile(modules.search, 'utf8'),

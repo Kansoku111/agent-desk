@@ -31,6 +31,14 @@ TM・eco共通の親の自動継続待機は `test/goal-driver-wait.test.js`・`
 
 設定の回帰確認は同じフィクスチャサーバーの `settings-bug-audit-ui.html` で `await settingsAudit.run()` を実行します。候補が後から届くClaudeワークスペースの選択・送信と、検証行の削除→追加→保存を実コンポーネントで確認します。`usage-pricing-ui.html` の `await usagePricingTest.run()` は、未算定・一部未算定・非課金・利用なし・既知ゼロをタイル、モデル行、グラフのツールチップで確認します。どちらもRPCは模擬応答で、本番データや実モデルを使いません。
 
+## コンテキスト圧縮
+
+`node --test test/compaction-patch.test.js test/context-overflow-patch.test.js test/context-compaction-runtime.test.js test/dsh-compatibility.test.js` で検証します。巨大な先頭メッセージと短い最近の会話を模擬し、実dsh／ACPで要約・続行・プロセス再起動後の再開を親子両方で確認します。ローカル模擬APIだけを使い、実モデルの要約品質や実際の最大入力容量を検証するものではありません。
+
+保持量を下げるのは、従来の範囲選択が圧縮不能を返す場合だけです。最小の安全な先頭範囲を要約し、システム先頭と少なくとも最後の1ノードを残し、ツール呼び出しと結果の組を分断しません。安全な境界がない会話は無理に切りません。予算を一律に広げる方法や履歴の切り捨ては採らず、上流の要約・保存・キャンセル処理を維持します。
+
+`context-overflow` フックは、コンテキストサイズを選べる ChatGPT／Claude 経路の正常終了だけを、入力usageとローカル予算の比較による超過判定から除きます。APIが返す超過エラー、出力ゼロの長さ制限、他経路のサイレント超過検出は維持します。`compaction` フックとともに更新時のソース一致・構文・実ロード結果を検査します。設定・セッション形式・モデル・課金経路は変えず、移行操作は不要です。実行中のdshには遡及適用されないため、利用にはAgent Deskの再起動が必要です。
+
 ## 利用上限時のフォールバック
 
 回帰確認は node --test test/usage-fallback.test.js test/usage-fallback-settings-ui.test.js test/normal-fallback-handoff.test.js test/thread-usage-fallback.test.js test/ab.test.js test/teams.test.js test/terminals.test.js test/outbox.test.js test/claude-hook.test.js です。模擬ランタイム・PTYで優先順、旧設定、認証、指定モデルの適用、停止・競合・再起動時のフェンスを確認します。実モデル・本番データは使いません。
