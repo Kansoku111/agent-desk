@@ -65,6 +65,8 @@ test('create and complete, strict selection, instructions and persistent thread 
   assert.equal(thread.ephemeral, false)
   assert.equal(thread.developerInstructions, 'global instruction\n\ntask instruction')
   assert.deepEqual(thread.config.mcp_servers, { test: { command: 'x' } })
+  // The chosen level is also the new conversation's level; a turn-only value applies weakly and made 'max' behave like medium to high.
+  assert.equal(thread.config.model_reasoning_effort, 'high')
   const turn = server.calls.find(x => x.method === 'turn/start').params
   assert.equal(turn.effort, 'high')
   assert.equal(turn.model, 'gpt-test')

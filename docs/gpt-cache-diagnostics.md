@@ -32,6 +32,8 @@ usageの個別項目は、正数の `value`、明示0の `zero`、項目なし�
 
 `result.reasoningContext` は終端応答の `reasoning.context` にある実適用値（`current_turn`・`all_turns`）です。項目が無ければ `absent`、想定外の値は `invalid`、終端未取得は `unobserved` です。要求が未指定でも実適用値は返り得るため、両者を同じ値とみなしません。過去のログにこの項目が無い場合は未記録であり、特定のmodeが適用された証拠には使えません。[公式の推論履歴仕様](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-across-calls)も、未指定時はモデル既定を使い、応答で実適用値を確認するよう説明しています。
 
+`result.servedModel` と `result.servedReasoningEffort` は、終端応答が報告したモデル名と推論レベルです。要求したモデルや推論レベルとは別に、サービス側が実際に応答へ使ったものを確認するための項目です。モデル名は英数字・`.`・`_`・`-` だけの64文字以内のときだけ記録し、項目が無ければ `absent`、形式が合わなければ `invalid`、終端未取得は `unobserved` です。推論レベルは許可リストの値だけで、公式仕様では要求値を報告し続けることがあるため、これだけで実際の推論量は判断できません。
+
 `result.transport` は応答を受け取った通信路で、`websocket` か `http` です。WebSocketから切り替えた試行は `http` になります。WebSocketの `headersMs` は最初のイベントを受けた時点で、HTTPのレスポンスヘッダーとは意味が異なるため、通信路をまたぐ比較には `terminalMs` か `firstTextMs` を使ってください。
 
 metadataの後に明示的な`error`イベントが届いた場合、ヘッダーが既に200でも結果は`failed`です。例外にはサービスが報告したstatus/codeを残して再試行を判断しますが、診断ファイルへエラー本文は保存しません。終端応答を伴わないため、この場合のusageは`unobserved`、`terminal`は`null`のままです。単なる途中切断と、明示的な拒否を分けて解釈してください。

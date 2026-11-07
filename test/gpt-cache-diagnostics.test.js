@@ -141,6 +141,30 @@ test('diagnostics distinguish requested and effective reasoning context without 
   assert.doesNotMatch(JSON.stringify(records), /SECRET/)
 })
 
+test('diagnostics report the served model and echoed effort, allowlisting both', async () => {
+  const { diagnostics, records } = capture()
+  const responses = [
+    { model: 'gpt-6-luna-2026-11-01', reasoning: { effort: 'max' } },
+    { model: 'gpt-6-sol', reasoning: { effort: 'medium' } },
+    {},
+    { model: 'SECRET MODEL WITH SPACES', reasoning: { effort: 'SECRET_EFFORT' } },
+    { model: { name: 'SECRET_OBJECT' }, reasoning: { effort: null } },
+  ]
+  for (const response of responses) {
+    const observer = diagnostics.begin(payload(), 'SECRET_SESSION')
+    observer.event({ type: 'response.completed', response })
+    observer.finish('completed')
+  }
+  const unfinished = diagnostics.begin(payload(), 'SECRET_SESSION')
+  unfinished.event({ type: 'response.created', response: { model: 'gpt-6-luna', reasoning: { effort: 'max' } } })
+  unfinished.finish('interrupted')
+  await diagnostics.flush()
+  const results = records.filter(r => r.event === 'result')
+  assert.deepEqual(results.map(r => r.servedModel), ['gpt-6-luna-2026-11-01', 'gpt-6-sol', 'absent', 'invalid', 'invalid', 'unobserved'])
+  assert.deepEqual(results.map(r => r.servedReasoningEffort), ['max', 'medium', 'absent', 'invalid', 'invalid', 'unobserved'])
+  assert.doesNotMatch(JSON.stringify(records), /SECRET/)
+})
+
 test('text input, array input and absent input are not reported as the same prefix', async () => {
   const { diagnostics, records } = capture()
   for (const input of ['SECRET_ONE', 'SECRET_TWO', [], undefined, null]) diagnostics.begin({ input }, 'session').finish('completed')

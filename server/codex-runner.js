@@ -250,7 +250,10 @@ export class CodexRunner extends EventEmitter {
       const params = { model: record.model, cwd: record.workspace, sandbox: record.permissionMode,
         approvalPolicy: this.#approvalPolicy(record),
         developerInstructions: [this.instructions(record), record.instructions].filter(Boolean).join('\n\n'),
-        config: { mcp_servers: record.mcpServers ?? {}, 'features.multi_agent': false, 'features.goals': false, 'features.hooks': false, 'features.plugins': false, web_search: leanResearch ? 'disabled' : 'cached', 'features.shell_tool': !leanResearch, 'features.unified_exec': !leanResearch } }
+        // The selected level must also be the conversation's own level. Sent only with turn/start, it reaches the model as a mid-conversation
+        // update that applies weakly (measured: max ran like medium to high). thread/start honours this; thread/resume ignores it (measured: the
+        // resumed thread kept medium), so a conversation keeps the level it was created with and a later change still applies only weakly.
+        config: { ...(record.effort ? { model_reasoning_effort: record.effort } : {}), mcp_servers: record.mcpServers ?? {}, 'features.multi_agent': false, 'features.goals': false, 'features.hooks': false, 'features.plugins': false, web_search: leanResearch ? 'disabled' : 'cached', 'features.shell_tool': !leanResearch, 'features.unified_exec': !leanResearch } }
       const result = record.sessionId
         ? await this.server.rawRequest('thread/resume', { ...params, threadId: record.sessionId, excludeTurns: true })
         : await this.server.rawRequest('thread/start', { ...params, ephemeral: false, serviceName: 'agent_desk_tasks' })

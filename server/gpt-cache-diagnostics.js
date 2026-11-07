@@ -9,6 +9,9 @@ const TERMINALS = new Set(['response.completed', 'response.failed', 'response.in
 const OUTCOMES = new Set(['completed', 'failed', 'incomplete', 'interrupted', 'transport_error', 'idle_timeout', 'cancelled', 'http_error', 'no_body', 'auth_error'])
 const ITEM_KINDS = new Set(['message', 'reasoning', 'function_call', 'function_call_output', 'additional_tools', 'tool_search_output'])
 const ROLES = new Set(['system', 'developer', 'user', 'assistant', 'tool'])
+const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+// The served model name is a service-chosen slug, not user data; anything that is not slug-shaped is reported as invalid instead of stored.
+const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const OMIT_SETTINGS = new Set(['input', 'instructions', 'tools', 'prompt_cache_key'])
 const directoryAtStart = process.env[CACHE_DIAGNOSTICS_ENV]
 let processDiagnostics
@@ -73,6 +76,7 @@ function responseObserver(id, lifecycle, record, now) {
   let transportUsed = 'http'
   let usage = { ...usageOf(null), state: 'unobserved' }
   let reasoningContext = 'unobserved'
+  let servedModel = 'unobserved', servedReasoningEffort = 'unobserved'
   return {
     mark,
     transport(kind) {
@@ -92,13 +96,18 @@ function responseObserver(id, lifecycle, record, now) {
       const context = event.response?.reasoning?.context
       // An omitted request uses a model default; only the terminal response
       // can tell us which reasoning history the service actually rendered.
+      // The terminal response says which model actually served the request, which a router may choose differently from the requested one.
+      const model = event.response?.model
+      servedModel = model === undefined ? 'absent' : typeof model === 'string' && SLUG.test(model) ? model : 'invalid'
+      const effort = event.response?.reasoning?.effort
+      servedReasoningEffort = effort === undefined ? 'absent' : EFFORTS.includes(effort) ? effort : 'invalid'
       reasoningContext = context === undefined ? 'absent' : ['current_turn', 'all_turns'].includes(context) ? context : 'invalid'
     },
     finish(outcome, httpStatus) {
       if (lifecycle.finished) return
       mark('finishedMs')
       lifecycle.finished = true
-      record({ event: 'result', id, startedAt, timing, transport: transportUsed, outcome: OUTCOMES.has(outcome) ? outcome : 'unknown', ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), terminal, usage, reasoningContext })
+      record({ event: 'result', id, startedAt, timing, transport: transportUsed, outcome: OUTCOMES.has(outcome) ? outcome : 'unknown', ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), terminal, usage, reasoningContext, servedModel, servedReasoningEffort })
     },
   }
 }
@@ -190,7 +199,7 @@ export function createCacheDiagnostics({ directory, write, onStop = notifyStop, 
         if (series.size > CACHE_DIAGNOSTICS_LIMITS.series) series.delete(series.keys().next().value)
       }
       const effort = payload.reasoning?.effort
-      const reasoningEffort = effort === undefined ? 'absent' : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) ? effort : 'invalid'
+      const reasoningEffort = effort === undefined ? 'absent' : EFFORTS.includes(effort) ? effort : 'invalid'
       const tier = payload.service_tier
       const serviceTier = tier === undefined ? 'absent' : ['auto', 'default', 'flex', 'priority'].includes(tier) ? tier : 'invalid'
       const context = payload.reasoning?.context

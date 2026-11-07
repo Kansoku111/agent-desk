@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pass the selected Codex reasoning level to a new conversation itself, not only to each turn, so GPT `max`/`xhigh`/`high` no longer run lighter than the label (and than DSH or the Codex CLI at the same level). New conversations at higher levels now take longer and use more tokens; lower the level to keep the old cost. Existing conversations keep the level they were created with (resuming ignores the setting), and changing the level inside one conversation still applies only weakly.
+
 ## [0.1.11] - 2026-11-06
 
 ### Added
