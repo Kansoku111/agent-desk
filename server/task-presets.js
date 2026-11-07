@@ -18,9 +18,9 @@ const recordingWarning = (run) => run.snapshotUnavailable
   ? 'フォルダー全体の変更確認・差分保存は上限のため省略します。担当自身の成果物と確認結果を参照してください。理由: ' + run.snapshotUnavailable
   : run.diffUnavailable ? 'フォルダー全体の差分保存は上限のため省略します。変更がないことを意味しません。理由: ' + run.diffUnavailable : ''
 export class TaskPresets extends EventEmitter {
-  constructor({ dir, threads, terminals, agents, teams, catalog, settings, validateModel, authorize, mcpServers = () => [], instructions = () => '', writers = () => [], snapshot = sourceSnapshot }) {
+  constructor({ dir, threads, terminals, codex, agents, teams, catalog, settings, validateModel, authorize, mcpServers = () => [], instructions = () => '', writers = () => [], snapshot = sourceSnapshot }) {
     super()
-    Object.assign(this, { dir, threads, terminals, agents, teams, catalog, settings, validateModel, authorize, mcpServers, instructions, writers, snapshot })
+    Object.assign(this, { dir, threads, terminals, codex, agents, teams, catalog, settings, validateModel, authorize, mcpServers, instructions, writers, snapshot })
     this.runs = new Map()
     this.held = new Set()
     this.pending = new Map()
@@ -49,6 +49,10 @@ export class TaskPresets extends EventEmitter {
         if (['Stop', 'StopFailure'].includes(input.hook_event_name)) this.enqueue(run, () => this.parentFinished(run, input.hook_event_name === 'StopFailure'))
       }
     })
+    codex?.on('finished', (event) => {
+      for (const run of this.runs.values()) if (run.source.kind === 'codex' && run.source.id === event.id && run.phase === 'preparing') this.enqueue(run, () => this.parentFinished(run, event.status !== 'done' || event.denials?.length > 0))
+    })
+    codex?.on('removed', ({ id }) => this.sourceRemoved({ kind: 'codex', id }))
     agents.on('finished', (event) => {
       const run = [...this.runs.values()].find((entry) => entry.worker?.kind === 'claude' && entry.worker.id === event.id && entry.phase === 'running')
       if (run) this.enqueue(run, () => this.workerFinished(run, event))
@@ -93,10 +97,10 @@ export class TaskPresets extends EventEmitter {
   }
   assertLive(run) { if (this.closing || run.cancelled || !PRESET_ACTIVE.has(run.phase)) throw new Error('委託は停止されました') }
   async source(source, idle = false) {
-    if (!source || !['thread', 'terminal'].includes(source.kind) || typeof source.id !== 'string') throw new Error('元タスクが不正です')
-    const record = source.kind === 'thread' ? (await this.threads.get(source.id)).thread : this.terminals.list().find((entry) => entry.id === source.id)
+    if (!source || !['thread', 'terminal', 'codex'].includes(source.kind) || typeof source.id !== 'string') throw new Error('元タスクが不正です')
+    const record = source.kind === 'thread' ? (await this.threads.get(source.id)).thread : source.kind === 'codex' ? this.codex?.get(source.id) : this.terminals.list().find((entry) => entry.id === source.id)
     if (!record || record.ab || record.team || record.preset || this.teams.teamLedBy(source.id)) throw new Error('通常タスクからのみ使えます')
-    if (idle && (source.kind === 'thread' ? record.status === 'running' || record.pendingApproval : record.state !== 'running' || record.activity !== 'idle' || record.background > 0 || !this.terminals.status(source.id)?.ready || this.terminals.live?.get(source.id)?.sessionAt === null)) throw new Error('元タスクと裏の作業が待機中になってから開始してください')
+    if (idle && (source.kind === 'thread' ? record.status === 'running' || record.pendingApproval : source.kind === 'codex' ? record.state !== 'idle' || record.pendingApproval || this.codex.configuring.has(source.id) : record.state !== 'running' || record.activity !== 'idle' || record.background > 0 || !this.terminals.status(source.id)?.ready || this.terminals.live?.get(source.id)?.sessionAt === null)) throw new Error('元タスクと裏の作業が待機中になってから開始してください')
     return record
   }
   async inspect(source) {
@@ -112,7 +116,7 @@ export class TaskPresets extends EventEmitter {
       if (context?.presetRunId === run.id && (ownWorker && run.phase === 'running' || ownParent)) continue
       // Independent ordinary conversations may run alongside a preset; restores remain guarded.
       const ordinary = !record.team && !record.ab && !record.preset && !this.teams.teamLedBy?.(record.id) &&
-        (this.threads.threads.get(record.id) === record || this.terminals.records?.get(record.id) === record)
+        (this.threads.threads.get(record.id) === record || this.terminals.records?.get(record.id) === record || this.codex?.records.get(record.id) === record)
       if (context?.operation !== 'restore' && run.source.id !== record.id && !ownWorker && (ordinary || record.permissionMode === 'read-only')) continue
       throw new Error(PRESET_LABEL[run.kind] + 'が実行中です（' + run.title + ' / ' + run.id + ' / ' + run.workspace + '）')
     }
@@ -166,23 +170,24 @@ export class TaskPresets extends EventEmitter {
     if (kind === 'review') {
       // The parent's brief decides what is reviewed, so there is no scope to validate. Independence only means
       // not reusing a model that already worked on this task: the source itself or one of its delegates.
-      const worked = [record.model, source.kind === 'terminal' ? 'claude:' + record.model : null, ...[...this.runs.values()].filter((run) => sourceKey(run.source) === sourceKey(source) && run.kind === 'delegate' && run.phase === 'completed').map((run) => run.model)]
+      const worked = [record.model, source.kind === 'terminal' ? 'claude:' + record.model : null, source.kind === 'codex' ? JSON.stringify(['openai-codex', record.model]) : null, ...[...this.runs.values()].filter((run) => sourceKey(run.source) === sourceKey(source) && run.kind === 'delegate' && run.phase === 'completed').map((run) => run.model)]
       if (worked.includes(config.model)) throw new Error('独立レビューには実装とは別のモデルを選択してください')
     }
     if (!Array.isArray(checkIds) || checkIds.length > 30 || typeof command !== 'string' || command.length > 4000) throw new Error('検証の選択が不正です')
     const checks = normalizeChecks([...checkIds.map((id) => { const check = details.checks.find((entry) => entry.id === id); if (!check) throw new Error('検証IDが見つかりません'); return { ...check, autoRepair: true } }), ...(command.trim() ? [{ id: 'preset-check', command: command.trim(), cwd: '.', timeoutMs: 300000, autoRepair: true }] : [])])
     await this.authorize({ workspace: record.workspace, model: config.model, authConfirmation })
-    await this.source(source, true)
+    const currentSource = await this.source(source, true)
+    if (source.kind === 'codex' && (currentSource.model !== record.model || currentSource.sessionId !== record.sessionId || currentSource.workspace !== record.workspace)) throw new Error('元のGPタスクが変更されました。確認してから開始してください。')
     this.room(record.workspace)
     const now = Date.now()
     const run = { id: randomUUID(), requestId, fingerprint, source: { ...source }, sourceSession: record.sessionId, sourceModel: record.modelInUse ?? record.model, kind, title: record.title, workspace: record.workspace, model: config.model, effort, permissionMode: config.model.startsWith('claude:') ? 'danger-full-access' : reviewMode === 'opinion' ? 'read-only' : permissionMode, browser, instruction, checks, ...(reviewMode ? { reviewMode } : {}), phase: 'preparing', createdAt: now, updatedAt: now, report: '', sourceGone: false }
     // Reserve before any filesystem/model await; completion never releases the parent's goal gate.
     this.runs.set(run.id, run)
-    this.held.add(sourceKey(source))
+    if (source.kind !== 'codex') this.held.add(sourceKey(source))
     run.preparePrompt = preparePresetPrompt(run)
     await this.save(run)
     try {
-      const conversation = source.kind === 'thread' ? await this.threads.get(source.id) : await this.terminals.conversation(source.id)
+      const conversation = source.kind === 'thread' ? await this.threads.get(source.id) : source.kind === 'codex' ? { turns: this.codex.turns(source.id) } : await this.terminals.conversation(source.id)
       run.parentTurnIds = conversation.turns.map((turn) => turn.id)
       try { await this.snapshot(run.workspace, run.checks.length ? undefined : { timeoutMs: 10_000 }) }
       catch (error) {
@@ -198,6 +203,9 @@ export class TaskPresets extends EventEmitter {
       if (source.kind === 'thread') {
         const receipt = await this.threads.send(source.id, { text: run.preparePrompt, messageId: run.id }, { presetRunId: run.id })
         run.parentTurnId = receipt.turnId
+      } else if (source.kind === 'codex') {
+        this.codex.run(source.id, run.preparePrompt, { presetRunId: run.id })
+        run.parentTurnId = this.codex.turns(source.id).at(-1).id
       } else await this.terminals.sendMessage(source.id, run.preparePrompt, { presetRunId: run.id })
       await this.save(run)
     } catch (error) { if (!run.cancelled) { run.phase = 'needs-attention'; run.error = error.message; await this.save(run) } }
@@ -222,8 +230,8 @@ export class TaskPresets extends EventEmitter {
     for (const delay of [0, 100, 400, 1000]) {
       if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
       this.assertLive(run)
-      const { turns } = run.source.kind === 'thread' ? await this.threads.get(run.source.id) : await this.terminals.conversation(run.source.id)
-      const matches = turns.filter((entry) => !run.parentTurnIds.includes(entry.id) && (run.source.kind === 'thread' ? entry.user?.messageId === run.id : matchesPresetPrompt(entry.user?.text, run.preparePrompt)))
+      const { turns } = run.source.kind === 'thread' ? await this.threads.get(run.source.id) : run.source.kind === 'codex' ? { turns: this.codex.turns(run.source.id) } : await this.terminals.conversation(run.source.id)
+      const matches = turns.filter((entry) => !run.parentTurnIds.includes(entry.id) && (run.source.kind === 'thread' ? entry.user?.messageId === run.id : run.source.kind === 'codex' ? entry.id === run.parentTurnId && entry.user?.text === run.preparePrompt : matchesPresetPrompt(entry.user?.text, run.preparePrompt)))
       if (matches.length === 1 && turns.at(-1)?.id === matches[0].id && matches[0].status !== 'running') { turn = matches[0]; break }
     }
     if (failed || !turn || turn.status !== 'done' || run.source.kind === 'terminal' && !run.submitted) throw new Error('対応する親の正常な最終回答を確認できません。自動起動しません。')
@@ -397,6 +405,7 @@ export class TaskPresets extends EventEmitter {
     if (run.worker?.kind === 'claude') { const exited = this.agents.live.get(run.worker.id)?.exited; this.agents.stop(run.worker.id); await exited }
     if (preparing) {
       if (run.source.kind === 'thread') await stopThread(run.source.id)
+      else if (run.source.kind === 'codex') await this.codex.stop(run.source.id)
       else this.terminals.interrupt(run.source.id, null)
     }
     await this.pending.get(id)
@@ -468,7 +477,7 @@ export class TaskPresets extends EventEmitter {
       const source = await this.source(run.source, true)
       if (automatic && run.sourceSession && source.sessionId !== run.sourceSession) throw new Error('元セッションが変更されました。結果を確認してください。')
       this.room(run.workspace)
-      if (run.deliveryAttempted && run.source.kind === 'terminal') throw new Error('前回の送信状態が不明です。元の会話を確認してください。自動では再送しません。')
+      if (run.deliveryAttempted && ['terminal', 'codex'].includes(run.source.kind)) throw new Error('前回の送信状態が不明です。元の会話を確認してください。自動では再送しません。')
       run.deliveryAttempted = true
       run.deliveryMessageId ??= randomUUID()
       await this.save(run)
@@ -477,7 +486,10 @@ export class TaskPresets extends EventEmitter {
       const limit = run.reviewMode === 'opinion' ? 12000 : 5000
       const text = '[Agent Desk: ' + PRESET_LABEL[run.kind] + 'の結果 / ' + run.id + ']\n状態: ' + run.phase + '\n検証: ' + (run.verification?.status ?? '未実行') + (run.warning ? '\n注意: ' + run.warning : '') + '\n' + report.slice(0, limit) + (report.length > limit ? '\n（報告を省略。全文は資料を参照）' : '') + '\n未完了: ' + (run.error || run.result?.remaining || 'なし') + '\n資料: ' + (run.record ?? '担当開始前') + (run.patch ? '\n修正差分: ' + run.patch : '') + (run.reviewMode === 'opinion' ? '\nこれは別担当の意見です。会話の文脈に沿って検討し、利用者の明示的な依頼なく実装・修正を始めないでください。' : '\nこれは担当の報告です。未検証事項を成功とみなさず、必要に応じて確認してください。')
       if (run.source.kind === 'thread') await this.threads.send(run.source.id, { text, messageId: run.deliveryMessageId }, { userInitiated: !automatic })
-      else await this.terminals.sendMessage(run.source.id, text)
+      else if (run.source.kind === 'codex') {
+        this.codex.run(run.source.id, text)
+        await this.codex.waitForStart(run.source.id)
+      } else await this.terminals.sendMessage(run.source.id, text)
       run.deliveredAt = Date.now()
       delete run.deliveryError
       await this.save(run)

@@ -37,6 +37,7 @@ export class CodexRunner extends EventEmitter {
     this.records = new Map()
     this.writers = new Map()
     this.live = new Map()
+    this.configuring = new Set()
     this.sessions = new Map()
     this.permissions = new Map()
     this.modelCache = []
@@ -166,32 +167,40 @@ export class CodexRunner extends EventEmitter {
   async configure(id, patch) { return this.update(id, patch) }
   async update(id, patch) {
     const record = this.#record(id)
-    if (this.running(id) && ['model', 'effort', 'permissionMode', 'instructions', 'mcpServers'].some(key => patch[key] !== undefined)) throw new Error('作業が終わってから設定を変更してください')
-    const next = { ...record }
-    if (patch.permissionMode !== undefined) {
-      if (!MODES.includes(patch.permissionMode)) throw new Error('権限モードが不正です')
-      next.permissionMode = patch.permissionMode
+    const configChange = ['model', 'effort', 'permissionMode', 'instructions', 'mcpServers'].some(key => patch[key] !== undefined)
+    if (configChange) {
+      if (this.running(id) || this.configuring.has(id)) throw new Error('作業が終わってから設定を変更してください')
+      this.executionGuard?.(record)
+      this.configuring.add(id)
     }
-    if (patch.model !== undefined || patch.effort !== undefined) {
-      const selection = await this.#selection(patch.model ?? record.model, patch.effort ?? record.effort)
-      if (record.sessionId && (!record.accountKey || selection.accountKey !== record.accountKey)) throw new Error('Codex のサインイン先が変わったか照合できません。新しいタスクを作成してください。')
-      Object.assign(next, selection)
-    }
-    if (patch.title !== undefined) { if (typeof patch.title !== 'string' || !patch.title.trim()) throw new Error('タイトルが空です'); next.title = clip(patch.title.trim(), 200) }
-    for (const key of ['archived', 'pinned']) if (patch[key] !== undefined) { if (typeof patch[key] !== 'boolean') throw new Error('設定の形式が不正です'); next[key] = patch[key] }
-    for (const key of ['instructions', 'mcpServers', 'team', 'permissionPolicy']) if (patch[key] !== undefined) next[key] = patch[key]
-    next.updatedAt = this.now()
-    await this.#save(next, true)
-    this.records.set(id, next)
-    this.#emit(next)
-    return this.summary(next)
+    try {
+      const next = { ...record }
+      if (patch.permissionMode !== undefined) {
+        if (!MODES.includes(patch.permissionMode)) throw new Error('権限モードが不正です')
+        next.permissionMode = patch.permissionMode
+      }
+      if (patch.model !== undefined || patch.effort !== undefined) {
+        const selection = await this.#selection(patch.model ?? record.model, patch.effort ?? record.effort)
+        if (record.sessionId && (!record.accountKey || selection.accountKey !== record.accountKey)) throw new Error('Codex のサインイン先が変わったか照合できません。新しいタスクを作成してください。')
+        Object.assign(next, selection)
+      }
+      if (patch.title !== undefined) { if (typeof patch.title !== 'string' || !patch.title.trim()) throw new Error('タイトルが空です'); next.title = clip(patch.title.trim(), 200) }
+      for (const key of ['archived', 'pinned']) if (patch[key] !== undefined) { if (typeof patch[key] !== 'boolean') throw new Error('設定の形式が不正です'); next[key] = patch[key] }
+      for (const key of ['instructions', 'mcpServers', 'team', 'permissionPolicy']) if (patch[key] !== undefined) next[key] = patch[key]
+      next.updatedAt = this.now()
+      await this.#save(next, true)
+      this.records.set(id, next)
+      this.#emit(next)
+      return this.summary(next)
+    } finally { if (configChange) this.configuring.delete(id) }
   }
 
-  run(id, text, { images = [] } = {}) {
+  run(id, text, { images = [], presetRunId } = {}) {
     const record = this.#record(id)
     if (this.closing) throw new Error('アプリを終了しています')
     if (this.running(id)) throw new Error('作業中です。追加指示として送ってください')
-    this.executionGuard?.(record)
+    if (this.configuring.has(id)) throw new Error('設定の変更が終わってから送信してください')
+    this.executionGuard?.(record, { presetRunId })
     if (typeof text !== 'string' || (!text.trim() && !images.length)) throw new Error('メッセージが空です')
     const turn = { id: randomUUID(), startedAt: this.now(), endedAt: null, status: 'running', stopReason: null, error: null, user: { text, images }, items: [] }
     const live = { turn, turnId: null, startAcknowledged: false, earlyCompletion: null, ended: false, stopping: false, ready: deferred(), done: deferred(), denials: [], baseline: record.tokenTotal, baselineKnown: record.turns.length === 0 || record.tokenTotal !== null, usage: null }

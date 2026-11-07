@@ -14,6 +14,9 @@ test('GP model frames update the shared catalog and task drafts use IME-safe key
   assert.match(view, /getDraft\(draftKey\)/)
   assert.match(view, /ime\.confirm\(\)/)
   assert.match(app, /<CodexView key=\{route\.id\}/)
+  assert.match(view, /<OpenInMenu workspace=\{task\.workspace\} task=\{!task\.team && !team && !task\.ab/)
+  assert.match(view, /<TaskPresetToggle source=\{\{ kind: 'codex', id: taskId \}\}/)
+  assert.match(view, /<TaskPresetRuns source=\{\{ kind: 'codex', id: taskId \}\}/)
 })
 
 test('GP tasks are mixed with other tasks, pinned first and searchable', () => {

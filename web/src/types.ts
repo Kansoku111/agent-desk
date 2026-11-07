@@ -28,7 +28,7 @@ export interface AbRun {
   messages: (string | { text: string; images?: ImageRef[]; afterJobId?: string })[]; createdAt: number; updatedAt: number
 }
 
-export interface TaskPresetSource { kind: 'thread' | 'terminal'; id: string }
+export interface TaskPresetSource { kind: 'thread' | 'terminal' | 'codex'; id: string }
 export type TaskPresetKind = 'delegate' | 'review'
 export interface TaskPresetRun {
   id: string; source: TaskPresetSource; sourceGone?: boolean; kind: TaskPresetKind; title: string; workspace: string

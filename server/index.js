@@ -571,7 +571,7 @@ const presetAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'task-p
 presetAgents.on('turn', ({ id, turn }) => broadcast('agentTurn', { id, turn }))
 presetAgents.on('turn-speed', ({ id, turnId, speed }) => broadcast('agentTurnSpeed', { id, turnId, speed }))
 const presets = await new TaskPresets({
-  dir: path.join(paths.home, 'task-presets'), threads, terminals, agents: presetAgents, teams,
+  dir: path.join(paths.home, 'task-presets'), threads, terminals, codex, agents: presetAgents, teams,
   catalog: () => catalogState(), settings: getSettings, mcpServers: mcpServersFor,
   instructions: () => effectiveCustomInstructions(settings),
   writers: () => ab.list().flatMap((run) => run.jobs.filter((job) => job.writable && ['running', 'stopping'].includes(job.status)).map(() => ({ title: run.title, workspace: run.workspace }))),

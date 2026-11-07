@@ -14,8 +14,9 @@ const runs = [
   { id: 'one', source: { kind: 'thread', id: 'parent' }, kind: 'delegate', title: '依頼', model, effort: 'low', phase: 'running' },
   { id: 'two', source: { kind: 'thread', id: 'parent' }, kind: 'review', title: 'レビュー', model: 'claude:haiku', effort: 'low', phase: 'completed' },
   { id: 'other', source: { kind: 'terminal', id: 'parent' }, kind: 'review', title: '別タスク', model, effort: '', phase: 'stopped' },
+  { id: 'gp-run', source: { kind: 'codex', id: 'gp-parent' }, kind: 'delegate', title: 'GPの依頼', model, effort: 'low', phase: 'running' },
 ]
-const server = { taskPresets: runs, threads: [{ id: 'parent', title: '元の会話' }], terminals: [], catalog: { providers: { 'openai-codex': 'ChatGPT' }, models: [{ value: model, name: '実装モデル' }] } }
+const server = { taskPresets: runs, threads: [{ id: 'parent', title: '元の会話' }], terminals: [], codexTasks: [{ id: 'gp-parent', title: 'GPの会話' }], catalog: { providers: { 'openai-codex': 'ChatGPT' }, models: [{ value: model, name: '実装モデル' }] } }
 let state
 const source = await fs.readFile(new URL('../web/src/components/TaskPresets.tsx', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
@@ -41,6 +42,12 @@ test('preset panel shows the parent and each worker, and opens the worker view',
   const terminal = result.TaskPresetRuns({ source: { kind: 'terminal', id: 'parent' }, onClose() {} })
   assert.match(text(terminal), /別タスク/)
   assert.doesNotMatch(text(terminal), /レビュー完了/)
+  const gp = result.TaskPresetRuns({ source: { kind: 'codex', id: 'gp-parent' }, onClose() {} })
+  const gpCards = nodes(gp, node => node.type === 'button' && node.props.className?.includes('subagent-card'))
+  assert.match(text(gpCards[0]), /親.*GPの会話/)
+  assert.match(text(gpCards[1]), /子に委託.*GPの依頼/)
+  gpCards[0].props.onClick()
+  assert.deepEqual(state, { view: 'codex', id: 'gp-parent' })
 })
 
 test('preset panel toggle is hidden without runs and closes via backdrop', () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, FolderOpen, Loader2, PanelLeftOpen, Paperclip, Square, X } from 'lucide-react'
-import { act, isImageAttachment, isTouch, loadCodexPermissions, request, setState, toast, uploadAttachment, upsertCodexTask, useStore } from '../store'
+import { act, isImageAttachment, isNarrow, isTouch, loadCodexPermissions, request, setState, toast, uploadAttachment, upsertCodexTask, useStore } from '../store'
 import type { Attachment, CodexTaskSummary } from '../types'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import { workspaceLabel } from '../util'
@@ -8,6 +8,7 @@ import { TurnView } from './TurnView'
 import { CodexModelPicker } from './CodexModelPicker'
 import { OpenInMenu } from './ThreadView'
 import { TeamPanel, TeamToggle } from './TeamPanel'
+import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
 import { useConversationScroll } from './useConversationScroll'
 
 export function CodexView({ taskId }: { taskId: string }) {
@@ -25,6 +26,7 @@ export function CodexView({ taskId }: { taskId: string }) {
   const ime = useImeField()
   const [images, setImages] = useState<Attachment[]>([])
   const [busy, setBusy] = useState(false)
+  const [presetOpen, setPresetOpen] = useState(() => !isNarrow())
   const [uploading, setUploading] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const { scroller, stick, showJump, onScroll } = useConversationScroll(taskId, Boolean(task), turns)
@@ -66,8 +68,9 @@ export function CodexView({ taskId }: { taskId: string }) {
       <span className="header-chip" title={task.workspace}><FolderOpen size={13} />{workspaceLabel(task.workspace, myPc, names)}</span>
     </div><div className="header-right">
       {team && <TeamToggle team={team} />}
+      <TaskPresetToggle source={{ kind: 'codex', id: taskId }} open={presetOpen} onToggle={() => setPresetOpen((open) => !open)} />
       {working && <button type="button" className="button ghost" onClick={() => void (teamChild ? act('team.stopChild', { teamId: team!.id, childId: teamChild.id }) : act('codex.task.stop', { taskId }))}><Square size={13} /> 停止</button>}
-      <OpenInMenu workspace={task.workspace} />
+      <OpenInMenu workspace={task.workspace} task={!task.team && !team && !task.ab ? { kind: 'codex', id: taskId } : undefined} />
     </div></header>
     <div className="thread-body"><div className="thread-main"><div className="terminal-chat">
       <div className="scroller" ref={scroller} onScroll={onScroll}><div className="column">
@@ -90,6 +93,6 @@ export function CodexView({ taskId }: { taskId: string }) {
         <CodexModelPicker task={task} models={choices} disabled={working || Boolean(task.team || team || task.ab)} onChange={update} />
         <select aria-label="権限" value={task.permissionMode} disabled={working || Boolean(task.team || team || task.ab)} onChange={(event) => void update({ permissionMode: event.target.value as CodexTaskSummary['permissionMode'] })}><option value="read-only">読み取りのみ</option><option value="workspace-write">ワークスペース編集</option><option value="danger-full-access">フルアクセス</option></select>
       </div><div className="composer-right"><button type="button" className="send-button" title={working ? '追加指示を送信' : '送信'} aria-label={working ? '追加指示を送信' : '送信'} disabled={busy || uploading || (!text.trim() && !images.length)} onPointerDown={(event) => { event.preventDefault(); ime.confirm() }} onClick={() => void send()}><ArrowUp size={17} /></button></div></div>
-    </div></div>{team && teamPanel && <TeamPanel team={team} />}</div>
+    </div></div>{team && teamPanel && <TeamPanel team={team} />}{presetOpen && <TaskPresetRuns source={{ kind: 'codex', id: taskId }} onClose={() => setPresetOpen(false)} />}</div>
   </div>
 }

@@ -228,7 +228,7 @@ export function TaskPresetRuns({ source, onClose }: { source: TaskPresetSource; 
   const route = useStore((state) => state.route)
   const runs = usePresetRuns(source)
   if (!server || !runs.length) return null
-  const parent = source.kind === 'thread' ? server.threads.find((entry) => entry.id === source.id) : server.terminals.find((entry) => entry.id === source.id)
+  const parent = source.kind === 'thread' ? server.threads.find((entry) => entry.id === source.id) : source.kind === 'codex' ? server.codexTasks.find((entry) => entry.id === source.id) : server.terminals.find((entry) => entry.id === source.id)
   const here = (view: string, id: string) => route.view === view && 'id' in route && route.id === id ? 'page' as const : undefined
   return <>
     <div className="subagent-backdrop" aria-hidden="true" onClick={onClose} />
