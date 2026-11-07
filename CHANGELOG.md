@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated the bundled Codex app-server (`@openai/codex`) from 0.166.0 to 0.167.0.
 - Tell PTC agents to batch the reads, the write that depends on them and the check into one `run_code`. On one of two small test tasks this halved `run_code` calls and cut time and cost by about 30%; the other changed little.
 
 ## [0.1.11] - 2026-11-06
