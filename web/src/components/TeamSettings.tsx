@@ -488,7 +488,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
 
 /**
  * A running team's own settings (from its panel): the children's providers
- * and tiers and how many may be open. Who leads stays as it started.
+ * and tiers, how many may be open, and PTC. Who leads stays as it started.
  */
 export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose: () => void }) {
   const server = useStore((state) => state.server)
@@ -511,10 +511,11 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const teamTarget = team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? usageFallbackChoice(team.usageFallbackRoutes, currentLeader) : null
   const teamFallback = teamTarget?.model ?? (team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? '' : draft.leaderFallback ?? '')
   const teamFallbackEffort = teamTarget?.effort ?? (team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? '' : draft.fallbackEffort ?? '')
+  const toolModeBlocked = team.toolModeBusy && draft.toolMode !== team.config?.toolMode
   const save = async () => {
-    if (needsAuth && !auth.ready) return
+    if (toolModeBlocked || (needsAuth && !auth.ready)) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, openscale: draft.openscale, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, openscale: draft.openscale, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren, toolMode: draft.toolMode } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
@@ -529,6 +530,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
         </p>
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
+          <PtcToggle mode={draft.toolMode} disabled={saving || team.toolModeBusy} onChange={(toolMode) => change({ toolMode })} />
         </section>
         <ChildModels server={server} config={draft} onChange={change} />
         {team.leaderKind === 'codex' ? <p className="muted">Codexリーダーのフォールバックには対応していません。</p>
@@ -540,7 +542,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={onClose}>キャンセル</button>
-        <button type="button" className="button primary" disabled={saving || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
+        <button type="button" className="button primary" disabled={saving || toolModeBlocked || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
       </div>
     </Modal>
   )
