@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { getState, isNarrow, setState } from './store'
 
 // A swipe right opens the sidebar on a phone, a swipe left closes it.
+// A swipe right on the right-hand panel (team, subagents) closes the panel instead.
 const MIN_DISTANCE = 64
 // Sideways travel must dominate: a diagonal drag is a scroll.
 const MAX_SLOPE = 0.5
@@ -27,7 +28,7 @@ function dialogOpen() {
 
 export function useSidebarSwipe() {
   useEffect(() => {
-    let start: { x: number; y: number; time: number; can: ReturnType<typeof panning> } | null = null
+    let start: { x: number; y: number; time: number; can: ReturnType<typeof panning>; inPanel: boolean } | null = null
 
     const onStart = (event: TouchEvent) => {
       start = null
@@ -38,7 +39,8 @@ export function useSidebarSwipe() {
       // Dragging in a text field moves the caret or selects.
       if (target instanceof Element && target.closest('input, textarea, [contenteditable="true"]')) return
       const touch = event.touches[0]
-      start = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, can: panning(target) }
+      const inPanel = target instanceof Element && target.closest('.subagent-panel') !== null
+      start = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, can: panning(target), inPanel }
     }
     const onEnd = (event: TouchEvent) => {
       const from = start
@@ -48,6 +50,11 @@ export function useSidebarSwipe() {
       const dx = touch.clientX - from.x
       const dy = touch.clientY - from.y
       if (Math.abs(dx) < MIN_DISTANCE || Math.abs(dy) > Math.abs(dx) * MAX_SLOPE || event.timeStamp - from.time > MAX_DURATION) return
+      // A right-hand panel slides back out to the right; each panel wires its own close to its backdrop.
+      if (dx > 0 && from.inPanel) {
+        if (!from.can.fingerRight) document.querySelector<HTMLElement>('.subagent-backdrop')?.click()
+        return
+      }
       const open = getState().sidebarOpen
       if (dx > 0 && !open && !from.can.fingerRight) setState({ sidebarOpen: true })
       else if (dx < 0 && open && !from.can.fingerLeft) setState({ sidebarOpen: false })
