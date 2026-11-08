@@ -2,7 +2,8 @@ import { useEffect } from 'react'
 import { getState, isNarrow, setState } from './store'
 
 // A swipe right opens the sidebar on a phone, a swipe left closes it.
-// A swipe right on the right-hand panel (team, subagents) closes the panel instead.
+// A swipe right on the right-hand panel (team, subagents) closes the panel instead,
+// and a swipe left with the sidebar closed opens the team panel.
 const MIN_DISTANCE = 64
 // Sideways travel must dominate: a diagonal drag is a scroll.
 const MAX_SLOPE = 0.5
@@ -58,6 +59,8 @@ export function useSidebarSwipe() {
       const open = getState().sidebarOpen
       if (dx > 0 && !open && !from.can.fingerRight) setState({ sidebarOpen: true })
       else if (dx < 0 && open && !from.can.fingerLeft) setState({ sidebarOpen: false })
+      // With the sidebar closed, a swipe left brings in the team panel of a leader or child, when the view has one.
+      else if (dx < 0 && !open && !from.can.fingerLeft) document.querySelector<HTMLElement>('.team-toggle[aria-pressed="false"]')?.click()
     }
     const cancel = () => {
       start = null
