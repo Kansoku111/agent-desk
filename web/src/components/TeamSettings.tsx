@@ -368,6 +368,29 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
   )
 }
 
+/** A running team's leader: Claude Code or a dsh model (Codex leaders are not switched). */
+function TeamLeaderField({ server, value, effort, disabled, onChange }: { server: AppState; value: string; effort: string; disabled: boolean; onChange: (model: string, effort: string) => void }) {
+  const groups = teamModelGroups(server).filter((group) => group.id !== 'codex')
+  if (!groups.some((group) => group.models.some((entry) => entry.value === value))) {
+    const name = value.startsWith('claude:') ? claudeModelName(server, value.slice(7) || null) ?? 'Claude Code の既定' : server.catalog.models.find((entry) => entry.value === value)?.name ?? value
+    groups.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name }] })
+  }
+  const efforts = (model: string) => {
+    if (model.startsWith('claude:')) return claudeEfforts(server, model.slice(7) || null)
+    const choice = pickerChoice(model)
+    return choice && choice.provider !== 'claude' ? dshEfforts(server, choice.model, choice.provider) : []
+  }
+  return (
+    <section className="account-card">
+      <div className="team-leader-picker">
+        <ModelField label="リーダー" value={value} groups={groups} disabled={disabled} effort={effort} efforts={efforts(value)} allowDefaultEffort allowClearUnavailableEffort
+          onChange={(next) => { if (next !== value) onChange(next, '') }}
+          onEffort={(next) => onChange(value, next || '')} />
+      </div>
+    </section>
+  )
+}
+
 function ChildCount({ config, onChange }: { config: Config; onChange: Change }) {
   return (
     <div className="setting compact">
@@ -487,8 +510,8 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
 }
 
 /**
- * A running team's own settings (from its panel): the children's providers
- * and tiers, how many may be open, and PTC. Who leads stays as it started.
+ * A running team's own settings (from its panel): its leader, the children's
+ * providers and tiers, how many may be open, and PTC.
  */
 export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose: () => void }) {
   const server = useStore((state) => state.server)
@@ -496,6 +519,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const [saving, setSaving] = useState(false)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const [authRevision, setAuthRevision] = useState(0)
+  const [leaderChoice, setLeaderChoice] = useState<{ model: string; effort: string } | null>(null)
   if (!server) return null
   if (!draft) {
     return (
@@ -505,9 +529,17 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
     )
   }
   const change: Change = (patch) => setDraft((current) => (current ? applyPatch(current, patch) : current))
-  const needsAuth = needsClaudeAuth(draft, team)
+  const leaderThread = team.leaderKind === 'thread' ? server.threads.find((entry) => entry.id === team.leaderId) : undefined
+  const leaderTerminal = team.leaderKind === 'terminal' ? server.terminals.find((entry) => entry.id === team.leaderId) : undefined
+  const currentLeader = team.leaderKind === 'thread' ? leaderThread?.model : 'claude:' + (leaderTerminal?.model ?? '')
+  const currentEffort = (team.leaderKind === 'thread' ? leaderThread?.effort : leaderTerminal?.effort) || ''
+  // Codex and eco leaders stay as they started (the server does not switch them).
+  const switchable = !team.execution && team.leaderKind !== 'codex' && Boolean(currentLeader)
+  const nextLeader = leaderChoice ?? { model: currentLeader ?? '', effort: currentEffort }
+  const leaderChanged = switchable && (nextLeader.model !== currentLeader || nextLeader.effort !== currentEffort)
+  const leaderToClaude = leaderChanged && nextLeader.model.startsWith('claude:')
+  const needsAuth = needsClaudeAuth(draft, team) || leaderToClaude
   const showAuth = needsAuth || team.children.some((child) => child.kind === 'agent' && child.state !== 'removed')
-  const currentLeader = team.leaderKind === 'thread' ? server.threads.find((entry) => entry.id === team.leaderId)?.model : 'claude:' + (server.terminals.find((entry) => entry.id === team.leaderId)?.model ?? '')
   const teamTarget = team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? usageFallbackChoice(team.usageFallbackRoutes, currentLeader) : null
   const teamFallback = teamTarget?.model ?? (team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? '' : draft.leaderFallback ?? '')
   const teamFallbackEffort = teamTarget?.effort ?? (team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? '' : draft.fallbackEffort ?? '')
@@ -515,7 +547,14 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const save = async () => {
     if (toolModeBlocked || (needsAuth && !auth.ready)) return
     setSaving(true)
-    const result = await act('team.update', { teamId: team.id, authConfirmation: showAuth && auth.ready ? auth.confirmation : undefined, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, openscale: draft.openscale, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren, toolMode: draft.toolMode } })
+    const confirmation = showAuth && auth.ready ? auth.confirmation : undefined
+    // A confirmation authorizes one action: the leader's Claude Code launch takes it when there is one.
+    if (leaderChanged && !(await act('team.changeLeader', { teamId: team.id, model: nextLeader.model, effort: nextLeader.effort, authConfirmation: leaderToClaude ? confirmation : undefined }))) {
+      setSaving(false)
+      if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
+      return
+    }
+    const result = await act('team.update', { teamId: team.id, authConfirmation: leaderToClaude ? undefined : confirmation, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, openscale: draft.openscale, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren, toolMode: draft.toolMode } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
@@ -525,8 +564,11 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   return (
     <Modal title="このチームの設定" onClose={onClose} width={620} className="team-start-modal">
       <div className="team-start-body">
+        {switchable && <TeamLeaderField server={server} value={nextLeader.model} effort={nextLeader.effort} disabled={saving}
+          onChange={(model, effort) => setLeaderChoice({ model, effort })} />}
+        {leaderChanged && nextLeader.model.startsWith('claude:') !== (team.leaderKind === 'terminal') && <p className="team-warning">実行方式が変わるため、会話は抜粋で引き継ぎます。リーダーが待機中のときだけ切り替えられます。</p>}
         <p className="muted">
-          リーダー（{leader}）はこのままです。子のモデルと数の変更は、次に起動する子から反映し、リーダーにも伝えます。動いている子はそのモデルのまま続けます。
+          {!switchable && `リーダー（${leader}）はこのままです。`}子のモデルと数の変更は、次に起動する子から反映し、リーダーにも伝えます。動いている子はそのモデルのまま続けます。
         </p>
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />

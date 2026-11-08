@@ -3536,6 +3536,78 @@ for (const mode of ['TM', 'eco']) for (const origin of ['thread', 'terminal']) f
   })
 }
 
+test('TM: the user switches a dsh leader to another dsh model on the same conversation', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  await f.threads.send(f.leader, { text: '元の依頼' })
+  f.threads.finish(f.leader, '完了')
+  const model = '["deepseek-official","deepseek-v4-flash"]'
+  const created = f.threads.calls.filter((c) => c[0] === 'create').length
+  const { team } = await f.manager.changeLeader(f.team.id, { model, effort: '' })
+  assert.equal(team.leaderId, f.leader)
+  assert.equal(f.threads.threads.get(f.leader).model, model)
+  assert.equal(f.threads.calls.filter((c) => c[0] === 'create').length, created)
+})
+
+test('TM: the user switches a Claude Code leader model on the same conversation', async (t) => {
+  const f = await setup(t)
+  const configured = []
+  f.terminals.configure = async (id, client, options) => { configured.push([id, client, options]) }
+  await f.manager.changeLeader(f.team.id, { model: 'claude:haiku', effort: 'low' })
+  assert.deepEqual(configured, [[f.leader, null, { model: 'haiku', effort: 'low' }]])
+  assert.equal(f.team.leaderId, f.leader)
+})
+
+for (const origin of ['thread', 'terminal']) {
+  test('TM: the user switches the leader from ' + origin + ' to another runtime with an excerpt', async (t) => {
+    const f = await setup(t, { leaderProvider: origin === 'thread' ? 'gpt' : 'claude' })
+    if (origin === 'thread') { await f.threads.send(f.leader, { text: '元の依頼' }); f.threads.finish(f.leader, '完了') }
+    const model = origin === 'thread' ? 'claude:sonnet' : '["anthropic","claude-haiku-5-5"]'
+    await f.manager.changeLeader(f.team.id, { model, effort: 'medium' })
+    assert.equal(f.team.leaderKind, origin === 'thread' ? 'terminal' : 'thread')
+    assert.notEqual(f.team.leaderId, f.leader)
+    assert.equal(f.team.leaderFallbackUsed, undefined)
+    assert.equal(f.team.leaderFallbackPending, undefined)
+    const sent = origin === 'thread' ? f.terminals.calls.findLast((c) => c[0] === 'type' && c[1] === f.team.leaderId) : f.threads.calls.findLast((c) => c[0] === 'send' && c[1] === f.team.leaderId)
+    assert.match(sent[2], origin === 'thread' ? /元の依頼/ : /途中の作業/)
+    assert.match(sent[2], /ユーザーがリーダーをあなたに切り替えました/)
+    assert.throws(() => f.manager.guardExecution({ id: f.leader, workspace: f.workspace, team: { id: f.team.id, role: 'leader' } }), /切り替え済み/)
+    if (origin === 'thread') assert.equal(f.terminals.records.get(f.team.leaderId).model, 'sonnet')
+    else assert.equal(f.threads.threads.get(f.team.leaderId).model, model)
+    // The next report goes to the new leader once it has read the excerpt.
+    if (origin === 'terminal') f.threads.finish(f.team.leaderId, '確認しました')
+    await f.tool('spawn', { title: 'a', task: 'x', tier: 'low', provider: 'gpt', name: 'G' })
+    f.threads.finish(f.team.children[0].taskId, '子の報告')
+    await tick()
+    if (origin === 'thread') f.terminals.set(f.team.leaderId, { activity: 'idle', ready: true })
+    await tick()
+    const delivered = origin === 'thread' ? f.terminals.calls.some((c) => c[0] === 'type' && c[1] === f.team.leaderId && /子の報告/.test(c[2])) : f.threads.calls.some((c) => c[0] === 'send' && c[1] === f.team.leaderId && /子の報告/.test(c[2]))
+    assert.equal(delivered, true)
+  })
+}
+
+test('TM: a leader asked nothing yet is switched without a carried-over message', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  await f.manager.changeLeader(f.team.id, { model: 'claude:', effort: '' })
+  assert.equal(f.team.leaderKind, 'terminal')
+  assert.equal(f.terminals.records.get(f.team.leaderId).model, null)
+  assert.equal(f.terminals.calls.some((c) => c[0] === 'type' && c[1] === f.team.leaderId), false)
+})
+
+test('TM: a working leader, Codex, eco and unknown models are not switched', async (t) => {
+  const f = await setup(t)
+  f.terminals.set(f.leader, { activity: 'running' })
+  await assert.rejects(f.manager.changeLeader(f.team.id, { model: '["anthropic","claude-haiku-5-5"]', effort: '' }), /作業中/)
+  assert.equal(f.team.leaderId, f.leader)
+  assert.equal(f.team.leaderKind, 'terminal')
+  assert.equal(f.team.leaderFallbackPending, undefined)
+  assert.equal(f.threads.threads.size, 0, 'the replacement is removed')
+  await assert.rejects(f.manager.changeLeader(f.team.id, { model: 'codex:gpt-6-luna' }), /Codex/)
+  await assert.rejects(f.manager.changeLeader(f.team.id, { model: '["openai-codex","unknown"]' }), /選び直して/)
+  await assert.rejects(f.manager.changeLeader(f.team.id, { model: 42 }), /不正/)
+  const eco = await setupExecution(t)
+  await assert.rejects(eco.manager.changeLeader(eco.team.id, { model: 'claude:haiku' }), /eco/)
+})
+
 test('eco permits fallback to Claude while its write child is working', async (t) => {
   const f = await setupExecution(t, {}, { leaderFallback: 'claude:sonnet', fallbackEffort: 'medium' })
   await f.tool('spawn', { ...exTask, mode: 'write' })

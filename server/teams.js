@@ -2098,6 +2098,52 @@ export class TeamManager extends EventEmitter {
     return { team: this.summary(team) }
   }
 
+  /**
+   * The user picked another leader in the team's panel. Within the same
+   * runtime the leader keeps its conversation, as the task screen's model
+   * picker does; another runtime gets a new leader given an excerpt, as a
+   * usage-limit fallback does. Codex and eco leaders are not switched here.
+   */
+  async changeLeader(teamId, { model, effort } = {}, authConfirmation) {
+    const team = this.teams.get(teamId)
+    if (!team) throw new Error('チームが見つかりません')
+    if (typeof model !== 'string' || model.length > 1000 || (effort != null && (typeof effort !== 'string' || effort.length > 100))) throw new Error('リーダーのモデルが不正です')
+    if (team.execution) throw new Error('ecoのリーダーは変更できません')
+    if (team.leaderKind === 'codex' || model.startsWith('codex:')) throw new Error('Codexのリーダーはまだ変更できません')
+    // 'claude:' is Claude Code's own default model.
+    if (model !== 'claude:') try { validateAbModel(model, this.catalog.data, this.modelVisibility()) } catch { throw new Error('リーダーのモデルを選び直してください') }
+    const levels = workflowLevels(this.catalog.data, model)
+    if (effort && levels && !levels.includes(effort)) throw new Error('リーダーの推論レベルを選び直してください')
+    if (this.fallingBack.has(team.id) || team.leaderFallbackPending) throw new Error('リーダーの切り替え中です')
+    if (this.delivering.has(team.id)) throw new Error('リーダーへ報告を渡している途中です。終わってから変更してください')
+    if (!team.sharedFallbackPolicy && !team.leaderFallbackUsed && this.config(team).leaderFallback === model) throw new Error('フォールバック先と同じモデルはリーダーにできません')
+    const toTerminal = model.startsWith('claude:')
+    if (toTerminal && authConfirmation) await this.#confirmAuth(team, authConfirmation, true, () => this.teams.get(teamId) === team)
+    const id = team.leaderId
+    if (team.leaderKind === (toTerminal ? 'terminal' : 'thread')) {
+      if (toTerminal) await this.terminals.configure(id, null, { model: model.slice(7) || null, effort: effort || null })
+      else await this.threads.update(id, { model, effort: effort ?? '' })
+    } else {
+      const version = team.stopVersion
+      const current = () => this.teams.get(team.id) === team && team.leaderId === id && team.stopVersion === version && !this.stopping && !this.threads.stopping
+      this.fallingBack.add(team.id)
+      try {
+        team.leaderFallbackPending = true
+        await this.#save({ required: true })
+        await this.#replaceLeader(team, id, current, version, { model, effort, manual: true })
+      } catch (error) {
+        delete team.leaderFallbackPending
+        void this.#save()
+        throw error
+      } finally {
+        this.fallingBack.delete(team.id)
+        if (!this.stopping) { this.#pump(team); this.#scheduleObserverOutbox(team, null) }
+      }
+    }
+    this.#emit(team)
+    return { team: this.summary(team) }
+  }
+
   /** Tries again to hand the leader a report it did not take. */
   retryDelivery(teamId) {
     const team = this.teams.get(teamId)
@@ -2615,7 +2661,7 @@ export class TeamManager extends EventEmitter {
     team.leaderFallbackPending = true
     await this.#save({ required: true })
     if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
-    if (oldKind === 'terminal' || config.leaderFallback.startsWith('claude:')) return this.#replaceLeader(team, id, turn, current, version)
+    if (oldKind === 'terminal' || config.leaderFallback.startsWith('claude:')) return this.#replaceLeader(team, id, current, version, { model: config.leaderFallback, effort: config.fallbackEffort })
     team.leaderFallbackUsed = true
     await this.#save({ required: true })
     if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
@@ -2628,14 +2674,16 @@ export class TeamManager extends EventEmitter {
     this.workingLeaders.delete(team.id)
     this.#emit(team)
   }
-  async #replaceLeader(team, id, turn, current, version) {
+  /** A new leader in another runtime, given an excerpt of the old one's conversation: after a usage limit, or when the user picks one (`manual`). */
+  async #replaceLeader(team, id, current, version, { model, effort, manual = false }) {
     const config = this.config(team)
     const oldKind = team.leaderKind
     const inputAt = oldKind === 'terminal' ? this.terminals.status(id)?.inputAt : null
-    const source = oldKind === 'thread' ? this.threads.turns.get(id) : (await this.terminals.conversation(id)).turns
-    if (!current() || !source?.length) throw new Error('会話を引き継げないため切り替えを中止しました')
-    const history = carryoverText(source).replace('the permission mode changed or the previous session could not be resumed', 'the leader model and runtime changed after a usage limit')
-    if (!history) throw new Error('会話を引き継げないため切り替えを中止しました')
+    const source = oldKind === 'thread' ? this.threads.turns.get(id) ?? (await this.threads.get(id)).turns : (await this.terminals.conversation(id)).turns
+    // Only a usage limit needs an interrupted turn to carry; a leader asked nothing yet is simply replaced.
+    if (!current() || (!manual && !source?.length)) throw new Error('会話を引き継げないため切り替えを中止しました')
+    const history = source?.length ? carryoverText(source).replace('the permission mode changed or the previous session could not be resumed', manual ? 'the user switched the leader to another model and runtime' : 'the leader model and runtime changed after a usage limit') : ''
+    if (!history && !manual) throw new Error('会話を引き継げないため切り替えを中止しました')
     this.retiringLeaders.add(id)
     let replacement
     let committed = false
@@ -2649,27 +2697,32 @@ export class TeamManager extends EventEmitter {
         await this.threads.suspendTeamLeader(id, () => { if (!current()) throw new Error('リーダーの状態が変わりました') })
       }
       if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
-      const toClaude = config.leaderFallback.startsWith('claude:')
+      const toClaude = model.startsWith('claude:')
       if (toClaude) {
-        replacement = await this.terminals.create({ workspace: team.workspace, team: { id: team.id, role: 'leader' }, model: config.leaderFallback.slice(7), effort: config.fallbackEffort || null, title: 'リーダー（切り替え後）' })
+        replacement = await this.terminals.create({ workspace: team.workspace, team: { id: team.id, role: 'leader' }, model: model.slice(7) || null, effort: effort || null, title: 'リーダー（切り替え後）' })
       } else {
-        replacement = await this.threads.create({ workspace: team.workspace, model: config.leaderFallback, effort: config.fallbackEffort, toolMode: config.toolMode,
+        replacement = await this.threads.create({ workspace: team.workspace, model, effort: effort ?? '', toolMode: config.toolMode,
           permissionMode: config.leaderBypass ? 'danger-full-access' : 'workspace-write', team: { id: team.id, role: 'leader', ...(team.execution?.strictEffort ? { strictEffort: true } : {}) } })
       }
       if (!current()) throw new Error('リーダーの状態が変わったため切り替えを中止しました')
       team.retiredLeaders = [...(team.retiredLeaders ?? []), { id, kind: oldKind }]
       team.leaderId = replacement.id
       team.leaderKind = toClaude ? 'terminal' : 'thread'
-      team.leaderFallbackUsed = true
+      // A new leader picked by the user settles a fallback that failed; the fallback itself stays unused.
+      if (manual) delete team.leaderFallbackError
+      else team.leaderFallbackUsed = true
       await this.#save({ required: true })
       committed = true
       this.#emit(team)
       if (oldKind === 'thread') await this.threads.update(id, { archived: true })
       else await this.terminals.update(id, { archived: true })
-      const prompt = history + '\n\n' + '[Agent Desk] 利用上限のためリーダーが切り替わりました。上記の会話は抜粋です。チームの状態を確認して途中の依頼を続けてください。変更済みファイルを確認し、実行済みまたは完了が不明な外部操作を繰り返さないでください。過去の画像は自動では引き継がれません。'
+      // The user may switch an idle leader whose work is done: it continues only what is unfinished.
+      const prompt = !history ? '' : history + '\n\n' + (manual
+        ? '[Agent Desk] ユーザーがリーダーをあなたに切り替えました。上記の会話は前のリーダーとの抜粋です。チームの状態を確認し、終わっていない依頼があれば続け、なければ次の報告や指示を待ってください。変更済みファイルを確認し、実行済みまたは完了が不明な外部操作を繰り返さないでください。過去の画像は自動では引き継がれません。'
+        : '[Agent Desk] 利用上限のためリーダーが切り替わりました。上記の会話は抜粋です。チームの状態を確認して途中の依頼を続けてください。変更済みファイルを確認し、実行済みまたは完了が不明な外部操作を繰り返さないでください。過去の画像は自動では引き継がれません。')
       if (this.teams.get(team.id) !== team || team.leaderId !== replacement.id || this.stopping || team.stopVersion !== version) throw new Error('切り替え中にチームが停止しました')
-      if (toClaude) await this.terminals.sendMessage(replacement.id, prompt)
-      else await this.threads.send(replacement.id, { text: prompt }, { guard: () => { if (this.teams.get(team.id) !== team || team.leaderId !== replacement.id || this.stopping || team.stopVersion !== version) throw new Error('切り替え中にチームが停止しました') } })
+      if (prompt && toClaude) await this.terminals.sendMessage(replacement.id, prompt)
+      else if (prompt) await this.threads.send(replacement.id, { text: prompt }, { guard: () => { if (this.teams.get(team.id) !== team || team.leaderId !== replacement.id || this.stopping || team.stopVersion !== version) throw new Error('切り替え中にチームが停止しました') } })
       delete team.leaderFallbackPending
       await this.#save({ required: true })
       this.workingLeaders.delete(team.id)
@@ -2679,10 +2732,10 @@ export class TeamManager extends EventEmitter {
         if (team.leaderId === replacement.id) {
           team.leaderId = id
           team.leaderKind = oldKind
-          delete team.leaderFallbackUsed
+          if (!manual) delete team.leaderFallbackUsed
           team.retiredLeaders = (team.retiredLeaders ?? []).filter((entry) => entry.id !== id)
         }
-        if (config.leaderFallback.startsWith('claude:')) await this.terminals.remove(replacement.id).catch(() => {})
+        if (model.startsWith('claude:')) await this.terminals.remove(replacement.id).catch(() => {})
         else await this.threads.remove(replacement.id).catch(() => {})
       }
       throw error

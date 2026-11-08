@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Pass optional JSON data to TypeScript PTC programs through `run_code.data` and `input.get()`, keeping literal source text out of the program compiler without changing tool permissions.
+- Switch a running TM team's leader from "このチームの設定": within the same runtime it keeps its conversation; between dsh and Claude Code an idle leader is replaced with a conversation excerpt, as a usage-limit fallback does. Codex and eco leaders are not switched.
 
 ### Fixed
 

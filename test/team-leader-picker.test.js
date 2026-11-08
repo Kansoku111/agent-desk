@@ -132,3 +132,38 @@ test('a previously selected but unavailable model remains visible without switch
   assert.ok(h.field().groups.flatMap((group) => group.models).some((entry) => entry.value === value && entry.name === 'old-model'))
   assert.equal(h.draft.leaderProvider, 'deepseek')
 })
+
+test('a running team switches its leader before saving the other settings', async () => {
+  const slots = []
+  let cursor = 0
+  const calls = []
+  const current = JSON.stringify(['openai-codex', 'gpt-6-luna'])
+  const config = teamConfig({ leaderProvider: 'gpt', gptLeader: { model: 'gpt-6-luna' }, gpt: { enabled: true } })
+  const team = { id: 'team', leaderId: 'leader', leaderKind: 'thread', children: [], config }
+  const app = { ...server, catalog: { ...server.catalog, providers: {} }, settings: { ...server.settings, agentTeams: config }, threads: [{ id: 'leader', model: current, effort: 'high' }], terminals: [] }
+  const confirmation = { challenge: 'c' }
+  const consent = function ClaudeAuthConsent() {}
+  const dependencies = { ...modules,
+    react: { useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], (value) => { slots[index] = typeof value === 'function' ? value(slots[index]) : value }] } },
+    '../store': { useStore: (select) => select({ server: app }), act: async (name, args) => { calls.push({ name, args }); return { ok: true } } },
+    '../team-auth-consent': { needsClaudeAuth: () => false },
+    './ClaudeAuthConsent': { ClaudeAuthConsent: consent },
+    '../../../shared/workflow-effort.js': workflowEffort,
+  }
+  const exports = {}
+  new Function('require', 'exports', outputText)((name) => dependencies[name], exports)
+  const render = () => { cursor = 0; return exports.TeamConfigDialog({ team, onClose() {} }) }
+  const leader = () => nodes(render(), (node) => node.type?.name === 'TeamLeaderField')[0].props
+  const save = () => nodes(render(), (node) => node.type === 'button' && node.props.children === '保存')[0].props
+  assert.equal(leader().value, current)
+  assert.equal(leader().effort, 'high')
+  assert.equal(nodes(render(), (node) => node.type === consent).length, 0)
+  leader().onChange('claude:haiku', '')
+  nodes(render(), (node) => node.type === consent)[0].props.onChange({ ready: true, confirmation })
+  await save().onClick()
+  assert.deepEqual(calls.map((call) => call.name), ['team.changeLeader', 'team.update'])
+  assert.deepEqual(calls[0].args, { teamId: 'team', model: 'claude:haiku', effort: '', authConfirmation: confirmation })
+  assert.equal(calls[1].args.authConfirmation, undefined, 'a confirmation authorizes one action')
+  team.leaderKind = 'codex'
+  assert.equal(nodes(render(), (node) => node.type?.name === 'TeamLeaderField').length, 0)
+})
