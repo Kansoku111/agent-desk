@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import path from 'node:path'
-import { attachmentPath, fileListText, isImageFile, isOtherFile, otherFileId, safeFileName } from '../server/attachments.js'
+import { attachmentPath, fileListText, isImageFile, isOtherFile, otherFileId, safeFileName, turnAttachments } from '../server/attachments.js'
 
 const uuid = '0f8e2b0c-1234-4abc-9def-0123456789ab'
 
@@ -35,4 +35,22 @@ test('fileListText gives the agent each file path', () => {
   const text = fileListText(dir, [{ file: `${uuid}/clip.mp4` }])
   assert.ok(text.includes(path.join(dir, uuid, 'clip.mp4')))
   assert.equal(fileListText(dir, []), '')
+})
+
+test('turnAttachments finds uploads, steered files and image previews, and nothing else', () => {
+  const image = `${uuid}.png`
+  const other = `${uuid}/報告.pdf`
+  const preview = '11111111-2222-4333-8444-555555555555.webp'
+  const turns = [
+    { user: { text: 'hi', images: [{ file: image }, { file: '../outside.png' }] }, items: [
+      { type: 'steer', images: [{ file: other }] },
+      { type: 'tool', output: `Saved.
+[agent-desk-preview] ${preview}` },
+      { type: 'tool', output: [{ type: 'text', text: `[agent-desk-preview] ${preview}` }] },
+      { type: 'agent', text: `[agent-desk-preview] ${uuid}.gif` },
+    ] },
+    { user: { text: 'again', images: [{ file: image }] }, items: [] },
+  ]
+  assert.deepEqual(turnAttachments(turns).sort(), [other, image, preview].sort())
+  assert.deepEqual(turnAttachments(undefined), [])
 })

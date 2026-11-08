@@ -172,12 +172,44 @@ export class Checkpoints {
     return this.#exclusive(repo, () => git(repo, ['gc', '--auto', '--quiet'], { timeout: 10 * 60_000 }))
   }
 
+  /**
+   * Drops the snapshots `keep(name, savedAt)` rejects and frees their space; returns how many were dropped.
+   * `name` is the ref without `refs/agent-desk/`.
+   */
+  async prune(workspace, keep) {
+    const repo = await this.#repo(workspace)
+    return this.#exclusive(repo, async () => {
+      const lines = (await git(repo, ['for-each-ref', '--format=%(committerdate:unix) %(refname)', 'refs/agent-desk/'])).split('\n').filter(Boolean)
+      const refs = lines.map((line) => {
+        const space = line.indexOf(' ')
+        return { at: Number(line.slice(0, space)) * 1000, ref: line.slice(space + 1) }
+      })
+      const drop = refs.filter(({ ref, at }) => !keep(ref.slice('refs/agent-desk/'.length), at))
+      if (drop.length === refs.length) {
+        // The index still holds the last scan's objects, which gc keeps; with no snapshot left, start over.
+        if (await hasObjects(repo)) await this.#reset(repo)
+        return drop.length
+      }
+      if (!drop.length) return 0
+      await git(repo, ['update-ref', '--stdin'], { input: drop.map(({ ref }) => `delete ${ref}\n`).join('') })
+      await git(repo, ['gc', '--quiet', '--prune=now'], { timeout: 10 * 60_000 })
+      return drop.length
+    })
+  }
+
   // ---------------------------------------------------------------- internals
 
+  async #reset(repo) {
+    // A workspace too large to snapshot stays skipped; a new repository would wait out the timeout again.
+    const skip = await fs.readFile(path.join(repo.gitDir, 'skip.json'), 'utf8').catch(() => null)
+    await fs.rm(repo.gitDir, { recursive: true, force: true })
+    await this.#init(repo)
+    if (skip) await fs.writeFile(path.join(repo.gitDir, 'skip.json'), skip)
+  }
+
   async #repo(workspace) {
+    const id = repoId(workspace)
     const resolved = path.resolve(workspace)
-    const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved
-    const id = createHash('sha256').update(key).digest('hex').slice(0, 16)
     let repo = this.repos.get(id)
     if (!repo) {
       repo = {
@@ -282,6 +314,18 @@ export class Checkpoints {
     }
     return entries
   }
+}
+
+/** The name of a workspace's snapshot repository inside the root folder. */
+export function repoId(workspace) {
+  const resolved = path.resolve(workspace)
+  const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  return createHash('sha256').update(key).digest('hex').slice(0, 16)
+}
+
+async function hasObjects(repo) {
+  const counts = Object.fromEntries((await git(repo, ['count-objects', '-v'])).split('\n').map((line) => line.split(': ')))
+  return Number(counts.count) > 0 || Number(counts['in-pack']) > 0
 }
 
 // A file can be replaced with a directory, or an omitted descendant with a file.

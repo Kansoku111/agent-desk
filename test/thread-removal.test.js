@@ -172,3 +172,34 @@ test('removed event reaches the UI before slow checkpoint garbage collection', a
     await removal
   }
 })
+
+test('removing a task of its own deletes its attachments; a team task keeps them', async (t) => {
+  const f = await fixture(t)
+  const dir = f.paths.attachmentsDir
+  const image = '0f8e2b0c-1234-4abc-9def-0123456789ab.png'
+  const other = '1f8e2b0c-1234-4abc-9def-0123456789ab/notes.txt'
+  const unrelated = '2f8e2b0c-1234-4abc-9def-0123456789ab.png'
+  const teamImage = '3f8e2b0c-1234-4abc-9def-0123456789ab.png'
+  await fs.mkdir(path.join(dir, path.dirname(other)), { recursive: true })
+  for (const file of [image, other, unrelated, teamImage]) await fs.writeFile(path.join(dir, file), 'bytes')
+  const exists = (file) => fs.access(path.join(dir, file)).then(() => true, () => false)
+  const run = async (manager, threadId, images) => {
+    await manager.send(threadId, { text: 'look at these', images })
+    const active = manager.active.get(threadId)
+    f.finish.resolve()
+    await active.done
+  }
+  await run(f.manager, f.thread.id, [{ file: image, mimeType: 'image/png', name: 'a.png' }, { file: other, mimeType: 'text/plain', name: 'notes.txt' }])
+  const team = await f.manager.create({ workspace: f.base, model: '["test","model"]', toolMode: 'native', team: { id: 'team-1', role: 'child' } })
+  await run(f.manager, team.id, [{ file: teamImage, mimeType: 'image/png', name: 'b.png' }])
+
+  // Read back from disk, as after a restart, when the transcript is not in memory.
+  await f.manager.turnWriters.get(f.thread.id).flush()
+  f.manager.turns.delete(f.thread.id)
+  await f.manager.remove(f.thread.id)
+  assert.equal(await exists(image), false)
+  assert.equal(await exists(path.dirname(other)), false, 'the upload folder goes with its file')
+  assert.equal(await exists(unrelated), true)
+  await f.manager.remove(team.id)
+  assert.equal(await exists(teamImage), true, 'team tasks share files with other records')
+})

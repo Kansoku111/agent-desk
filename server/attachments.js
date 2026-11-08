@@ -1,5 +1,6 @@
 // Files the user attaches to a message. Images go to the model as pictures;
 // any other file is saved under its own name and the agent gets its path.
+import fs from 'node:fs/promises'
 import path from 'node:path'
 
 /** Image types the model reads directly, and the extension each is saved with. */
@@ -42,6 +43,37 @@ export function attachmentPath(dir, file) {
   if (isImageFile(file)) return path.join(dir, file)
   if (isOtherFile(file)) return path.join(dir, ...file.split('/'))
   return null
+}
+
+// imagegen.js puts a copy of each generated image here and names it on this line.
+const PREVIEW_LINE = /\[agent-desk-preview\] ([a-f0-9-]+\.(?:png|jpg|gif|webp))/g
+
+/** The attachments a task's turns show: the user's files and the image previews its tools made. */
+export function turnAttachments(turns) {
+  const files = new Set()
+  const add = (images) => {
+    for (const image of Array.isArray(images) ? images : []) if (isImageFile(image?.file) || isOtherFile(image?.file)) files.add(image.file)
+  }
+  for (const turn of Array.isArray(turns) ? turns : []) {
+    add(turn?.user?.images)
+    for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+      if (item?.type === 'steer') add(item.images)
+      if (item?.type !== 'tool' || item.output == null) continue
+      const output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output)
+      for (const match of output.matchAll(PREVIEW_LINE)) files.add(match[1])
+    }
+  }
+  return [...files]
+}
+
+/** Deletes attachments. A non-image upload is the only file in its own folder, so the folder goes with it. */
+export async function removeAttachments(dir, files, log = () => {}) {
+  for (const file of files) {
+    const full = attachmentPath(dir, file)
+    if (!full) continue
+    await fs.rm(isImageFile(file) ? full : path.dirname(full), { recursive: true, force: true })
+      .catch((error) => log(`attachment ${file}:`, error.message))
+  }
 }
 
 /** The text that tells the agent where the attached files are. */

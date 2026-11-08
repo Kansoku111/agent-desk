@@ -2,13 +2,44 @@
 // Reuse the isolated checkpoint repository: never stage or commit the user's repo.
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { Checkpoints } from './checkpoints.js'
+import { Checkpoints, repoId } from './checkpoints.js'
 import { sourceSnapshot, verificationReport } from './execution.js'
 import { clip } from './teams-prompts.js'
 
+// A review takes its after-snapshot and diffs it right away; younger snapshots may still be in use.
+const SETTLED_MS = 10 * 60_000
+
 export class ExecutionReview {
-  constructor({ dir }) {
-    this.checkpoints = new Checkpoints({ root: path.join(dir, 'snapshots') })
+  constructor({ dir, now = Date.now }) {
+    this.root = path.join(dir, 'snapshots')
+    this.checkpoints = new Checkpoints({ root: this.root })
+    this.now = now
+    this.sweeping = Promise.resolve()
+  }
+
+  /**
+   * Frees the snapshots no review can use any more: every one of a child for
+   * which `isLive(childId)` is false, and each review's after-state (its diff
+   * is kept in changes.patch). A live child's baseline (`<child>/before`) stays.
+   */
+  sweep(isLive, log = () => {}) {
+    const run = async () => {
+      const entries = await fs.readdir(this.root, { withFileTypes: true }).catch(() => [])
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const workspace = (await fs.readFile(path.join(this.root, entry.name, 'workspace.txt'), 'utf8').catch(() => '')).trim()
+        // Opening any other path would create a new, empty repository.
+        if (!workspace || repoId(workspace) !== entry.name) continue
+        const settled = this.now() - SETTLED_MS
+        const keep = (name, at) => {
+          const [owner, kind, ...rest] = name.split('/')
+          return at > settled || (kind === 'before' && !rest.length && isLive(owner))
+        }
+        await this.checkpoints.prune(workspace, keep).catch((error) => log(`eco review snapshots (${workspace}):`, error.message))
+      }
+    }
+    this.sweeping = this.sweeping.then(run, run)
+    return this.sweeping
   }
 
   async start(folder, id) {

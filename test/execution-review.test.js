@@ -160,3 +160,27 @@ test('eco changes while recording the review invalidate the command evidence', a
   assert.match(result.warning, /差分の取得中にソースが変更/)
   assert.match(result.text, /eco 検証: stale/)
 })
+
+test('eco review sweeps free removed children and finished reviews but keep a live baseline', async (t) => {
+  const { folder, reviews, execution, report } = await fixture(t)
+  await reviews.start(folder, 'removed-child')
+  await fs.writeFile(path.join(folder, 'source.txt'), 'child fix\n')
+  await report()
+  const refs = () => {
+    const gitDir = path.join(reviews.root, fsSync.readdirSync(reviews.root).find((name) => /^[0-9a-f]{16}$/.test(name)))
+    return execFileSync('git', ['--git-dir', gitDir, 'for-each-ref', '--format=%(refname)'], { encoding: 'utf8' })
+      .split('\n').filter(Boolean).map((ref) => ref.replace('refs/agent-desk/', '').replace(/\/[0-9a-f-]{36}\//, '/<run>/')).sort()
+  }
+  assert.deepEqual(refs(), ['child/<run>/after', 'child/before', 'removed-child/before'])
+
+  // Snapshots younger than a review's diff stay, whoever owns them.
+  await reviews.sweep((id) => id === 'child')
+  assert.equal(refs().length, 3)
+
+  const later = new ExecutionReview({ dir: path.dirname(reviews.root), now: () => Date.now() + 11 * 60_000 })
+  await later.sweep((id) => id === 'child')
+  assert.deepEqual(refs(), ['child/before'])
+  const again = await report()
+  assert.match(await fs.readFile(again.patch, 'utf8'), /\+child fix/, 'the kept baseline still serves the next review')
+  assert.ok(execution.baseline.commit)
+})

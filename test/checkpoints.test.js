@@ -267,3 +267,43 @@ test('changes lists what a turn did, and forget drops kept snapshots', async (t)
   await checkpoints.tidy(workspace)
   await assert.rejects(checkpoints.changes(workspace, before, after), 'forgotten snapshots are pruned')
 })
+
+test('prune drops rejected snapshots and keeps the rest usable', async (t) => {
+  const { base, workspace, checkpoints, write, read } = await setup()
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('a.txt', '1')
+  const { commit: kept } = await checkpoints.snapshot(workspace, 'live/before')
+  await write('a.txt', '2')
+  const { commit: dropped } = await checkpoints.snapshot(workspace, 'live/run-1/after')
+  await checkpoints.snapshot(workspace, 'gone/before')
+  const seen = []
+  const count = await checkpoints.prune(workspace, (name, at) => {
+    seen.push(name)
+    assert.ok(Math.abs(Date.now() - at) < 60_000, 'the snapshot time is passed in milliseconds')
+    return name === 'live/before'
+  })
+  assert.equal(count, 2)
+  assert.deepEqual(seen.sort(), ['gone/before', 'live/before', 'live/run-1/after'])
+  await assert.rejects(checkpoints.changes(workspace, kept, dropped), 'a dropped snapshot is gone')
+  await checkpoints.restore(workspace, kept)
+  assert.equal(await read('a.txt'), '1')
+  assert.equal(await checkpoints.prune(workspace, () => true), 0)
+})
+
+test('prune empties a repository left without snapshots, keeping its skip marker', async (t) => {
+  const { base, workspace, checkpoints, write } = await setup()
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('a.txt', 'content')
+  await checkpoints.snapshot(workspace, 'gone/before')
+  const repo = [...checkpoints.repos.values()][0]
+  const skip = JSON.stringify({ at: 0, reason: 'too many files' })
+  await fs.writeFile(path.join(repo.gitDir, 'skip.json'), skip)
+  assert.equal(await checkpoints.prune(workspace, () => false), 1)
+  const objects = childProcess.execFileSync('git', ['--git-dir', repo.gitDir, 'count-objects', '-v'], { encoding: 'utf8' })
+  assert.match(objects, /^count: 0$/m)
+  assert.match(objects, /^in-pack: 0$/m)
+  assert.equal(await fs.readFile(path.join(repo.gitDir, 'skip.json'), 'utf8'), skip)
+  // An expired skip lets the next snapshot use the fresh repository.
+  const { commit } = await checkpoints.snapshot(workspace, 'next/before')
+  assert.match(commit, /^[0-9a-f]{40}$/)
+})

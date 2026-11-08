@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Save a streaming turn's updates to `threads/<id>.live.json` alone instead of rewriting the whole transcript every 400 ms; the whole `<id>.json` (unchanged format) is written at admission, at the turn's end and on exit, and a crash restores the streamed items. On a 47 MB task this removes a ~80 ms server stall per update and about two thirds of the bytes written.
+- Free eco review snapshots: at startup and after a team or child is removed, drop the snapshots of removed or closed children (a reopened child takes a new baseline) and finished reviews' after-states, and empty repositories left without any; an open child's baseline is kept.
+- Delete a standalone task's own attachments and image previews with the task; team, AB, preset and fallback tasks keep theirs, since other records may share them.
 - Deliver PTC batching guidance and complete examples through the public executor-section API instead of rewriting upstream SDK instructions; retain existing data/runtime compatibility checks.
 - Show complete data-based PTC edit and batched file/progress calls, keeping literal replacements out of executable strings without changing execution or permissions.
 - Accept argument-free PTC `input.get()` and legacy empty containers; present required code and description before optional data without guessing missing code or staging data across calls.

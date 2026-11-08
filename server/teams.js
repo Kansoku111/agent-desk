@@ -318,6 +318,16 @@ export class TeamManager extends EventEmitter {
       if (!team.stopped) for (const child of team.children) this.#scheduleObserverOutbox(team, child)
       if (team.leaderKind === 'thread') this.#scheduleObserverOutbox(team, null)
     }
+    this.#sweepReviews()
+  }
+
+  /**
+   * Frees the eco review snapshots of children that are gone or closed (see ExecutionReview.sweep).
+   * A closed child cannot be reverified, and a send that reopens it takes a new baseline.
+   */
+  #sweepReviews() {
+    const live = (id) => [...this.teams.values()].some((team) => team.children.some((child) => child.id === id && !child.closed))
+    void this.executionReview.sweep(live, this.log)
   }
 
   async stop() {
@@ -996,6 +1006,7 @@ export class TeamManager extends EventEmitter {
       fs.rmSync(path.join(this.dir, teamId), { recursive: true, force: true })
       await this.#save()
       this.emit('removed', { teamId })
+      this.#sweepReviews()
     }
     return { removed: true }
   }
@@ -1987,6 +1998,7 @@ export class TeamManager extends EventEmitter {
       text: `ユーザーが子「${child.name}」を削除しました。子の会話は削除されましたが、作業ファイルは残っています。` })
     await this.#save()
     this.#emit(team)
+    this.#sweepReviews()
     await this.#syncGoalWaiting(team)
     this.#pump(team)
     return { removed: true }

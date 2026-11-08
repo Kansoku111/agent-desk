@@ -6,8 +6,9 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { fileListText, isImageFile } from './attachments.js'
+import { fileListText, isImageFile, removeAttachments, turnAttachments } from './attachments.js'
 import { debouncedWriter, readJson } from './json-file.js'
+import { liveFile, readTranscript, transcriptWriter } from './transcript-writer.js'
 import { workspacesOverlap } from './execution.js'
 import { PERMISSION_MODES, runtimeKey } from './runtime.js'
 import { applyUpdate, newTurn, parseConfigOptions, settleTurn, titleFrom, nearestEffort } from './transcript.js'
@@ -152,7 +153,7 @@ export class ThreadManager extends EventEmitter {
     const thread = this.#available(threadId)
     // Losing receipts on a corrupt document could execute an accepted message
     // twice. Fail closed rather than treating a broken transcript as empty.
-    const doc = await readJson(this.#turnFile(threadId), { version: 1, turns: [] }, { recoverCorrupt: false })
+    const doc = await readTranscript(this.#turnFile(threadId), { version: 1, turns: [] })
     this.#available(threadId, thread)
     const turns = doc.turns ?? []
     let interrupted = false
@@ -218,7 +219,7 @@ export class ThreadManager extends EventEmitter {
   #turnWriter(threadId) {
     let writer = this.turnWriters.get(threadId)
     if (!writer) {
-      writer = debouncedWriter(this.#turnFile(threadId), 400)
+      writer = transcriptWriter(this.#turnFile(threadId), 400)
       this.turnWriters.set(threadId, writer)
     }
     return writer
@@ -230,6 +231,11 @@ export class ThreadManager extends EventEmitter {
 
   #saveTurns(threadId) {
     this.#turnWriter(threadId).schedule(this.#turnDocument(threadId))
+  }
+
+  /** For an update that changed `turn` alone: only that turn is written until the next whole save. */
+  #saveLive(threadId, turn) {
+    this.#turnWriter(threadId).scheduleLive(turn, this.#turnDocument(threadId))
   }
 
   #persistTurns(threadId) {
@@ -687,6 +693,11 @@ export class ThreadManager extends EventEmitter {
     // of a transcript being discarded. flush() can retain an earlier failure
     // even after the transient filesystem problem has gone away.
     await this.turnWriters.get(threadId)?.flush().catch(() => {})
+    // A task of its own is the only record of its uploads and image previews. Team, AB,
+    // preset and fallback tasks pass files to and from other records, so theirs stay.
+    const ownsAttachments = !thread.team && !thread.ab && !thread.preset && !thread.usageFallbackFrom && !thread.fallbackTo
+    const attachments = ownsAttachments ? turnAttachments(this.turns.get(threadId)
+      ?? (await readTranscript(this.#turnFile(threadId), null).catch(() => null))?.turns) : []
     // Stage the durable index without hiding the task from list()/hello yet.
     // A failed commit must never look like a deletion followed by resurrection.
     const createReceipts = [...this.createReceipts.values()].filter((entry) => entry.threadId === threadId)
@@ -713,9 +724,11 @@ export class ThreadManager extends EventEmitter {
     this.indexRemovals.delete(threadId)
     // The index is the source of truth. Windows may temporarily lock a
     // transcript; cleanup failure must not undo an already committed deletion.
-    await fs.rm(this.#turnFile(threadId), { force: true }).catch((error) => {
-      console.warn(`[agent-desk] deleted task ${threadId}; transcript cleanup failed:`, error.message)
-    })
+    for (const file of [this.#turnFile(threadId), liveFile(this.#turnFile(threadId))]) {
+      await fs.rm(file, { force: true }).catch((error) => {
+        console.warn(`[agent-desk] deleted task ${threadId}; transcript cleanup failed:`, error.message)
+      })
+    }
     if (thread.sessionId) {
       this.sessionIndex.delete(thread.sessionId)
       this.liveOptions.delete(thread.sessionId)
@@ -736,6 +749,7 @@ export class ThreadManager extends EventEmitter {
     // Optional GC must not hold the removal RPC (or the next bulk removal)
     // behind a long snapshot/git-gc queue after deletion has already committed.
     if (this.checkpoints) void this.checkpoints.forget(thread.workspace, threadId).catch(() => {})
+    await removeAttachments(this.paths.attachmentsDir, attachments, (...args) => console.warn(`[agent-desk] deleted task ${threadId};`, ...args))
   }
 
   /**
@@ -1505,7 +1519,7 @@ export class ThreadManager extends EventEmitter {
       this.#emitThread(thread)
     }
     if (side.configOptions) this.#learnOptions(thread, side.configOptions)
-    this.#saveTurns(threadId)
+    this.#saveLive(threadId, turn)
     this.#emitTurn(threadId, turn)
   }
 
