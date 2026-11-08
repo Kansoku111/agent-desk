@@ -10,18 +10,44 @@ TypeScriptのPTCでは、`run_code`の必須引数は従来どおり `code` と 
 
 モデルには必須の `code`・`description` を先に、その後に任意の `data` を提示します。必須項目がない呼び出しは従来どおり拒否します。`data` だけを先に送り、次の呼び出しで実行する使い方はできません。
 
-モデルが呼び出す形の例：
+対象ファイルを `read` で確認した後の編集例です。編集前後の文面も `data` に置きます。
 
 ```json
 {
-  "code": "const files = await input.get<ToolArgsMap['write'][]>(); for (const file of files) await tools.write(file);",
-  "description": "Write source from literal JSON data",
-  "data": [
-    {
-      "file_path": "src/example.cjs",
-      "content": "const name = 'world';\nconsole.log(`hello ${name}`);\n"
-    }
-  ]
+  "code": "return await tools.edit(await input.get());",
+  "description": "Edit a file from literal data",
+  "data": {
+    "file_path": "src/example.txt",
+    "old_string": "old text",
+    "new_string": "new text"
+  }
+}
+```
+
+ファイル作成と進捗更新も1回の `run_code` にまとめられます。`todos` には現在の全リストを渡し、まだ実行していない検証を完了扱いにしません。
+
+```json
+{
+  "code": "const {files,todos} = await input.get(); for (const file of files) await tools.write(file); return await tools.todo_write({todos});",
+  "description": "Write files and update the current task list",
+  "data": {
+    "files": [
+      {
+        "file_path": "src/example.cjs",
+        "content": "const name = 'world';\nconsole.log(`hello ${name}`);\n"
+      }
+    ],
+    "todos": [
+      {
+        "content": "Implement changes",
+        "status": "in_progress"
+      },
+      {
+        "content": "Verify changes",
+        "status": "pending"
+      }
+    ]
+  }
 }
 ```
 

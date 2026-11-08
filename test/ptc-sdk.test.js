@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { shareOutputTypes, patchPtcSdkSource } from '../server/ptc-sdk-patch.js'
+import { shareOutputTypes, patchPtcSdkSource, ptcDataExamples } from '../server/ptc-sdk-patch.js'
 
 const require = createRequire(import.meta.url)
 const mcp = '{ content: JsonValue[]; structuredContent?: JsonValue; }'
@@ -68,14 +68,36 @@ test('PTC data schema, binding and presentation changes fail closed together on 
   for (const [before, after] of [
     ['return parameterSchemaSpecToJsonSchema({', 'return changedParameterSchema({'],
     ['rawInput: args.code', 'rawInput: args.changedCode'],
+    ['const instructions = renderSdkInstructions(programFormat);', 'const instructions = changedInstructions();'],
     ['signal: runController.signal,', 'signal: changedSignal,'],
   ]) assert.equal(patchPtcSdkSource(source.replace(before, after)), null)
   const patched = patchPtcSdkSource(source)
   assert.match(patched, /agentDeskDataBindings\(args, runtime\)/)
   assert.match(patched, /declare const input/)
-  assert.match(patched, /input\.get/)
+  assert.match(patched, /agentDeskDataExamples\(sorted\)/)
   assert.match(patched, /Pass a JSON arguments object to every tools binding/)
   assert.match(patched, /Combine progress-only/)
+})
+
+test('complete data examples are valid calls, follow available tools, and match the usage guide', async () => {
+  const parse = text => [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map(x => JSON.parse(x[1]))
+  const examples = parse(ptcDataExamples(['edit', 'write', 'todo_write'].map(name => ({ name }))))
+  assert.equal(examples.length, 2)
+  for (const call of examples) {
+    assert.deepEqual(Object.keys(call), ['code', 'description', 'data'])
+    assert.ok(call.code && call.description)
+    assert.ok(call.code.includes('await input.get()'))
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+    assert.doesNotThrow(() => new AsyncFunction('tools', 'input', call.code))
+  }
+  assert.ok(examples[0].code.includes('tools.edit'))
+  assert.ok(examples[1].code.includes('tools.write') && examples[1].code.includes('tools.todo_write'))
+  assert.ok(examples[1].data.todos.every(todo => todo.status !== 'completed'))
+  assert.equal(ptcDataExamples([{ name: 'read' }, { name: 'glob' }]), '')
+  assert.equal(ptcDataExamples([{ name: 'write' }]), '')
+  assert.equal(parse(ptcDataExamples([{ name: 'edit' }])).length, 1)
+  const doc = await fs.readFile(new URL('../docs/ptc.md', import.meta.url), 'utf8')
+  assert.deepEqual(parse(doc), examples)
 })
 
 test('the TypeScript run_code instructions gain one batching line after the Promise.all line, and the Python ones do not', async () => {

@@ -17,6 +17,7 @@ import { WEB_SEARCH_PLUGIN, abPatch, chatWebPatch, homePatch, shippedPersona, te
 import { localRoute } from '../server/local-llm.js'
 import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
 import { PLAN_INSTRUCTION } from '../server/thread-utils.js'
+import { ptcDataExamples } from '../server/ptc-sdk-patch.js'
 
 async function setup(t, mode, profile) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ptc-'))
@@ -551,6 +552,33 @@ test('real ACP shares SDK output types while retaining every native binding', { 
   assert.deepEqual(args.members.map(member => member.name.text).sort(), nativeNames)
   assert.deepEqual(outputs.members.map(member => member.name.text).sort(), nativeNames)
   assert.ok(parsed.statements.some(node => ts.isTypeAliasDeclaration(node) && node.name.text.startsWith('SharedOutput')))
+})
+
+test('complete data examples edit literal contents and batch writes with progress in real PTC', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'workspace-write')
+  await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+  const [edit, batch] = [...ptcDataExamples(['edit', 'write', 'todo_write'].map(name => ({ name }))).matchAll(/```json\n([\s\S]*?)\n```/g)].map(x => JSON.parse(x[1]))
+  await f.run('return await tools.read({file_path:"input.txt"});')
+  const literal = 'quotes \' " ` ${notInterpolated}\n日本語'
+  edit.data = { file_path: 'input.txt', old_string: 'PTC fixture content', new_string: literal }
+  await f.run(edit.code, { data: edit.data })
+  assert.equal(await fs.readFile(path.join(f.workspace, 'input.txt'), 'utf8'), literal)
+  batch.data.files[0].file_path = 'batched.cjs'
+  await f.run(batch.code, { data: batch.data })
+  assert.equal(await fs.readFile(path.join(f.workspace, 'batched.cjs'), 'utf8'), batch.data.files[0].content)
+  const output = f.requests.at(-1).messages.filter(x => x.role === 'tool').at(-1).content
+  assert.match(typeof output === 'string' ? output : JSON.stringify(output), /"inProgress":\s*1/)
+  const sdk = JSON.stringify(f.requests.at(-1).messages.filter(x => x.role === 'system'))
+  assert.match(sdk, /Complete run_code argument objects/)
+})
+
+test('complete edit example does not bypass read-only permissions', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'read-only')
+  await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+  const [edit] = [...ptcDataExamples([{ name: 'edit' }]).matchAll(/```json\n([\s\S]*?)\n```/g)].map(x => JSON.parse(x[1]))
+  edit.data = { file_path: 'input.txt', old_string: 'PTC fixture content', new_string: 'forbidden' }
+  await f.run(edit.code, { data: edit.data })
+  assert.equal(await fs.readFile(path.join(f.workspace, 'input.txt'), 'utf8'), 'PTC fixture content')
 })
 
 test('real PTC passes literal source as data without compiling, interpolating or leaking it across calls', { timeout: 120_000 }, async (t) => {
