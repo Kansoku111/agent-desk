@@ -1,5 +1,5 @@
-// Strict update-only compatibility gate. Normal launch hooks deliberately warn
-// and continue; installing a release must instead prove every required patch.
+// Strict update-only compatibility gate. Host launch hooks warn and continue;
+// the PTC worker rejects a missing input patch. Updates must prove both paths.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import { createRequire, findPackageJSON, registerHooks } from 'node:module'
@@ -18,7 +18,7 @@ import { patchOutputSpeedSource } from './output-speed-patch.js'
 import { patchFsSearchSource } from './fs-search-patch.js'
 import { patchGoalToolSource } from './goal-tool-patch.js'
 import { patchPtcSource } from './ptc-patch.js'
-import { patchPtcRuntimeSource } from './ptc-runtime-patch.js'
+import { patchPtcRuntimeSource, patchPtcWorkerSource } from './ptc-runtime-patch.js'
 import { patchPtcResultsSource } from './ptc-results-patch.js'
 import { patchPtcSdkSource } from './ptc-sdk-patch.js'
 
@@ -50,14 +50,17 @@ export function runtimeHookArgs() {
   return HOOKS.flatMap(({ name }) => ['--import', new URL(`./${name}-hook.js`, import.meta.url).href])
 }
 
-export function composeCompatibilityPatches({ acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, tools }) {
-  const sources = { acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, tools }
+export function composeCompatibilityPatches({ acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, ptcWorker, tools }) {
+  const sources = { acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, ptcWorker, tools }
   for (const hook of HOOKS) {
     if (!hook.patch) continue
     const patched = hook.patch(sources[hook.module])
     if (!patched || patched === sources[hook.module]) throw new Error(`${hook.name} hook: upstream source did not match`)
     sources[hook.module] = patched
   }
+  const worker = patchPtcWorkerSource(sources.ptcWorker)
+  if (!worker || worker === sources.ptcWorker) throw new Error('ptc-worker hook: upstream source did not match')
+  sources.ptcWorker = worker
   return sources
 }
 
@@ -116,7 +119,7 @@ export function resolveCompatibilityModules(root) {
   const pi = packageFile('@earendil-works/pi-ai', llm)
   // retry-hook imports the app's pi-ai, which may differ from dsh's nested copy.
   const retryPi = packageFile('@earendil-works/pi-ai', path.join(root, 'server', 'retry-hook.js'))
-  return { acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, tools, pi, retryPi }
+  return { acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, ptcWorker: path.join(path.dirname(ptcRuntime), 'process.js'), tools, pi, retryPi }
 }
 
 async function verifyActualHookChain(modules, expected) {
@@ -125,7 +128,7 @@ async function verifyActualHookChain(modules, expected) {
   // the result of their nextLoad chain. Do not evaluate any dsh module: replacing
   // its final source with an empty module prevents all upstream side effects.
   for (const { name } of HOOKS) await import(new URL(`./${name}-hook.js`, import.meta.url).href)
-  const targets = new Map(['acp', 'llm', 'compaction', 'search', 'goalTool', 'goalDriver', 'ptcRuntime', 'tools'].map((key) => [
+  const targets = new Map(['acp', 'llm', 'compaction', 'search', 'goalTool', 'goalDriver', 'ptcRuntime', 'ptcWorker', 'tools'].map((key) => [
     `${pathToFileURL(modules[key]).href}?agent-desk-compatibility`, key,
   ]))
   const seen = new Set()
@@ -156,6 +159,7 @@ export async function verifyDshCompatibility({ root = fileURLToPath(new URL('../
       llm: await fs.readFile(modules.llm, 'utf8'),
       compaction: await fs.readFile(modules.compaction, 'utf8'),
       ptcRuntime: await fs.readFile(modules.ptcRuntime, 'utf8'),
+      ptcWorker: await fs.readFile(modules.ptcWorker, 'utf8'),
       tools: await fs.readFile(modules.tools, 'utf8'),
       search: await fs.readFile(modules.search, 'utf8'),
       goalTool: await fs.readFile(modules.goalTool, 'utf8'),

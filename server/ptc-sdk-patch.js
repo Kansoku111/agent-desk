@@ -27,18 +27,20 @@ const PARALLEL = "- Independent read-only calls MAY overlap under \\`Promise.all
 // and the same as a line in this system prompt on task D; task F saw little change.
 const BATCH = [
   '- Every `run_code` call costs a model round trip. Put the reads, the write that depends on them and the check that verifies it in one program (read the files, write, then run the tests) instead of one program per step; split only where you must see an output before choosing the next step.',
-  '- Put long literal source text in the optional `run_code.data` JSON field, not in nested JavaScript strings or template literals. Read it with `const files = await input.get<ToolArgsMap["write"][]>({})`, then call `tools.write(file)` for each file. The data field is not compiled as program text; normal tool permissions still apply. `input` is bound only when `data` is supplied.',
-  '- Pass a JSON arguments object to every binding, including `{}` when there are no fields. To enter the task directory, call `tools.working_directory({cd: "the assigned directory"})` once and batch the initial inspection with it; do not query the inherited directory and then browse a different project. Combine progress-only `todo_write` updates with actual work instead of spending a separate model response on them.',
+  '- Supply `code` and `description` before optional `run_code.data` in the same call. Put literal source text in `data`, not nested JavaScript strings. Read it with `const files = await input.get<ToolArgsMap["write"][]>()`, then call `tools.write(file)` for each file. Data is not compiled as program text; normal tool permissions apply. Data is available only in that call: do not split data upload and execution.',
+  '- Pass a JSON arguments object to every tools binding, including `{}` when there are no fields. To enter the task directory, call `tools.working_directory({cd: "the assigned directory"})` once and batch the initial inspection with it; do not query the inherited directory and then browse a different project. Combine progress-only `todo_write` updates with actual work instead of spending a separate model response on them.',
 ].join('\n').replaceAll('`', '\\`') + '\n'
 const STATIC_PARAMS = '\t\tparameters: {\n\t\t\tcode: {'
 const DYNAMIC_PARAMS = '\t\t\treturn parameterSchemaSpecToJsonSchema({\n\t\t\t\tcode: {'
+const STATIC_DATA = '\t\t\t...RUN_CODE_CONTROLS\n'
+const DYNAMIC_DATA = '\t\t\t\t...controlParameters(runtime)'
 const BINDINGS = '\t\t\t\t\t\t\t}],\n\t\t\t\t\t\t\tsignal: runController.signal,'
 const DECLARATION = '\t\t"type ToolName = keyof ToolOutputMap",'
 const DESCRIPTION = 'return resolveFlavor(runtime).description + (instructions ?'
 const PRESENTATION = 'rawInput: args.code'
 
 export function patchPtcSdkSource(source) {
-  const anchors = [LOOP, OUTPUT, PARALLEL, STATIC_PARAMS, DYNAMIC_PARAMS, BINDINGS, DECLARATION, DESCRIPTION, PRESENTATION]
+  const anchors = [LOOP, OUTPUT, PARALLEL, STATIC_PARAMS, DYNAMIC_PARAMS, STATIC_DATA, DYNAMIC_DATA, BINDINGS, DECLARATION, DESCRIPTION, PRESENTATION]
   if (source.includes('agentDeskShareOutputs') || source.split('outputMembers').length !== 5
     || anchors.some(anchor => source.split(anchor).length !== 2)) return null
   const imports = 'import { shareOutputTypes as agentDeskShareOutputs } from ' + JSON.stringify(new URL('./ptc-sdk-patch.js', import.meta.url).href) + ';\n'
@@ -47,10 +49,10 @@ export function patchPtcSdkSource(source) {
     .replace(LOOP, SHARED_LOOP)
     .replace(OUTPUT, SHARED_OUTPUT)
     .replace(PARALLEL, () => PARALLEL + BATCH)
-    .replace(STATIC_PARAMS, '\t\tparameters: {\n\t\t\t...agentDeskDataParameters,\n\t\t\tcode: {')
-    .replace(DYNAMIC_PARAMS, '\t\t\treturn parameterSchemaSpecToJsonSchema({\n\t\t\t\t...agentDeskRuntimeDataParameters(runtime),\n\t\t\t\tcode: {')
+    .replace(STATIC_DATA, '\t\t\t...agentDeskDataParameters,\n' + STATIC_DATA)
+    .replace(DYNAMIC_DATA, '\t\t\t\t...agentDeskRuntimeDataParameters(runtime),\n' + DYNAMIC_DATA)
     .replace(BINDINGS, '\t\t\t\t\t\t\t}, ...agentDeskDataBindings(args, runtime)],\n\t\t\t\t\t\t\tsignal: runController.signal,')
-    .replace(DECLARATION, DECLARATION + '\n\t\t"/** Only bound when run_code.data is supplied. */\\ndeclare const input: { get<T = JsonValue>(args: Record<string, never>): Promise<T> };",')
+    .replace(DECLARATION, DECLARATION + '\n\t\t"/** Only bound when run_code.data is supplied. */\\ndeclare const input: { get<T = JsonValue>(args?: Record<string, never> | readonly []): Promise<T> };",')
     .replace(DESCRIPTION, 'return resolveFlavor(runtime).description + (runtime.language === "typescript" ? " " + agentDeskDataDescription : "") + (instructions ?')
     .replace(PRESENTATION, 'rawInput: Object.hasOwn(args, "data") ? { code: args.code, data: args.data } : args.code')
 }

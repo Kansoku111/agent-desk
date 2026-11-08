@@ -28,7 +28,8 @@ test('PTC input snapshots lossless JSON, rejects invalid data, and does not shar
   for (const data of [undefined, NaN, Infinity, 1n, () => 0, { x: undefined }, cycle]) {
     assert.throws(() => get({ data }), /lossless JSON/)
   }
-  for (const args of [undefined, null, [], 'literal', { unexpected: true }]) {
-    await assert.rejects(read(args), /input.get\(\{\}\)/)
+  for (const args of [undefined, {}, []]) assert.equal((await read(args)).files[0].content, 'source')
+  for (const args of [null, [1], 'literal', { unexpected: true }]) {
+    await assert.rejects(read(args), /input.get\(\)/)
   }
 })

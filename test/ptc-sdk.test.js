@@ -74,7 +74,7 @@ test('PTC data schema, binding and presentation changes fail closed together on 
   assert.match(patched, /agentDeskDataBindings\(args, runtime\)/)
   assert.match(patched, /declare const input/)
   assert.match(patched, /input\.get/)
-  assert.match(patched, /Pass a JSON arguments object to every binding/)
+  assert.match(patched, /Pass a JSON arguments object to every tools binding/)
   assert.match(patched, /Combine progress-only/)
 })
 

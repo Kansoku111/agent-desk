@@ -567,7 +567,7 @@ test('real PTC passes literal source as data without compiling, interpolating or
   // The old nested-template shape fails before any write; do not guess a repair.
   await f.run("await tools.write({file_path:'nested-must-not-run.cjs',content:`" + source + "`});")
   await assert.rejects(fs.stat(path.join(f.workspace, 'nested-must-not-run.cjs')))
-  await f.run('const files = await input.get<ToolArgsMap["write"][]>({}); for (const file of files) await tools.write(file); return {executed: Object.hasOwn(globalThis, "__ptcDataExecuted")};', { data: files })
+  await f.run('const files = await input.get<ToolArgsMap["write"][]>(); for (const file of files) await tools.write(file); return {executed: Object.hasOwn(globalThis, "__ptcDataExecuted")};', { data: files })
   assert.equal(await fs.readFile(path.join(f.workspace, 'literal.cjs'), 'utf8'), source)
   const announced = f.updates.find(x => x.rawInput?.data)
   assert.deepEqual(announced?.rawInput?.data, files, 'execution/approval detail must retain the separate input data')
@@ -576,6 +576,8 @@ test('real PTC passes literal source as data without compiling, interpolating or
   assert.deepEqual(request.tools.map(x => x.function.name), ['run_code'])
   assert.ok(request.tools[0].function.parameters.properties.data)
   assert.ok(!request.tools[0].function.parameters.required.includes('data'))
+  assert.deepEqual(Object.keys(request.tools[0].function.parameters.properties).slice(0, 3), ['code', 'description', 'data'])
+  assert.deepEqual(request.tools[0].function.parameters.required, ['code', 'description'])
   const result = request.messages.filter(x => x.role === 'tool').at(-1).content
   assert.match(typeof result === 'string' ? result : JSON.stringify(result), /"executed":\s*false/)
   await f.run('const input = "legacy-local-name"; return input;')
@@ -586,10 +588,39 @@ test('real PTC passes literal source as data without compiling, interpolating or
   assert.match(typeof absent === 'string' ? absent : JSON.stringify(absent), /undefined/)
 })
 
+test('PTC data accessor accepts no arguments and legacy empty containers without changing tools', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'workspace-write')
+  await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+  for (const [i, args] of ['', '{}', '[]'].entries()) {
+    const data = { file_path: `input-get-${i}.txt`, content: `literal-${i}` }
+    await f.run(`return await tools.write(await input.get(${args}));`, { data })
+    assert.equal(await fs.readFile(path.join(f.workspace, data.file_path), 'utf8'), data.content)
+  }
+  await f.run('try { await tools.working_directory(); return "unexpected-default"; } catch (error) { return error.message; }')
+  const result = f.requests.at(-1).messages.filter(x => x.role === 'tool').at(-1).content
+  assert.match(typeof result === 'string' ? result : JSON.stringify(result), /binding arguments must be lossless JSON/)
+})
+
+test('PTC rejects data-only and missing-description calls before execution and does not stage data', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'workspace-write')
+  await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+  const data = { file_path: 'must-not-default-code.txt', content: 'must not execute' }
+  for (const args of [{ data }, { code: 'return await tools.write(await input.get());', data }]) {
+    f.queue.push({ name: 'run_code', args })
+    await f.prompt()
+    const result = f.requests.at(-1).messages.filter(x => x.role === 'tool').at(-1).content
+    assert.match(typeof result === 'string' ? result : JSON.stringify(result), /missing required property/)
+    await assert.rejects(fs.stat(path.join(f.workspace, data.file_path)))
+  }
+  await f.run('return typeof input;')
+  const result = f.requests.at(-1).messages.filter(x => x.role === 'tool').at(-1).content
+  assert.match(typeof result === 'string' ? result : JSON.stringify(result), /undefined/)
+})
+
 test('PTC data does not grant read-only sessions write permission', { timeout: 120_000 }, async (t) => {
   const f = await setup(t, 'read-only')
   await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
-  await f.run('return await tools.write(await input.get<ToolArgsMap["write"]>({}));', { data: { file_path: 'forbidden-data.txt', content: 'must not write' } })
+  await f.run('return await tools.write(await input.get<ToolArgsMap["write"]>());', { data: { file_path: 'forbidden-data.txt', content: 'must not write' } })
   await assert.rejects(fs.stat(path.join(f.workspace, 'forbidden-data.txt')))
 })
 

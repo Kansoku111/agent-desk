@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import { createRequire, stripTypeScriptTypes } from 'node:module'
 import { test } from 'node:test'
 import { stripPtcTypes, ptcSyntaxMessage } from '../server/ptc-program-error.js'
-import { patchPtcRuntimeSource } from '../server/ptc-runtime-patch.js'
+import { patchPtcRuntimeSource, patchPtcWorkerSource } from '../server/ptc-runtime-patch.js'
 
 const require = createRequire(import.meta.url)
 const PREFIX = 'async function __dsh_program__() {\n'
@@ -147,6 +147,17 @@ test('valid TypeScript is unchanged and unsupported syntax or unknown stack form
   assert.match(ptcSyntaxMessage(eof, 'const value = {', 1), /end of program|line/)
 })
 
+test('only input.get gains default arguments at the installed worker JSON boundary', async () => {
+  const source = await fs.readFile(new URL('./process.js', import.meta.resolve('@deepseek-ai/dsh-ptc-runtime-node')), 'utf8')
+  const patched = patchPtcWorkerSource(source)
+  assert.ok(patched)
+  assert.ok(patched.includes('args = global === "input" && name === "get" ? {} : void 0'))
+  assert.ok(patched.includes('binding arguments must be lossless JSON'))
+  assert.equal(patchPtcWorkerSource(patched), null)
+  assert.equal(patchPtcWorkerSource(source.replace('value: async (args) => {', 'value: async (changed) => {')), null)
+  assert.equal(patchPtcWorkerSource(source.replace('return data.namespaces.map(({ global, names }) => {', 'return changedNamespaces(data);')), null)
+})
+
 test('the installed runtime wraps every execution mode once and refuses changed upstream anchors', async () => {
   const source = await fs.readFile(require.resolve('@deepseek-ai/dsh-ptc-runtime-node'), 'utf8')
   const patched = patchPtcRuntimeSource(source)
@@ -155,6 +166,8 @@ test('the installed runtime wraps every execution mode once and refuses changed 
   assert.equal(patched.split('agentDeskStripPtc(STRIP_PREFIX + program + STRIP_SUFFIX, program, 1)').length, 2)
   assert.equal(patched.split('stripTypes: agentDeskStripPtc').length, 3)
   assert.ok(!patched.includes('stripTypes: stripTypeScriptTypes'))
+  assert.ok(patched.includes('["--import", pathToFileURL(mapped(fileURLToPath('))
+  assert.equal(patchPtcRuntimeSource(source.replace('mapped(fileURLToPath(new URL("./process.js", import.meta.url)))', 'changedWorkerBootstrap()')), null)
   assert.equal(patchPtcRuntimeSource(patched), null)
   assert.equal(patchPtcRuntimeSource(source.replace('stripTypeScriptTypes(STRIP_PREFIX + program + STRIP_SUFFIX)', 'changed(STRIP_PREFIX + program + STRIP_SUFFIX)')), null)
   assert.equal(patchPtcRuntimeSource(source.replace('stripTypes: stripTypeScriptTypes', 'stripTypes: changed')), null)

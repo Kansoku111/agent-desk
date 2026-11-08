@@ -1,6 +1,6 @@
 import { snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
 
-export const PTC_DATA_DESCRIPTION = 'Optional lossless JSON data, available through await input.get({}) inside TypeScript programs. Put literal file contents here instead of embedding them in executable code strings. Data is not executed; use the normal tools to write or edit files.'
+export const PTC_DATA_DESCRIPTION = 'Optional lossless JSON data for this call. Always supply code and description in the same call, before data; data alone does not stage input for a later call. Read it with await input.get() inside TypeScript programs. Put literal file contents here instead of embedding them in executable code strings; use the normal tools to write or edit files.'
 export const PTC_DATA_PARAMETERS = { data: { type: 'json', description: PTC_DATA_DESCRIPTION } }
 
 export function ptcDataParameters(runtime) {
@@ -18,9 +18,9 @@ export function ptcDataBindings(args, runtime) {
   return [{
     global: 'input',
     functions: {
-      get: async (options) => {
-        if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).length) {
-          throw new TypeError('input.get takes an empty arguments object: input.get({})')
+      get: async (options = {}) => {
+        if (!options || typeof options !== 'object' || Object.keys(options).length) {
+          throw new TypeError('input.get takes no options: input.get()')
         }
         return snapshotJsonValue(value)
       },

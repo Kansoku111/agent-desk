@@ -19,7 +19,7 @@ import { patchOutputSpeedSource } from '../server/output-speed-patch.js'
 import { patchFsSearchSource } from '../server/fs-search-patch.js'
 import { patchGoalToolSource } from '../server/goal-tool-patch.js'
 import { patchPtcSource } from '../server/ptc-patch.js'
-import { patchPtcRuntimeSource } from '../server/ptc-runtime-patch.js'
+import { patchPtcRuntimeSource, patchPtcWorkerSource } from '../server/ptc-runtime-patch.js'
 import { patchPtcSdkSource } from '../server/ptc-sdk-patch.js'
 import { patchPtcResultsSource } from '../server/ptc-results-patch.js'
 
@@ -122,6 +122,8 @@ async function fixture(t) {
   const goalDriver = await put(`${goalDriverDir}/lib/index.js`, goalDriverSource)
   const ptcRuntimeSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-ptc-runtime-node'), 'utf8')
   const ptcRuntime = await put(`${ptcRuntimeDir}/lib/index.js`, ptcRuntimeSource)
+  const ptcWorkerSource = await fs.readFile(path.join(path.dirname(require.resolve('@deepseek-ai/dsh-ptc-runtime-node')), 'process.js'), 'utf8')
+  const ptcWorker = await put(`${ptcRuntimeDir}/lib/process.js`, ptcWorkerSource)
   const toolsSource = await fs.readFile(require.resolve('@deepseek-ai/dsh-tool-executor-ptc'), 'utf8')
   const tools = await put(`${toolsDir}/lib/index.js`, toolsSource)
   const pi = await pkg('@earendil-works/pi-ai', 'dist/index.js', {
@@ -134,16 +136,16 @@ async function fixture(t) {
   await put(`${pi}/dist/providers/opencode-go.models.js`, 'import values from "./data/opencode-go.json" with { type: "json" }; export const OPENCODE_GO_MODELS = values')
   await put(`${pi}/dist/providers/data/opencode-go.json`, JSON.stringify({ 'openai-completions': { 'chat:fixture': { id: 'fixture', type: 'chat' } } }))
   const retry = await put(`${pi}/dist/utils/retry.js`, 'export const isRetryableAssistantError = () => true')
-  return { root, put, acp, llm, compaction, compactionSource, search, goalTool, goalDriver, ptcRuntime, tools, acpSource, llmSource, searchSource, goalToolSource, goalDriverSource, ptcRuntimeSource, toolsSource, retry, pi }
+  return { root, put, acp, llm, compaction, compactionSource, search, goalTool, goalDriver, ptcRuntime, ptcWorker, tools, acpSource, llmSource, searchSource, goalToolSource, goalDriverSource, ptcRuntimeSource, ptcWorkerSource, toolsSource, retry, pi }
 }
 
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
-  const { acpSource, llmSource, compactionSource, searchSource, goalToolSource, goalDriverSource, ptcRuntimeSource, toolsSource } = await fixture(t)
+  const { acpSource, llmSource, compactionSource, searchSource, goalToolSource, goalDriverSource, ptcRuntimeSource, ptcWorkerSource, toolsSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
     'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'context-overflow-hook.js', 'reasoning-usage-hook.js', 'compaction-hook.js', 'goal-hook.js', 'goal-wait-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'mcp-startup-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'ptc-errors-hook.js', 'ptc-sdk-hook.js', 'ptc-results-hook.js', 'fs-search-hook.js',
   ])
-  assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, compaction: compactionSource, search: searchSource, goalTool: goalToolSource, goalDriver: goalDriverSource, ptcRuntime: ptcRuntimeSource, tools: toolsSource }), {
-    acp: patchPtcSource(patchOutputSpeedSource(patchMcpStartupSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource)))))), llm: patchReasoningUsageSource(patchContextOverflowSource(patchRetrySource(llmSource))), compaction: patchCompactionSource(compactionSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource), ptcRuntime: patchPtcRuntimeSource(ptcRuntimeSource), tools: patchPtcResultsSource(patchPtcSdkSource(toolsSource)),
+  assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, compaction: compactionSource, search: searchSource, goalTool: goalToolSource, goalDriver: goalDriverSource, ptcRuntime: ptcRuntimeSource, ptcWorker: ptcWorkerSource, tools: toolsSource }), {
+    acp: patchPtcSource(patchOutputSpeedSource(patchMcpStartupSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource)))))), llm: patchReasoningUsageSource(patchContextOverflowSource(patchRetrySource(llmSource))), compaction: patchCompactionSource(compactionSource), search: patchFsSearchSource(searchSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource), ptcRuntime: patchPtcRuntimeSource(ptcRuntimeSource), ptcWorker: patchPtcWorkerSource(ptcWorkerSource), tools: patchPtcResultsSource(patchPtcSdkSource(toolsSource)),
   })
 })
 
@@ -176,6 +178,7 @@ for (const [name, field, change] of [
   ['mcp-startup', 'acp', (source) => source.replace('for (const config of configs) await agentCtx.plugin(McpClient, config);', 'await changedMount();')],
   ['ptc', 'acp', (source) => source.replace('return this.modelControl.set(configId, value, signal);', 'return upstreamSetConfig();')],
   ['ptc-errors', 'ptcRuntime', (source) => source.replace('stripTypeScriptTypes(STRIP_PREFIX + program + STRIP_SUFFIX)', 'changedParse(STRIP_PREFIX + program + STRIP_SUFFIX)')],
+  ['ptc-worker', 'ptcWorker', (source) => source.replace('value: async (args) => {', 'value: async (changedArgs) => {')],
   ['ptc-sdk', 'tools', (source) => source.replace('const outputMembers = [];', 'const changedOutput = [];')],
   ['ptc-results', 'tools', (source) => source.replace('value: result.value', 'value: changedValue')],
   ['fs-search', 'search', (source) => source.replace('async function runRipgrep(', 'async function upstreamSearch(')],
@@ -251,11 +254,21 @@ for (const name of ['goal', 'goal-wait', 'goal-tool', 'mcp-startup', 'ptc', 'ptc
     const { root } = await fixture(t)
     const hook = path.join(root, 'server', `${name}-hook.js`)
     const source = await fs.readFile(hook, 'utf8')
-    await fs.writeFile(hook, source.replace('const TARGET = /', 'const TARGET = /never-match'))
+    const target = name === 'ptc-errors' ? 'RUNTIME' : 'TARGET'
+    await fs.writeFile(hook, source.replace(`const ${target} = /`, `const ${target} = /never-match`))
     assert.notEqual(await fs.readFile(hook, 'utf8'), source)
     await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /actual runtime hook composition differs/)
   })
 }
+
+test('the gate observes the actual PTC worker hook, not only its standalone patch', async (t) => {
+  const { root } = await fixture(t)
+  const hook = path.join(root, 'server', 'ptc-errors-hook.js')
+  const source = await fs.readFile(hook, 'utf8')
+  await fs.writeFile(hook, source.replace('const WORKER = /', 'const WORKER = /never-match'))
+  assert.notEqual(await fs.readFile(hook, 'utf8'), source)
+  await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /actual runtime hook composition differs/)
+})
 
 test('a private retry utility left on disk is not enough if its public export vanished', async (t) => {
   const { root, pi, put } = await fixture(t)
