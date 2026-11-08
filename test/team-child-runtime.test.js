@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import YAML from 'yaml'
 import { homePatch, TEAM_CHILD_PLUGIN, TEAM_CHILD_COMPACTION_PLUGIN, teamChildPatch } from '../server/dsh-config.js'
 import { apply, SECTION_NAME, READ_ONLY_SECTION_NAME, READ_ONLY_PROMPT } from '../server/team-child-plugin.js'
-import { childPrompt } from '../server/teams-prompts.js'
+import { childPrompt, leaderPrompt } from '../server/teams-prompts.js'
 import { RuntimePool, runtimeKey } from '../server/runtime.js'
 
 test('the team children\'s layer disables delegation and goal rounds and gives instructions', () => {
@@ -15,6 +15,19 @@ test('the team children\'s layer disables delegation and goal rounds and gives i
   assert.deepEqual(rows.at(-1), { insert: [{ id: 'agent-desk-team-child', name: TEAM_CHILD_PLUGIN, config: { text: childPrompt() } }] })
   assert.match(childPrompt(), /^# Agent Desk team: you are a child agent\n/)
   assert.ok(TEAM_CHILD_PLUGIN.endsWith('/server/team-child-plugin.js'))
+})
+
+test('team guidance checks all deliverables without forcing retries or confusing inherited directories', () => {
+  for (const prompt of [childPrompt(), childPrompt('fixture', { background: true })]) {
+    assert.match(prompt, /work directory assigned in the task, not an inherited current directory/)
+    assert.match(prompt, /Passing existing\/public tests does not finish a task/)
+    assert.match(prompt, /missing deliverables and checks/)
+    assert.match(prompt, /concrete blocker/)
+    assert.match(prompt, /instead of separate bookkeeping-only calls/)
+  }
+  const parent = leaderPrompt({ workspace: 'fixture', maxChildren: 2, tiers: [] })
+  assert.match(parent, /normal turn ending is not task acceptance/)
+  assert.match(parent, /Do not retry merely because a report is partial/)
 })
 
 test('the child plugin adds its text as one literal section after the persona', () => {

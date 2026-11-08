@@ -7,10 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Pass optional JSON data to TypeScript PTC programs through `run_code.data` and `input.get({})`, keeping literal source text out of the program compiler without changing tool permissions.
+
 ### Fixed
 
 - Stop pathological SIWC function-argument padding instead of retrying it; preserve code-string whitespace, ordinary long reasoning, and encrypted reasoning on transient retries.
 - Include interrupted dsh requests in turn and history accounting, mark unavailable usage and partial reasoning as lower bounds, and retain existing saved estimates.
+- Clarify PTC argument objects, task-directory selection and batched progress updates; require team agents to check every requested deliverable before reporting or accepting completion, without unconditional automatic retries.
 
 ## [0.1.12] - 2026-11-07
 

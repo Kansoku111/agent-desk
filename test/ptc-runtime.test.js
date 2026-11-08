@@ -553,17 +553,57 @@ test('real ACP shares SDK output types while retaining every native binding', { 
   assert.ok(parsed.statements.some(node => ts.isTypeAliasDeclaration(node) && node.name.text.startsWith('SharedOutput')))
 })
 
+test('real PTC passes literal source as data without compiling, interpolating or leaking it across calls', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'workspace-write')
+  await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+  const source = [
+    "'use strict';",
+    'const result = {text: "日本語"};',
+    'process.stdout.write(`${JSON.stringify(result)}\\n`);',
+    '// quotes: single \' double " backtick ` interpolation ${literal}',
+    'globalThis.__ptcDataExecuted = true;',
+  ].join('\n') + '\n' + '// literal data padding\n'.repeat(600)
+  const files = [{ file_path: 'literal.cjs', content: source }, { file_path: 'other.txt', content: 'quotes \' " ` ${literal}\n日本語' }]
+  // The old nested-template shape fails before any write; do not guess a repair.
+  await f.run("await tools.write({file_path:'nested-must-not-run.cjs',content:`" + source + "`});")
+  await assert.rejects(fs.stat(path.join(f.workspace, 'nested-must-not-run.cjs')))
+  await f.run('const files = await input.get<ToolArgsMap["write"][]>({}); for (const file of files) await tools.write(file); return {executed: Object.hasOwn(globalThis, "__ptcDataExecuted")};', { data: files })
+  assert.equal(await fs.readFile(path.join(f.workspace, 'literal.cjs'), 'utf8'), source)
+  const announced = f.updates.find(x => x.rawInput?.data)
+  assert.deepEqual(announced?.rawInput?.data, files, 'execution/approval detail must retain the separate input data')
+  assert.equal(await fs.readFile(path.join(f.workspace, 'other.txt'), 'utf8'), files[1].content)
+  const request = f.requests.at(-1)
+  assert.deepEqual(request.tools.map(x => x.function.name), ['run_code'])
+  assert.ok(request.tools[0].function.parameters.properties.data)
+  assert.ok(!request.tools[0].function.parameters.required.includes('data'))
+  const result = request.messages.filter(x => x.role === 'tool').at(-1).content
+  assert.match(typeof result === 'string' ? result : JSON.stringify(result), /"executed":\s*false/)
+  await f.run('const input = "legacy-local-name"; return input;')
+  const legacy = f.requests.at(-1).messages.filter(x => x.role === 'tool').at(-1).content
+  assert.match(typeof legacy === 'string' ? legacy : JSON.stringify(legacy), /legacy-local-name/)
+  await f.run('return typeof input;')
+  const absent = f.requests.at(-1).messages.filter(x => x.role === 'tool').at(-1).content
+  assert.match(typeof absent === 'string' ? absent : JSON.stringify(absent), /undefined/)
+})
+
+test('PTC data does not grant read-only sessions write permission', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'read-only')
+  await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
+  await f.run('return await tools.write(await input.get<ToolArgsMap["write"]>({}));', { data: { file_path: 'forbidden-data.txt', content: 'must not write' } })
+  await assert.rejects(fs.stat(path.join(f.workspace, 'forbidden-data.txt')))
+})
+
 test('real PTC syntax diagnostics reach the model without executing tools and the session recovers', { timeout: 120_000 }, async (t) => {
   const f = await setup(t, 'workspace-write')
   await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'ptc')
   const marker = path.join(f.workspace, 'must-not-be-written.txt')
-  await f.run('await tools.write({file_path:"must-not-be-written.txt",content:"SECRET_OTHER_LINE"});\nconst broken = {x: 1)')
+  await f.run('await tools.write({file_path:"must-not-be-written.txt",content:"SECRET_OTHER_LINE"});\nconst broken = {x: 1)', { data: { secret: 'SECRET_INPUT_DATA' } })
   const content = f.requests.at(-1).messages.filter(entry => entry.role === 'tool').at(-1).content
   const error = typeof content === 'string' ? content : JSON.stringify(content)
   assert.match(error, /code run failed/)
   assert.match(error, /line 2, column/)
   assert.match(error, /const broken/)
-  assert.doesNotMatch(error, /SECRET_OTHER_LINE|node:internal|__dsh_program__/)
+  assert.doesNotMatch(error, /SECRET_OTHER_LINE|SECRET_INPUT_DATA|node:internal|__dsh_program__/)
   await assert.rejects(fs.stat(marker))
   // A Japanese todo after an earlier error must not hide the actual location.
   await f.run('const before = 1; '.repeat(45) + 'const broken = {x: 1); ' + 'const todo = "確認する"; '.repeat(30))

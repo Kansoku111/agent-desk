@@ -63,6 +63,21 @@ test('the real SDK renderer is patched once without altering argument docs or th
   assert.equal(patched.slice(patched.indexOf('function renderToolsSdkPy(')),source.slice(py))
 })
 
+test('PTC data schema, binding and presentation changes fail closed together on upstream drift', async () => {
+  const source = await fs.readFile(require.resolve('@deepseek-ai/dsh-tool-executor-ptc'), 'utf8')
+  for (const [before, after] of [
+    ['return parameterSchemaSpecToJsonSchema({', 'return changedParameterSchema({'],
+    ['rawInput: args.code', 'rawInput: args.changedCode'],
+    ['signal: runController.signal,', 'signal: changedSignal,'],
+  ]) assert.equal(patchPtcSdkSource(source.replace(before, after)), null)
+  const patched = patchPtcSdkSource(source)
+  assert.match(patched, /agentDeskDataBindings\(args, runtime\)/)
+  assert.match(patched, /declare const input/)
+  assert.match(patched, /input\.get/)
+  assert.match(patched, /Pass a JSON arguments object to every binding/)
+  assert.match(patched, /Combine progress-only/)
+})
+
 test('the TypeScript run_code instructions gain one batching line after the Promise.all line, and the Python ones do not', async () => {
   const source=await fs.readFile(require.resolve('@deepseek-ai/dsh-tool-executor-ptc'),'utf8')
   const patched=patchPtcSdkSource(source)
