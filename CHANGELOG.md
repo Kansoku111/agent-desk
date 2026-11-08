@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Deliver PTC batching guidance and complete examples through the public executor-section API instead of rewriting upstream SDK instructions; retain existing data/runtime compatibility checks.
 - Show complete data-based PTC edit and batched file/progress calls, keeping literal replacements out of executable strings without changing execution or permissions.
 - Accept argument-free PTC `input.get()` and legacy empty containers; present required code and description before optional data without guessing missing code or staging data across calls.
 - Stop pathological SIWC function-argument padding instead of retrying it; preserve code-string whitespace, ordinary long reasoning, and encrypted reasoning on transient retries.

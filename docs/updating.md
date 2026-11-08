@@ -51,6 +51,7 @@ dsh と同梱の Codex は `package.json` で版を固定しているため、�
    `reasoning-usage` フックはpi-aiが報告した正の推論トークン内訳をdshへ引き渡します。欠落とゼロを区別できない値は記録せず、出力総数や料金には加算しません。`test/reasoning-usage-patch.test.js` と `test/reasoning-usage-runtime.test.js` で確認します。
 
    `compaction` フックは、巨大な先頭メッセージのため通常の保持量で範囲が作れない場合だけ、最近の保持量を減らして最小の安全な先頭範囲を要約します。`context-overflow` フックは、ローカル予算を超えた正常な ChatGPT／Claude 応答を超過エラーに変換しないようにします。APIが返した超過エラーと出力ゼロの長さ制限は維持します。`test/context-compaction-runtime.test.js` と上記パッチテストで確認します。
+   PTCのバッチ案内・完成形例は `server/ptc-guidance.js` が公開 `ToolExecutor.sections` APIで配ります。SDKの案内文にはパッチを当てません。`data` API・SDK型・ワーカー境界の内部フックは残るため、互換チェックだけでなく「共通」の `npm test` に含まれる `test/ptc-guidance.test.js`・`test/ptc-runtime.test.js` も通ることを確認します。後者はモデルAPIを使わず、実dshでdata編集・読み取り専用・モード切替・セッション間の案内分離を検証します。
 4. `node scripts/check-dsh.mjs` で、新しい dsh が実際に起動し、セッションを作ってモデルを選べることを確かめます。最後の行に `"ok":true` が出れば成功です。
 5. 「共通」の確認とコミットをします。
 

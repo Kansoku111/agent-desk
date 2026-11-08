@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { test } from 'node:test'
-import { PtcExecutor } from '@deepseek-ai/dsh-tool-executor-ptc'
+import { PTC_GUIDANCE_SECTION } from '../server/ptc-guidance.js'
 import { patchPtcSource } from '../server/ptc-patch.js'
 import { assertPresentationReady, setToolMode, withToolMode } from '../server/ptc-bridge.js'
 import { TOOL_MODE_CONFIG, ptcEventUpdate, toolModeOption } from '../server/ptc.js'
@@ -29,7 +29,7 @@ test('bridge releases the exact declaration before switching, rejects busy/inval
   let hold = false
   // The executors only read these from the context while being built.
   const record = { assertActive() {}, agent: { status: 'idle', ctx: { systemPrompt: { getSectionOrder: () => 0 }, tools: { setExecutor(executor) {
-    const mode = executor instanceof PtcExecutor ? 'ptc' : 'native'
+    const mode = executor.sections?.some(section => section.name === PTC_GUIDANCE_SECTION) ? 'ptc' : 'native'
     if (fail) throw new Error('declaration failed')
     calls.push(mode)
     return async () => {

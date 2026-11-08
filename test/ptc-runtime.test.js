@@ -17,7 +17,7 @@ import { WEB_SEARCH_PLUGIN, abPatch, chatWebPatch, homePatch, shippedPersona, te
 import { localRoute } from '../server/local-llm.js'
 import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
 import { PLAN_INSTRUCTION } from '../server/thread-utils.js'
-import { ptcDataExamples } from '../server/ptc-sdk-patch.js'
+import { ptcDataExamples } from '../server/ptc-guidance.js'
 
 async function setup(t, mode, profile) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ptc-'))
@@ -516,12 +516,13 @@ test('real ACP switches native → PTC → native, forwards internal tools, resu
   assert.equal(toolModeOption(other.configOptions).currentValue, 'native')
   await f.runtime.prompt(other.sessionId, [{ type: 'text', text: 'other root' }])
   assert.ok(schemas().includes('read'))
+  assert.doesNotMatch(JSON.stringify(f.requests.at(-1).messages.filter(message => message.role === 'system')), /Complete run_code argument objects|Every `run_code` call costs/)
   await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, 'native')
   await f.prompt()
   assert.ok(schemas().includes('read'))
   assert.equal(schemas().includes('run_code'), false)
   const nativeSystem = f.requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n')
-  assert.doesNotMatch(nativeSystem, /Only `run_code`|namespace tools/)
+  assert.doesNotMatch(nativeSystem, /Only `run_code`|namespace tools|Every `run_code` call costs|Complete run_code argument objects/)
   await f.runtime.stop()
   await f.runtime.start()
   const resumed = await f.runtime.resumeSession(f.session.sessionId, f.workspace)
@@ -570,6 +571,7 @@ test('complete data examples edit literal contents and batch writes with progres
   assert.match(typeof output === 'string' ? output : JSON.stringify(output), /"inProgress":\s*1/)
   const sdk = JSON.stringify(f.requests.at(-1).messages.filter(x => x.role === 'system'))
   assert.match(sdk, /Complete run_code argument objects/)
+  assert.equal(sdk.split('Every `run_code` call costs a model round trip.').length, 2, 'guidance is emitted once, not also patched into the SDK')
 })
 
 test('complete edit example does not bypass read-only permissions', { timeout: 120_000 }, async (t) => {

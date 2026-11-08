@@ -6,6 +6,7 @@
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { PtcExecutor } from '@deepseek-ai/dsh-tool-executor-ptc'
 import { TOOL_MODE_CONFIG, TOOL_MODES } from './ptc.js'
+import { withPtcGuidance } from './ptc-guidance.js'
 import { SESSION_POLICY_CONFIG, sessionPolicyOption } from './session-policy-plugin.js'
 const states = new WeakMap()
 const stateOf = (record) => {
@@ -38,7 +39,7 @@ export async function setToolMode(record, mode) {
     state.dispose = null
     record.assertActive()
     const ctx = record.agent.ctx
-    state.dispose = ctx.tools.setExecutor(mode === 'ptc' ? new PtcExecutor(ctx) : new NativeToolExecutor(ctx))
+    state.dispose = ctx.tools.setExecutor(mode === 'ptc' ? withPtcGuidance(new PtcExecutor(ctx), ctx) : new NativeToolExecutor(ctx))
     state.mode = mode
   } finally {
     state.changing = false
