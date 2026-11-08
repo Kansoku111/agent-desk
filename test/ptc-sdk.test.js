@@ -74,7 +74,7 @@ test('PTC data schema, binding and presentation changes fail closed together on 
   const patched = patchPtcSdkSource(source)
   assert.match(patched, /agentDeskDataBindings\(args, runtime\)/)
   assert.match(patched, /declare const input/)
-  assert.match(patched, /agentDeskDataExamples\(sorted\)/)
+  assert.match(patched, /agentDeskDataExamples\(sorted, programFormat\)/)
   assert.match(patched, /Pass a JSON arguments object to every tools binding/)
   assert.match(patched, /Combine progress-only/)
 })
@@ -83,6 +83,7 @@ test('complete data examples are valid calls, follow available tools, and match 
   const parse = text => [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map(x => JSON.parse(x[1]))
   const examples = parse(ptcDataExamples(['edit', 'write', 'todo_write'].map(name => ({ name }))))
   assert.equal(examples.length, 2)
+  assert.equal(ptcDataExamples([{ name: 'edit' }], 'script'), '')
   for (const call of examples) {
     assert.deepEqual(Object.keys(call), ['code', 'description', 'data'])
     assert.ok(call.code && call.description)

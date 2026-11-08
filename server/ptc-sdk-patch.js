@@ -16,7 +16,8 @@ export function shareOutputTypes(entries, indent = '  ') {
 
 // Complete argument objects keep data attached to the call, rather than
 // teaching only a code fragment that can be copied without its literal input.
-export function ptcDataExamples(schemas) {
+export function ptcDataExamples(schemas, programFormat = 'function-body') {
+  if (programFormat !== 'function-body') return ''
   const names = new Set(schemas.map(schema => schema.name))
   const calls = []
   if (names.has('edit')) calls.push({
@@ -73,7 +74,7 @@ export function patchPtcSdkSource(source) {
     .replace(LOOP, SHARED_LOOP)
     .replace(OUTPUT, SHARED_OUTPUT)
     .replace(PARALLEL, () => PARALLEL + BATCH)
-    .replace(SDK_INSTRUCTIONS, '\tconst instructions = renderSdkInstructions(programFormat) + agentDeskDataExamples(sorted);')
+    .replace(SDK_INSTRUCTIONS, '\tconst instructions = renderSdkInstructions(programFormat) + agentDeskDataExamples(sorted, programFormat);')
     .replace(STATIC_DATA, '\t\t\t...agentDeskDataParameters,\n' + STATIC_DATA)
     .replace(DYNAMIC_DATA, '\t\t\t\t...agentDeskRuntimeDataParameters(runtime),\n' + DYNAMIC_DATA)
     .replace(BINDINGS, '\t\t\t\t\t\t\t}, ...agentDeskDataBindings(args, runtime)],\n\t\t\t\t\t\t\tsignal: runController.signal,')
