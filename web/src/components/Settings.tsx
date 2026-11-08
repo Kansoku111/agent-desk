@@ -17,11 +17,11 @@ export function SettingsDialog({ tab }: { tab: SettingsTab }) {
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'accounts', label: 'アカウント' },
     { id: 'models', label: 'モデル' },
+    { id: 'general', label: '一般' },
     { id: 'teams', label: 'エージェントチーム' },
     { id: 'personalize', label: 'パーソナライズ' },
     { id: 'skills', label: 'Skills' },
     { id: 'usage', label: '使用量' },
-    { id: 'general', label: '一般' },
     { id: 'remote', label: 'スマホ' },
     { id: 'about', label: '情報' },
   ]
