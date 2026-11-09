@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-11-09
+
 ### Added
 
 - Toggle Fast beside the model picker in ordinary GP tasks when the Codex model offers it. The setting is saved per task and applies from the next turn.
@@ -25,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cancelling while a bridged child is being created no longer starts it afterward. Clean up completion listeners when startup fails or a run ends.
 - Bridged DSH subagents now read API keys from Agent Desk's managed credential store. The headless profile had disabled it, so routes such as GP → Command Code failed with `MISSING_CREDENTIAL` even when a key was saved.
 - A GP task asked for "a subagent" used Codex's own `spawn_agent` instead of the route chosen in Settings, so the model was ignored and nothing showed in the subagent panel. Codex 0.167.0 gives gpt-6 models its own subagent tools even with `features.multi_agent=false`; a task that mounts the subagent bridge is now told, in its developer instructions, not to use them and to call the bridge's `subagent` tool.
+- Apply a reasoning level changed mid-conversation in a GP (Codex) task to the conversation itself. A conversation the app-server still had loaded ignored the new level on resume, so a raised level stayed weak and a lowered level stayed high until the process idled out; the task now unloads and resumes it, and stops with an error if the level cannot be applied.
 
 ### Changed
 
@@ -36,10 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `server/gpt-subagent-mcp.js` and the `subagent_gpt` MCP tool of Claude Code tasks, replaced by the bridge above.
-
-### Fixed
-
-- Apply a reasoning level changed mid-conversation in a GP (Codex) task to the conversation itself. A conversation the app-server still had loaded ignored the new level on resume, so a raised level stayed weak and a lowered level stayed high until the process idled out; the task now unloads and resumes it, and stops with an error if the level cannot be applied.
 
 ## [0.1.13] - 2026-11-08
 
