@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The subagent panel now also shows on GP and Claude Code tasks, and lists the subagents that ran as another kind of task as cards you can open: a Claude Code or GP child streams its tools and answer, a DSH child shows its answer when it ends. The list lives in memory (the latest 30 per task) and is empty again after a restart.
 - Choose the model and reasoning level Claude Code's own subagents run on (Claude Code → Claude Code). Claude Code does not pass the parent's level on to a subagent on another model — it uses that model's default — so a level you pick is applied by a hook on the Agent tool, and "default" means the model's own default, not the parent's.
 
+### Fixed
+
+- A GP task asked for "a subagent" used Codex's own `spawn_agent` instead of the route chosen in Settings, so the model was ignored and nothing showed in the subagent panel. Codex 0.167.0 gives gpt-6 models its own subagent tools even with `features.multi_agent=false`; a task that mounts the subagent bridge is now told, in its developer instructions, not to use them and to call the bridge's `subagent` tool.
+
 ### Changed
 
 - Settings saved with the per-provider subagent models (`subagentModels`, `subagentEfforts`) migrate to routes: the DSH row takes the ChatGPT model if one was set, otherwise the Claude one; the Claude Code row takes the ChatGPT model only. If both providers were set, only ChatGPT is used from now on, so no billing route changes silently. The old keys stay in `settings.json` but are no longer read.

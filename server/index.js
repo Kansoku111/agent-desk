@@ -18,7 +18,7 @@ import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF, OPENSCALE_REF,
 } from './credentials.js'
 import { contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeDshChildPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch, writeChatWebPatch } from './dsh-config.js'
-import { BRIDGE_MCP_SERVER, SubagentBridge, SUBAGENT_TOOL_TIMEOUT_SEC } from './subagent-bridge.js'
+import { BRIDGE_MCP_SERVER, CODEX_BRIDGE_GUIDANCE, SubagentBridge, SUBAGENT_TOOL_TIMEOUT_SEC } from './subagent-bridge.js'
 import { routePlan, savedRoutes } from './subagent-routes.js'
 import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
@@ -145,7 +145,7 @@ const credentials = new CredentialStore(paths.credentials)
 const codexApp = new CodexAppServer({ home: paths.codexHome, openUrl: openExternal })
 const codexWork = new CodexWorkServer({ home: paths.codexHome, cwd: paths.myPc })
 const codex = await new CodexRunner({ home: paths.home, server: codexWork, attachmentsDir: paths.attachmentsDir,
-  instructions: () => effectiveCustomInstructions(settings), trustedMcp: [BRIDGE_MCP_SERVER] }).load()
+  instructions: () => effectiveCustomInstructions(settings), trustedMcp: [BRIDGE_MCP_SERVER], mcpGuidance: { [BRIDGE_MCP_SERVER]: CODEX_BRIDGE_GUIDANCE } }).load()
 
 // Agent teams (teams.js) give their leader's Claude Code its flags.
 let teams = null
@@ -989,7 +989,8 @@ const handlers = {
   ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
   ...createCodexHandlers({
     paths, codex, teams, getSettings, mutateSettings,
-    // Codex has no subagents of its own here, so a Codex task's subagents always come through the bridge.
+    // A Codex task's subagents come through the bridge; its own (spawn_agent) cannot be switched off by a
+    // setting, so the task is told not to use them (CODEX_BRIDGE_GUIDANCE).
     // Returns the servers to mount when they differ from what the task has, otherwise null.
     subagentMcp: (task) => {
       const server = subagentBridge.mcpServer('gp', task.id, task.workspace)

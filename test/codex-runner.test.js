@@ -607,3 +607,18 @@ test('a bridged subagent session is hidden from the task list, cannot ask the us
   assert.equal(runner.pendingPermissions(child.id).length, 0)
   await finish(runner, server, child.id, ids)
 })
+
+test('a task that mounts the subagent bridge is told to use it, and no other task gets that text', async t => {
+  const { dir, server, runner } = await setup(t, { mcpGuidance: { 'agent-desk-subagent': 'use the bridge tool' } })
+  const bridged = await runner.create({ workspace: dir, instructions: 'task instruction', mcpServers: { 'agent-desk-subagent': { command: 'x' } } })
+  const first = await start(runner, bridged.id)
+  assert.equal(server.calls.find(call => call.method === 'thread/start').params.developerInstructions, 'global instruction\n\ntask instruction\n\nuse the bridge tool')
+  await finish(runner, server, bridged.id, first)
+  // A conversation resumed later is told again: the instructions are not stored with it.
+  const second = await start(runner, bridged.id)
+  assert.match(server.calls.find(call => call.method === 'thread/resume').params.developerInstructions, /use the bridge tool$/)
+  await finish(runner, server, bridged.id, second)
+  const plain = await runner.create({ workspace: dir, mcpServers: { other: { command: 'x' } } })
+  await start(runner, plain.id)
+  assert.equal(server.calls.filter(call => call.method === 'thread/start').at(-1).params.developerInstructions, 'global instruction')
+})

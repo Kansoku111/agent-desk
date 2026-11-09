@@ -24,6 +24,16 @@ export const SUBAGENT_TOOL_TIMEOUT_SEC = 6 * 60 * 60
 const CHILD_NOTE = 'You are a subagent another agent started. Do the task you are given in the working folder and reply with your final report. '
   + 'You cannot start subagents or ask the user questions: finish with what you could do and say what blocked you.'
 
+/**
+ * For a Codex task that mounts the bridge. Codex 0.167 hands its own subagent tools (`spawn_agent` and the rest
+ * of `collaboration`) to gpt-6 models whatever `features.multi_agent` says, and asked for "a subagent" the model
+ * picks them over an MCP tool, which skips the route the user chose (measured with gpt-6-luna, low). Naming the
+ * setting and the tool is what makes it call the bridge.
+ */
+export const CODEX_BRIDGE_GUIDANCE = 'Codex\'s own subagents (spawn_agent and the other collaboration tools) are turned off in the user\'s Agent Desk settings: never use them. '
+  + `To delegate work to a subagent, call the subagent tool of the ${BRIDGE_MCP_SERVER.replaceAll('-', '_')} MCP server with the task in prompt `
+  + `(in exec: await tools.mcp__${BRIDGE_MCP_SERVER.replaceAll('-', '_')}__subagent({ prompt })). It runs on the model the user chose and returns its report.`
+
 /** Children kept per parent for the right-hand panel; the oldest drop off, so a task that lives for days does not grow without bound. */
 const MAX_VIEWS = 30
 /** Items kept per child, like the panel of a dsh task. */

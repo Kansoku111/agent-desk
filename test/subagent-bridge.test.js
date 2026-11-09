@@ -7,7 +7,7 @@ import { Readable } from 'node:stream'
 import { test } from 'node:test'
 import { createRequestHandler } from '../server/http-routes.js'
 import { createThreadHandlers } from '../server/rpc-handlers-threads.js'
-import { BRIDGE_MCP_SERVER, SUBAGENT_TOOL_TIMEOUT_SEC, SubagentBridge } from '../server/subagent-bridge.js'
+import { BRIDGE_MCP_SERVER, CODEX_BRIDGE_GUIDANCE, SUBAGENT_TOOL_TIMEOUT_SEC, SubagentBridge } from '../server/subagent-bridge.js'
 import { defaultRoutes } from '../server/subagent-routes.js'
 
 const luna = JSON.stringify(['openai-codex', 'gpt-6-luna'])
@@ -342,4 +342,10 @@ test('the panel lists a dsh task\'s logged children with the bridged ones, and a
   assert.deepEqual(await prompts('thread-1'), ['from the dsh log', 'a'])
   assert.deepEqual(await prompts('codex-1'), ['b'])
   assert.deepEqual(await prompts('nobody'), [])
+})
+
+test('the guidance for a Codex task names the tool as Codex exposes it and rules out its own subagents', () => {
+  // Codex turns the server name's hyphens into underscores: mcp__<server>__<tool>.
+  assert.match(CODEX_BRIDGE_GUIDANCE, new RegExp(`tools\\.mcp__${BRIDGE_MCP_SERVER.replaceAll('-', '_')}__subagent\\(`))
+  assert.match(CODEX_BRIDGE_GUIDANCE, /spawn_agent[^.]*turned off[^.]*never use them/)
 })

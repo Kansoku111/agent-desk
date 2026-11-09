@@ -24,10 +24,14 @@ export function codexSandbox(mode, workspace) {
 }
 
 export class CodexRunner extends EventEmitter {
-  /** @param {string[]} [trustedMcp] - MCP servers whose tool calls need no approval: Agent Desk's own, whose use the user chose in the settings */
-  constructor({ home, server, attachmentsDir, instructions = () => '', trustedMcp = [], now = Date.now, speedNow, stopTimeoutMs = 10000 }) {
+  /**
+   * @param {string[]} [trustedMcp] - MCP servers whose tool calls need no approval: Agent Desk's own, whose use the user chose in the settings
+   * @param {Record<string, string>} [mcpGuidance] - developer instructions added to a task that mounts the named MCP server
+   */
+  constructor({ home, server, attachmentsDir, instructions = () => '', trustedMcp = [], mcpGuidance = {}, now = Date.now, speedNow, stopTimeoutMs = 10000 }) {
     super()
     this.trustedMcp = trustedMcp
+    this.mcpGuidance = mcpGuidance
     this.home = path.resolve(home)
     this.dir = path.join(this.home, 'codex-tasks')
     this.indexFile = path.join(this.home, 'codex-tasks.json')
@@ -266,7 +270,7 @@ export class CodexRunner extends EventEmitter {
       const leanResearch = Boolean((record.ab && !record.ab.writable && record.ab.lean) || record.team?.executionMode === 'research')
       const params = { model: record.model, cwd: record.workspace, sandbox: record.permissionMode,
         approvalPolicy: this.#approvalPolicy(record),
-        developerInstructions: [this.instructions(record), record.instructions].filter(Boolean).join('\n\n'),
+        developerInstructions: [this.instructions(record), record.instructions, ...Object.entries(this.mcpGuidance).filter(([name]) => record.mcpServers?.[name]).map(([, text]) => text)].filter(Boolean).join('\n\n'),
         // The selected level must also be the conversation's own level. Sent only with turn/start, it reaches the model as a mid-conversation
         // update that applies weakly (measured: max ran like medium to high). thread/start honours this; thread/resume honours it only for a
         // conversation that is not loaded (see the unload below). The level is not stored with the conversation, so every resume must pass it.

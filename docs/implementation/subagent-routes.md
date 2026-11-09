@@ -10,7 +10,7 @@
 |---|---|---|---|
 | DSH | ○ `subagent` / `subagent_claude` / `subagent_gpt` | × | × |
 | CL | ○ `subagent_gpt`（GPT のみ、`gpt-subagent-mcp.js`） | △ Claude Code 組み込み（モデル・推論は指定していない） | × |
-| GP | × | × | × Codex の `multi_agent` を無効にしている（`codex-runner.js`、`docs/codex.md`） |
+| GP | × | × | × Codex の `multi_agent` を無効にしている（`codex-runner.js`、`docs/codex.md`）。ただし 0.167.0 は gpt-6 系に独自のサブエージェントツールを渡す（「実装結果」参照） |
 
 決定事項（利用者との合意）:
 
@@ -104,7 +104,7 @@ Route = { target: 'dsh' | 'cl' | 'gp', model: string | null, effort: string | nu
 ### 着手前に確認すること（採用した答え）
 1. 別種を選んだ行は、その親のネイティブの委託ツールを外す。ただしモデルを選ぶまでは外さない（ドラッグだけで委託手段がなくなるのを防ぐ）。
 2. 移行は ChatGPT を残す。課金先を黙って変えないため。
-3. GP→GP は初期でオン。GP は組み込みの委託ツールを持たないので、行は常に仲介ツールを載せる。
+3. GP→GP は初期でオン。GP の行は常に仲介ツールを載せる。（当初は「GP は組み込みの委託ツールを持たない」と考えたが誤りだった。下の「Codex 自身のサブエージェント」を参照。）
 
 ### 段階0の検証結果（GPT は `gpt-6-luna`・`low`、Claude Code は `haiku`・`low`）
 - CL→CL: `CLAUDE_CODE_SUBAGENT_MODEL` と `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` で、組み込みエージェント全部のモデルを強制できた。推論レベルは、当初「親と同じ」と考えて設定画面から外したが誤りだった。モックの API で子のリクエストを見ると、親が `--effort high` でも、モデルを強制した子はそのモデルの既定（Sonnet 5.5 なら `xhigh`）で動く。そこで PreToolUse フック（`Agent|Task`）が `updatedInput` に `effort` を足して渡す（`server/subagent-effort-hook.js`）。低（`low`）・最大（`max`）を指定して子の `output_config.effort` がそのとおりになること、未指定ならフックは何も返さず既定のままになることを確認した。親のレベルは変わらない。
@@ -119,6 +119,13 @@ Route = { target: 'dsh' | 'cl' | 'gp', model: string | null, effort: string | nu
 - 子のセッション（Claude Code は専用の `ClaudeRunner`、Codex は `subagent` 印つきの記録）はタスク一覧・通知に出さず、完了後に削除する。起動時に残りを掃除する。
 - 子が使う Claude Code の権限: Claude Code にはサンドボックスがないので、子はフルアクセスか読み取り専用の親からだけ起動する。Claude Code の親は、仲介ツールの承認を Claude Code に任せるので、フルアクセス扱い。
 - チームの GPT リーダーが GPT 以外のサブエージェントを起動したら止める。従来の「Claude だけ」の判定を、固定ツールが増えたため広げた。
+
+### Codex 自身のサブエージェント
+- 実際の GP タスクで「サブエージェントを呼んでみて」と頼むと、モデルは仲介ツールではなく Codex 自身の `spawn_agent`（`subAgentActivity`・`collabAgentToolCall`）を使い、設定の委託先（例: GP→DSH の DeepSeek）が無視された。右パネルにも何も出ない。
+- Codex 0.167.0 は、アプリサーバーの起動引数とスレッド設定の両方で `features.multi_agent=false` にしても、gpt-6 系のモデルのメタデータ（`multiAgentVersion`）に従って `collaboration.spawn_agent` などをツール定義（`additional_tools`）に入れる。`features.multi_agent_v2=false`、`agents.max_depth=0`、`features.multi_agent_v2.enabled=false` も効かなかった（`gpt-6-luna`・`low`）。
+- 採用: 仲介ツールをマウントした GP タスクの開発者向け指示に、Codex 自身のサブエージェントを使わず `exec` から `tools.mcp__agent_desk_subagent__subagent({ prompt })` を呼ぶことを毎回加える（`CODEX_BRIDGE_GUIDANCE`、`CodexRunner` の `mcpGuidance`）。同じ依頼で仲介ツールが呼ばれ、カードが出ることを確認した。
+- 代替案: モデルカタログを差し替えて `multiAgentVersion` を外す（Codex の更新ごとに壊れやすい）、`spawn_agent` の開始を検知して中断する（モデルへ理由を返せない）。どちらも採らなかった。
+- 限界: 指示による誘導で、強制ではない。サブエージェントをオフにした設定（仲介ツールが載らない）の GP タスクでは、Codex 自身のサブエージェントが使えるまま。
 
 ### 右パネルのカード（段階4の表示）
 - 当初は dsh のログを読む既存のパネル（`SubagentTracker`）に頼る想定だったが、仲介した子は dsh のセッションではない（Claude Code・Codex の子はそもそもログが別）うえ、パネル自体が DSH の画面にしかなかった。そこで `SubagentBridge` が子ごとに同じ形のカードを持ち、`change` を `subagent` フレームとして親タスクの id で配信する。`subagents.list` は DSH タスクのログ由来の子に、仲介した子を足して返す。DSH・GP・Claude Code のどの画面も同じパネルを使う。
