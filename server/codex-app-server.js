@@ -194,14 +194,14 @@ export class CodexAppServer extends EventEmitter {
       code: -32601, message: 'Agent Desk image runtime does not allow this operation'
     } }) + '\n')
   }
-  fail(error) {
+  fail(error, { idle = false } = {}) {
     for (const request of this.pending.values()) {
       clearTimeout(request.timer)
       request.reject(error)
     }
 
     this.pending.clear()
-    this.emit('stopped', error)
+    this.emit('stopped', error, { idle })
   }
   notify(method, params) {
     this.child?.stdin.write(JSON.stringify({
@@ -260,7 +260,7 @@ export class CodexAppServer extends EventEmitter {
     clearTimeout(this.idleTimer)
     if (this.busy || ['starting', 'browser', 'device'].includes(this.login.phase)) return
     this.idleTimer = setTimeout(() => {
-      void this.stop().catch(error => console.error('[agent-desk] Codex idle shutdown failed:', error.message))
+      void this.stop({ idle: true }).catch(error => console.error('[agent-desk] Codex idle shutdown failed:', error.message))
     }, this.idleMs)
     this.idleTimer.unref?.()
   }
@@ -614,15 +614,15 @@ For references, edit/follow the attached local images. Call the tool exactly onc
     // Shared .sandbox logs may belong to the persistent work process.
   }
 
-  stop() {
+  stop({ idle = false } = {}) {
     this.startGeneration++
-    this.stopping ??= this.stopProcess().finally(() => {
+    this.stopping ??= this.stopProcess({ idle }).finally(() => {
       this.stopping = null
     })
     return this.stopping
   }
 
-  async stopProcess() {
+  async stopProcess({ idle = false } = {}) {
     clearTimeout(this.idleTimer)
     clearTimeout(this.loginTimer)
     const child = this.child
@@ -632,7 +632,7 @@ For references, edit/follow the attached local images. Call the tool exactly onc
       await this.cleanupRuntime()
       return
     }
-    this.fail(new Error('Codex app-server stopped'))
+    this.fail(new Error('Codex app-server stopped'), { idle })
     if (child.pid && child.exitCode === null && child.signalCode === null) {
       const exited = new Promise(resolve => child.once('exit', resolve))
       child.stdin.end()

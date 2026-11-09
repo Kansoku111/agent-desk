@@ -418,7 +418,8 @@ test('idle app-server shuts down and restarts using only its own saved auth', as
   })
   await login(client)
   const stopped = once(client, 'stopped')
-  await stopped
+  const [, reason] = await stopped
+  assert.deepEqual(reason, { idle: true })
   assert.equal(client.child, null)
   assert.equal((await client.account()).signedIn, true)
 })

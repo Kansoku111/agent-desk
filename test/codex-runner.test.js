@@ -497,6 +497,22 @@ test('model cache cannot return account A after account B list fails', async t =
   assert.equal(server.calls.filter(x => x.method === 'model/list').length, 3)
 })
 
+test('idle shutdown keeps the model list visible and still checks the account on reuse', async t => {
+  const { server, runner } = await setup(t)
+  const models = await runner.models()
+  const events = []
+  runner.on('models', list => events.push(list))
+  server.emit('stopped', new Error('idle'), { idle: true })
+  assert.deepEqual(runner.modelCache, models)
+  assert.deepEqual(events, [])
+  assert.deepEqual(await runner.models(), models)
+  assert.equal(server.calls.filter(x => x.method === 'model/list').length, 1)
+  server.account = null
+  assert.deepEqual(await runner.models(), [])
+  assert.deepEqual(runner.modelCache, [])
+  assert.deepEqual(events, [[]])
+})
+
 test('stopped invalidates cached models and rejects a pending list from the old connection', async t => {
   const { server, runner } = await setup(t)
   await runner.models()

@@ -52,8 +52,10 @@ export class CodexRunner extends EventEmitter {
     this.indexWriter = debouncedWriter(this.indexFile)
     server.on('notification', (method, params) => this.#notification(method, params))
     server.on('request', request => this.#request(request))
-    server.on('stopped', error => {
-      this.invalidateModels()
+    server.on('stopped', (error, { idle = false } = {}) => {
+      // Idle shutdown is expected; retain the list for the UI, but reject in-flight reads.
+      if (idle) this.modelGeneration = (this.modelGeneration ?? 0) + 1
+      else this.invalidateModels()
       for (const [id, live] of this.live) void this.#finish(id, live, 'error', error?.message ?? 'Codex が停止しました')
     })
   }
