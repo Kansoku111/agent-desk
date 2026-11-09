@@ -31,7 +31,7 @@ Route = { target: 'dsh' | 'cl' | 'gp', model: string | null, effort: string | nu
 
 - `model: null` は「親と同じ」。既定は全行が `{ target: <自分>, model: null, effort: null }`。
 - 検証は `settings.js` に置く。`target` は列挙、`model` は target に合うカタログ、`effort` は `workflowLevels` と同じ規則。
-- DSH 行で固定モデルを選べるのは、今と同じ anthropic / openai-codex のみ（`SUBAGENT_TOOLS`）。DeepSeek などは今回の範囲に入れない。
+- DSH を委託先にするときのモデルは、接続済みでカタログにあるものを自由に選べる（GPT、Claude(API)、DeepSeek、OpenCode Go、Command Code、ローカル LLM ほか）。今の `SUBAGENT_TOOLS`（anthropic / openai-codex の2つだけ）と `settings.js` の検証は、接続先ごとの表に広げる。表には固定ツールの名前と課金の案内文を持たせ、案内文には接続先の課金（従量・サブスクリプション・無料）を載せる。`gptSubagentPatch` の `openai-codex` 固定も外す。固定ツールの本体（`agentOptions` の `provider` / `model`）に接続先の制限はない。
 - 同種のままの行は、ネイティブの委託ツールをそのまま使う（DSH は `subagent`、CL は組み込み Agent）。
 - 別種を選んだ行は、その親のネイティブの委託ツールを外し、仲介ツールだけにする。DSH は `BASE_SUBAGENT_TOOLS` を無効にし、CL は `--disallowedTools Agent`（`ab-runner.js` と同じ）を使う。
 
@@ -74,6 +74,7 @@ Route = { target: 'dsh' | 'cl' | 'gp', model: string | null, effort: string | nu
    - Claude Code の `--agents` と `CLAUDE_CODE_SUBAGENT_MODEL(_FORCE)` が CL→CL の子のモデル・推論に効くか。効かなければ CL→CL は「親と同じ」固定にし、設定は別種のときだけ有効にする。
    - Codex が MCP ツールを呼ぶときの承認の挙動と、`tool_timeout_sec`、キャンセル。
    - 仲介の MCP が長時間呼び出しで切れないか。
+   - GPT / Claude 以外の接続先（DeepSeek、OpenCode Go、Command Code、ローカル LLM）が、子の dsh で動くか。ローカル LLM のサーバーが止まっているときに、子の失敗が親へ明示的に返るか。
 1. **設定モデルと移行**（挙動は変えない）: `subagentRoutes`、検証、移行、`select` だけの設定画面。DSH / CL の既存挙動が同じであることをテストで固定する。
 2. **仲介ブリッジ**: MCP とサーバー側。まず CL→DSH（今の `subagent_gpt` の置き換え）で既存と同じ動きを確認する。
 3. **親ごとの組み込み**: DSH（`dsh-config.js` の `homePatch`、`mcp-servers.js`）、CL（`terminals.js` の `#writeTaskMcp`）、GP（`codex-runner.js` の `mcpServers`）の順。GP→GP は GP タスクにツール定義が毎回載るので、それを docs と CHANGELOG に書く。
