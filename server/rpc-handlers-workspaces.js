@@ -30,6 +30,7 @@ export function createWorkspaceHandlers({ paths, getSettings, mutateSettings, op
     }
     await mutateSettings(candidate => {
       candidate.workspaces = [resolved, ...candidate.workspaces.filter((entry) => entry !== resolved)].slice(0, 30)
+      candidate.hiddenProjects = (candidate.hiddenProjects ?? []).filter((entry) => entry !== resolved)
       candidate.lastWorkspace = resolved
       if (project) rename(candidate, resolved, project.name)
     })
@@ -70,6 +71,15 @@ export function createWorkspaceHandlers({ paths, getSettings, mutateSettings, op
       if (!isProjectColor(color)) throw new Error('この色は選べません')
       return mutateSettings(candidate => {
         candidate.projectColors = { ...candidate.projectColors, [dir]: color }
+      })
+    },
+
+    'project.hide': async ({ path: dir }) => {
+      if (typeof dir !== 'string' || !dir.trim() || dir === paths.myPc) throw new Error('プロジェクトが見つかりません')
+      return mutateSettings(candidate => {
+        candidate.hiddenProjects = [...new Set([...(candidate.hiddenProjects ?? []), dir])]
+        candidate.workspaces = candidate.workspaces.filter((entry) => entry !== dir)
+        if (candidate.lastWorkspace === dir) candidate.lastWorkspace = candidate.workspaces[0] ?? null
       })
     },
 

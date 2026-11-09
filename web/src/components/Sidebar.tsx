@@ -483,6 +483,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
   const [renaming, setRenaming] = useState(false)
   const [startingCodex, setStartingCodex] = useState(false)
   const [colorOpen, setColorOpen] = useState(false)
+  const [hiding, setHiding] = useState(false)
   const [savingColor, setSavingColor] = useState(false)
   const [name, setName] = useState(group.label)
   const saveColor = async (color: number) => {
@@ -578,14 +579,11 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
                     setRenaming(true)
                   }}
                 />}
-                {!group.pc && rows.length === 0 && (
+                {!group.pc && (
                   <MenuItem
                     icon={<X size={14} />}
                     label="一覧から外す"
-                    onSelect={() => {
-                      close()
-                      void act('workspace.remove', { path: group.path })
-                    }}
+                    onSelect={() => { close(); setHiding(true) }}
                   />
                 )}
               </>
@@ -593,6 +591,11 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
           </Dropdown>
         </div>
       </div>
+      {hiding && createPortal(
+        <ConfirmDialog title="プロジェクトを一覧から外す" body={<p>セッションとフォルダは削除されません。同じフォルダを再登録すると、セッションも再表示されます。</p>}
+          confirmLabel="一覧から外す" onClose={() => setHiding(false)} onConfirm={() => void act('project.hide', { path: group.path })} />,
+        document.body,
+      )}
       {colorOpen && createPortal(
         <Modal title={`${group.label} — 色変更`} onClose={() => setColorOpen(false)} width={320}>
           <div className="modal-body project-color-palette" aria-label="プロジェクトの色">
@@ -645,6 +648,7 @@ export function Sidebar() {
   const ab = useStore((state) => state.server?.ab) ?? []
   const codex = useStore((state) => state.server?.codexTasks) ?? []
   const workspaces = useStore((state) => state.server?.settings.workspaces) ?? []
+  const hiddenProjects = useStore((state) => state.server?.settings.hiddenProjects)
   const myPc = useStore((state) => state.server?.app.myPc) ?? ''
   const names = useStore((state) => state.server?.settings.projectNames)
   const colors = useStore((state) => state.server?.settings.projectColors)
@@ -681,6 +685,7 @@ export function Sidebar() {
     const result: Group[] = []
     for (const path of new Set(order)) {
       const pc = path === myPc
+      if (!pc && hiddenProjects?.includes(path)) continue
       result.push({
         path,
         pc,
@@ -697,7 +702,7 @@ export function Sidebar() {
     return needle || archived
       ? result.filter(any)
       : result.filter((group) => group.pc || any(group) || workspaces.includes(group.path))
-  }, [threads, terminals, ab, codex, workspaces, myPc, names, colors, needle, archived])
+  }, [threads, terminals, ab, codex, workspaces, hiddenProjects, myPc, names, colors, needle, archived])
 
   // Search/archive changes cannot leave hidden tasks selected for deletion.
   const activeId = route.view === 'thread' || route.view === 'terminal' || route.view === 'ab' || route.view === 'codex' ? route.id : null

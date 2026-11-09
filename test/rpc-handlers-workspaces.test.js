@@ -47,3 +47,37 @@ test('workspace.add still adds a folder given in quotes', async () => {
     await fs.rm(dir, { recursive: true, force: true })
   }
 })
+
+test('hiding a project keeps its files and metadata and re-adding restores it', async () => {
+  const h = setup()
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-hidden-project-'))
+  const file = path.join(dir, 'keep.txt')
+  try {
+    await fs.writeFile(file, 'keep')
+    await h.handlers['project.create']({ path: dir, name: 'Custom name' })
+    await h.handlers['project.color']({ path: dir, color: 3 })
+    await h.handlers['project.hide']({ path: dir })
+    await h.handlers['project.hide']({ path: dir })
+    assert.deepEqual(h.settings.workspaces, [])
+    assert.deepEqual(h.settings.hiddenProjects, [dir])
+    assert.equal(h.settings.lastWorkspace, null)
+    assert.equal(h.settings.projectNames[dir], 'Custom name')
+    assert.equal(h.settings.projectColors[dir], 3)
+    assert.equal(await fs.readFile(file, 'utf8'), 'keep')
+    await h.handlers['workspace.add']({ path: dir })
+    assert.deepEqual(h.settings.hiddenProjects, [])
+    assert.deepEqual(h.settings.workspaces, [dir])
+    assert.equal(h.settings.projectNames[dir], 'Custom name')
+    assert.equal(h.settings.projectColors[dir], 3)
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('project hiding rejects invalid paths and My PC', async () => {
+  const h = setup()
+  for (const dir of [undefined, '', '  ', 42, '__my_pc__']) {
+    await assert.rejects(h.handlers['project.hide']({ path: dir }), /プロジェクトが見つかりません/)
+  }
+  assert.equal(h.settings.hiddenProjects, undefined)
+})

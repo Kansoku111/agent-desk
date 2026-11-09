@@ -472,6 +472,7 @@ export interface Settings extends UsageDisplay {
   defaultPermissionMode: PermissionMode
   codexDefaults?: Pick<CodexTaskSummary, 'model' | 'effort' | 'permissionMode'> | null
   workspaces: string[]
+  hiddenProjects?: string[]
   lastWorkspace: string | null
   notifications: boolean
   anthropicWorkspaceId: string | null

@@ -41,6 +41,7 @@ export const DEFAULT_SETTINGS = {
   // Normal GP tasks remember their own choices; workflow workers never change these defaults.
   codexDefaults: null,
   workspaces: [],
+  hiddenProjects: [],
   lastWorkspace: null,
   notifications: true,
   anthropicWorkspaceId: null,
