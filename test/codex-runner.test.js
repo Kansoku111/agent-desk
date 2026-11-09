@@ -15,7 +15,7 @@ class FakeWorkServer extends EventEmitter {
     this.calls.push({ method, params })
     switch (method) {
       case 'account/read': return { account: this.account }
-      case 'model/list': return { data: [{ model: 'gpt-test', displayName: 'Test', isDefault: true, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] }
+      case 'model/list': return { data: [{ model: 'gpt-test', displayName: 'Test', isDefault: true, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }, ...(this.extraModels ?? [])] }
       // Like the real app-server: a loaded conversation keeps its level and ignores resume's config; an unloaded one takes it from the config.
       case 'thread/start': { const id = `thread-${++this.nextThread}`; this.loaded.set(id, params.config?.model_reasoning_effort ?? null); return { thread: { id }, reasoningEffort: this.loaded.get(id) } }
       case 'thread/resume': { if (!this.loaded.has(params.threadId)) this.loaded.set(params.threadId, params.config?.model_reasoning_effort ?? null); return { thread: { id: params.threadId }, reasoningEffort: this.loaded.get(params.threadId) } }
@@ -149,6 +149,59 @@ test('create and complete, strict selection, instructions and persistent thread 
   assert.equal(server.calls.filter(x => x.method === 'thread/start').length, 1)
   assert.equal(server.calls.find(x => x.method === 'thread/resume').params.threadId, first.threadId)
   await finish(runner, server, task.id, second)
+})
+
+const fastModel = {
+  model: 'gpt-6-luna', defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }],
+  serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }],
+}
+
+test('GP Fast uses the catalog, persists per task, and turns on and off on the same loaded thread', async t => {
+  const { dir, server, runner } = await setup(t)
+  server.extraModels = [fastModel]
+  const task = await runner.create({ workspace: dir, model: 'gpt-6-luna', effort: 'low' })
+  assert.equal((await runner.models()).find(model => model.id === task.model).fast, '1.5x speed')
+  let threadId
+  for (const fast of [undefined, true, false]) {
+    if (fast !== undefined) assert.equal((await runner.update(task.id, { fastMode: fast })).fastMode, fast)
+    const ids = await start(runner, task.id)
+    threadId ??= ids.threadId
+    assert.equal(ids.threadId, threadId)
+    assert.equal(server.calls.at(-1).params.serviceTierForTurn, fast ? 'priority' : 'default')
+    assert.equal(Object.hasOwn(server.calls.at(-1).params, 'serviceTier'), false)
+    await assert.rejects(runner.update(task.id, { fastMode: !fast }), /作業が終わってから/)
+    await finish(runner, server, task.id, ids)
+  }
+  await runner.update(task.id, { fastMode: true })
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'codex-tasks', `${task.id}.json`), 'utf8'))
+  assert.equal(saved.fastMode, true)
+  assert.equal((await runner.create({ workspace: dir, model: task.model })).fastMode, undefined)
+  assert.equal(server.calls.filter(call => call.method === 'thread/unsubscribe').length, 0)
+  assert.equal((await runner.update(task.id, { model: 'gpt-test' })).fastMode, false)
+  await assert.rejects(runner.update(task.id, { fastMode: true }), /対応していません/)
+})
+
+test('GP Fast refuses a revoked tier, can be turned off, and does not change managed tasks', async t => {
+  const { dir, server, runner } = await setup(t)
+  server.extraModels = [fastModel]
+  const task = await runner.create({ workspace: dir, model: fastModel.model })
+  await assert.rejects(runner.update(task.id, { fastMode: 'true' }), /不正/)
+  await runner.update(task.id, { fastMode: true })
+  server.extraModels = [{ ...fastModel, serviceTiers: [{ id: 'ultrafast' }] }]
+  await runner.models({ refresh: true })
+  await assert.rejects(runner.send(task.id, { text: 'next' }), /Fast をオフにするか/)
+  await waitFor(() => !runner.running(task.id))
+  assert.equal(server.calls.some(call => call.method === 'turn/start'), false)
+  await runner.update(task.id, { fastMode: false })
+  await finish(runner, server, task.id, await start(runner, task.id))
+  assert.equal(Object.hasOwn(server.calls.find(call => call.method === 'turn/start').params, 'serviceTierForTurn'), false)
+
+  server.extraModels = [fastModel]
+  await runner.models({ refresh: true })
+  const team = await runner.create({ workspace: dir, model: fastModel.model, team: { id: 'team', role: 'leader' } })
+  await assert.rejects(runner.update(team.id, { fastMode: true }), /通常の GP タスク/)
+  await finish(runner, server, team.id, await start(runner, team.id))
+  assert.equal(Object.hasOwn(server.calls.filter(call => call.method === 'turn/start').at(-1).params, 'serviceTierForTurn'), false)
 })
 
 test('a level changed after the conversation was created is applied to the conversation, not as a weak turn update', async t => {

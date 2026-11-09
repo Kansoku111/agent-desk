@@ -52,14 +52,20 @@ test('create guards workspace, forwards only allowed options, and adds workspace
 test('independent task send, update and remove are limited to public options', async () => {
   const { handlers: h, calls } = setup()
   assert.deepEqual(await h['codex.task.send']({ taskId: 'independent', text: 'hello', images: ['image'], permissionMode: 'danger-full-access' }), { sent: true })
-  const patch = { taskId: 'independent', title: 'title', archived: true, pinned: false, model: 'model', effort: 'low', permissionMode: 'read-only', instructions: 'injected', mcpServers: { evil: {} }, permissionPolicy: 'bypass', team: {}, ab: {} }
+  const patch = { taskId: 'independent', title: 'title', archived: true, pinned: false, model: 'model', effort: 'low', permissionMode: 'read-only', fastMode: true, instructions: 'injected', mcpServers: { evil: {} }, permissionPolicy: 'bypass', team: {}, ab: {} }
   await h['codex.task.update'](patch)
   assert.deepEqual(await h['codex.task.remove']({ taskId: 'independent' }), { removed: true })
   assert.deepEqual(calls, [
     ['send', 'independent', { text: 'hello', images: ['image'] }],
-    ['update', 'independent', { title: 'title', archived: true, pinned: false, model: 'model', effort: 'low', permissionMode: 'read-only' }],
+    ['update', 'independent', { title: 'title', archived: true, pinned: false, model: 'model', effort: 'low', permissionMode: 'read-only', fastMode: true }],
     ['remove', 'independent'],
   ])
+})
+
+test('Fast is saved with the task and does not update GP defaults', async () => {
+  const { handlers: h, settings } = setup()
+  assert.equal((await h['codex.task.update']({ taskId: 'independent', fastMode: true })).task.fastMode, true)
+  assert.equal(settings.codexDefaults, undefined)
 })
 
 test('leader sends refresh only when idle and removes its team', async () => {
@@ -78,9 +84,9 @@ test('leader sends refresh only when idle and removes its team', async () => {
 test('leader allows presentation updates but rejects execution setting changes', async () => {
   const { handlers: h, calls } = setup()
   await h['codex.task.update']({ taskId: 'leader', title: 'title', pinned: true, archived: false })
-  assert.deepEqual(calls, [['update', 'leader', { title: 'title', archived: false, pinned: true, model: undefined, effort: undefined, permissionMode: undefined }]])
+  assert.deepEqual(calls, [['update', 'leader', { title: 'title', archived: false, pinned: true, model: undefined, effort: undefined, permissionMode: undefined, fastMode: undefined }]])
   calls.length = 0
-  for (const patch of [{ model: 'model' }, { effort: 'low' }, { permissionMode: 'read-only' }]) {
+  for (const patch of [{ model: 'model' }, { effort: 'low' }, { permissionMode: 'read-only' }, { fastMode: false }]) {
     await assert.rejects(h['codex.task.update']({ taskId: 'leader', ...patch }), /チーム設定/)
   }
   assert.deepEqual(calls, [])

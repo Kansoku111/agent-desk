@@ -54,11 +54,11 @@ export function createCodexHandlers({ codex, teams, paths, getSettings, mutateSe
       if (value.ab || value.team?.childId) throw new Error('この担当はAB・チームの画面から停止してください')
       return { task: await codex.stop(taskId) }
     },
-    'codex.task.update': async ({ taskId, title, archived, pinned, model, effort, permissionMode }) => {
+    'codex.task.update': async ({ taskId, title, archived, pinned, model, effort, permissionMode, fastMode }) => {
       const value = task(taskId)
       if (value.ab || value.team?.childId || (value.team && value.team.role !== 'leader')) throw new Error('AB・チームの担当設定はここでは変更できません')
-      if (value.team && [model, effort, permissionMode].some(entry => entry !== undefined)) throw new Error('チームの実行設定はチーム設定から変更してください')
-      const updated = await codex.update(taskId, { title, archived, pinned, model, effort, permissionMode })
+      if (value.team && [model, effort, permissionMode, fastMode].some(entry => entry !== undefined)) throw new Error('チームの実行設定はチーム設定から変更してください')
+      const updated = await codex.update(taskId, { title, archived, pinned, model, effort, permissionMode, fastMode })
       if (!value.team && [model, effort, permissionMode].some(entry => entry !== undefined)) {
         await mutateSettings(candidate => remember(candidate, updated, { model: model !== undefined || effort !== undefined, permissionMode: permissionMode !== undefined }))
       }

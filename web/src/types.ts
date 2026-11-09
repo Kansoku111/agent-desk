@@ -42,6 +42,7 @@ export interface TaskPresetRun {
 export interface CodexTaskSummary {
   id: string; title: string; workspace: string; model: string | null; effort: string | null
   permissionMode: Exclude<PermissionMode, 'chat-web'>; sessionId: string | null
+  fastMode?: boolean
   status: 'idle' | 'running' | 'done' | 'error' | 'stopped'; pendingApproval: boolean
   createdAt: number; updatedAt: number; archived: boolean; pinned: boolean
   score?: UsageScore; team?: { id: string; childId?: string; role?: string } | null; ab?: { runId: string; jobId: string } | null
@@ -51,7 +52,7 @@ export interface CodexQuestion {
   options: { label: string; description: string }[] | null
 }
 export interface CodexPermission { requestId: string; kind: 'command' | 'file' | 'tool' | 'user-input'; title: string; details?: string; questions?: CodexQuestion[] }
-export interface CodexModel { id: string; name: string; efforts: string[]; defaultEffort?: string }
+export interface CodexModel { id: string; name: string; efforts: string[]; defaultEffort?: string; fast?: string }
 
 export interface ThreadSummary {
   preset?: { runId: string; browser?: boolean }

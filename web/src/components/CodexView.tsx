@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, FolderOpen, Loader2, PanelLeftOpen, Paperclip, Square, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, FolderOpen, Loader2, PanelLeftOpen, Paperclip, Square, X, Zap } from 'lucide-react'
 import { act, isImageAttachment, isNarrow, isTouch, loadCodexPermissions, request, setState, toast, uploadAttachment, upsertCodexTask, useStore } from '../store'
 import type { Attachment, CodexTaskSummary } from '../types'
 import { getDraft, useDraft, useImeField } from '../drafts'
-import { workspaceLabel } from '../util'
+import { fastNote, workspaceLabel } from '../util'
 import { TurnView } from './TurnView'
 import { CodexModelPicker } from './CodexModelPicker'
 import { CodexPermissionPicker } from './CodexPermissionPicker'
@@ -30,6 +30,7 @@ export function CodexView({ taskId }: { taskId: string }) {
   const ime = useImeField()
   const [images, setImages] = useState<Attachment[]>([])
   const [busy, setBusy] = useState(false)
+  const [fastUpdating, setFastUpdating] = useState(false)
   const [presetOpen, setPresetOpen] = useState(() => !isNarrow())
   const [uploading, setUploading] = useState(false)
   const input = useRef<HTMLInputElement>(null)
@@ -39,14 +40,22 @@ export function CodexView({ taskId }: { taskId: string }) {
   if (!task) return <div className="main-empty">タスクが見つかりません</div>
   const working = task.status === 'running'
   const teamChild = team?.children.find((entry) => entry.kind === 'codex' && entry.taskId === taskId)
+  const owned = Boolean(task.team || team || task.ab)
+  const fastOn = task.fastMode === true
+  const fast = choices.find((model) => model.id === task.model)?.fast
   const update = async (patch: Partial<CodexTaskSummary>) => {
     const result = await act<{ task: CodexTaskSummary }>('codex.task.update', { taskId, ...patch })
     if (result) upsertCodexTask(result.task)
     return Boolean(result)
   }
+  const toggleFast = async () => {
+    setFastUpdating(true)
+    try { await update({ fastMode: !fastOn }) }
+    finally { setFastUpdating(false) }
+  }
   const send = async () => {
     const sentText = getDraft(draftKey), sentImages = images
-    if (busy || uploading || (!sentText.trim() && !sentImages.length)) return
+    if (busy || fastUpdating || uploading || (!sentText.trim() && !sentImages.length)) return
     setBusy(true)
     const child = team?.children.find((entry) => entry.kind === 'codex' && entry.taskId === taskId)
     const result = child
@@ -97,9 +106,12 @@ export function CodexView({ taskId }: { taskId: string }) {
       <textarea {...ime.fieldProps} rows={2} value={text} aria-label="メッセージ" placeholder={working ? '追加指示を入力…' : 'メッセージを入力…'} onChange={(event) => setText(event.target.value)} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void addFiles([...event.clipboardData.files]) } }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !isTouch()) { event.preventDefault(); void send() } }} />
       <div className="composer-bar"><div className="composer-left">
         <button type="button" className="icon-button" aria-label="画像を添付" disabled={Boolean(teamChild)} onClick={() => input.current?.click()}><Paperclip size={16} /></button><input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={(event) => { void addFiles([...event.target.files ?? []]); event.target.value = '' }} />
-        <CodexModelPicker task={task} models={choices} disabled={working || Boolean(task.team || team || task.ab)} onChange={update} />
-        <CodexPermissionPicker value={task.permissionMode} disabled={working || Boolean(task.team || team || task.ab)} onChange={(permissionMode) => void update({ permissionMode })} />
-      </div><div className="composer-right"><button type="button" className="send-button" title={working ? '追加指示を送信' : '送信'} aria-label={working ? '追加指示を送信' : '送信'} disabled={busy || uploading || (!text.trim() && !images.length)} onPointerDown={(event) => { event.preventDefault(); ime.confirm() }} onClick={() => void send()}><ArrowUp size={17} /></button></div></div>
+        <CodexModelPicker task={task} models={choices} disabled={working || owned || fastUpdating} onChange={update} />
+        {!owned && (fast !== undefined || fastOn) && <button type="button" className={`chip fast-chip${fastOn ? ' on' : ''}`} aria-pressed={fastOn}
+          title={`次の送信から Fast モードを切り替えます。オンにすると利用枠の消費が増えます。${fast ? `（${fastNote(fast)}）` : ''}`}
+          disabled={working || busy || fastUpdating} onClick={() => void toggleFast()}><Zap size={13} fill={fastOn ? 'currentColor' : 'none'} />Fast</button>}
+        <CodexPermissionPicker value={task.permissionMode} disabled={working || owned || fastUpdating} onChange={(permissionMode) => void update({ permissionMode })} />
+      </div><div className="composer-right"><button type="button" className="send-button" title={working ? '追加指示を送信' : '送信'} aria-label={working ? '追加指示を送信' : '送信'} disabled={busy || fastUpdating || uploading || (!text.trim() && !images.length)} onPointerDown={(event) => { event.preventDefault(); ime.confirm() }} onClick={() => void send()}><ArrowUp size={17} /></button></div></div>
     </div></div>{team && teamPanel ? <TeamPanel team={team} /> : subagentPanel && <SubagentPanel taskId={taskId} workspace={task.workspace} />}{presetOpen && <TaskPresetRuns source={{ kind: 'codex', id: taskId }} onClose={() => setPresetOpen(false)} />}</div>
   </div>
 }

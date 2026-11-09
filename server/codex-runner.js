@@ -13,6 +13,7 @@ import { addScores, emptyScore } from '../shared/usage-score.js'
 
 const MODES = ['read-only', 'workspace-write', 'danger-full-access']
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+const FAST_TIER = 'priority'
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const clip = (text, limit = 120) => text.length > limit ? text.slice(0, limit) + '…' : text
 const accountKey = account => account?.email ? createHash('sha256').update(JSON.stringify([account.email, account.workspaceName ?? null])).digest('hex') : null
@@ -135,8 +136,10 @@ export class CodexRunner extends EventEmitter {
         for (const model of page.data ?? []) {
           const id = model.model ?? model.id
           if (typeof id !== 'string' || !id || model.hidden) continue
+          const fast = model.serviceTiers?.find(tier => tier.id === FAST_TIER)
           models.push({ id, name: model.displayName ?? id, efforts: (model.supportedReasoningEfforts ?? []).map(option => option.reasoningEffort).filter(value => EFFORTS.includes(value)),
-            defaultEffort: model.defaultReasoningEffort ?? 'medium', isDefault: model.isDefault === true })
+            defaultEffort: model.defaultReasoningEffort ?? 'medium', isDefault: model.isDefault === true,
+            ...(fast ? { fast: fast.description ?? '' } : {}) })
         }
         cursor = page.nextCursor ?? null
       } while (cursor)
@@ -158,16 +161,16 @@ export class CodexRunner extends EventEmitter {
     if (!selected) throw new Error('選択した Codex モデルは利用できません。モデルを選び直してください。')
     const chosenEffort = effort || selected.defaultEffort
     if (chosenEffort && !selected.efforts.includes(chosenEffort)) throw new Error('この Codex モデルは指定した推論レベルに対応していません')
-    return { model: selected.id, effort: chosenEffort, accountKey: this.modelKeys.get(models) ?? null }
+    return { choice: { model: selected.id, effort: chosenEffort, accountKey: this.modelKeys.get(models) ?? null }, fast: selected.fast !== undefined }
   }
 
   async create({ workspace, model = null, effort = null, permissionMode = 'workspace-write', instructions = '', mcpServers = {}, permissionPolicy = 'ask', team = null, ab = null, subagent = null }) {
     if (this.closing) throw new Error('アプリを終了しています')
     if (typeof workspace !== 'string' || !workspace.trim() || !(await fs.stat(workspace)).isDirectory()) throw new Error('ワークスペースのフォルダが不正です')
     if (!MODES.includes(permissionMode)) throw new Error('権限モードが不正です')
-    const selection = await this.#selection(model, effort)
+    const { choice } = await this.#selection(model, effort)
     const now = this.now()
-    const record = { id: randomUUID(), title: '新しいタスク', workspace: path.resolve(workspace), ...selection, permissionMode, instructions, mcpServers, permissionPolicy,
+    const record = { id: randomUUID(), title: '新しいタスク', workspace: path.resolve(workspace), ...choice, permissionMode, instructions, mcpServers, permissionPolicy,
       sessionId: null, status: 'idle', createdAt: now, updatedAt: now, archived: false, pinned: false, turns: [], score: emptyScore(), tokenTotal: null,
       ...(team ? { team } : {}), ...(ab ? { ab } : {}), ...(subagent ? { subagent } : {}) }
     this.records.set(record.id, record)
@@ -180,7 +183,8 @@ export class CodexRunner extends EventEmitter {
   async configure(id, patch) { return this.update(id, patch) }
   async update(id, patch) {
     const record = this.#record(id)
-    const configChange = ['model', 'effort', 'permissionMode', 'instructions', 'mcpServers'].some(key => patch[key] !== undefined)
+    const modelChange = patch.model !== undefined || patch.effort !== undefined
+    const configChange = modelChange || ['permissionMode', 'instructions', 'mcpServers', 'fastMode'].some(key => patch[key] !== undefined)
     if (configChange) {
       if (this.running(id) || this.configuring.has(id)) throw new Error('作業が終わってから設定を変更してください')
       this.executionGuard?.(record)
@@ -192,10 +196,17 @@ export class CodexRunner extends EventEmitter {
         if (!MODES.includes(patch.permissionMode)) throw new Error('権限モードが不正です')
         next.permissionMode = patch.permissionMode
       }
-      if (patch.model !== undefined || patch.effort !== undefined) {
-        const selection = await this.#selection(patch.model ?? record.model, patch.effort ?? record.effort)
-        if (record.sessionId && (!record.accountKey || selection.accountKey !== record.accountKey)) throw new Error('Codex のサインイン先が変わったか照合できません。新しいタスクを作成してください。')
-        Object.assign(next, selection)
+      if (patch.fastMode !== undefined) {
+        if (typeof patch.fastMode !== 'boolean') throw new Error('Fast モードの設定が不正です')
+        if (record.team || record.ab || record.subagent) throw new Error('Fast モードは通常の GP タスクで変更できます')
+        next.fastMode = patch.fastMode
+      }
+      if (modelChange || patch.fastMode === true) {
+        const { choice, fast } = await this.#selection(patch.model ?? record.model, patch.effort ?? record.effort)
+        if (record.sessionId && (!record.accountKey || choice.accountKey !== record.accountKey)) throw new Error('Codex のサインイン先が変わったか照合できません。新しいタスクを作成してください。')
+        if (patch.fastMode === true && !fast) throw new Error('この Codex モデルは Fast モードに対応していません')
+        if (modelChange) Object.assign(next, choice)
+        if (choice.model !== record.model && !fast && next.fastMode) next.fastMode = false
       }
       if (patch.title !== undefined) { if (typeof patch.title !== 'string' || !patch.title.trim()) throw new Error('タイトルが空です'); next.title = clip(patch.title.trim(), 200) }
       for (const key of ['archived', 'pinned']) if (patch[key] !== undefined) { if (typeof patch[key] !== 'boolean') throw new Error('設定の形式が不正です'); next[key] = patch[key] }
@@ -264,9 +275,14 @@ export class CodexRunner extends EventEmitter {
       if (live.ended) return
       if (live.stopping) return this.#finish(id, live, 'stopped')
       // Select the model and its account identity together; never authorize with a different read.
-      const selection = await this.#selection(record.model, record.effort)
+      const { choice, fast } = await this.#selection(record.model, record.effort)
       if (record.sessionId && !record.accountKey) throw new Error('Codex のサインイン先を照合できません。新しいタスクを作成してください。')
-      if (record.accountKey && selection.accountKey !== record.accountKey) throw new Error('Codex のサインイン先が変わりました。新しいタスクを作成してください。')
+      if (record.accountKey && choice.accountKey !== record.accountKey) throw new Error('Codex のサインイン先が変わりました。新しいタスクを作成してください。')
+      const ordinaryTask = !record.team && !record.ab && !record.subagent
+      const fastOn = record.fastMode === true
+      if (ordinaryTask && fastOn && !fast) throw new Error('この Codex モデルで Fast モードを利用できません。Fast をオフにするか、対応モデルを選んでください。')
+      // A turn-local tier keeps the thread's tier intact and applies to the next turn on a loaded thread too.
+      const tierOverride = ordinaryTask && fast ? { serviceTierForTurn: fastOn ? FAST_TIER : 'default' } : {}
       if (live.ended) return
       if (live.stopping) return this.#finish(id, live, 'stopped')
       const leanResearch = Boolean((record.ab && !record.ab.writable && record.ab.lean) || record.team?.executionMode === 'research')
@@ -295,7 +311,7 @@ export class CodexRunner extends EventEmitter {
       if (live.ended) return
       if (live.stopping) return this.#finish(id, live, 'stopped')
       const response = await this.server.rawRequest('turn/start', { threadId: record.sessionId, clientUserMessageId: live.turn.id,
-        input, model: record.model, effort: record.effort, cwd: record.workspace, approvalPolicy: this.#approvalPolicy(record), sandboxPolicy: { ...codexSandbox(record.permissionMode, record.workspace), ...(leanResearch ? { networkAccess: false } : {}) } })
+        input, model: record.model, effort: record.effort, ...tierOverride, cwd: record.workspace, approvalPolicy: this.#approvalPolicy(record), sandboxPolicy: { ...codexSandbox(record.permissionMode, record.workspace), ...(leanResearch ? { networkAccess: false } : {}) } })
       if (live.ended) return
       if (!response.turn?.id) throw new Error('Codex のターンIDを取得できませんでした')
       if (live.turnId && live.turnId !== response.turn.id) throw new Error('Codex のターンIDが一致しません')
