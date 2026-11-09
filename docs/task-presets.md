@@ -72,7 +72,7 @@
 
 ## 開発時の確認
 
-`node --test test/task-presets*.test.js`はモデルを使わない回帰確認です。読み取り専用の担当を含む実行先の選択と、実際のACPセッションの起動・権限も確認します。PC／390px幅の操作確認は`test/fixtures/task-presets-ui.html`の隔離Reactフィクスチャ（`window.taskPresetsTest.run()`と`window.taskPresetsTest.failures()`）で行えます。
+`node --test test/task-presets*.test.js`はモデルを使わない回帰確認です。HTTP接続時の開始と開始前エラー後の操作復帰、読み取り専用の担当を含む実行先の選択と、実際のACPセッションの起動・権限も確認します。PC／390px幅の操作確認は`test/fixtures/task-presets-ui.html`の隔離Reactフィクスチャ（`window.taskPresetsTest.run()`と`window.taskPresetsTest.failures()`）で行えます。`window.taskPresetsTest.startup()`は`crypto.randomUUID`のないHTTP相当の環境と開始前の例外を再現し、開始要求の送信と×で閉じられることを確認します。
 
 次は実際のモデルを使い、利用枠を消費します。製品コードやユーザーの作業フォルダーは変更せず、使い捨てのコードで確認します。会話記録や信頼済みフォルダー情報はCLIが通常どおり保存します。モデルを変更せず、GPTは`gpt-6-luna`・`low`、Claude Codeは`haiku`・`low`を明示します。Claude Codeはsubscription経路を確認できる場合のみ開始します。
 

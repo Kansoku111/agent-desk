@@ -29,7 +29,7 @@ class Socket {
     if (input.type === 'team.claudeAuth') result = { descriptor: { version: 1, mode: 'subscription', authMethod: 'fixture', apiProvider: '' }, challenge: null, confirmed: true }
     if (input.type === 'preset.create') {
       parentCalls++
-      current = { id: 'run-' + ++sequence, source, kind: input.kind, reviewMode: input.reviewMode, model: server.settings.taskPresets[input.kind].model, effort: 'low', title: '相談した機能', workspace: 'fixture', phase: 'preparing', createdAt: sequence, updatedAt: sequence, report: '', brief: '要件・範囲・完了条件・検証方法', permissionMode: 'workspace-write' }
+      current = { id: 'run-' + ++sequence, source, kind: input.kind, reviewMode: input.reviewMode, model: (input.kind === 'review' ? server.settings.taskPresets.reviewSelected ?? server.settings.taskPresets.review : server.settings.taskPresets.delegate).model, effort: 'low', title: '相談した機能', workspace: 'fixture', phase: 'preparing', createdAt: sequence, updatedAt: sequence, report: '', brief: '要件・範囲・完了条件・検証方法', permissionMode: 'workspace-write' }
       server.taskPresets = [...server.taskPresets, current]; result = { run: current }; publish()
     }
     if (input.type === 'preset.evidence') result = { text: input.kind === 'patch' ? '--- source.cjs\n+++ source.cjs\n+ fixed arithmetic sum' : 'verification passed', truncated: false, file: 'fixture/changes.patch' }
@@ -98,6 +98,49 @@ const api = {
     check(document.documentElement.scrollWidth <= innerWidth, 'no horizontal overflow')
     labels.push('independent review: two selectors, opinion default, automatic return, no overflow')
     return labels
+  },
+  async startup() {
+    const uuid = Object.getOwnPropertyDescriptor(crypto, 'randomUUID')
+    // Match a plain HTTP browser: getRandomValues exists, randomUUID does not.
+    Object.defineProperty(crypto, 'randomUUID', { configurable: true, value: undefined })
+    server.settings.taskPresets.reviewSelected = { model: reviewer, effort: 'low' }
+    const labels: string[] = []
+    try {
+      for (const kind of ['review', 'delegate'] as const) {
+        render(); store.setState({ presetRun: null, presetStart: { source, kind } }); await tick(200)
+        const before = requests.filter((entry) => entry.type === 'preset.create').length
+        check(!button('始める').disabled, kind + ' is ready')
+        button('始める').click(); await tick(200)
+        const creates = requests.filter((entry) => entry.type === 'preset.create')
+        check(creates.length === before + 1, kind + ' reaches the server without randomUUID')
+        check(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(creates.at(-1).requestId), 'valid request UUID')
+        check(!document.querySelector('[role="dialog"]'), kind + ' start dialog closes')
+        labels.push(kind + ': HTTP-compatible start request')
+      }
+      for (const kind of ['review', 'delegate'] as const) {
+        const random = Object.getOwnPropertyDescriptor(crypto, 'getRandomValues')
+        Object.defineProperty(crypto, 'getRandomValues', { configurable: true, value: () => { throw new Error('fixture ID failure') } })
+        try {
+          render(); store.setState({ presetRun: null, presetStart: { source, kind } }); await tick(200)
+          const before = requests.filter((entry) => entry.type === 'preset.create').length
+          button('始める').click(); await tick(200)
+          check(document.querySelector('[role="alert"]')?.textContent === 'fixture ID failure', kind + ' shows the preparation error')
+          check(!button('始める').disabled && !button('キャンセル').disabled, kind + ' unlocks its controls')
+          check(requests.filter((entry) => entry.type === 'preset.create').length === before, 'failed ID sends no request')
+          ;(document.querySelector('[role="dialog"] button[aria-label="閉じる"]') as HTMLButtonElement).click(); await tick()
+          check(!document.querySelector('[role="dialog"]'), kind + ' close button works after the error')
+          labels.push(kind + ': ID error is visible and close button works')
+        } finally {
+          if (random) Object.defineProperty(crypto, 'getRandomValues', random)
+          else Reflect.deleteProperty(crypto, 'getRandomValues')
+        }
+      }
+      check(document.documentElement.scrollWidth <= innerWidth, 'no horizontal overflow')
+      return labels
+    } finally {
+      if (uuid) Object.defineProperty(crypto, 'randomUUID', uuid)
+      else Reflect.deleteProperty(crypto, 'randomUUID')
+    }
   },
   async failures() {
     const sent = requests.filter((entry) => entry.type === 'preset.deliver').length

@@ -4,6 +4,7 @@ import test from 'node:test'
 import ts from 'typescript'
 import * as workflowEffort from '../shared/workflow-effort.js'
 import * as presetModels from '../shared/task-preset-models.js'
+import { messageId } from '../web/src/outbox.ts'
 
 const jsx = (type, props) => ({ type, props })
 const nodes = (node, match) => !node || typeof node !== 'object' ? [] : [
@@ -22,7 +23,7 @@ function mount(kind, settings = {}) {
   const server = { settings: { taskPresets: { delegate: { model: GPT, effort: 'low' }, review: { model: null, effort: null }, ...settings } },
     catalog: { effortsByModel: { [GPT]: [{ value: 'low' }, { value: 'high' }] } } }
   let slots = [], cursor = 0, pendingEffects = [], failSave = false
-  const calls = []
+  const calls = [], states = [], routes = []
   const react = {
     useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial
       return [slots[i], value => { slots[i] = typeof value === 'function' ? value(slots[i]) : value }] },
@@ -41,11 +42,11 @@ function mount(kind, settings = {}) {
       if (type === 'preset.create') return { run: { id: 'run' } }
       throw new Error('unexpected request: ' + type)
     },
-    setState() {}, navigate() {},
+    setState(patch) { states.push(patch) }, navigate(route) { routes.push(route) },
   }
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: Symbol('Fragment') },
-    '../store': store, '../util': { effortLabel: value => value },
+    '../store': store, '../util': { effortLabel: value => value }, '../outbox': { messageId },
     '../../../shared/workflow-effort.js': workflowEffort,
     '../../../shared/task-preset-models.js': presetModels,
     './WorkflowModelField': { ModelField: 'ModelField', modelGroups: () => groups },
@@ -62,7 +63,39 @@ function mount(kind, settings = {}) {
     return { tree, field }
   }
   async function init() { render(); for (const effect of pendingEffects.splice(0)) effect(); await Promise.resolve(); return render() }
-  return { server, calls, render, init, reopen() { slots = []; pendingEffects = []; return this.init() }, fail(value) { failSave = value } }
+  return { server, calls, states, routes, render, init, reopen() { slots = []; pendingEffects = []; return this.init() }, fail(value) { failSave = value } }
+}
+
+for (const kind of ['review', 'delegate']) {
+  test(`${kind} starts over HTTP without crypto.randomUUID`, async (t) => {
+    const descriptor = Object.getOwnPropertyDescriptor(crypto, 'randomUUID')
+    Object.defineProperty(crypto, 'randomUUID', { configurable: true, value: undefined })
+    t.after(() => descriptor ? Object.defineProperty(crypto, 'randomUUID', descriptor) : delete crypto.randomUUID)
+    const ui = mount(kind, { reviewSelected: { model: GPT, effort: 'low' } })
+    const { tree } = await ui.init()
+    nodes(tree, n => n.type === 'button' && n.props.className === 'button primary')[0].props.onClick()
+    await new Promise(setImmediate)
+    const create = ui.calls.find(call => call.type === 'preset.create')
+    assert.ok(create, 'the start request must reach the server')
+    assert.match(create.params.requestId, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/)
+    assert.deepEqual(ui.routes, [{ view: 'preset', id: 'run' }])
+    assert.deepEqual(ui.states, [{ presetStart: null }])
+  })
+
+  test(`${kind} recovers from an ID generation error instead of locking the dialog`, async (t) => {
+    t.mock.method(crypto, 'getRandomValues', () => { throw new Error('ID generation failed') })
+    t.mock.method(crypto, 'randomUUID', () => { throw new Error('ID generation failed') })
+    const ui = mount(kind, { reviewSelected: { model: GPT, effort: 'low' } })
+    let { tree } = await ui.init()
+    nodes(tree, n => n.type === 'button' && n.props.className === 'button primary')[0].props.onClick()
+    await new Promise(setImmediate)
+    tree = ui.render().tree
+    assert.equal(nodes(tree, n => n.props?.role === 'alert')[0]?.props.children, 'ID generation failed')
+    assert.equal(nodes(tree, n => n.type === 'button' && n.props.className === 'button primary')[0].props.disabled, false)
+    assert.equal(ui.calls.some(call => call.type === 'preset.create'), false)
+    tree.props.onClose()
+    assert.deepEqual(ui.states, [{ presetStart: null }])
+  })
 }
 
 test('delegate picker saves model and effort immediately, even after reopening', async () => {

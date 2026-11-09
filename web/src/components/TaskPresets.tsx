@@ -3,6 +3,7 @@ import './TaskPresets.css'
 import { CheckCircle2, ChevronRight, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, PanelRight, Send, Square, X } from 'lucide-react'
 import { act, isNarrow, isTouch, loadThread, navigate, request, setState, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
+import { messageId } from '../outbox'
 import { PRESET_PROMPT_MARK } from '../../../shared/task-preset-mark.js'
 import type { AppState, ExecutionCheck, TaskPresetKind, TaskPresetRun, TaskPresetSource, Turn } from '../types'
 import { effortLabel, parseModel, workspaceLabel } from '../util'
@@ -113,15 +114,15 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
   const start = async () => {
     if (!inspection || busy || preset.saving) return
     setBusy(true); setError('')
-    const payload = { source, kind: 'review', ...(legacyChoice.current ? { harness } : {}), reviewMode: mode, permissionMode: harness === 'dsh' && mode === 'fix' ? permission : 'workspace-write', expectedModel: model, expectedEffort: effort }
-    const fingerprint = JSON.stringify(payload)
-    if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: crypto.randomUUID() }
     try {
+      const payload = { source, kind: 'review', ...(legacyChoice.current ? { harness } : {}), reviewMode: mode, permissionMode: harness === 'dsh' && mode === 'fix' ? permission : 'workspace-write', expectedModel: model, expectedEffort: effort }
+      const fingerprint = JSON.stringify(payload)
+      if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: messageId() }
       const result = await request<{ run: TaskPresetRun }>('preset.create', { ...payload, requestId: intent.current.id, authConfirmation: auth.confirmation })
       setState({ presetStart: null })
       navigate({ view: 'preset', id: result.run.id })
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    setBusy(false)
+    finally { setBusy(false) }
   }
   return <Modal title="独立レビュー" onClose={busy || preset.saving ? () => {} : close} width={560}>
     <div className="modal-body preset-form">
@@ -169,16 +170,16 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
   const ready = selected && workflowEffortSupported(effort, workflowLevels(server.catalog, model))
   const start = async () => {
     if (!inspection || busy || preset.saving) return
-    const payload = { source, kind, instruction, browser, permissionMode: cli ? 'danger-full-access' : permission, checkIds, command, expectedModel: model, expectedEffort: effort }
-    const fingerprint = JSON.stringify(payload)
-    if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: crypto.randomUUID() }
     setBusy(true); setError('')
     try {
+      const payload = { source, kind, instruction, browser, permissionMode: cli ? 'danger-full-access' : permission, checkIds, command, expectedModel: model, expectedEffort: effort }
+      const fingerprint = JSON.stringify(payload)
+      if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: messageId() }
       const result = await request<{ run: TaskPresetRun }>('preset.create', { ...payload, requestId: intent.current.id, authConfirmation: auth.confirmation })
       setState({ presetStart: null })
       navigate({ view: 'preset', id: result.run.id })
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    setBusy(false)
+    finally { setBusy(false) }
   }
   return <Modal title={LABEL[kind]} onClose={busy || preset.saving ? () => {} : close} width={560}>
     <div className="modal-body preset-form">
