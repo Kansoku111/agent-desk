@@ -118,6 +118,34 @@ test('failed saves keep the previous choice and show the error', async () => {
   assert.equal(ui.server.settings.taskPresets.delegate.model, GPT)
 })
 
+test('DSH review fixes can explicitly select full access; opinion remains read-only', async () => {
+  const ui = mount('review', { reviewSelected: { model: GPT, effort: 'low' } })
+  let { tree } = await ui.init()
+  assert.equal(nodes(tree, n => n.type === 'select').length, 0)
+  nodes(tree, n => n.type === 'input' && n.props.value === 'fix')[0].props.onChange()
+  tree = ui.render().tree
+  const permission = nodes(tree, n => n.type === 'select')[0]
+  assert.equal(permission.props.value, 'workspace-write')
+  permission.props.onChange({ target: { value: 'danger-full-access' } })
+  tree = ui.render().tree
+  nodes(tree, n => n.type === 'button' && n.props.className === 'button primary')[0].props.onClick()
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(ui.calls.find(c => c.type === 'preset.create').params.permissionMode, 'danger-full-access')
+
+  const opinion = mount('review', { reviewSelected: { model: GPT, effort: 'low' } })
+  ;({ tree } = await opinion.init())
+  nodes(tree, n => n.type === 'input' && n.props.value === 'fix')[0].props.onChange()
+  tree = opinion.render().tree
+  nodes(tree, n => n.type === 'select')[0].props.onChange({ target: { value: 'danger-full-access' } })
+  tree = opinion.render().tree
+  nodes(tree, n => n.type === 'input' && n.props.value === 'opinion')[0].props.onChange()
+  tree = opinion.render().tree
+  assert.equal(nodes(tree, n => n.type === 'select').length, 0)
+  nodes(tree, n => n.type === 'button' && n.props.className === 'button primary')[0].props.onClick()
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(opinion.calls.find(c => c.type === 'preset.create').params.permissionMode, 'workspace-write')
+})
+
 test('legacy review choice starts without choosing a different harness', async () => {
   const ui = mount('review', { reviewClaude: { model: 'claude:haiku', effort: 'low' } })
   let { tree } = await ui.init()

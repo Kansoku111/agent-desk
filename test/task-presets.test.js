@@ -74,6 +74,18 @@ test('one-shot envelopes reject wrong run, ambiguous blocks, extra fields and in
   assert.equal(matchesPresetPrompt(wrapped.replace('id="123a">', 'id="different">'), preparePresetPrompt(run)), false)
 })
 
+test('review fix uses the explicitly selected DSH permission and opinion stays read-only', async (t) => {
+  for (const [reviewMode, expected] of [['fix', 'danger-full-access'], ['opinion', 'read-only']]) {
+    await t.test(reviewMode, async (t) => {
+      const f = await fixture(t)
+      const run = await f.start({ kind: 'review', reviewMode, permissionMode: 'danger-full-access' })
+      await f.complete(f.parent.id, brief(run))
+      assert.equal(run.permissionMode, expected)
+      assert.equal(f.threads.threads.get(run.worker.id).permissionMode, expected)
+    })
+  }
+})
+
 const sourceLimit = () => Object.assign(new Error('検証対象が多すぎます。プロジェクト範囲を絞ってください'), { code: 'SOURCE_SNAPSHOT_LIMIT' })
 
 test('large plain-folder creative delegation prepares the parent and finishes without pretending whole-folder checks ran', async (t) => {

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Independent review-and-fix with a DSH worker can explicitly use full access when workspace-write sandbox setup or subprocesses fail on Windows. The default remains workspace-write; opinion reviews remain read-only.
 - Bridged DSH children no longer offer persistent goal tools they cannot resume, or claim that unavailable approval prompts are enabled; approval-requiring operations are rejected without widening the parent's permissions.
 - Cancelling while a bridged child is being created no longer starts it afterward. Clean up completion listeners when startup fails or a run ends.
 - Bridged DSH subagents now read API keys from Agent Desk's managed credential store. The headless profile had disabled it, so routes such as GP → Command Code failed with `MISSING_CREDENTIAL` even when a key was saved.
