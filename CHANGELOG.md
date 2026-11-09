@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Let dsh apply the provider's existing retry policy when its model stream is idle for five minutes, instead of immediately failing the turn. The watchdog still bounds stalled requests; repeated timeouts can still exhaust the retry limit.
+
 ## [0.1.14] - 2026-11-09
 
 ### Added

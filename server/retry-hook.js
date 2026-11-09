@@ -1,5 +1,6 @@
 // Loaded into every dsh process with node --import. Only transient provider
-// errors are reclassified; retries never remove reasoning from the payload.
+// errors are reclassified and idle timeouts enter dsh's retry policy; retries
+// never remove reasoning from the payload.
 import { registerHooks } from 'node:module'
 import { patchRetrySource, RETRYABLE_KEY, retryableCheck } from './retry-patch.js'
 

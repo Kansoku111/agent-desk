@@ -15,6 +15,9 @@
 // `isRetryableAssistantError`). The patch asks it before falling back to
 // PI_AI_ERROR, so dsh retries what pi-ai itself would. A WebSocket closed for
 // a message that is too big (1009) stays an error: it would fail again.
+// The adapter's idle watchdog throws outside the normal finish-chunk path, so
+// dsh's request recovery never sees it. Convert only that watchdog timeout into
+// an error finish; its existing provider retry policy decides whether to retry.
 
 /** Where retry-hook.js puts pi-ai's check, for the patched module to call. */
 export const RETRYABLE_KEY = 'agentDesk.isRetryableProviderError'
@@ -54,7 +57,12 @@ export function patchPiAiSource(source) {
 // Retrying a transport failure is not evidence that encrypted reasoning is
 // corrupt. Preserve the payload; never discard model context just because the
 // same request was sent several times.
-export const patchRetrySource = patchPiAiSource
+export function patchRetrySource(source) {
+  const patched = patchPiAiSource(source)
+  const timeout = 'if (timeoutOf(watchdog.signal, "LLM_STREAM_IDLE_TIMEOUT") !== void 0) throw new LlmError(`pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, "TIMEOUT", { cause: error });'
+  if (!patched || patched.split(timeout).length !== 2) return null
+  return patched.replace(timeout, 'if (!options.signal?.aborted && timeoutOf(watchdog.signal, "LLM_STREAM_IDLE_TIMEOUT") !== void 0) { yield { type: "finish", reason: { kind: "error", failure: { message: `pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, code: "TIMEOUT" } } }; return; }')
+}
 
 /** pi-ai's check, as the patched rule calls it: true for a transient provider failure. */
 export function retryableCheck(isRetryableAssistantError) {

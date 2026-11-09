@@ -35,7 +35,7 @@ function classifier(source) {
 }
 
 test('the installed dsh-llm-pi-ai takes the retry patch, and still parses', () => {
-  const patched = patchPiAiSource(installedSource())
+  const patched = patchRetrySource(installedSource())
   assert.ok(patched, 'dsh-llm-pi-ai no longer matches retry-patch.js; update the patch for this dsh')
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-desk-retry-')), 'index.mjs')
   try {
@@ -116,7 +116,12 @@ test('leaves an unexpected dsh-llm-pi-ai alone', () => {
   assert.equal(patchPiAiSource('export const x = 1'), null)
 })
 
-test('retry compatibility patches classification only and never injects a payload rewrite', () => {
+test('retry compatibility requires the idle watchdog anchor', () => {
+  const source = installedSource().replace('LLM_STREAM_IDLE_TIMEOUT") !== void 0) throw', 'changed") !== void 0) throw')
+  assert.equal(patchRetrySource(source), null)
+})
+
+test('retry compatibility preserves provider payload and options', () => {
   const original = installedSource()
   const patched = patchRetrySource(original)
   assert.ok(patched)
