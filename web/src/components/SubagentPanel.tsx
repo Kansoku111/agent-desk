@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Bot, CheckCircle2, ChevronLeft, ChevronRight, CircleSlash, Loader2, MessageSquare, X, XCircle } from 'lucide-react'
 import { setSubagentPanel, setState, useStore } from '../store'
-import type { SubagentInfo, SubagentStatus, ThreadSummary, TurnItem } from '../types'
+import type { SubagentInfo, SubagentStatus, TurnItem } from '../types'
 import { duration, formatTokens, formatUsd, summarizeTool } from '../util'
 import { Markdown } from './Markdown'
 import { Elapsed, Item } from './TurnView'
@@ -213,8 +213,8 @@ function Detail({ subagent, workspace }: { subagent: SubagentInfo; workspace: st
 }
 
 /** The right-hand panel: a task's subagents, live, and what each one is doing. */
-export const SubagentPanel = memo(function SubagentPanel({ thread }: { thread: ThreadSummary }) {
-  const subagents = useStore((state) => state.subagents[thread.id])
+export const SubagentPanel = memo(function SubagentPanel({ taskId, workspace }: { taskId: string; workspace: string }) {
+  const subagents = useStore((state) => state.subagents[taskId])
   const focus = useStore((state) => state.subagentFocus)
   const selected = subagents?.find((subagent) => subagent.id === focus)
   if (!subagents?.length) return null
@@ -223,7 +223,7 @@ export const SubagentPanel = memo(function SubagentPanel({ thread }: { thread: T
       {/* On a phone the panel covers the task; a tap beside it closes it. */}
       <div className="subagent-backdrop" aria-hidden="true" onClick={() => setSubagentPanel(false)} />
       <aside className="subagent-panel" aria-label="サブエージェント">
-        {selected ? <Detail subagent={selected} workspace={thread.workspace} /> : <List subagents={subagents} />}
+        {selected ? <Detail subagent={selected} workspace={workspace} /> : <List subagents={subagents} />}
       </aside>
     </>
   )

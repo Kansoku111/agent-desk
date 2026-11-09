@@ -346,6 +346,7 @@ function handleFrame(frame: any) {
       flushQueues()
       if (route.view === 'codex') void loadCodexTask(route.id)
       if (route.view === 'thread') void loadThread(route.id)
+      if (route.view === 'codex' || route.view === 'terminal') void loadSubagents(route.id)
       if (route.view === 'agent') void loadAgentTurns(route.id)
       announceNewModels(server.modelUpdate)
       for (const listener of helloListeners) listener()
@@ -708,7 +709,7 @@ export function navigate(route: Route) {
   } catch {}
   if (route.view === 'codex') void loadCodexTask(route.id)
   if (route.view === 'thread' && !state.turns[route.id]) void loadThread(route.id)
-  else if (route.view === 'thread' && !state.subagents[route.id]) void loadSubagents(route.id)
+  else if ((route.view === 'thread' || route.view === 'codex' || route.view === 'terminal') && !state.subagents[route.id]) void loadSubagents(route.id)
   else if (route.view === 'agent') void loadAgentTurns(route.id)
 }
 

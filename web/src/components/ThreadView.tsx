@@ -93,7 +93,7 @@ function costsUpTo(turns: Turn[]) {
 }
 
 /** Shows or hides the subagent panel; only on tasks that started subagents. */
-function SubagentToggle({ threadId }: { threadId: string }) {
+export function SubagentToggle({ threadId }: { threadId: string }) {
   const total = useStore((state) => state.subagents[threadId]?.length ?? 0)
   const running = useStore((state) => state.subagents[threadId]?.filter((entry) => entry.status === 'running' || entry.status === 'starting').length ?? 0)
   const open = useStore((state) => state.subagentPanel)
@@ -275,7 +275,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
             </div>
           </div>
         </div>
-        {panelTeam && teamPanel ? <TeamPanel team={panelTeam} /> : panelOpen && <SubagentPanel thread={thread} />}
+        {panelTeam && teamPanel ? <TeamPanel team={panelTeam} /> : panelOpen && <SubagentPanel taskId={thread.id} workspace={thread.workspace} />}
         {presetOpen && <TaskPresetRuns source={{ kind: 'thread', id: thread.id }} onClose={() => setPresetOpen(false)} />}
       </div>
     </div>

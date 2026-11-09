@@ -556,7 +556,10 @@ codex.executionGuard = (record, context) => teams.guardExecution(record, context
 codex.on('session', task => { if (!task.subagent) broadcast('codexTask', { task }) })
 codex.on('turn', ({ id, turn }) => broadcast('codexTurn', { taskId: id, turn }))
 codex.on('turn-speed', ({ id, turnId, speed }) => broadcast('codexTurnSpeed', { taskId: id, turnId, speed }))
-codex.on('removed', ({ id }) => broadcast('codexTaskRemoved', { taskId: id }))
+codex.on('removed', ({ id }) => {
+  broadcast('codexTaskRemoved', { taskId: id })
+  subagentBridge.forget(id)
+})
 codex.on('fault', error => log('Codex task:', error.message))
 codex.on('approval', ({ id }) => {
   const task = codex.get(id)
@@ -670,7 +673,10 @@ threads.on('turn-speed', ({ threadId, turnId, speed }) => broadcast('turnSpeed',
 threads.on('removed', ({ threadId }) => {
   broadcast('removed', { threadId })
   subagents.forget(threadId)
+  subagentBridge.forget(threadId)
 })
+// The children that ran as another kind of task show in their parent's panel, whatever kind it is.
+subagentBridge.on('change', ({ parentId, subagent }) => broadcast('subagent', { threadId: parentId, subagent }))
 subagents.on('change', ({ threadId, subagent }) => {
   broadcast('subagent', { threadId, subagent })
   // A team's children have no subagents (their dsh has none: this is the
@@ -692,7 +698,10 @@ threads.on('turn-finished', (info) => {
   if (!teams.isChild(info.threadId) && !threads.threads.get(info.threadId)?.ab) broadcast('notify', { kind: 'turn-finished', ...info })
 })
 terminals.on('terminal', (terminal) => broadcast('terminal', { terminal }))
-terminals.on('removed', ({ terminalId }) => broadcast('terminalRemoved', { terminalId }))
+terminals.on('removed', ({ terminalId }) => {
+  broadcast('terminalRemoved', { terminalId })
+  subagentBridge.forget(terminalId)
+})
 terminals.on('turn-finished', ({ terminalId, title, failed }) => {
   if (!teams.isChild(terminalId)) broadcast('notify', { kind: 'turn-finished', terminal: true, threadId: terminalId, title, ...(failed ? { status: 'error' } : {}) })
 })
@@ -965,7 +974,7 @@ const restartApp = createAppRestarter({
 
 const mutateSettings = (...args) => settingsService.mutate(...args)
 const handlers = {
-  ...createThreadHandlers({ paths, threads, teams, codexApp, subagents, mutateSettings }),
+  ...createThreadHandlers({ paths, threads, teams, codexApp, subagents, subagentBridge, mutateSettings }),
   ...createWorkspaceHandlers({ paths, getSettings, mutateSettings }),
   ...createAccountHandlers({
     appVersion: APP_VERSION, credentials, login, codexApp, codex, getSettings, broadcast, accounts, setAnthropicWorkspace, refreshClaudeCost,

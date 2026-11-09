@@ -6,6 +6,7 @@ import path from 'node:path'
 import { Readable } from 'node:stream'
 import { test } from 'node:test'
 import { createRequestHandler } from '../server/http-routes.js'
+import { createThreadHandlers } from '../server/rpc-handlers-threads.js'
 import { BRIDGE_MCP_SERVER, SUBAGENT_TOOL_TIMEOUT_SEC, SubagentBridge } from '../server/subagent-bridge.js'
 import { defaultRoutes } from '../server/subagent-routes.js'
 
@@ -260,4 +261,85 @@ test('the endpoint reports a failed child as ok:false and stops the child when t
   await done
   assert.deepEqual(hanging.stopped, ['s1'])
   assert.deepEqual(hanging.removed, ['s1'])
+})
+test('each child shows in its parent\'s panel as a card that follows its run and ends with its outcome', async (t) => {
+  const claude = fakeRunner()
+  const turn = { id: 't1', items: [{ type: 'tool', id: 'c1', name: 'Read', kind: 'read', status: 'in_progress', input: {}, output: '' }], usage: { requests: 2, input: 30, output: 4, cacheRead: 5, cacheWrite: 6, cost: null } }
+  claude.run = (id, prompt) => {
+    claude.runs.push([id, prompt])
+    setImmediate(() => {
+      claude.emit('turn', { id: 'someone-else', turn: { items: [{ type: 'agent', id: 'x', text: 'not ours' }] } })
+      claude.emit('turn', { id, turn })
+      setImmediate(() => claude.emit('finished', { id, status: 'done', text: 'the report', error: null }))
+    })
+  }
+  const { bridge } = await setup(t, { routes: { gp: { target: 'cl', model: 'claude:haiku', effort: 'low' } }, claude })
+  const seen = []
+  bridge.on('change', ({ parentId, subagent }) => seen.push([parentId, subagent.status, subagent.items.length]))
+  await bridge.call({ parent: { kind: 'gp', id: 'task-1' }, prompt: 'review the diff\nand report' })
+  assert.deepEqual(seen, [['task-1', 'running', 0], ['task-1', 'running', 1], ['task-1', 'done', 1]])
+  const [card, ...rest] = bridge.list('task-1')
+  assert.equal(rest.length, 0)
+  assert.equal(card.status, 'done')
+  assert.equal(card.modelName, 'Claude Code haiku')
+  assert.equal(card.effort, 'low')
+  assert.equal(card.prompt, 'review the diff\nand report')
+  assert.equal(card.items[0].name, 'Read')
+  assert.deepEqual(card.usage, { requests: 2, input: 30, output: 4, cacheRead: 5, cacheWrite: 6, cost: null })
+  assert.ok(card.endedAt >= card.startedAt)
+  // Only that task has it, and a removed task takes its cards along.
+  assert.deepEqual(bridge.list('task-2'), [])
+  bridge.forget('task-1')
+  assert.deepEqual(bridge.list('task-1'), [])
+  // The card stops following the child once it is done.
+  claude.emit('turn', { id: 's1', turn: { items: [{ type: 'agent', id: 'late', text: 'late' }] } })
+  assert.equal(seen.length, 3)
+})
+
+test('a headless DSH child shows its answer, a failure shows as an error, and a stopped call as stopped', async (t) => {
+  let fail = false
+  const { bridge } = await setup(t, { routes: { gp: { target: 'dsh', model: luna, effort: null } }, runDsh: async () => {
+    if (fail) throw new Error('boom')
+    return 'dsh report'
+  } })
+  await bridge.call({ parent: { kind: 'gp', id: 'a' }, prompt: 'one' })
+  fail = true
+  await assert.rejects(bridge.call({ parent: { kind: 'gp', id: 'a' }, prompt: 'two' }), /boom/)
+  const [done, failed] = bridge.list('a')
+  assert.deepEqual([done.status, done.items], ['done', [{ type: 'agent', id: 'answer', text: 'dsh report' }]])
+  assert.equal(done.modelName, 'GPT gpt-6-luna')
+  assert.equal(failed.status, 'error')
+  assert.match(failed.items.at(-1).text, /boom/)
+
+  const controller = new AbortController()
+  const hanging = await setup(t, { routes: { gp: { target: 'dsh', model: luna, effort: null } }, runDsh: ({ signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('stopped')))) })
+  const call = hanging.bridge.call({ parent: { kind: 'gp', id: 'b' }, prompt: 'long', signal: controller.signal })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(hanging.bridge.list('b')[0].status, 'running')
+  controller.abort()
+  await assert.rejects(call, /stopped/)
+  assert.equal(hanging.bridge.list('b')[0].status, 'cancelled')
+})
+
+test('only the latest children of a task are kept', async (t) => {
+  const { bridge } = await setup(t, { routes: { gp: { target: 'dsh', model: luna, effort: null } } })
+  for (let index = 0; index < 33; index += 1) await bridge.call({ parent: { kind: 'gp', id: 'a' }, prompt: `job ${index}` })
+  const cards = bridge.list('a')
+  assert.equal(cards.length, 30)
+  assert.equal(cards[0].prompt, 'job 3')
+  assert.equal(cards.at(-1).prompt, 'job 32')
+})
+
+test('the panel lists a dsh task\'s logged children with the bridged ones, and any other task only the bridged ones', async (t) => {
+  const { bridge } = await setup(t, { routes: { dsh: { target: 'cl', model: 'claude:haiku', effort: null }, gp: { target: 'dsh', model: luna, effort: null } } })
+  await bridge.call({ parent: { kind: 'dsh', id: 'thread-1' }, prompt: 'a' })
+  await bridge.call({ parent: { kind: 'gp', id: 'codex-1' }, prompt: 'b' })
+  const logged = { id: 'logged', prompt: 'from the dsh log' }
+  const threads = { threads: new Map([['thread-1', {}]]), get: async (id) => ({ thread: { id, sessionId: 'session-1' } }) }
+  const subagents = { list: async (id, sessionId) => (sessionId === 'session-1' ? [logged] : []) }
+  const { 'subagents.list': list } = createThreadHandlers({ paths: {}, threads, subagents, subagentBridge: bridge })
+  const prompts = async (threadId) => (await list({ threadId })).subagents.map((entry) => entry.prompt)
+  assert.deepEqual(await prompts('thread-1'), ['from the dsh log', 'a'])
+  assert.deepEqual(await prompts('codex-1'), ['b'])
+  assert.deepEqual(await prompts('nobody'), [])
 })

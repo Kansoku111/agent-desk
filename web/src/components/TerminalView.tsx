@@ -16,7 +16,8 @@ import { sendTerminalMessage } from '../terminal-send'
 import { ConfirmDialog } from './Modal'
 import { Dropdown, MenuItem } from './Popover'
 import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
-import { OpenInMenu } from './ThreadView'
+import { OpenInMenu, SubagentToggle } from './ThreadView'
+import { SubagentPanel } from './SubagentPanel'
 import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
 import { TerminalChat, useConversation } from './TerminalChat'
 import { TerminalModelPicker } from './TerminalPickers'
@@ -162,6 +163,7 @@ function Header({ terminal, mode, onMode, onRestart, presetOpen, onPresetToggle 
       </div>
       <div className="header-right">
         {panelTeam && <TeamToggle team={panelTeam} />}
+        <SubagentToggle threadId={terminal.id} />
         <TaskPresetToggle source={{ kind: 'terminal', id: terminal.id }} open={presetOpen} onToggle={onPresetToggle} />
         <button
           type="button"
@@ -438,6 +440,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
   const ledTeam = useLedTeam(terminalId)
   const team = useTeam(terminal?.team?.id) ?? ledTeam
   const teamPanel = useStore((state) => state.teamPanel)
+  const subagentPanel = useStore((state) => state.subagentPanel)
   const sizeRef = useRef<() => Size | null>(() => null)
 
   useEffect(() => {
@@ -777,7 +780,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
             />
           )}
         </div>
-        {team && teamPanel && <TeamPanel team={team} />}
+        {team && teamPanel ? <TeamPanel team={team} /> : subagentPanel && <SubagentPanel taskId={terminal.id} workspace={terminal.workspace} />}
         {presetOpen && <TaskPresetRuns source={{ kind: 'terminal', id: terminal.id }} onClose={() => setPresetOpen(false)} />}
       </div>
     </div>

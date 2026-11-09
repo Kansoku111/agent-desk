@@ -8,7 +8,8 @@ import { TurnView } from './TurnView'
 import { CodexModelPicker } from './CodexModelPicker'
 import { CodexPermissionPicker } from './CodexPermissionPicker'
 import { CodexQuestionCard } from './CodexQuestionCard'
-import { OpenInMenu } from './ThreadView'
+import { OpenInMenu, SubagentToggle } from './ThreadView'
+import { SubagentPanel } from './SubagentPanel'
 import { TeamPanel, TeamToggle } from './TeamPanel'
 import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
 import { useConversationScroll } from './useConversationScroll'
@@ -21,6 +22,7 @@ export function CodexView({ taskId }: { taskId: string }) {
   const sidebarOpen = useStore((state) => state.sidebarOpen)
   const team = useStore((state) => state.server?.teams?.find((entry) => entry.leaderId === taskId || entry.children.some((child) => child.kind === 'codex' && child.taskId === taskId)))
   const teamPanel = useStore((state) => state.teamPanel)
+  const subagentPanel = useStore((state) => state.subagentPanel)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
   const draftKey = `codex:${taskId}`
@@ -70,6 +72,7 @@ export function CodexView({ taskId }: { taskId: string }) {
       <span className="header-chip" title={task.workspace}><FolderOpen size={13} />{workspaceLabel(task.workspace, myPc, names)}</span>
     </div><div className="header-right">
       {team && <TeamToggle team={team} />}
+      <SubagentToggle threadId={taskId} />
       <TaskPresetToggle source={{ kind: 'codex', id: taskId }} open={presetOpen} onToggle={() => setPresetOpen((open) => !open)} />
       {working && <button type="button" className="button ghost" onClick={() => void (teamChild ? act('team.stopChild', { teamId: team!.id, childId: teamChild.id }) : act('codex.task.stop', { taskId }))}><Square size={13} /> 停止</button>}
       <OpenInMenu workspace={task.workspace} task={!task.team && !team && !task.ab ? { kind: 'codex', id: taskId } : undefined} />
@@ -97,6 +100,6 @@ export function CodexView({ taskId }: { taskId: string }) {
         <CodexModelPicker task={task} models={choices} disabled={working || Boolean(task.team || team || task.ab)} onChange={update} />
         <CodexPermissionPicker value={task.permissionMode} disabled={working || Boolean(task.team || team || task.ab)} onChange={(permissionMode) => void update({ permissionMode })} />
       </div><div className="composer-right"><button type="button" className="send-button" title={working ? '追加指示を送信' : '送信'} aria-label={working ? '追加指示を送信' : '送信'} disabled={busy || uploading || (!text.trim() && !images.length)} onPointerDown={(event) => { event.preventDefault(); ime.confirm() }} onClick={() => void send()}><ArrowUp size={17} /></button></div></div>
-    </div></div>{team && teamPanel && <TeamPanel team={team} />}{presetOpen && <TaskPresetRuns source={{ kind: 'codex', id: taskId }} onClose={() => setPresetOpen(false)} />}</div>
+    </div></div>{team && teamPanel ? <TeamPanel team={team} /> : subagentPanel && <SubagentPanel taskId={taskId} workspace={task.workspace} />}{presetOpen && <TaskPresetRuns source={{ kind: 'codex', id: taskId }} onClose={() => setPresetOpen(false)} />}</div>
   </div>
 }

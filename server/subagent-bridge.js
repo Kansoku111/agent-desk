@@ -5,7 +5,8 @@
 // child runs as the route's kind with the route's model and reasoning level,
 // never wider than the task's own permission, and has no subagent tools of its
 // own. The answer comes back with the model that actually ran it.
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { abClaudeArgs } from './ab-runner.js'
 import { SUBAGENT_TOOLS } from './dsh-config.js'
@@ -22,6 +23,11 @@ export const SUBAGENT_TOOL_TIMEOUT_SEC = 6 * 60 * 60
 
 const CHILD_NOTE = 'You are a subagent another agent started. Do the task you are given in the working folder and reply with your final report. '
   + 'You cannot start subagents or ask the user questions: finish with what you could do and say what blocked you.'
+
+/** Children kept per parent for the right-hand panel; the oldest drop off, so a task that lives for days does not grow without bound. */
+const MAX_VIEWS = 30
+/** Items kept per child, like the panel of a dsh task. */
+const MAX_ITEMS = 400
 
 /** Resolves with the `finished` event of one session. */
 function finishedOf(runner, id) {
@@ -40,7 +46,11 @@ const outcome = (event) => {
   throw new Error(event.error || `The subagent did not finish (${event.status}).`)
 }
 
-export class SubagentBridge {
+/**
+ * Emits `change` with `{ parentId, subagent }` whenever a child's card for the
+ * right-hand panel (the shape of subagents.js) changes.
+ */
+export class SubagentBridge extends EventEmitter {
   /**
    * @param {object} options
    * @param {string} options.file - where the secret is kept
@@ -55,6 +65,7 @@ export class SubagentBridge {
    * @param {(kind: string, child: object) => Promise<string>} options.dshPatch - writes a DSH child's model layer, returns its path
    */
   constructor({ file, paths, settings, url, parents, claude, codex, instructions = () => '', dshPatch, runDsh = runDshChild }) {
+    super()
     this.file = file
     this.paths = paths
     this.settings = settings
@@ -66,6 +77,8 @@ export class SubagentBridge {
     this.dshPatch = dshPatch
     this.runDsh = runDsh
     this.secret = null
+    /** Each parent task's children, oldest first, for the panel; kept until the task is removed. */
+    this.views = new Map()
   }
 
   /** Reads (or makes) the secret, and drops children an exit left behind. */
@@ -157,52 +170,110 @@ export class SubagentBridge {
     if (!info) throw new Error('The task that started this subagent was not found.')
     const ran = this.#target(plan, info)
     const header = `Ran on: ${ran.label}${ran.effort ? ` (reasoning ${ran.effort})` : ''}`
+    const view = this.#open(parent, ran, prompt)
     try {
-      return `${header}\n\n${await this.#run(parent, ran, info, prompt, signal)}`
+      const text = await this.#run(parent, ran, info, prompt, signal, view)
+      this.#settle(parent, view, 'done')
+      return `${header}\n\n${text}`
     } catch (error) {
+      this.#settle(parent, view, signal?.aborted ? 'cancelled' : 'error', error)
       if (signal?.aborted) throw error
       const limit = isLeaderUsageLimit(error) ? '\nThe usage limit of this model was reached. Do not retry with the same settings.' : ''
       throw new Error(`${header}${limit}\n${error.message}`)
     }
   }
 
-  async #run(parent, ran, info, prompt, signal) {
-    if (ran.kind === 'dsh') {
-      const patchFile = await this.dshPatch(parent.kind, { provider: ran.provider, model: ran.model, effort: ran.effort })
-      return this.runDsh({ paths: this.paths, workspace: info.workspace, prompt, mode: info.mode, patchFile, signal })
-    }
-    if (ran.kind === 'cl') return this.#runClaude(ran, info, prompt, signal)
-    return this.#runCodex(parent, ran, info, prompt, signal)
+  /** The children of a task, for its right-hand panel. */
+  list(parentId) {
+    return [...(this.views.get(parentId) ?? [])]
   }
 
-  async #runClaude(ran, info, prompt, signal) {
+  /** Drops what the panel kept for a removed task. */
+  forget(parentId) {
+    this.views.delete(parentId)
+  }
+
+  #open(parent, ran, prompt) {
+    const now = Date.now()
+    const view = {
+      id: randomUUID(), parentId: null, depth: 1, callId: null, label: null, mode: 'one-shot', title: null,
+      provider: ran.provider ?? null, model: ran.model, modelName: ran.label, effort: ran.effort,
+      status: 'running', startedAt: now, updatedAt: now, endedAt: null, prompt, items: [],
+      usage: { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: null },
+    }
+    const views = this.views.get(parent.id) ?? []
+    views.push(view)
+    if (views.length > MAX_VIEWS) views.splice(0, views.length - MAX_VIEWS)
+    this.views.set(parent.id, views)
+    this.emit('change', { parentId: parent.id, subagent: view })
+    return view
+  }
+
+  #settle(parent, view, status, error = null) {
+    view.status = status
+    view.endedAt = view.updatedAt = Date.now()
+    if (status === 'error') view.items = [...view.items, { type: 'notice', id: 'end', level: 'warning', text: `エラーで終了しました: ${error?.message ?? ''}` }]
+    this.emit('change', { parentId: parent.id, subagent: view })
+  }
+
+  /** Mirrors a Claude Code or Codex child's turn into its card until the returned function is called. */
+  #follow(runner, id, parent, view) {
+    const onTurn = (event) => {
+      if (event.id !== id) return
+      const { items, usage } = event.turn
+      view.items = items.slice(-MAX_ITEMS)
+      if (usage) view.usage = { requests: usage.requests ?? 0, input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0, cost: usage.cost ?? null }
+      view.updatedAt = Date.now()
+      this.emit('change', { parentId: parent.id, subagent: view })
+    }
+    runner.on('turn', onTurn)
+    return () => runner.off('turn', onTurn)
+  }
+
+  async #run(parent, ran, info, prompt, signal, view) {
+    if (ran.kind === 'dsh') {
+      const patchFile = await this.dshPatch(parent.kind, { provider: ran.provider, model: ran.model, effort: ran.effort })
+      // A headless dsh prints only its answer, so the card has nothing to show before it ends.
+      const text = await this.runDsh({ paths: this.paths, workspace: info.workspace, prompt, mode: info.mode, patchFile, signal })
+      view.items = [{ type: 'agent', id: 'answer', text }]
+      return text
+    }
+    if (ran.kind === 'cl') return this.#runClaude(ran, info, prompt, signal, parent, view)
+    return this.#runCodex(parent, ran, info, prompt, signal, view)
+  }
+
+  async #runClaude(ran, info, prompt, signal, parent, view) {
     // Claude Code has no sandbox here, so a child is full access or read-only; a task between the two gets neither.
     if (info.mode === 'workspace-write') throw new Error('This task may only write in its working folder, so a Claude Code subagent (which runs unsandboxed) is not allowed. Give the task full access or choose another kind in the settings.')
     const session = await this.claude.create({
       workspace: info.workspace, model: ran.model, effort: ran.effort,
       args: abClaudeArgs({ writable: info.mode === 'danger-full-access', lean: false, instructions: `${CHILD_NOTE}\n\n${this.instructions()}` }),
     })
+    const unfollow = this.#follow(this.claude, session.id, parent, view)
     try {
       const finished = finishedOf(this.claude, session.id)
       signal?.addEventListener('abort', () => this.claude.stop(session.id), { once: true })
       this.claude.run(session.id, prompt)
       return outcome(await finished)
     } finally {
+      unfollow()
       await this.claude.remove(session.id).catch(() => {})
     }
   }
 
-  async #runCodex(parent, ran, info, prompt, signal) {
+  async #runCodex(parent, ran, info, prompt, signal, view) {
     const session = await this.codex.create({
       workspace: info.workspace, model: ran.model, effort: ran.effort, permissionMode: info.mode,
       instructions: CHILD_NOTE, mcpServers: {}, permissionPolicy: 'deny', subagent: { parent: `${parent.kind}:${parent.id}` },
     })
+    const unfollow = this.#follow(this.codex, session.id, parent, view)
     try {
       const finished = finishedOf(this.codex, session.id)
       signal?.addEventListener('abort', () => void this.codex.stop(session.id).catch(() => {}), { once: true })
       this.codex.run(session.id, prompt)
       return outcome(await finished)
     } finally {
+      unfollow()
       await this.codex.remove(session.id).catch(() => {})
     }
   }

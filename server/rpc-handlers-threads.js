@@ -8,7 +8,7 @@ import { needsTranslation, SkillTranslator } from './skill-translate.js'
 import { listSkillOverview, listSkills } from './skills.js'
 
 /** Handlers for thread tasks; index.js merges them into the request table. */
-export function createThreadHandlers({ paths, threads, teams, codexApp, subagents, mutateSettings }) {
+export function createThreadHandlers({ paths, threads, teams, codexApp, subagents, subagentBridge, mutateSettings }) {
 
   async function saveImages(images) {
     const saved = []
@@ -62,9 +62,12 @@ export function createThreadHandlers({ paths, threads, teams, codexApp, subagent
       translated: await translator.translate((await listSkillOverview(await skillWorkspace(params), paths.dshHome)).map((skill) => skill.description), params.engine),
     }),
 
+    // Any kind of task: a dsh task's children are read from its dsh logs, and the
+    // ones that ran as another kind of task (subagent-bridge.js) are kept in memory.
     'subagents.list': async ({ threadId }) => {
-      const { thread } = await threads.get(threadId)
-      return { subagents: await subagents.list(thread.id, thread.sessionId) }
+      const thread = threads.threads.has(threadId) ? (await threads.get(threadId)).thread : null
+      const own = thread ? await subagents.list(thread.id, thread.sessionId) : []
+      return { subagents: [...own, ...subagentBridge.list(String(threadId))] }
     },
 
     'thread.create': async ({ workspace, model, effort, permissionMode, toolMode, text, images, createId, plan }) => {
