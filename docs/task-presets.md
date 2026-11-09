@@ -72,7 +72,7 @@
 
 ## 開発時の確認
 
-`node --test test/task-presets.test.js test/task-presets-panel-ui.test.js`はモデルを使わない回帰確認です。PC／390px幅の操作確認は`test/fixtures/task-presets-ui.html`の隔離Reactフィクスチャ（`window.taskPresetsTest.run()`と`window.taskPresetsTest.failures()`）で行えます。
+`node --test test/task-presets*.test.js`はモデルを使わない回帰確認です。読み取り専用の担当を含む実行先の選択と、実際のACPセッションの起動・権限も確認します。PC／390px幅の操作確認は`test/fixtures/task-presets-ui.html`の隔離Reactフィクスチャ（`window.taskPresetsTest.run()`と`window.taskPresetsTest.failures()`）で行えます。
 
 次は実際のモデルを使い、利用枠を消費します。製品コードやユーザーの作業フォルダーは変更せず、使い捨てのコードで確認します。会話記録や信頼済みフォルダー情報はCLIが通常どおり保存します。モデルを変更せず、GPTは`gpt-6-luna`・`low`、Claude Codeは`haiku`・`low`を明示します。Claude Codeはsubscription経路を確認できる場合のみ開始します。
 
@@ -82,6 +82,7 @@ node scripts/smoke-task-presets.mjs claude
 node scripts/smoke-task-presets.mjs terminal
 node scripts/smoke-task-preset-worker.mjs gpt --full-access
 node scripts/smoke-task-preset-worker.mjs claude
+node scripts/smoke-task-preset-worker.mjs gpt --opinion
 ```
 
-最後の2つは担当の修正と`node --test`成功まで確認します。GPTの例はWindowsのNodeテスト起動を含むため、テストの権限を`--full-access`で明示しています。本番の権限を自動昇格する指定ではありません。[初期調査と判断の記録](investigations/task-action-presets.md)。
+担当の通常チェックは修正と`node --test`成功まで確認します。`--opinion`は実際の読み取り専用の実行先で問題を報告し、対象ファイルを変更していないことを確認します。GPTの修正例はWindowsのNodeテスト起動を含むため、テストの権限を`--full-access`で明示しています。本番の権限を自動昇格する指定ではありません。[初期調査と判断の記録](investigations/task-action-presets.md)。

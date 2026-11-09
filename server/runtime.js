@@ -284,7 +284,7 @@ export class RuntimePool extends EventEmitter {
       runtime.on('exit', (info) => this.emit('exit', { mode: 'read-only', key, ...info }))
       this.runtimes.set(key, runtime)
     }
-    if (paths.taskPresetPatch) for (const mode of ['workspace-write', 'danger-full-access']) {
+    if (paths.taskPresetPatch) for (const mode of ['read-only', 'workspace-write', 'danger-full-access']) {
       const key = 'preset:' + mode
       const runtime = new AcpRuntime({ mode, paths, patches: [paths.taskPresetPatch], onUpdate, onPermission })
       runtime.on('exit', (info) => this.emit('exit', { mode, key, ...info }))

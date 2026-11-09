@@ -6,7 +6,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { AcpRuntime } from '../server/runtime.js'
+import { RuntimePool } from '../server/runtime.js'
 import { TOOL_MODE_CONFIG } from '../server/ptc.js'
 import { appPaths } from '../server/paths.js'
 import { readJson } from '../server/json-file.js'
@@ -19,15 +19,16 @@ import { authDescriptor, claudeAuthStatus } from '../server/claude-auth.js'
 import { findClaude } from '../server/terminals.js'
 import { workerPresetInstructions, parsePresetResult } from '../server/task-preset-protocol.js'
 const provider = process.argv[2]
-const permissionMode = process.argv.includes('--full-access') ? 'danger-full-access' : 'workspace-write'
-if (!['gpt', 'claude'].includes(provider)) throw new Error('Usage: node scripts/smoke-task-preset-worker.mjs gpt|claude (billed)')
+const opinion = process.argv.includes('--opinion')
+const permissionMode = opinion ? 'read-only' : process.argv.includes('--full-access') ? 'danger-full-access' : 'workspace-write'
+if (!['gpt', 'claude'].includes(provider) || opinion && provider !== 'gpt') throw new Error('Usage: node scripts/smoke-task-preset-worker.mjs gpt|claude [--full-access] (gpt also supports --opinion; billed)')
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'preset-worker-live-'))
 const workspace = path.join(root, 'project')
 await fs.mkdir(workspace)
 await fs.writeFile(path.join(workspace, 'source.cjs'), 'exports.add = (a, b) => a - b\n')
 await fs.writeFile(path.join(workspace, 'source.test.cjs'), 'const test = require("node:test"); const assert = require("node:assert/strict"); const { add } = require("./source.cjs"); test("sum", () => { assert.equal(add(2, 3), 5); assert.equal(add(-2, 2), 0) });\n')
-const run = { id: randomUUID(), kind: provider === 'gpt' ? 'delegate' : 'review' }
-const prompt = workerPresetInstructions(run) + '\n\nRequirements: add(a,b) must return their arithmetic sum. Scope: source.cjs and source.test.cjs only. ' + (run.kind === 'review' ? 'Independently review both files, fix discovered defects, and verify the fix.' : 'Implement the agreed sum behavior and verify it.') + ' Run node --test source.test.cjs. Do not run git commands, delegate, change settings, touch any other files, or start goals. Return the required final JSON with actual verification evidence.'
+const run = { id: randomUUID(), kind: opinion || provider === 'claude' ? 'review' : 'delegate', ...(opinion ? { reviewMode: 'opinion' } : {}) }
+const prompt = workerPresetInstructions(run) + '\n\nRequirements: add(a,b) must return their arithmetic sum. Scope: source.cjs and source.test.cjs only. ' + (opinion ? 'Read both files and independently assess whether the implementation satisfies the requirement. Report the defect with evidence. Do not change files or run shell commands.' : (run.kind === 'review' ? 'Independently review both files, fix discovered defects, and verify the fix.' : 'Implement the agreed sum behavior and verify it.') + ' Run node --test source.test.cjs.') + ' Do not run git commands, delegate, change settings, touch any other files, or start goals. Return the required final JSON with actual verification evidence.'
 let rejectDeadline
 const deadline = new Promise((_, reject) => { rejectDeadline = reject })
 void deadline.catch(() => {})
@@ -42,9 +43,9 @@ try {
     const subagents = pinned ? [pinned] : []
     await writeTaskPresetPatch(patch, { subagents })
     const turn = newTurn({ id: randomUUID(), text: prompt, images: [] })
-    const runtime = new AcpRuntime({ mode: permissionMode, paths, patches: [patch], onUpdate: (_id, update) => applyUpdate(turn, update), onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
+    const pool = new RuntimePool({ paths: { ...paths, taskPresetPatch: patch }, onUpdate: (_id, update) => applyUpdate(turn, update), onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
     try {
-      await runtime.start()
+      const runtime = await pool.get('preset:' + permissionMode)
       const session = await runtime.newSession(workspace, [])
       const toolOptions = await runtime.setOption(session.sessionId, TOOL_MODE_CONFIG, 'ptc')
       assert.equal(toolOptions.find((option) => option.id === TOOL_MODE_CONFIG)?.currentValue, 'ptc')
@@ -53,7 +54,7 @@ try {
       assert.equal(parseConfigOptions(await runtime.setOption(session.sessionId, 'reasoning_effort', 'low')).currentEffort, 'low')
       await Promise.race([runtime.prompt(session.sessionId, [{ type: 'text', text: prompt }]), deadline])
       output = turn.items.filter((item) => item.type === 'agent').at(-1)?.text
-    } finally { await runtime.stop() }
+    } finally { await pool.stopAll() }
   } else {
     const descriptor = authDescriptor(await claudeAuthStatus({ claude: findClaude(), cwd: workspace }))
     assert.equal(descriptor.mode, 'subscription', 'No model call on an unconfirmed billing route')
@@ -70,9 +71,17 @@ try {
   }
   const result = parsePresetResult(output, run)
   assert.equal(result.status, 'complete', result.blocker || result.remaining)
-  const check = await promisify(execFile)(process.execPath, ['--test', 'source.test.cjs'], { cwd: workspace, encoding: 'utf8', timeout: 10000 })
-  assert.match(check.stdout, /pass 1/)
-  console.log(JSON.stringify({ provider, model: provider === 'gpt' ? 'gpt-6-luna' : 'haiku', effort: 'low', permissionMode: provider === 'gpt' ? permissionMode : 'danger-full-access', role: run.kind, status: result.status, verification: 'passed', files: await fs.readdir(workspace) }))
+  if (opinion) {
+    assert.equal(await fs.readFile(path.join(workspace, 'source.cjs'), 'utf8'), 'exports.add = (a, b) => a - b\n')
+    assert.equal(await fs.readFile(path.join(workspace, 'source.test.cjs'), 'utf8'), 'const test = require("node:test"); const assert = require("node:assert/strict"); const { add } = require("./source.cjs"); test("sum", () => { assert.equal(add(2, 3), 5); assert.equal(add(-2, 2), 0) });\n')
+    assert.match(result.summary, /subtract|減算|引き算|a\s*-\s*b/i)
+  } else {
+    const check = await promisify(execFile)(process.execPath, ['--test', '--test-reporter=tap', 'source.test.cjs'], { cwd: workspace, encoding: 'utf8', timeout: 10000 })
+    // The worker may add regression cases, so the number of passing tests is not fixed.
+    assert.match(check.stdout, /^# pass [1-9]\d*$/m)
+    assert.match(check.stdout, /^# fail 0$/m)
+  }
+  console.log(JSON.stringify({ provider, model: provider === 'gpt' ? 'gpt-6-luna' : 'haiku', effort: 'low', permissionMode: provider === 'gpt' ? permissionMode : 'danger-full-access', role: opinion ? 'opinion' : run.kind, status: result.status, verification: opinion ? 'reported without edits' : 'passed', files: await fs.readdir(workspace) }))
 } finally {
   clearTimeout(timeout)
   assert.ok(path.basename(root).startsWith('preset-worker-live-') && path.dirname(root) === os.tmpdir())

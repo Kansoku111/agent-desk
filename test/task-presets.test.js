@@ -215,6 +215,17 @@ test('review-and-fix asks for evidence and focused verification without affectin
   }
 })
 
+test('opinion completion treats reported findings as the deliverable, not unfinished fixes', () => {
+  const opinion = workerPresetInstructions({ id: 'R', kind: 'review', reviewMode: 'opinion' })
+  assert.match(opinion, /use complete with empty remaining and blocker.*even when you find bugs/)
+  assert.match(opinion, /findings, suggested fixes and unperformed implementation checks in summary, not remaining/)
+  assert.match(opinion, /Use continue only for an unfinished assessment/)
+  assert.match(opinion, /never verify because this mode has no registered app checks/)
+  for (const run of [{ id: 'R', kind: 'review', reviewMode: 'fix' }, { id: 'D', kind: 'delegate' }]) {
+    assert.doesNotMatch(workerPresetInstructions(run), /For this opinion-only assignment/)
+  }
+})
+
 test('delegate completes one-way; only explicit delivery sends a parent prompt, once', async (t) => {
   const f = await fixture(t)
   const run = await f.start()
