@@ -60,6 +60,13 @@ test('settings omit unconfigured API and show distinct controls after connection
   assert.ok(workflow.modelGroups(state).find((group) => group.id === 'anthropic').models.some((item) => item.value === model.value))
 })
 
+test('Fable 5.2 in the catalog is offered on Claude Code without an API key', () => {
+  const fable = { id: 'claude-fable-5-2', name: 'Claude Fable 5.2', provider: 'anthropic', value: '["anthropic","claude-fable-5-2"]' }
+  const server = { ...state, catalog: { ...state.catalog, models: [fable] }, accounts: { ...state.accounts, claude: { configured: false } } }
+  assert.ok(terminal.claudeModels(server).some((item) => item.id === fable.id))
+  assert.ok(claudeCodeModels(server).some((item) => item.value === 'claude:claude-fable-5-2'))
+})
+
 test('Claude Code aliases have their own visibility across picker and terminal', () => {
   input('Claude Code Haiku をモデルピッカーに表示').onChange({ target: { checked: false } })
   assert.ok(!workflow.modelGroups(state).find((group) => group.id === 'claude-code').models.some((item) => item.value === 'claude:haiku'))

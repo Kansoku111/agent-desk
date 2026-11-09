@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyCatalogAdditions, isModelId } from '../server/model-catalog.js'
+import { applyCatalogAdditions, configuredModelCatalog, isModelId } from '../server/model-catalog.js'
 
 const base = {
   'anthropic-messages': {
@@ -22,6 +22,20 @@ test('bundled Sonnet 5.5 uses the official cache-read rate per million tokens', 
   assert.deepEqual(data['anthropic-messages']['claude-sonnet-5-5'].cost, {
     input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5,
   })
+})
+
+test('Fable 5.2 is bundled with official limits and adaptive thinking', async () => {
+  const { data } = applyCatalogAdditions(base, 'anthropic')
+  const model = data['anthropic-messages']['claude-fable-5-2']
+  assert.equal(model.contextWindow, 1_000_000)
+  assert.equal(model.maxTokens, 128_000)
+  assert.deepEqual(model.input, ['text', 'image'])
+  assert.deepEqual(model.cost, { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 })
+  const configured = await configuredModelCatalog()
+  const runtime = configured.definitions.anthropic.find((entry) => entry.id === model.id)
+  assert.deepEqual(runtime.compat, { forceAdaptiveThinking: true, supportsTemperature: false })
+  assert.deepEqual(runtime.reasoningEfforts, { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' })
+  assert.deepEqual(configured.pricing['anthropic/claude-fable-5-2'], model.cost)
 })
 
 test('a bundled model the installed catalog already ships is left alone', () => {

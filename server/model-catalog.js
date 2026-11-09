@@ -4,7 +4,7 @@
 // (`dist/providers/data/<provider>.json`). New models land in newer pi-ai
 // releases first, and dsh pins pi-ai to a major version it was built against.
 // Agent Desk therefore adds the missing entries to that catalog before any dsh
-// process starts: definitions copied from a newer pi-ai release
+// process starts: bundled definitions from pi-ai or provider documentation
 // (`catalog-extras.json`), definitions read from the newest pi-ai release on
 // npm (model-updates.js), plus models the user registers in settings by
 // cloning an existing model's definition. Each added entry carries a marker so
@@ -253,6 +253,9 @@ export async function configuredModelCatalog(customModels = [], fetched = null) 
         contextWindow: model.contextWindow,
         maxTokens: model.maxTokens,
         input: model.input,
+        // This new model requires adaptive thinking; it is not in the installed pi-ai catalog yet.
+        ...(provider === 'anthropic' && model.id === 'claude-fable-5-2' && model[MARKER]
+          ? { compat: { forceAdaptiveThinking: true, supportsTemperature: false } } : {}),
         reasoningEfforts: model.reasoning
           ? Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max']
             .map(level => [level, model.thinkingLevelMap?.[level] ?? (level === 'max' ? null : level)])
