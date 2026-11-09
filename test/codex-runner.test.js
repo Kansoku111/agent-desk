@@ -9,15 +9,17 @@ import { CodexRunner } from '../server/codex-runner.js'
 import { createCodexHandlers } from '../server/rpc-handlers-codex.js'
 
 class FakeWorkServer extends EventEmitter {
-  constructor() { super(); this.calls = []; this.responses = []; this.nextThread = 0; this.nextTurn = 0; this.active = 0; this.account = { type: 'chatgpt', email: 'a@example.test', workspaceName: 'One' } }
+  constructor() { super(); this.calls = []; this.responses = []; this.nextThread = 0; this.nextTurn = 0; this.active = 0; this.loaded = new Map(); this.account = { type: 'chatgpt', email: 'a@example.test', workspaceName: 'One' } }
   async use(fn) { this.active++; try { return await fn() } finally { this.active-- } }
   async rawRequest(method, params = {}) {
     this.calls.push({ method, params })
     switch (method) {
       case 'account/read': return { account: this.account }
       case 'model/list': return { data: [{ model: 'gpt-test', displayName: 'Test', isDefault: true, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] }
-      case 'thread/start': return { thread: { id: `thread-${++this.nextThread}` } }
-      case 'thread/resume': return { thread: { id: params.threadId } }
+      // Like the real app-server: a loaded conversation keeps its level and ignores resume's config; an unloaded one takes it from the config.
+      case 'thread/start': { const id = `thread-${++this.nextThread}`; this.loaded.set(id, params.config?.model_reasoning_effort ?? null); return { thread: { id }, reasoningEffort: this.loaded.get(id) } }
+      case 'thread/resume': { if (!this.loaded.has(params.threadId)) this.loaded.set(params.threadId, params.config?.model_reasoning_effort ?? null); return { thread: { id: params.threadId }, reasoningEffort: this.loaded.get(params.threadId) } }
+      case 'thread/unsubscribe': this.loaded.delete(params.threadId); return { status: 'unsubscribed' }
       case 'turn/start': return { turn: { id: `turn-${++this.nextTurn}` } }
       default: return {}
     }
@@ -147,6 +149,43 @@ test('create and complete, strict selection, instructions and persistent thread 
   assert.equal(server.calls.filter(x => x.method === 'thread/start').length, 1)
   assert.equal(server.calls.find(x => x.method === 'thread/resume').params.threadId, first.threadId)
   await finish(runner, server, task.id, second)
+})
+
+test('a level changed after the conversation was created is applied to the conversation, not as a weak turn update', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir, model: 'gpt-test', effort: 'low' })
+  await finish(runner, server, task.id, await start(runner, task.id))
+  // Unchanged level: the loaded conversation is reused as is.
+  await finish(runner, server, task.id, await start(runner, task.id))
+  assert.equal(server.calls.filter(x => x.method === 'thread/unsubscribe').length, 0)
+  for (const effort of ['high', 'low']) {
+    await runner.update(task.id, { effort })
+    const before = server.calls.length
+    const ids = await start(runner, task.id)
+    const sent = server.calls.slice(before).map(x => x.method)
+    assert.deepEqual(sent.slice(sent.indexOf('thread/resume'), sent.indexOf('turn/start') + 1), ['thread/resume', 'thread/unsubscribe', 'thread/resume', 'turn/start'])
+    assert.equal(server.loaded.get(ids.threadId), effort)
+    assert.equal(server.calls.at(-1).params.effort, effort)
+    await finish(runner, server, task.id, ids)
+  }
+  assert.equal(runner.turns(task.id).every(turn => turn.status === 'done'), true)
+})
+
+test('a level the conversation cannot take stops the turn instead of running at another level', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir, model: 'gpt-test', effort: 'low' })
+  await finish(runner, server, task.id, await start(runner, task.id))
+  await runner.update(task.id, { effort: 'high' })
+  const raw = server.rawRequest.bind(server)
+  server.rawRequest = async (method, params) => {
+    const result = await raw(method, params)
+    return method === 'thread/resume' ? { ...result, reasoningEffort: 'low' } : result
+  }
+  const before = server.calls.length
+  runner.run(task.id, 'next')
+  await waitFor(() => !runner.running(task.id))
+  assert.match(runner.turns(task.id).at(-1).error?.message ?? runner.turns(task.id).at(-1).error, /推論レベル/)
+  assert.equal(server.calls.slice(before).some(x => x.method === 'turn/start'), false)
 })
 
 test('steer sends one additional instruction and stop waits for completed interruption', async t => {

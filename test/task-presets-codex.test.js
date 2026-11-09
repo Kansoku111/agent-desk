@@ -179,7 +179,7 @@ test('real Codex runner correlates GP preparation and delivery with app-server t
     async rawRequest(method, params) {
       if (method === 'account/read') return { account: { type: 'chatgpt', email: 'fixture@example.test' } }
       if (method === 'model/list') return { data: [{ model: 'gpt-6-luna', isDefault: true, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }] }
-      if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: params.threadId ?? 'gp-session' } }
+      if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: params.threadId ?? 'gp-session' }, reasoningEffort: params.config?.model_reasoning_effort ?? null }
       if (method === 'turn/start') return { turn: { id: 'remote-' + params.clientUserMessageId } }
       return {}
     },

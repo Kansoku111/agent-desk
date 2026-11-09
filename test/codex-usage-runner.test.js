@@ -16,7 +16,7 @@ class FakeServer extends EventEmitter {
     if (method === 'account/read') return { account: { type: 'chatgpt', email: 'fake@example.test' } }
     if (method === 'model/list') return { data: [{ model: 'gpt-mock', displayName: 'Mock', isDefault: true, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }] }
     if (method === 'thread/start') return { thread: { id: 'thread-' + ++this.thread } }
-    if (method === 'thread/resume') return { thread: { id: params.threadId } }
+    if (method === 'thread/resume') return { thread: { id: params.threadId }, reasoningEffort: params.config?.model_reasoning_effort ?? null }
     if (method === 'turn/start') return { turn: { id: 'turn-' + ++this.turn } }
     return {}
   }

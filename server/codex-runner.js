@@ -266,12 +266,18 @@ export class CodexRunner extends EventEmitter {
         approvalPolicy: this.#approvalPolicy(record),
         developerInstructions: [this.instructions(record), record.instructions].filter(Boolean).join('\n\n'),
         // The selected level must also be the conversation's own level. Sent only with turn/start, it reaches the model as a mid-conversation
-        // update that applies weakly (measured: max ran like medium to high). thread/start honours this; thread/resume ignores it (measured: the
-        // resumed thread kept medium), so a conversation keeps the level it was created with and a later change still applies only weakly.
+        // update that applies weakly (measured: max ran like medium to high). thread/start honours this; thread/resume honours it only for a
+        // conversation that is not loaded (see the unload below). The level is not stored with the conversation, so every resume must pass it.
         config: { ...(record.effort ? { model_reasoning_effort: record.effort } : {}), mcp_servers: record.mcpServers ?? {}, 'features.default_mode_request_user_input': !record.ab && !record.team?.childId, 'features.multi_agent': false, 'features.goals': false, 'features.hooks': false, 'features.plugins': false, web_search: leanResearch ? 'disabled' : 'cached', 'features.shell_tool': !leanResearch, 'features.unified_exec': !leanResearch } }
-      const result = record.sessionId
-        ? await this.server.rawRequest('thread/resume', { ...params, threadId: record.sessionId, excludeTurns: true })
-        : await this.server.rawRequest('thread/start', { ...params, ephemeral: false, serviceName: 'agent_desk_tasks' })
+      const resume = () => this.server.rawRequest('thread/resume', { ...params, threadId: record.sessionId, excludeTurns: true })
+      let result = record.sessionId ? await resume() : await this.server.rawRequest('thread/start', { ...params, ephemeral: false, serviceName: 'agent_desk_tasks' })
+      // A conversation that is still loaded keeps the level it was loaded with and ignores resume's config, so a level changed since then would
+      // only reach the model as the weak mid-conversation update (measured; it also kept a lowered level at max). Unloading it first makes resume apply the level.
+      if (record.sessionId && record.effort && result.reasoningEffort !== record.effort) {
+        await this.server.rawRequest('thread/unsubscribe', { threadId: record.sessionId })
+        result = await resume()
+        if (result.reasoningEffort !== record.effort) throw new Error('Codex の会話に選択した推論レベルを反映できませんでした。新しいタスクを作成してください。')
+      }
       if (live.ended) return
       if (!result.thread?.id) throw new Error('Codex の会話IDを取得できませんでした')
       if (record.sessionId && result.thread.id !== record.sessionId) throw new Error('Codex の会話IDが一致しません。新規会話へ切り替えず停止しました。')

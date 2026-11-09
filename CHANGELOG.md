@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Apply a reasoning level changed mid-conversation in a GP (Codex) task to the conversation itself. A conversation the app-server still had loaded ignored the new level on resume, so a raised level stayed weak and a lowered level stayed high until the process idled out; the task now unloads and resumes it, and stops with an error if the level cannot be applied.
+
 ## [0.1.13] - 2026-11-08
 
 ### Added
