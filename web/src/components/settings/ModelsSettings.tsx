@@ -5,7 +5,7 @@ import type { FastProvider } from '../../types'
 import { byNewest, providerReady } from '../Pickers'
 import { isModelVisible } from '../../model-selection'
 import { workflowLevels, workflowOptions } from '../../../../shared/workflow-effort.js'
-import { DROP_TYPE, ROUTE_KINDS, routesOf, targetGroups, type RouteParent, type SubagentRoute } from '../../subagent-routes'
+import { DROP_TYPE, ROUTE_KINDS, routesOf, savedModelName, targetGroups, type RouteParent, type SubagentRoute } from '../../subagent-routes'
 import { Dropdown, MenuItem } from '../Popover'
 import { CLAUDE_CODE, ModelField, modelGroups } from '../WorkflowModelField'
 import { TaskPresetModels } from '../TaskPresets'
@@ -149,9 +149,13 @@ function Subagents() {
         // Claude Code's own subagents take the level of the task that starts them.
         const fixedLevel = parent === 'cl' && route.target === 'cl'
         const levels = model ? workflowLevels(server.catalog, model) : []
+        const listed = targetGroups(groups, route.target)
         const choices = [
           ...(route.target === parent ? [{ id: 'same', heading: '', note: '', models: [{ value: '', name: '指定なし' }] }] : []),
-          ...targetGroups(groups, route.target),
+          ...listed,
+          // A saved model whose account is not connected stays visible instead of looking unset.
+          ...(model && !listed.some((group) => group.models.some((entry) => entry.value === model))
+            ? [{ id: 'saved', heading: '', note: '', models: [{ value: model, name: `${savedModelName(model)}（利用不可）` }] }] : []),
         ]
         return (
           <div

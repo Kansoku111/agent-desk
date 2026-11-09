@@ -24,8 +24,10 @@ export function codexSandbox(mode, workspace) {
 }
 
 export class CodexRunner extends EventEmitter {
-  constructor({ home, server, attachmentsDir, instructions = () => '', now = Date.now, speedNow, stopTimeoutMs = 10000 }) {
+  /** @param {string[]} [trustedMcp] - MCP servers whose tool calls need no approval: Agent Desk's own, whose use the user chose in the settings */
+  constructor({ home, server, attachmentsDir, instructions = () => '', trustedMcp = [], now = Date.now, speedNow, stopTimeoutMs = 10000 }) {
     super()
+    this.trustedMcp = trustedMcp
     this.home = path.resolve(home)
     this.dir = path.join(this.home, 'codex-tasks')
     this.indexFile = path.join(this.home, 'codex-tasks.json')
@@ -372,6 +374,12 @@ export class CodexRunner extends EventEmitter {
         kind: 'user-input', title: 'Codex からの質問', questions: params.questions })
       this.#emit(record)
       this.emit('approval', { id, requestId: String(requestId) })
+      return
+    }
+    // Codex asks before an MCP tool call outside full access; Agent Desk's own subagent tool is already the user's choice.
+    if (method === 'mcpServer/elicitation/request' && params._meta?.codex_approval_kind === 'mcp_tool_call' && this.trustedMcp.includes(params.serverName)
+      && record && live && !live.ended && !live.stopping && !record.ab && !record.subagent) {
+      this.server.respond(requestId, { action: 'accept' })
       return
     }
     const known = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)

@@ -18,7 +18,7 @@ import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF, OPENSCALE_REF,
 } from './credentials.js'
 import { contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeDshChildPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch, writeChatWebPatch } from './dsh-config.js'
-import { SubagentBridge, SUBAGENT_TOOL_TIMEOUT_SEC } from './subagent-bridge.js'
+import { BRIDGE_MCP_SERVER, SubagentBridge, SUBAGENT_TOOL_TIMEOUT_SEC } from './subagent-bridge.js'
 import { routePlan, savedRoutes } from './subagent-routes.js'
 import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
@@ -145,7 +145,7 @@ const credentials = new CredentialStore(paths.credentials)
 const codexApp = new CodexAppServer({ home: paths.codexHome, openUrl: openExternal })
 const codexWork = new CodexWorkServer({ home: paths.codexHome, cwd: paths.myPc })
 const codex = await new CodexRunner({ home: paths.home, server: codexWork, attachmentsDir: paths.attachmentsDir,
-  instructions: () => effectiveCustomInstructions(settings) }).load()
+  instructions: () => effectiveCustomInstructions(settings), trustedMcp: [BRIDGE_MCP_SERVER] }).load()
 
 // Agent teams (teams.js) give their leader's Claude Code its flags.
 let teams = null
@@ -1143,6 +1143,7 @@ async function shutdown(code = 0) {
   await teams.stop().catch((error) => log('team shutdown:', error.message))
   await terminals.shutdown().catch((error) => log('terminal shutdown:', error.message))
   await agents.shutdown().catch((error) => log('team agents shutdown:', error.message))
+  await subagentAgents.shutdown().catch((error) => log('subagent agents shutdown:', error.message))
   await catalogWarmTask?.catch((error) => log('catalog warm shutdown:', error.message))
   await catalog.flush().catch((error) => log('catalog shutdown:', error.message))
   await codex.shutdown().catch((error) => log('Codex shutdown:', error.message))

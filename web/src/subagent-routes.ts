@@ -22,6 +22,19 @@ export function targetGroups<T extends Group>(groups: T[], target: RouteParent):
   return groups.filter((group) => ids.includes(group.id))
 }
 
+/** The name of a saved route model, for when its account is not connected and the menu no longer lists it. */
+export function savedModelName(model: string) {
+  if (model.startsWith('claude:')) return model.slice(7)
+  if (model.startsWith('codex:')) return model.slice(6)
+  try {
+    const parts: unknown = JSON.parse(model)
+    if (Array.isArray(parts) && typeof parts[1] === 'string') return parts[1]
+  } catch {
+    // Not a DSH model value; show it as saved.
+  }
+  return model
+}
+
 /** Routes as the settings hold them; an older save without routes sends every kind to itself. */
 export function routesOf(settings: Pick<Settings, 'subagentRoutes'>): Record<RouteParent, SubagentRoute> {
   return settings.subagentRoutes ?? {

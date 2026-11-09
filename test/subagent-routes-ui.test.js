@@ -123,6 +123,19 @@ test('dragging a chip onto a row sends that row\'s subagents to the chip\'s kind
   assert.equal(calls.length, before + 1)
 })
 
+test('a saved model whose account is not connected stays visible instead of looking unset', () => {
+  const saved = JSON.stringify(['local-llm', 'org/model:8b'])
+  const before = state.settings.subagentRoutes
+  state.settings.subagentRoutes = { ...before, dsh: { target: 'dsh', model: saved, effort: null }, cl: { target: 'cl', model: 'claude:gone', effort: null } }
+  const shown = (parent) => field(parent).groups.at(-1)
+  assert.deepEqual(shown('dsh'), { id: 'saved', heading: '', note: '', models: [{ value: saved, name: 'org/model:8b（利用不可）' }] })
+  assert.equal(shown('cl').models[0].name, 'gone（利用不可）')
+  assert.equal(routes.savedModelName('codex:gpt-6-luna'), 'gpt-6-luna')
+  // Listed models get no extra entry.
+  state.settings.subagentRoutes = before
+  assert.ok(!field('dsh').groups.some((group) => group.id === 'saved'))
+})
+
 test('with subagents off no row is shown, and an older save without routes shows each kind on itself', () => {
   state.settings.subagentsEnabled = false
   assert.equal(rows().length, 0)

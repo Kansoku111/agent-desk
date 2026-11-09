@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Choose where each kind of task (DSH, Claude Code, GP) sends its subagents, with a model and reasoning level, in Settings → Models → Subagents. Each kind starts on itself; change a row's target from its chip's menu or by dragging a chip onto another row. A route to another kind (for example DSH → Claude Code, GP → DSH, Claude Code → GP) gives the parent one `subagent` tool, which runs the child as a headless dsh, a headless Claude Code or an unattended Codex session with the parent's working folder and no wider permission, and starts its answer with `Ran on: <model>`. A DSH child can use any connected provider with a subagent tool (ChatGPT, Claude API, DeepSeek, OpenCode Go, Command Code, OpenScale, local LLM). A GP task now has this tool too (Codex's own `multi_agent` stays off), approved without asking.
+- Choose the model Claude Code's own subagents run on (Claude Code → Claude Code); their reasoning level stays the parent's.
+
+### Changed
+
+- Settings saved with the per-provider subagent models (`subagentModels`, `subagentEfforts`) migrate to routes: the DSH row takes the ChatGPT model if one was set, otherwise the Claude one; the Claude Code row takes the ChatGPT model only. If both providers were set, only ChatGPT is used from now on, so no billing route changes silently. The old keys stay in `settings.json` but are no longer read.
+- The fixed-model tools a DSH task gets (`subagent_gpt`, `subagent_claude` and, now, `subagent_deepseek` and the like) follow the DSH row only, one tool at a time; a Claude Code task's GPT subagent now goes through the same `subagent` tool instead of `subagent_gpt`.
+- A ChatGPT team leader's subagent on any provider other than ChatGPT is stopped as before for Claude, because it bills outside the team's settings.
+- Subagents that run as another kind of task are not shown in the subagent panel and are not part of the parent's per-turn usage.
+
+### Removed
+
+- `server/gpt-subagent-mcp.js` and the `subagent_gpt` MCP tool of Claude Code tasks, replaced by the bridge above.
+
 ### Fixed
 
 - Apply a reasoning level changed mid-conversation in a GP (Codex) task to the conversation itself. A conversation the app-server still had loaded ignored the new level on resume, so a raised level stayed weak and a lowered level stayed high until the process idled out; the task now unloads and resumes it, and stops with an error if the level cannot be applied.

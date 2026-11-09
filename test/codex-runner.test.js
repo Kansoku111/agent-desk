@@ -38,10 +38,10 @@ async function waitFor(check) {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
 }
-async function setup(t) {
+async function setup(t, options = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-runner-'))
   const server = new FakeWorkServer()
-  const runner = await new CodexRunner({ home: dir, attachmentsDir: dir, server, instructions: () => 'global instruction', stopTimeoutMs: 100 }).load()
+  const runner = await new CodexRunner({ home: dir, attachmentsDir: dir, server, instructions: () => 'global instruction', stopTimeoutMs: 100, ...options }).load()
   t.after(async () => { await runner.shutdown(); await fs.rm(dir, { recursive: true, force: true }) })
   return { dir, server, runner }
 }
@@ -563,4 +563,47 @@ test('concurrent model selections retain the identity of their own returned list
   assert.equal(recordB.accountKey, key('b@example.test', 'Two'))
   assert.equal('accountKey' in taskA, false)
   assert.equal('accountKey' in taskB, false)
+})
+
+const elicitation = (ids, serverName, kind = 'mcp_tool_call') => ({ ...ids, serverName, mode: 'form', _meta: { codex_approval_kind: kind, tool_name: 'subagent' } })
+
+test('the subagent bridge tool is approved without asking; other MCP requests are still refused', async t => {
+  const { dir, server, runner } = await setup(t, { trustedMcp: ['agent-desk-subagent'] })
+  const task = await runner.create({ workspace: dir })
+  const ids = await start(runner, task.id)
+  server.emit('request', { id: 1, method: 'mcpServer/elicitation/request', params: elicitation(ids, 'agent-desk-subagent') })
+  assert.deepEqual(server.responses.at(-1), { id: 1, result: { action: 'accept' } })
+  assert.equal(runner.pendingPermissions(task.id).length, 0)
+  // Another server, or something other than a tool call approval, is not ours to accept.
+  server.emit('request', { id: 2, method: 'mcpServer/elicitation/request', params: elicitation(ids, 'imagegen') })
+  assert.equal(server.responses.at(-1).id, 2)
+  assert.equal(server.responses.at(-1).error.code, -32601)
+  server.emit('request', { id: 3, method: 'mcpServer/elicitation/request', params: elicitation(ids, 'agent-desk-subagent', 'other') })
+  assert.equal(server.responses.at(-1).error.code, -32601)
+  await finish(runner, server, task.id, ids)
+  // Without the server being trusted (a runner built without the bridge) nothing is accepted.
+  const plain = await setup(t)
+  const other = await plain.runner.create({ workspace: dir })
+  const otherIds = await start(plain.runner, other.id)
+  plain.server.emit('request', { id: 4, method: 'mcpServer/elicitation/request', params: elicitation(otherIds, 'agent-desk-subagent') })
+  assert.equal(plain.server.responses.at(-1).error.code, -32601)
+})
+
+test('a bridged subagent session is hidden from the task list, cannot ask the user, and cannot approve its own tools', async t => {
+  const { dir, server, runner } = await setup(t, { trustedMcp: ['agent-desk-subagent'] })
+  const child = await runner.create({ workspace: dir, permissionMode: 'workspace-write', permissionPolicy: 'deny', mcpServers: {}, subagent: { parent: 'cl:abc' } })
+  assert.deepEqual(runner.list().map(task => task.id), [])
+  assert.deepEqual(runner.list({ includeOwned: true }).map(task => [task.id, task.subagent]), [[child.id, { parent: 'cl:abc' }]])
+  const ids = await start(runner, child.id)
+  const start_ = server.calls.find(call => call.method === 'thread/start')
+  assert.equal(start_.params.config['features.default_mode_request_user_input'], false)
+  assert.deepEqual(start_.params.config.mcp_servers, {})
+  server.emit('request', { id: 5, method: 'item/tool/requestUserInput', params: { ...ids, questions: inputQuestions, isBlocking: true } })
+  assert.deepEqual(server.responses.at(-1), { id: 5, result: { answers: {} } })
+  server.emit('request', { id: 6, method: 'mcpServer/elicitation/request', params: elicitation(ids, 'agent-desk-subagent') })
+  assert.equal(server.responses.at(-1).error.code, -32601)
+  server.emit('request', { id: 7, method: 'item/commandExecution/requestApproval', params: { ...ids, command: 'rm -r x' } })
+  assert.deepEqual(server.responses.at(-1), { id: 7, result: { decision: 'decline' } })
+  assert.equal(runner.pendingPermissions(child.id).length, 0)
+  await finish(runner, server, child.id, ids)
 })
