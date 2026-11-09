@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Choose where each kind of task (DSH, Claude Code, GP) sends its subagents, with a model and reasoning level, in Settings → Models → Subagents. Each kind starts on itself; change a row's target from its chip's menu or by dragging a chip onto another row. A route to another kind (for example DSH → Claude Code, GP → DSH, Claude Code → GP) gives the parent one `subagent` tool, which runs the child as a headless dsh, a headless Claude Code or an unattended Codex session with the parent's working folder and no wider permission, and starts its answer with `Ran on: <model>`. A DSH child can use any connected provider with a subagent tool (ChatGPT, Claude API, DeepSeek, OpenCode Go, Command Code, OpenScale, local LLM). A GP task now has this tool too (Codex's own `multi_agent` stays off), approved without asking.
-- Choose the model Claude Code's own subagents run on (Claude Code → Claude Code); their reasoning level stays the parent's.
+- Choose the model and reasoning level Claude Code's own subagents run on (Claude Code → Claude Code). Claude Code does not pass the parent's level on to a subagent on another model — it uses that model's default — so a level you pick is applied by a hook on the Agent tool, and "default" means the model's own default, not the parent's.
 
 ### Changed
 

@@ -61,13 +61,20 @@ test('each kind of task has one row, named by the kind, with the models its targ
   assert.equal(field('cl').value, '')
 })
 
-test('the level follows the chosen model, and Claude Code\'s own subagents have none to set', () => {
+test('the level follows the chosen model, for every kind', () => {
   assert.equal(field('dsh').effort, 'high')
   assert.deepEqual(field('dsh').efforts, ['low', 'high'])
   assert.equal(field('dsh').allowDefaultEffort, true)
+  // Nothing to set until a model is chosen.
   assert.deepEqual(field('cl').efforts, [])
-  // A route from another kind to Claude Code can set one: that child is a Claude Code session of its own.
-  assert.deepEqual(field('gp').efforts, ['low', 'medium', 'high', 'xhigh', 'max'])
+  // Claude Code's own subagents take a level too (a hook sets it on each call), as does a Claude Code session started from another kind.
+  const levels = ['low', 'medium', 'high', 'xhigh', 'max']
+  assert.deepEqual(field('gp').efforts, levels)
+  const before = state.settings.subagentRoutes
+  state.settings.subagentRoutes = { ...before, cl: { target: 'cl', model: 'claude:haiku', effort: 'low' } }
+  assert.deepEqual(field('cl').efforts, levels)
+  assert.equal(field('cl').effort, 'low')
+  state.settings.subagentRoutes = before
 })
 
 test('choosing a model keeps a level it supports and clears one it does not', () => {

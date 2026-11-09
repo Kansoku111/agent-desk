@@ -71,7 +71,7 @@ Route = { target: 'dsh' | 'cl' | 'gp', model: string | null, effort: string | nu
 各段階の最後に、既存テストと追加テストを実行して区切る。
 
 0. **検証**（使い捨て。GPT は `gpt-6-luna`・`low`、Claude Code は `haiku`・`low`）
-   - Claude Code の `--agents` と `CLAUDE_CODE_SUBAGENT_MODEL(_FORCE)` が CL→CL の子のモデル・推論に効くか。効かなければ CL→CL は「親と同じ」固定にし、設定は別種のときだけ有効にする。
+   - Claude Code の `--agents` と `CLAUDE_CODE_SUBAGENT_MODEL(_FORCE)` が CL→CL の子のモデル・推論に効くか。効かなければ CL→CL は「親と同じ」固定にし、設定は別種のときだけ有効にする。（結果は「段階0の検証結果」。モデルは効き、推論レベルはフックで効かせた。）
    - Codex が MCP ツールを呼ぶときの承認の挙動と、`tool_timeout_sec`、キャンセル。
    - 仲介の MCP が長時間呼び出しで切れないか。
    - GPT / Claude 以外の接続先（DeepSeek、OpenCode Go、Command Code、ローカル LLM）が、子の dsh で動くか。ローカル LLM のサーバーが止まっているときに、子の失敗が親へ明示的に返るか。
@@ -107,7 +107,8 @@ Route = { target: 'dsh' | 'cl' | 'gp', model: string | null, effort: string | nu
 3. GP→GP は初期でオン。GP は組み込みの委託ツールを持たないので、行は常に仲介ツールを載せる。
 
 ### 段階0の検証結果（GPT は `gpt-6-luna`・`low`、Claude Code は `haiku`・`low`）
-- CL→CL: `CLAUDE_CODE_SUBAGENT_MODEL` と `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` で、組み込みエージェント全部のモデルを強制できた。推論レベルを子だけに指定する手段はなく、親と同じになる（設定画面では推論レベルを出さない）。
+- CL→CL: `CLAUDE_CODE_SUBAGENT_MODEL` と `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` で、組み込みエージェント全部のモデルを強制できた。推論レベルは、当初「親と同じ」と考えて設定画面から外したが誤りだった。モックの API で子のリクエストを見ると、親が `--effort high` でも、モデルを強制した子はそのモデルの既定（Sonnet 5.5 なら `xhigh`）で動く。そこで PreToolUse フック（`Agent|Task`）が `updatedInput` に `effort` を足して渡す（`server/subagent-effort-hook.js`）。低（`low`）・最大（`max`）を指定して子の `output_config.effort` がそのとおりになること、未指定ならフックは何も返さず既定のままになることを確認した。親のレベルは変わらない。
+  - 採らなかった案: `--agents` の `effort` は、同名の組み込みエージェントを上書きしてプロンプトごと差し替えてしまう。`CLAUDE_CODE_EFFORT_LEVEL` は親も含めて全部に効くので使えない。
 - Codex の MCP 呼び出し: ワークスペース編集モードでは `mcpServer/elicitation/request`（`codex_approval_kind: mcp_tool_call`）で承認を求めてくる。`CodexRunner` は未知の要求を拒否するため、そのままだと「user rejected MCP tool call」で失敗した。仲介ツールのサーバー名だけを自動承認する `trustedMcp` を足して解決した（他の MCP と、AB・子の記録は従来どおり拒否）。`tool_timeout_sec` は設定として受け付けられ、ツールが使えることを確認した。
 - 長時間の呼び出し: 本体への HTTP は 15 秒ごとの空行で保ち、dsh は `TIMEOUT_ENV` を延ばす。実際に何時間も動かす試験はしていない。
 - 実モデルでの通し確認（Agent Desk を起動せず、スクリプトで）: DSH→Claude Code（haiku）、GP→DSH（luna）、Claude Code→GP（`claude -p` から MCP ツールを呼ぶ）、GP→GP（Codex から MCP ツール）、DSH→GP（dsh のセッションから MCP ツール）。いずれも `Ran on:` 付きで答えが返った。

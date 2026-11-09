@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const hookScript = fileURLToPath(new URL('./claude-hook.js', import.meta.url))
+const effortHookScript = fileURLToPath(new URL('./subagent-effort-hook.js', import.meta.url))
 
 export const DEFAULT_TITLE = 'Claude Code'
 const MAX_COLS = 500
@@ -90,7 +91,7 @@ export function cleanTitle(raw) {
  * a constant scroll step per wheel event: Claude Code speeds up a quick run of
  * them, which makes a finger swipe on the phone jump instead of follow.
  */
-export function hookSettings(node = process.execPath, script = hookScript, { deniedAgents = [] } = {}) {
+export function hookSettings(node = process.execPath, script = hookScript, { deniedAgents = [], subagentEffort = false } = {}) {
   // Claude Code runs hooks with Git Bash on Windows; forward slashes keep the quoting simple.
   const slash = (file) => file.replace(/\\/g, '/')
   const command = { type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: true }
@@ -101,6 +102,10 @@ export function hookSettings(node = process.execPath, script = hookScript, { den
   // otherwise an old prompt can be mistaken for the turn that hit its limit.
   const ordered = new Set(['UserPromptSubmit', 'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'Notification'])
   const settings = { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [{ ...command, async: !ordered.has(event) }] }]])) }
+  // Synchronous: the hook's reply changes the Agent call before it runs (subagent-effort-hook.js).
+  if (subagentEffort) {
+    settings.hooks.PreToolUse = [{ matcher: 'Agent|Task', hooks: [{ type: 'command', command: `"${slash(node)}" "${slash(effortHookScript)}"`, timeout: 10 }] }]
+  }
   if (deniedAgents.length) settings.permissions = { deny: deniedAgents.map((name) => `Agent(${name})`) }
   return settings
 }

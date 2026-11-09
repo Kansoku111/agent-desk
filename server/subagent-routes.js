@@ -110,8 +110,8 @@ export function savedRoutes(saved) {
 /**
  * What a kind of task gets for its route.
  * - `native`: its own delegation tools (dsh `subagent`, Claude Code's Agent).
- *   `pinned` adds a DSH tool on the route's model; `claudeModel` makes Claude
- *   Code's subagents run on a model.
+ *   `pinned` adds a DSH tool on the route's model; `claudeModel` (and `effort`)
+ *   make Claude Code's subagents run on a model at a reasoning level.
  * - `bridge`: the bridge MCP to `target`, and no native tools. Codex has no
  *   native tools (its multi-agent feature is off), so it always bridges.
  * A route to another kind without a model is not set up yet, so the task keeps
@@ -123,5 +123,5 @@ export function routePlan(parent, route) {
   if (parent === 'gp' || !own) return { mode: 'bridge', target: route.target, model: route.model, effort: route.effort }
   if (!route.model) return { mode: 'native' }
   if (parent === 'dsh') return { mode: 'native', pinned: { ...dshModelParts(route.model), effort: route.effort } }
-  return { mode: 'native', claudeModel: route.model.slice(CLAUDE_PREFIX.length) }
+  return { mode: 'native', claudeModel: route.model.slice(CLAUDE_PREFIX.length), effort: route.effort }
 }

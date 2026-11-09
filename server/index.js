@@ -169,7 +169,7 @@ const terminals = await new TerminalManager({
       const server = subagentBridge.mcpServer('cl', record.id, record.workspace)
       return server ? { mcp: { name: server.name, server: claudeMcpServer(server) }, nativeOff: true } : null
     }
-    return plan.claudeModel ? { claudeModel: plan.claudeModel } : null
+    return plan.claudeModel ? { claudeModel: plan.claudeModel, effort: plan.effort } : null
   },
   preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
   fallbackPreflight: (context) => teams?.claudeAuth.guard(null, context) ?? AUTH_REQUIRED,

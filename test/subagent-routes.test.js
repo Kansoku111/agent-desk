@@ -73,7 +73,8 @@ test('the plan keeps a kind\'s own tools unless the route needs the bridge', () 
   assert.deepEqual(routePlan('gp', route('gp')), { mode: 'bridge', target: 'gp', model: null, effort: null })
   // Same kind with a model: the native tool runs on it.
   assert.deepEqual(routePlan('dsh', route('dsh', luna, 'low')), { mode: 'native', pinned: { provider: 'openai-codex', model: 'gpt-6-luna', effort: 'low' } })
-  assert.deepEqual(routePlan('cl', route('cl', 'claude:haiku', 'low')), { mode: 'native', claudeModel: 'haiku' })
+  assert.deepEqual(routePlan('cl', route('cl', 'claude:haiku', 'low')), { mode: 'native', claudeModel: 'haiku', effort: 'low' })
+  assert.deepEqual(routePlan('cl', route('cl', 'claude:haiku')), { mode: 'native', claudeModel: 'haiku', effort: null })
   // Another kind: the bridge, and only once a model is chosen, so a drag alone cannot leave a task without subagents.
   assert.deepEqual(routePlan('dsh', route('cl')), { mode: 'native' })
   assert.deepEqual(routePlan('gp', route('cl')), { mode: 'native' })

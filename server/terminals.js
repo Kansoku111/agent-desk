@@ -68,9 +68,9 @@ export class TerminalManager extends EventEmitter {
    * @param {string} [options.claudeHome]  Claude Code's own data folder (resumable transcripts)
    * @param {(record: object) => ({ args?: string[] } | null)} [options.launch]  more flags for a team's leader or child
    * @param {() => string} [options.instructions]  the user's custom instructions (a team's leader gets them in its own prompt, teams-launch.js)
-   * @param {(record: object) => ({ mcp?: object, nativeOff?: boolean, claudeModel?: string } | null)} [options.subagentRoute]  where a task's
+   * @param {(record: object) => ({ mcp?: object, nativeOff?: boolean, claudeModel?: string, effort?: string } | null)} [options.subagentRoute]  where a task's
    *   subagents go (index.js): `mcp` is the bridge tool (Claude Code's MCP config shape) for a route to another kind, which also
-   *   switches Claude Code's own Agent off (`nativeOff`); `claudeModel` makes Claude Code's own subagents run on that model
+   *   switches Claude Code's own Agent off (`nativeOff`); `claudeModel` makes Claude Code's own subagents run on that model, and `effort` gives them that reasoning level (subagent-effort-hook.js)
    */
   constructor({
     file, settingsFile, hookUrl, send, pty = null, findClaude: find = () => findClaude(), log = () => {},
@@ -458,10 +458,10 @@ export class TerminalManager extends EventEmitter {
     const env = checked?.env ?? { ...process.env }
     // The user's agents can change between starts (opencodex rewrites its own).
     const deniedAgents = unroutedAgents(this.claudeHome, env)
-    const settings = extra ? teamHookSettings(undefined, undefined, { deniedAgents }) : hookSettings(undefined, undefined, { deniedAgents })
-    fs.writeFileSync(extra ? this.teamSettingsFile : this.settingsFile, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 })
     // A team's leader hands work to its children instead.
     const route = record.team ? null : this.subagentRoute(record)
+    const settings = extra ? teamHookSettings(undefined, undefined, { deniedAgents }) : hookSettings(undefined, undefined, { deniedAgents, subagentEffort: Boolean(route?.effort) })
+    fs.writeFileSync(extra ? this.teamSettingsFile : this.settingsFile, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 })
     const taskMcp = record.team ? null : this.#writeTaskMcp(record, route)
     const command = launchCommand(claude, [
       ...(resume ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
@@ -489,6 +489,7 @@ export class TerminalManager extends EventEmitter {
       AGENT_DESK_TERMINAL_SECRET: secret,
       // Claude Code's own subagents (Explore and the others too) run on the model the route names.
       ...(route?.claudeModel ? { CLAUDE_CODE_SUBAGENT_MODEL: route.claudeModel, CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' } : {}),
+      ...(route?.effort ? { AGENT_DESK_SUBAGENT_EFFORT: route.effort } : {}),
     })
 
     const { Terminal } = require('@xterm/headless')

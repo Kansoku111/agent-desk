@@ -146,8 +146,6 @@ function Subagents() {
         const route = routes[parent]
         const target = ROUTE_KINDS.find((kind) => kind.id === route.target)!
         const model = route.model ?? ''
-        // Claude Code's own subagents take the level of the task that starts them.
-        const fixedLevel = parent === 'cl' && route.target === 'cl'
         const levels = model ? workflowLevels(server.catalog, model) : []
         const listed = targetGroups(groups, route.target)
         const choices = [
@@ -203,7 +201,7 @@ function Subagents() {
               groups={choices}
               disabled={false}
               effort={route.effort ?? ''}
-              efforts={fixedLevel ? [] : workflowOptions(route.effort ?? '', levels)}
+              efforts={workflowOptions(route.effort ?? '', levels)}
               allowDefaultEffort
               onChange={(value) => {
                 const next = value ? workflowLevels(server.catalog, value) : []

@@ -373,14 +373,28 @@ test('a task whose subagents go to another kind gets the bridge tool and loses C
   await assert.rejects(fs.stat(file))
 })
 
-test('a Claude Code route to Claude Code keeps its own subagents and pins their model', async () => {
-  const { workspace, pty, manager } = await setup({ subagentRoute: () => ({ claudeModel: 'haiku' }) })
+test('a Claude Code route to Claude Code keeps its own subagents and pins their model and level', async () => {
+  const { workspace, pty, manager, dir } = await setup({ subagentRoute: () => ({ claudeModel: 'haiku' }) })
   await manager.create({ workspace })
   const { args, options } = pty.spawned[0]
   assert.ok(!args.includes('--disallowedTools'))
   assert.ok(!args.includes('--mcp-config'))
   assert.equal(options.env.CLAUDE_CODE_SUBAGENT_MODEL, 'haiku')
   assert.equal(options.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE, '1')
+  // No level chosen: nothing is set, and no hook runs on the Agent tool.
+  assert.equal(options.env.AGENT_DESK_SUBAGENT_EFFORT, undefined)
+  const file = path.join(dir, 'claude-terminal-settings.json')
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).hooks.PreToolUse, undefined)
+
+  const chosen = await setup({ subagentRoute: () => ({ claudeModel: 'haiku', effort: 'low' }) })
+  await chosen.manager.create({ workspace: chosen.workspace })
+  assert.equal(chosen.pty.spawned[0].options.env.AGENT_DESK_SUBAGENT_EFFORT, 'low')
+  const settings = JSON.parse(await fs.readFile(path.join(chosen.dir, 'claude-terminal-settings.json'), 'utf8'))
+  assert.equal(settings.hooks.PreToolUse[0].matcher, 'Agent|Task')
+  assert.match(settings.hooks.PreToolUse[0].hooks[0].command, /subagent-effort-hook\.js"$/)
+  // A team leader hands work to its children, so the route does not touch it.
+  await chosen.manager.create({ workspace: chosen.workspace, team: { id: 'team-1', role: 'leader' } })
+  assert.equal(chosen.pty.spawned[1].options.env.AGENT_DESK_SUBAGENT_EFFORT, undefined)
 })
 
 test('ordinary Claude tasks get image MCP alongside the bridge; the next start reflects settings', async (t) => {
