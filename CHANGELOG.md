@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Delegation and independent review start dialogs can be closed with ×, Esc or “閉じる” while their start request is pending. The submitted request continues; late replies do not navigate away or dismiss a newly opened dialog, and late failures are reported as notifications.
 - Starting a delegation or independent review over plain HTTP no longer fails before sending the request because `crypto.randomUUID` is unavailable. Use the existing HTTP-compatible UUID generator and show preparation errors without leaving the start dialog permanently busy and unclosable.
 - Opinion reviews with a DSH worker now have a dedicated read-only runtime; they previously failed at startup with `unknown permission mode: preset:read-only`. Clarify that a completed opinion report can contain unfixed findings without requesting another work round. Add real ACP startup coverage and an opinion smoke check through the production runtime pool.
 - The worker smoke check accepts additional passing regression tests instead of falsely failing whenever a worker adds a second test.

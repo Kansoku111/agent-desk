@@ -8,6 +8,8 @@
 
 開始画面でモデルと推論レベルを直接選びます。選択はその都度保存され、キャンセル後や再起動後も、委託とレビューそれぞれの最後の選択を使います。「設定 → モデル → タスクのプリセット」からも変更できます。未設定または利用できないモデルでは起動できません。以前のレビュー設定だけがある場合は、元タスクがClaude CodeならDSH、それ以外ならClaude Codeの設定を初期表示し、選択すると共通のレビュー設定に保存します。別の実行方式へ自動で切り替えません。既存の系列別サブエージェント、TM・eco・ABの設定とは独立しています。
 
+「始める」の応答を待っている間も、×・Esc・「閉じる」で開始画面を閉じ、ほかのタスクへ移動できます。送信済みの開始依頼は取り消しません。閉じた後に応答が届いても画面を自動で移動せず、受け付けた実行は元タスクの「委託」パネルから確認できます。開始要求が失敗した場合は通知します。実行を止めるときは、担当画面の「止める」を使います。
+
 ## 子に委託
 
 1. 元タスクで方針を相談し、待機中になってから「開く → 子に委託」を選びます。
@@ -72,7 +74,7 @@
 
 ## 開発時の確認
 
-`node --test test/task-presets*.test.js`はモデルを使わない回帰確認です。HTTP接続時の開始と開始前エラー後の操作復帰、読み取り専用の担当を含む実行先の選択と、実際のACPセッションの起動・権限も確認します。PC／390px幅の操作確認は`test/fixtures/task-presets-ui.html`の隔離Reactフィクスチャ（`window.taskPresetsTest.run()`と`window.taskPresetsTest.failures()`）で行えます。`window.taskPresetsTest.startup()`は`crypto.randomUUID`のないHTTP相当の環境と開始前の例外を再現し、開始要求の送信と×で閉じられることを確認します。
+`node --test test/task-presets*.test.js`はモデルを使わない回帰確認です。HTTP接続時の開始と開始前エラー後の操作復帰、読み取り専用の担当を含む実行先の選択と、実際のACPセッションの起動・権限も確認します。PC／390px幅の操作確認は`test/fixtures/task-presets-ui.html`の隔離Reactフィクスチャ（`window.taskPresetsTest.run()`と`window.taskPresetsTest.failures()`）で行えます。`window.taskPresetsTest.startup()`は`crypto.randomUUID`のないHTTP相当の環境と開始前の例外を再現し、開始要求の送信と×で閉じられることを確認します。`window.taskPresetsTest.pending()`は開始応答を保留し、×・Esc・「閉じる」、閉じた後の応答による画面移動の防止、遅れて失敗した場合の通知を確認します。
 
 次は実際のモデルを使い、利用枠を消費します。製品コードやユーザーの作業フォルダーは変更せず、使い捨てのコードで確認します。会話記録や信頼済みフォルダー情報はCLIが通常どおり保存します。モデルを変更せず、GPTは`gpt-6-luna`・`low`、Claude Codeは`haiku`・`low`を明示します。Claude Codeはsubscription経路を確認できる場合のみ開始します。
 

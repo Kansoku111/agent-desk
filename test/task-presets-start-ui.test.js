@@ -18,12 +18,12 @@ const groups = [
 const sourceCode = await fs.readFile(new URL('../web/src/components/TaskPresets.tsx', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(sourceCode, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText
 
-function mount(kind, settings = {}) {
+function mount(kind, settings = {}, responses = {}) {
   const source = { kind: 'thread', id: 'parent' }
   const server = { settings: { taskPresets: { delegate: { model: GPT, effort: 'low' }, review: { model: null, effort: null }, ...settings } },
     catalog: { effortsByModel: { [GPT]: [{ value: 'low' }, { value: 'high' }] } } }
-  let slots = [], cursor = 0, pendingEffects = [], failSave = false
-  const calls = [], states = [], routes = []
+  let slots = [], cursor = 0, pendingEffects = [], cleanups = [], failSave = false
+  const calls = [], states = [], routes = [], toasts = []
   const react = {
     useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial
       return [slots[i], value => { slots[i] = typeof value === 'function' ? value(slots[i]) : value }] },
@@ -39,10 +39,11 @@ function mount(kind, settings = {}) {
         Object.assign(server.settings.taskPresets, params.patch.taskPresets)
         return {}
       }
-      if (type === 'preset.create') return { run: { id: 'run' } }
+      if (type === 'preset.create') return responses.create ? responses.create(params) : { run: { id: 'run' } }
       throw new Error('unexpected request: ' + type)
     },
     setState(patch) { states.push(patch) }, navigate(route) { routes.push(route) },
+    toast(message, kind) { toasts.push({ message, kind }) },
   }
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: Symbol('Fragment') },
@@ -62,11 +63,57 @@ function mount(kind, settings = {}) {
     const field = picker.type(picker.props)
     return { tree, field }
   }
-  async function init() { render(); for (const effect of pendingEffects.splice(0)) effect(); await Promise.resolve(); return render() }
-  return { server, calls, states, routes, render, init, reopen() { slots = []; pendingEffects = []; return this.init() }, fail(value) { failSave = value } }
+  async function init() { render(); for (const effect of pendingEffects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup) }; await Promise.resolve(); return render() }
+  function unmount() { for (const cleanup of cleanups.splice(0)) cleanup() }
+  return { server, calls, states, routes, toasts, render, init, unmount, reopen() { unmount(); slots = []; pendingEffects = []; return this.init() }, fail(value) { failSave = value } }
 }
 
 for (const kind of ['review', 'delegate']) {
+  test(`${kind} pending start can close without late navigation into a reopened dialog`, async () => {
+    const result = Promise.withResolvers()
+    const ui = mount(kind, { reviewSelected: { model: GPT, effort: 'low' } }, { create: () => result.promise })
+    let { tree } = await ui.init()
+    nodes(tree, n => n.type === 'button' && n.props.className === 'button primary')[0].props.onClick()
+    tree = ui.render().tree
+    const close = nodes(tree, n => n.type === 'button' && n.props.className === 'button')[0]
+    assert.notEqual(close.props.disabled, true)
+    assert.equal(close.props.children, '閉じる')
+    tree.props.onClose()
+    assert.deepEqual(ui.states, [{ presetStart: null }])
+    await ui.reopen()
+    result.resolve({ run: { id: 'late-run' } })
+    await new Promise(setImmediate)
+    assert.deepEqual(ui.routes, [])
+    assert.deepEqual(ui.states, [{ presetStart: null }], 'the response must not close the new dialog')
+    assert.equal(ui.calls.filter(c => c.type === 'preset.create').length, 1)
+  })
+
+  test(`${kind} dismissed start failure remains visible as a toast without reopening the dialog`, async () => {
+    const result = Promise.withResolvers()
+    const ui = mount(kind, { reviewSelected: { model: GPT, effort: 'low' } }, { create: () => result.promise })
+    let { tree } = await ui.init()
+    nodes(tree, n => n.type === 'button' && n.props.className === 'button primary')[0].props.onClick()
+    tree = ui.render().tree
+    nodes(tree, n => n.type === 'button' && n.props.className === 'button')[0].props.onClick()
+    result.reject(new Error('開始を受け付けられませんでした'))
+    await new Promise(setImmediate)
+    assert.deepEqual(ui.states, [{ presetStart: null }])
+    assert.deepEqual(ui.routes, [])
+    assert.deepEqual(ui.toasts, [{ message: '開始を受け付けられませんでした', kind: 'error' }])
+  })
+
+  test(`${kind} unmounted start cannot navigate when its request finishes`, async () => {
+    const result = Promise.withResolvers()
+    const ui = mount(kind, { reviewSelected: { model: GPT, effort: 'low' } }, { create: () => result.promise })
+    const { tree } = await ui.init()
+    nodes(tree, n => n.type === 'button' && n.props.className === 'button primary')[0].props.onClick()
+    ui.unmount()
+    result.resolve({ run: { id: 'late-run' } })
+    await new Promise(setImmediate)
+    assert.deepEqual(ui.states, [])
+    assert.deepEqual(ui.routes, [])
+  })
+
   test(`${kind} starts over HTTP without crypto.randomUUID`, async (t) => {
     const descriptor = Object.getOwnPropertyDescriptor(crypto, 'randomUUID')
     Object.defineProperty(crypto, 'randomUUID', { configurable: true, value: undefined })

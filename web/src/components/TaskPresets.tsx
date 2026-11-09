@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './TaskPresets.css'
 import { CheckCircle2, ChevronRight, CornerDownRight, FolderOpen, Loader2, PanelLeftOpen, PanelRight, Send, Square, X } from 'lucide-react'
-import { act, isNarrow, isTouch, loadThread, navigate, request, setState, useStore } from '../store'
+import { act, isNarrow, isTouch, loadThread, navigate, request, setState, toast, useStore } from '../store'
 import { getDraft, useDraft, useImeField } from '../drafts'
 import { messageId } from '../outbox'
 import { PRESET_PROMPT_MARK } from '../../../shared/task-preset-mark.js'
@@ -97,11 +97,13 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
   const [busy, setBusy] = useState(false)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const intent = useRef({ fingerprint: '', id: '' })
-  const close = () => setState({ presetStart: null })
+  const dismissed = useRef(false)
+  const close = () => { dismissed.current = true; setState({ presetStart: null }) }
   useEffect(() => {
     let alive = true
+    dismissed.current = false
     request<Inspection>('preset.inspect', { source }).then((value) => { if (alive) setInspection(value) }).catch((cause) => { if (alive) setError(cause.message) })
-    return () => { alive = false }
+    return () => { alive = false; dismissed.current = true }
   }, [source.id, source.kind])
   if (!server) return null
   const model = preset.choice.model ?? ''
@@ -119,12 +121,17 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
       const fingerprint = JSON.stringify(payload)
       if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: messageId() }
       const result = await request<{ run: TaskPresetRun }>('preset.create', { ...payload, requestId: intent.current.id, authConfirmation: auth.confirmation })
+      // Dismissing the form does not cancel the run or let its late reply take over the UI.
+      if (dismissed.current) return
       setState({ presetStart: null })
       navigate({ view: 'preset', id: result.run.id })
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setBusy(false) }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      if (dismissed.current) toast(message, 'error')
+      else setError(message)
+    } finally { if (!dismissed.current) setBusy(false) }
   }
-  return <Modal title="独立レビュー" onClose={busy || preset.saving ? () => {} : close} width={560}>
+  return <Modal title="独立レビュー" onClose={close} width={560}>
     <div className="modal-body preset-form">
       <PresetModelPicker server={server} choice={preset.choice} disabled={busy || preset.saving} onChange={(value) => { void preset.save(value).then((saved) => { if (saved) { legacyChoice.current = false; if (Boolean(value.model?.startsWith('claude:')) !== (harness === 'claude')) setAuth({ ready: false }) } }) }} />
       <fieldset className="preset-switch"><legend>方法</legend>
@@ -134,8 +141,8 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
       {harness === 'dsh' && mode === 'fix' && <label>権限<select value={permission} disabled={busy} onChange={(event) => setPermission(event.target.value)}><option value="workspace-write">作業フォルダーへの書き込み</option><option value="danger-full-access">フルアクセス</option></select></label>}
       {harness === 'claude' && inspection && selected && <ClaudeAuthConsent workspace={inspection.workspace} taskPreset onChange={setAuth} />}
       {(preset.saveError || error) && <p className="team-warning" role="alert">{preset.saveError || error}</p>}
-      {mode === 'opinion' && <div className="preset-start-note muted">完了後、元のセッションへ自動で返します。</div>}
-      <div className="modal-actions"><button type="button" className="button" disabled={busy || preset.saving} onClick={close}>キャンセル</button>
+      {busy ? <div className="preset-start-note muted">閉じても開始処理は続きます。</div> : mode === 'opinion' && <div className="preset-start-note muted">完了後、元のセッションへ自動で返します。</div>}
+      <div className="modal-actions"><button type="button" className="button" onClick={close}>{busy ? '閉じる' : 'キャンセル'}</button>
         <button type="button" className="button primary" disabled={busy || preset.saving || !inspection || !ready || (harness === 'claude' && !auth.ready)} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
     </div>
   </Modal>
@@ -154,11 +161,13 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
   const [busy, setBusy] = useState(false)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
   const intent = useRef({ fingerprint: '', id: '' })
-  const close = () => setState({ presetStart: null })
+  const dismissed = useRef(false)
+  const close = () => { dismissed.current = true; setState({ presetStart: null }) }
   useEffect(() => {
     let alive = true
+    dismissed.current = false
     request<Inspection>('preset.inspect', { source }).then((value) => { if (alive) setInspection(value) }).catch((cause) => { if (alive) setError(cause.message) })
-    return () => { alive = false }
+    return () => { alive = false; dismissed.current = true }
   }, [source.id, source.kind])
   if (!server) return null
   const model = preset.choice.model ?? ''
@@ -176,12 +185,17 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
       const fingerprint = JSON.stringify(payload)
       if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: messageId() }
       const result = await request<{ run: TaskPresetRun }>('preset.create', { ...payload, requestId: intent.current.id, authConfirmation: auth.confirmation })
+      // Dismissing the form does not cancel the run or let its late reply take over the UI.
+      if (dismissed.current) return
       setState({ presetStart: null })
       navigate({ view: 'preset', id: result.run.id })
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setBusy(false) }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      if (dismissed.current) toast(message, 'error')
+      else setError(message)
+    } finally { if (!dismissed.current) setBusy(false) }
   }
-  return <Modal title={LABEL[kind]} onClose={busy || preset.saving ? () => {} : close} width={560}>
+  return <Modal title={LABEL[kind]} onClose={close} width={560}>
     <div className="modal-body preset-form">
       <PresetModelPicker server={server} choice={preset.choice} disabled={busy || preset.saving} onChange={(value) => { void preset.save(value).then((saved) => { if (saved && Boolean(value.model?.startsWith('claude:')) !== cli) setAuth({ ready: false }) }) }} />
       <div className="preset-model-line muted">{group && <span>{group.heading}{group.note ? ' · ' + group.note : ''}</span>}<span>{cli || permission === 'danger-full-access' ? 'フルアクセス' : '作業フォルダーに書き込み'}</span></div>
@@ -196,8 +210,8 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
       </div></details>
       {cli && inspection && <ClaudeAuthConsent workspace={inspection.workspace} taskPreset onChange={setAuth} />}
       {(preset.saveError || error) && <p className="team-warning" role="alert">{preset.saveError || error}</p>}
-      <div className="preset-start-note muted">{kind === 'review' ? '別モデルが指摘箇所の修正・検証まで行います。' : '現在のモデルが指示を作り、子が実作業と確認を行います。'} 完了後、親には自動送信しません。</div>
-      <div className="modal-actions"><button type="button" className="button" disabled={busy || preset.saving} onClick={close}>キャンセル</button>
+      <div className="preset-start-note muted">{busy ? '閉じても開始処理は続きます。' : '現在のモデルが指示を作り、子が実作業と確認を行います。完了後、親には自動送信しません。'}</div>
+      <div className="modal-actions"><button type="button" className="button" onClick={close}>{busy ? '閉じる' : 'キャンセル'}</button>
         <button type="button" className="button primary" disabled={busy || preset.saving || !inspection || !ready || (cli && !auth.ready)} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
     </div>
   </Modal>

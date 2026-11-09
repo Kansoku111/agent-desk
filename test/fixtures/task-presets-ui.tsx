@@ -5,7 +5,8 @@ const requests: any[] = []
 const source = { kind: 'thread' as const, id: 'parent' }
 const delegate = JSON.stringify(['openai-codex', 'fixture-implementer'])
 const reviewer = JSON.stringify(['openai-codex', 'fixture-reviewer'])
-let store: any, current: any, parentCalls = 0, sequence = 0
+let store: any, current: any, parentCalls = 0, sequence = 0, holdCreate = false
+const heldReplies: ((error?: string) => void)[] = []
 const server: any = {
   app: { myPc: 'fixture', remote: false }, openTargets: { terminal: true }, taskPresets: [], threads: [{ id: 'parent', title: '相談した機能' }], terminals: [],
   settings: { taskPresets: { delegate: { model: delegate, effort: 'low' }, review: { model: reviewer, effort: 'low' }, reviewClaude: { model: 'claude:haiku', effort: 'low' } }, modelVisibility: {}, projectNames: {}, usageCurrency: 'USD' },
@@ -36,7 +37,9 @@ class Socket {
     if (input.type === 'preset.get') result = { run: server.taskPresets.find((run: any) => run.id === input.runId), turns: [] }
     if (input.type === 'preset.deliver') { parentCalls++; current.deliveredAt = Date.now(); current.updatedAt++; result = { sent: true }; publish() }
     if (input.type === 'settings.update') { for (const role of Object.keys(input.patch.taskPresets)) server.settings.taskPresets[role] = input.patch.taskPresets[role]; publish(); result = { settings: server.settings } }
-    setTimeout(() => this.onmessage?.({ data: JSON.stringify({ id: input.id, ok: true, result }) }), 10)
+    const reply = (error?: string) => this.onmessage?.({ data: JSON.stringify(error ? { id: input.id, ok: false, error } : { id: input.id, ok: true, result }) })
+    if (input.type === 'preset.create' && holdCreate) heldReplies.push(reply)
+    else setTimeout(() => reply(), 10)
   }
 }
 Object.assign(window, { WebSocket: Socket })
@@ -98,6 +101,48 @@ const api = {
     check(document.documentElement.scrollWidth <= innerWidth, 'no horizontal overflow')
     labels.push('independent review: two selectors, opinion default, automatic return, no overflow')
     return labels
+  },
+  async pending() {
+    server.settings.taskPresets.reviewSelected = { model: reviewer, effort: 'low' }
+    const labels: string[] = []
+    holdCreate = true
+    try {
+      for (const kind of ['review', 'delegate'] as const) for (const method of ['x', 'escape', 'footer']) {
+        render(); store.navigate({ view: 'home' }); store.setState({ presetRun: null, presetStart: { source, kind } }); await tick()
+        const before = requests.filter((entry) => entry.type === 'preset.create').length
+        button('始める').click(); await tick()
+        check(heldReplies.length === 1, 'the start reply remains pending')
+        const dialog = document.querySelector('[role="dialog"]')!
+        if (method === 'x') (dialog.querySelector('button[aria-label="閉じる"]') as HTMLButtonElement).click()
+        else if (method === 'escape') document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        else {
+          const close = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(entry => entry.textContent === '閉じる')!
+          check(!close.disabled, 'pending close button is enabled'); close.click()
+        }
+        await tick()
+        check(!document.querySelector('[role="dialog"]'), kind + ' closes via ' + method)
+        check(!button('開く').disabled, 'the main view remains usable')
+        store.setState({ presetStart: { source, kind } }); await tick()
+        heldReplies.shift()!(); await tick()
+        check(document.querySelector('[role="dialog"] h2')?.textContent === (kind === 'review' ? '独立レビュー' : '子に委託'), 'late success preserves the new dialog')
+        check(store.getState().route.view === 'home', 'late success does not navigate')
+        check(requests.filter(entry => entry.type === 'preset.create').length === before + 1, 'closing sends no duplicate start')
+        ;(document.querySelector('[role="dialog"] button[aria-label="閉じる"]') as HTMLButtonElement).click(); await tick()
+        labels.push(kind + ': ' + method + ' closes during startup without late navigation')
+      }
+      for (const kind of ['review', 'delegate'] as const) {
+        store.setState({ presetStart: { source, kind } }); await tick()
+        button('始める').click(); await tick()
+        ;(document.querySelector('[role="dialog"] button[aria-label="閉じる"]') as HTMLButtonElement).click(); await tick()
+        heldReplies.shift()!('fixture delayed rejection'); await tick()
+        check(store.getState().toasts.some((entry: any) => entry.text === 'fixture delayed rejection' && entry.tone === 'error'), 'a delayed rejection is still reported')
+        check(!document.querySelector('[role="dialog"]'), 'a delayed rejection does not reopen the dialog')
+        labels.push(kind + ': delayed rejection is reported without a modal')
+      }
+      check(!requests.some(entry => entry.type === 'preset.stop'), 'dismissal never cancels the submitted run')
+      check(document.documentElement.scrollWidth <= innerWidth, 'no horizontal overflow')
+      return labels
+    } finally { holdCreate = false; for (const reply of heldReplies.splice(0)) reply() }
   },
   async startup() {
     const uuid = Object.getOwnPropertyDescriptor(crypto, 'randomUUID')
