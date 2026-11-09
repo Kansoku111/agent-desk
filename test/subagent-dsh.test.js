@@ -51,4 +51,8 @@ test('bridged headless DSH uses the managed API credential', { timeout: 90000 },
   assert.equal(requests[0].authorization, 'Bearer fixture-not-a-real-key')
   assert.equal(requests[0].body.model, model)
   assert.equal(requests[0].body.reasoning_effort, 'max')
+  const toolNames = requests[0].body.tools.map((tool) => tool.function.name)
+  assert.ok(!toolNames.includes('create_goal'), 'a one-shot child cannot create a persistent goal')
+  assert.ok(!toolNames.includes('update_goal'))
+  assert.match(JSON.stringify(requests[0].body.messages), /Approval prompts are disabled/)
 })

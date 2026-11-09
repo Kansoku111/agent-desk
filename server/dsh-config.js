@@ -337,6 +337,8 @@ export function dshChildPatch({ child = null, subagents = [], subagentsEnabled =
     { id: 'credentials', disabled: false },
     // Headless callers consume only the result, never a generated session title.
     { id: 'session-title-llm', disabled: true },
+    // A one-shot child has no continuation mechanism for an autonomous goal.
+    ...['tool-goal', 'goal-round-driver'].map((id) => ({ id, disabled: true })),
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
     ...pinned.map(({ provider }) => ({ id: `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`, disabled: true })),
   ]

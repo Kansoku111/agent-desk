@@ -115,7 +115,7 @@ Route = { target: 'dsh' | 'cl' | 'gp', model: string | null, effort: string | nu
 - 当初未確認だった API キー経路は、ヘッドレスプロファイルが認証ストアを無効にするため失敗していた。仲介した子の層でストアを有効にし、テスト用の保存済み Command Code キーがモック API への要求に使われることと、実際の Command Code モデルが応答することを子の実プロセスで確認した。DeepSeek・OpenCode Go・ローカル LLM の実モデルと、Claude Code の対話画面で仲介ツールを承認する操作は未確認。
 
 ### 計画からの変更
-- 仲介の子は、DSH をスレッドとして作らず、ヘッドレスの dsh（`subagent-dsh.js`）を直接起動する。親ごとの層は `dshChildPatch`（`gptSubagentPatch` の後継）。
+- 仲介の子は、DSH をスレッドとして作らず、ヘッドレスの dsh（`subagent-dsh.js`）を直接起動する。親ごとの層は `dshChildPatch`（`gptSubagentPatch` の後継）。無人の子は承認不可（必要な操作は拒否）とし、実行後に再開できない goal ツールとドライバーを外す。
 - 子のセッション（Claude Code は専用の `ClaudeRunner`、Codex は `subagent` 印つきの記録）はタスク一覧・通知に出さず、完了後に削除する。起動時に残りを掃除する。
 - 子が使う Claude Code の権限: Claude Code にはサンドボックスがないので、子はフルアクセスか読み取り専用の親からだけ起動する。Claude Code の親は、仲介ツールの承認を Claude Code に任せるので、フルアクセス扱い。
 - チームの GPT リーダーが GPT 以外のサブエージェントを起動したら止める。従来の「Claude だけ」の判定を、固定ツールが増えたため広げた。

@@ -39,16 +39,18 @@ const MAX_VIEWS = 30
 /** Items kept per child, like the panel of a dsh task. */
 const MAX_ITEMS = 400
 
-/** Resolves with the `finished` event of one session. */
+/** Waits for one session and allows cleanup if starting the run throws. */
 function finishedOf(runner, id) {
-  return new Promise((resolve) => {
-    const on = (event) => {
+  let on
+  const promise = new Promise((resolve) => {
+    on = (event) => {
       if (event.id !== id) return
       runner.off('finished', on)
       resolve(event)
     }
     runner.on('finished', on)
   })
+  return { promise, dispose: () => runner.off('finished', on) }
 }
 
 const outcome = (event) => {
@@ -241,8 +243,10 @@ export class SubagentBridge extends EventEmitter {
   }
 
   async #run(parent, ran, info, prompt, signal, view) {
+    if (signal?.aborted) throw new Error('The subagent was stopped.')
     if (ran.kind === 'dsh') {
       const patchFile = await this.dshPatch(parent.kind, { provider: ran.provider, model: ran.model, effort: ran.effort })
+      if (signal?.aborted) throw new Error('The subagent was stopped.')
       // A headless dsh prints only its answer, so the card has nothing to show before it ends.
       const text = await this.runDsh({ paths: this.paths, workspace: info.workspace, prompt, mode: info.mode, patchFile, signal })
       view.items = [{ type: 'agent', id: 'answer', text }]
@@ -260,12 +264,17 @@ export class SubagentBridge extends EventEmitter {
       args: abClaudeArgs({ writable: info.mode === 'danger-full-access', lean: false, instructions: `${CHILD_NOTE}\n\n${this.instructions()}` }),
     })
     const unfollow = this.#follow(this.claude, session.id, parent, view)
+    const stop = () => this.claude.stop(session.id)
+    let finished
     try {
-      const finished = finishedOf(this.claude, session.id)
-      signal?.addEventListener('abort', () => this.claude.stop(session.id), { once: true })
+      if (signal?.aborted) throw new Error('The subagent was stopped.')
+      finished = finishedOf(this.claude, session.id)
+      signal?.addEventListener('abort', stop, { once: true })
       this.claude.run(session.id, prompt)
-      return outcome(await finished)
+      return outcome(await finished.promise)
     } finally {
+      finished?.dispose()
+      signal?.removeEventListener('abort', stop)
       unfollow()
       await this.claude.remove(session.id).catch(() => {})
     }
@@ -277,12 +286,17 @@ export class SubagentBridge extends EventEmitter {
       instructions: CHILD_NOTE, mcpServers: {}, permissionPolicy: 'deny', subagent: { parent: `${parent.kind}:${parent.id}` },
     })
     const unfollow = this.#follow(this.codex, session.id, parent, view)
+    const stop = () => void this.codex.stop(session.id).catch(() => {})
+    let finished
     try {
-      const finished = finishedOf(this.codex, session.id)
-      signal?.addEventListener('abort', () => void this.codex.stop(session.id).catch(() => {}), { once: true })
+      if (signal?.aborted) throw new Error('The subagent was stopped.')
+      finished = finishedOf(this.codex, session.id)
+      signal?.addEventListener('abort', stop, { once: true })
       this.codex.run(session.id, prompt)
-      return outcome(await finished)
+      return outcome(await finished.promise)
     } finally {
+      finished?.dispose()
+      signal?.removeEventListener('abort', stop)
       unfollow()
       await this.codex.remove(session.id).catch(() => {})
     }

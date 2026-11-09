@@ -190,6 +190,61 @@ test('stopping the parent\'s call stops the child and removes it', async (t) => 
   assert.deepEqual(claude.removed, ['s1'])
 })
 
+for (const target of ['cl', 'gp']) test(`cancel during ${target} child creation never starts the child`, async (t) => {
+  const runner = fakeRunner()
+  const originalCreate = runner.create
+  let release, started
+  const pending = new Promise((resolve) => { release = resolve })
+  const creating = new Promise((resolve) => { started = resolve })
+  runner.create = async (options) => { started(); await pending; return originalCreate(options) }
+  const route = { gp: { target, model: target === 'cl' ? 'claude:haiku' : 'codex:gpt-6-luna', effort: 'low' } }
+  const { bridge } = await setup(t, { routes: route, ...(target === 'cl' ? { claude: runner } : { codex: runner }) })
+  const controller = new AbortController()
+  const call = bridge.call({ parent: { kind: 'gp', id: 'a' }, prompt: 'work', signal: controller.signal })
+  await creating
+  controller.abort()
+  release()
+  await assert.rejects(call)
+  assert.deepEqual(runner.runs, [])
+  assert.deepEqual(runner.removed, ['s1'])
+})
+
+test('cancel during DSH patch preparation does not start a child', async (t) => {
+  const model = JSON.stringify(['command-code', 'deepseek/deepseek-v4.1-flash'])
+  const { bridge, dshRuns } = await setup(t, { routes: { gp: { target: 'dsh', model, effort: 'max' } } })
+  let release, started
+  const pending = new Promise((resolve) => { release = resolve })
+  const preparing = new Promise((resolve) => { started = resolve })
+  bridge.dshPatch = async () => { started(); await pending; return 'child.patch.yml' }
+  const controller = new AbortController()
+  const call = bridge.call({ parent: { kind: 'gp', id: 'a' }, prompt: 'work', signal: controller.signal })
+  await preparing
+  controller.abort()
+  release()
+  await assert.rejects(call, /stopped/)
+  assert.deepEqual(dshRuns, [])
+})
+
+for (const target of ['cl', 'gp']) test(`a completed ${target} child is not stopped by a later cancellation`, async (t) => {
+  const runner = fakeRunner()
+  const route = { gp: { target, model: target === 'cl' ? 'claude:haiku' : 'codex:gpt-6-luna', effort: 'low' } }
+  const { bridge } = await setup(t, { routes: route, ...(target === 'cl' ? { claude: runner } : { codex: runner }) })
+  const controller = new AbortController()
+  await bridge.call({ parent: { kind: 'gp', id: 'a' }, prompt: 'work', signal: controller.signal })
+  controller.abort()
+  assert.deepEqual(runner.stopped, [])
+})
+
+for (const target of ['cl', 'gp']) test(`synchronous ${target} start failure removes its finished listener`, async (t) => {
+  const runner = fakeRunner()
+  runner.run = () => { throw new Error('start failed') }
+  const route = { gp: { target, model: target === 'cl' ? 'claude:haiku' : 'codex:gpt-6-luna', effort: 'low' } }
+  const { bridge } = await setup(t, { routes: route, ...(target === 'cl' ? { claude: runner } : { codex: runner }) })
+  await assert.rejects(bridge.call({ parent: { kind: 'gp', id: 'a' }, prompt: 'work' }), /start failed/)
+  assert.equal(runner.listenerCount('finished'), 0)
+  assert.deepEqual(runner.removed, ['s1'])
+})
+
 test('a call is refused when subagents are off, the route went back to the task\'s own tools, or the task is gone', async (t) => {
   const { bridge, live } = await setup(t, { routes: { dsh: { target: 'cl', model: 'claude:haiku', effort: null } }, parents: {} })
   live.subagentsEnabled = false

@@ -21,7 +21,7 @@ const STDERR_TAIL = 4000
 export function runDshChild({ paths, workspace, prompt, mode, patchFile, signal }) {
   return new Promise((resolve, reject) => {
     const layers = [paths.homePatch, patchFile].flatMap((file) => ['--patch', file])
-    const child = spawn(process.execPath, [...runtimeHookArgs(), dshBin, '--profile', 'headless', ...layers, '-'], {
+    const child = spawn(process.execPath, [...runtimeHookArgs(), dshBin, '--profile', 'headless', ...layers, '--approval-policy', 'never', '-'], {
       cwd: workspace,
       env: dshEnv(paths, mode),
       stdio: ['pipe', 'pipe', 'pipe'],
