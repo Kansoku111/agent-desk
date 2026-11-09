@@ -112,7 +112,7 @@ Route = { target: 'dsh' | 'cl' | 'gp', model: string | null, effort: string | nu
 - Codex の MCP 呼び出し: ワークスペース編集モードでは `mcpServer/elicitation/request`（`codex_approval_kind: mcp_tool_call`）で承認を求めてくる。`CodexRunner` は未知の要求を拒否するため、そのままだと「user rejected MCP tool call」で失敗した。仲介ツールのサーバー名だけを自動承認する `trustedMcp` を足して解決した（他の MCP と、AB・子の記録は従来どおり拒否）。`tool_timeout_sec` は設定として受け付けられ、ツールが使えることを確認した。
 - 長時間の呼び出し: 本体への HTTP は 15 秒ごとの空行で保ち、dsh は `TIMEOUT_ENV` を延ばす。実際に何時間も動かす試験はしていない。
 - 実モデルでの通し確認（Agent Desk を起動せず、スクリプトで）: DSH→Claude Code（haiku）、GP→DSH（luna）、Claude Code→GP（`claude -p` から MCP ツールを呼ぶ）、GP→GP（Codex から MCP ツール）、DSH→GP（dsh のセッションから MCP ツール）。いずれも `Ran on:` 付きで答えが返った。
-- 未確認: DeepSeek・OpenCode Go・Command Code・ローカル LLM を子の dsh で動かすこと（接続情報がないため）。Claude Code の対話画面で、仲介ツールを承認する操作。
+- 当初未確認だった API キー経路は、ヘッドレスプロファイルが認証ストアを無効にするため失敗していた。仲介した子の層でストアを有効にし、テスト用の保存済み Command Code キーがモック API への要求に使われることと、実際の Command Code モデルが応答することを子の実プロセスで確認した。DeepSeek・OpenCode Go・ローカル LLM の実モデルと、Claude Code の対話画面で仲介ツールを承認する操作は未確認。
 
 ### 計画からの変更
 - 仲介の子は、DSH をスレッドとして作らず、ヘッドレスの dsh（`subagent-dsh.js`）を直接起動する。親ごとの層は `dshChildPatch`（`gptSubagentPatch` の後継）。

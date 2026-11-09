@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bridged DSH subagents now read API keys from Agent Desk's managed credential store. The headless profile had disabled it, so routes such as GP → Command Code failed with `MISSING_CREDENTIAL` even when a key was saved.
 - A GP task asked for "a subagent" used Codex's own `spawn_agent` instead of the route chosen in Settings, so the model was ignored and nothing showed in the subagent panel. Codex 0.167.0 gives gpt-6 models its own subagent tools even with `features.multi_agent=false`; a task that mounts the subagent bridge is now told, in its developer instructions, not to use them and to call the bridge's `subagent` tool.
 
 ### Changed

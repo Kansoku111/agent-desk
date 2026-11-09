@@ -89,6 +89,7 @@ test('the DSH child runs the chosen model without delegation tools or their guid
   const child = { provider: 'deepseek-official', model: 'deepseek-v4-flash', effort: 'high' }
   const rows = YAML.parse(dshChildPatch({ child, subagents, persona }))
   assert.deepEqual(rows[0], { id: 'agent-default-model', config: { provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high' } })
+  assert.deepEqual(rows.find((row) => row.id === 'credentials'), { id: 'credentials', disabled: false })
   // Headless callers consume only the result, so no model call goes to an unused session title.
   assert.deepEqual(rows.find((row) => row.id === 'session-title-llm'), { id: 'session-title-llm', disabled: true })
   const added = YAML.parse(homePatch({ subagents, persona })).flatMap((row) => row.insert ?? []).map((row) => row.id)

@@ -333,6 +333,8 @@ export function dshChildPatch({ child = null, subagents = [], subagentsEnabled =
   const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isLocalModelId(model))
   const rows = [
     { id: 'agent-default-model', config: { provider: child.provider, model: child.model, ...(child.effort ? { reasoningEffort: child.effort } : {}) } },
+    // The headless profile disables the managed store; Agent Desk keeps API keys there, not in the environment.
+    { id: 'credentials', disabled: false },
     // Headless callers consume only the result, never a generated session title.
     { id: 'session-title-llm', disabled: true },
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
