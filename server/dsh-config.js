@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import YAML from 'yaml'
 import { writeText } from './json-file.js'
 import { ANTHROPIC_REF, OPENCODE_GO_REF } from './credentials.js'
-import { LOCAL_PROVIDER } from './local-llm.js'
+import { LOCAL_PROVIDER, isLocalModelId } from './local-llm.js'
 import { openscaleRoute } from './openscale.js'
 import { isModelId } from './model-catalog.js'
 import { SIWC_KEY_REF, SIWC_RESOURCE } from './siwc-client.js'
@@ -70,13 +70,20 @@ export function contextOverrides(limits, models) {
 }
 
 /**
- * Delegation tools pinned to one provider, so a GPT task can hand work to
- * Claude and the other way round. dsh's own `subagent` and `subagent_fork`
- * always run children on the parent's model.
+ * Delegation tools pinned to one provider, so a task can hand work to the
+ * model the user chose for it. dsh's own `subagent` and `subagent_fork` always
+ * run children on the parent's model. Keys are the catalog's provider ids; the
+ * billing line is what the model is told, so it must name how the route is paid.
  */
 export const SUBAGENT_TOOLS = {
   anthropic: { toolName: 'subagent_claude', family: 'Claude', billing: 'billed per token to the user\'s Anthropic API key' },
   'openai-codex': { toolName: 'subagent_gpt', family: 'GPT', billing: 'covered by the user\'s ChatGPT subscription' },
+  'deepseek-official': { toolName: 'subagent_deepseek', family: 'DeepSeek', billing: 'billed per token to the user\'s DeepSeek API key' },
+  'opencode-go': { toolName: 'subagent_opencode_go', family: 'OpenCode Go', billing: 'covered by the user\'s OpenCode Go subscription' },
+  'command-code': { toolName: 'subagent_command_code', family: 'Command Code', billing: 'billed through the user\'s Command Code account' },
+  'command-code-claude': { toolName: 'subagent_command_code_claude', family: 'Command Code (Claude)', billing: 'billed through the user\'s Command Code account' },
+  openscale: { toolName: 'subagent_openscale', family: 'OpenScale', billing: 'billed through the user\'s OpenScale account' },
+  'local-llm': { toolName: 'subagent_local', family: 'local LLM', billing: 'run on the user\'s own machine, with no per-token charge' },
 }
 
 /**
@@ -116,10 +123,14 @@ export const INSTRUCTIONS_MAX = 10_000
  */
 function subagentGuidance(subagents) {
   const tools = subagents.map(({ provider, model, name }) => ({ ...SUBAGENT_TOOLS[provider], label: name || model }))
+  const choice = tools.length === 1
+    // The one tool is the user's subagent for this kind of task, whatever family the parent is.
+    ? `The user chose this one for delegated work: use \`${tools[0].toolName}\` by default. \`subagent\` and \`subagent_fork\` run on your own model; use them only when asked, and \`subagent_fork\` only when the child must see this conversation.`
+    : `The user chose these. Delegate with your own family's tool (${tools.map(({ toolName, family }) => `\`${toolName}\` for ${family}`).join(', ')}), else \`subagent\`; use another family's only for a second opinion or when asked. \`subagent\` and \`subagent_fork\` run on your own model; use \`subagent_fork\` only when the child must see this conversation.`
   return [
     'Subagents on a fixed model:',
     ...tools.map(({ toolName, label, billing }) => `- \`${toolName}\`: ${label}; ${billing}.`),
-    `The user chose these. Delegate with your own family's tool (${tools.map(({ toolName, family }) => `\`${toolName}\` for ${family}`).join(', ')}), else \`subagent\`; use another family's only for a second opinion or when asked. \`subagent\` and \`subagent_fork\` run on your own model; use \`subagent_fork\` only when the child must see this conversation.`,
+    choice,
     'Subagents do not get this session\'s MCP tools (`mcp__…`: image generation, browser, desktop). Call those yourself; `mcp__imagegen__generate_image` already has GPT draw the image, so image requests need no subagent.',
   ].join('\n')
 }
@@ -155,6 +166,8 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  * @param {{ provider: string, model: string, name?: string | null, effort?: string | null }[]} [options.subagents] -
  *   the fixed-model delegation tools to add, one per {@link SUBAGENT_TOOLS} provider.
  * @param {boolean} [options.subagentsEnabled] - false omits all delegation tools and their generated guidance.
+ * @param {boolean} [options.nativeSubagents] - false drops dsh's own delegation tools too, for a task whose
+ *   subagents go to another kind of task through the bridge MCP (subagent-bridge-mcp.js).
  * @param {string | null} [options.settingsFile] - saved settings read by the live execution gate.
  * @param {{ personaPrefix: string, personaSuffix: string }} [options.persona] -
  *   the shipped persona ({@link shippedPersona}); the tools' guidance follows it.
@@ -172,7 +185,7 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  */
 export function homePatch({
   anthropicWorkspaceId = null, modelOverrides = {}, catalogModels = {},
-  subagents = [], subagentsEnabled = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null, commandCodeRoutes = {}, openscale = false,
+  subagents = [], subagentsEnabled = true, nativeSubagents = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null, commandCodeRoutes = {}, openscale = false,
 } = {}) {
   // dsh's default (5 tries, 10 s at most) gives up within about 15 s, shorter
   // than the minute-long upstream hiccups ChatGPT's backend has.
@@ -238,8 +251,8 @@ export function homePatch({
     name: new URL('./subagent-policy-plugin.js', import.meta.url).href,
     config: { settingsFile },
   }] })
-  if (!subagentsEnabled) rows.push(...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })))
-  const pinned = subagentsEnabled ? subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model)) : []
+  if (!subagentsEnabled || !nativeSubagents) rows.push(...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })))
+  const pinned = subagentsEnabled && nativeSubagents ? subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isLocalModelId(model)) : []
   if (pinned.length) {
     // Same shape as dsh-base's `subagent` row: fresh in-process children that
     // keep running in the background and accept `send_message`.
@@ -286,7 +299,7 @@ const BASE_SUBAGENT_TOOLS = ['tool-subagent', 'tool-subagent-fork', 'tool-subage
  * pressure without changing model capacity, reply caps, or other roles.
  */
 export function teamChildPatch({ subagents = [], persona = null } = {}) {
-  const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
+  const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isLocalModelId(model))
   const rows = [
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
     ...pinned.map(({ provider }) => ({ id: `agent-desk-${SUBAGENT_TOOLS[provider].toolName.replaceAll('_', '-')}`, disabled: true })),
@@ -309,18 +322,17 @@ ${YAML.stringify(rows)}`
 }
 
 /**
- * The extra layer of the headless dsh that a Claude Code task's `subagent_gpt`
- * runs (gpt-subagent-mcp.js): the user's GPT subagent model, and no subagent
- * tools of its own, like a team's child. Same options as homePatch, plus the
- * model; null when no GPT subagent model is set.
+ * The extra layer of the headless dsh that a bridged subagent runs when a
+ * Claude Code or Codex task sends its subagents to DSH (subagent-bridge.js): the
+ * model the user chose, and no subagent tools of its own, like a team's child.
+ * Same options as homePatch, plus `child` (`{ provider, model, effort }`); null
+ * when there is no child model to run.
  */
-export function gptSubagentPatch({ subagents = [], subagentsEnabled = true, persona = null } = {}) {
-  if (!subagentsEnabled) return null
-  const gpt = subagents.find(({ provider, model }) => provider === 'openai-codex' && isModelId(model))
-  if (!gpt) return null
-  const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
+export function dshChildPatch({ child = null, subagents = [], subagentsEnabled = true, persona = null } = {}) {
+  if (!subagentsEnabled || !child || !SUBAGENT_TOOLS[child.provider] || !isLocalModelId(child.model)) return null
+  const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isLocalModelId(model))
   const rows = [
-    { id: 'agent-default-model', config: { provider: gpt.provider, model: gpt.model, ...(gpt.effort ? { reasoningEffort: gpt.effort } : {}) } },
+    { id: 'agent-default-model', config: { provider: child.provider, model: child.model, ...(child.effort ? { reasoningEffort: child.effort } : {}) } },
     // Headless callers consume only the result, never a generated session title.
     { id: 'session-title-llm', disabled: true },
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
@@ -329,14 +341,14 @@ export function gptSubagentPatch({ subagents = [], subagentsEnabled = true, pers
   const { personaPrefix = '', personaSuffix = '' } = persona ?? {}
   rows.push({ id: 'system-prompt', config: { personaPrefix, personaSuffix } })
   return `# Managed by Agent Desk: this file is rewritten on every start.
-# Applied after cordis.patch.yml in the headless dsh behind a Claude Code
-# task's subagent_gpt: the user's GPT subagent model, without subagent tools.
+# Applied after cordis.patch.yml in the headless dsh behind a bridged subagent
+# (subagent-bridge.js): the user's chosen model, without subagent tools.
 ${YAML.stringify(rows)}`
 }
 
-/** Writes the GPT subagent's layer ({@link gptSubagentPatch}), or removes it; true when the file changed. */
-export async function writeGptSubagentPatch(file, options) {
-  const next = gptSubagentPatch(options)
+/** Writes a bridged DSH child's layer ({@link dshChildPatch}), or removes it; true when the file changed. */
+export async function writeDshChildPatch(file, options) {
+  const next = dshChildPatch(options)
   if (next) return writePatch(file, next)
   try {
     await fs.rm(file)
@@ -360,7 +372,7 @@ export function abPatch({ subagents = [], persona = null, writable = false, lean
     ...disabled.map((id) => ({ id, disabled: true })),
     // Remove the home layer's fixed-model delegation advice with its tools,
     // preserving the shipped persona just as teamChildPatch does.
-    ...(subagents.some(({ provider, model }) => SUBAGENT_TOOLS[provider] && isModelId(model))
+    ...(subagents.some(({ provider, model }) => SUBAGENT_TOOLS[provider] && isLocalModelId(model))
       ? [{ id: 'system-prompt', config: { personaPrefix: persona?.personaPrefix ?? '', personaSuffix: persona?.personaSuffix ?? '' } }] : []),
     ...(!writable ? [{ id: 'tool-fs', config: { write: false, edit: false } }] : []),
     { insert: [{ id: 'agent-desk-ab-policy', name: new URL('./ab-policy-plugin.js', import.meta.url).href, config: { writable } }] },
@@ -368,7 +380,7 @@ export function abPatch({ subagents = [], persona = null, writable = false, lean
 }
 /** Only web tools are exposed; the guard also rejects newly registered tools. */
 export function chatWebPatch() {
-  const disabled = [...BASE_SUBAGENT_TOOLS, 'agent-desk-subagent-gpt', 'agent-desk-subagent-claude',
+  const disabled = [...BASE_SUBAGENT_TOOLS, ...Object.values(SUBAGENT_TOOLS).map(({ toolName }) => `agent-desk-${toolName.replaceAll('_', '-')}`),
     'tool-plugin-manager', 'tool-working-directory', 'tool-bash', 'tool-pwsh', 'tool-jobs', 'tool-fs', 'tool-fs-search',
     'agent-instructions', 'agent-desk-skill-filesystem', 'tool-skill', 'tool-workflow', 'tool-todo', 'tool-goal',
     'goal-round-driver', 'plan-mode', 'tool-ask-user', 'mcp-resources']

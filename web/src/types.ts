@@ -459,6 +459,9 @@ export interface Accounts {
 
 export type FastProvider = 'openai-codex' | 'anthropic'
 
+export type RouteParent = 'dsh' | 'cl' | 'gp'
+export interface SubagentRoute { target: RouteParent; model: string | null; effort: string | null }
+
 export interface Settings extends UsageDisplay {
   commandCodeZdr?: boolean
   theme: Theme
@@ -487,9 +490,8 @@ export interface Settings extends UsageDisplay {
   /** Global subagent switch; older saves default to enabled. */
   taskPresets?: Record<TaskPresetKind, { model: string | null; effort: string | null }> & Partial<Record<'reviewDsh' | 'reviewClaude' | 'reviewSelected', { model: string | null; effort: string | null }>>
   subagentsEnabled?: boolean
-  /** Model of each fixed-model subagent tool; null leaves the tool out. */
-  subagentModels: Record<'openai-codex' | 'anthropic', string | null>
-  subagentEfforts?: Record<'openai-codex' | 'anthropic', string | null>
+  /** Where each kind of task (DSH, Claude Code, GP) sends its subagents; older saves have none and send them to themselves. */
+  subagentRoutes?: Record<RouteParent, SubagentRoute>
   /** Fast mode per provider; applies to the models in `AppState.fastModels`. */
   fastMode: Record<FastProvider, boolean>
   dshUpdateChannel: UpdateChannel

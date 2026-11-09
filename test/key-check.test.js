@@ -111,6 +111,7 @@ test('homePatch adds fixed-model subagent tools and tells the agent about them',
   assert.deepEqual(tools.map((row) => row.config), [
     { provider: 'spawn', toolName: 'subagent_claude', backgroundMode: 'continuable', agentOptions: { provider: 'anthropic', model: 'claude-haiku-5-5' } },
     { provider: 'spawn', toolName: 'subagent_gpt', backgroundMode: 'continuable', agentOptions: { provider: 'openai-codex', model: 'gpt-5.5' } },
+    { provider: 'spawn', toolName: 'subagent_deepseek', backgroundMode: 'continuable', agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash' } },
   ])
   const prompt = rows.find((row) => row.id === 'system-prompt').config
   assert.equal(prompt.personaPrefix, persona.personaPrefix)
@@ -135,8 +136,8 @@ test('the subagent guidance sends each model family to its own pinned tool, in n
   // The paragraph this one replaced was 510 characters for the same two tools.
   assert.ok(both.length <= 510, `${both.length} characters`)
 
-  // A tool that is not pinned does not exist, so the model is not pointed at it.
+  // A tool that is not pinned does not exist, so the model is not pointed at it. The one tool is the default.
   const gptOnly = guidance([gpt])
-  assert.match(gptOnly, /\(`subagent_gpt` for GPT\)/)
+  assert.match(gptOnly, /use `subagent_gpt` by default/)
   assert.doesNotMatch(gptOnly, /subagent_claude/)
 })

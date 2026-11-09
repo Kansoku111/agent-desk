@@ -59,7 +59,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
     ...(gpt
       ? [
         '',
-        'Hand the team\'s work to children with `spawn`, not to your own `subagent` tools: only children show in the user\'s team panel and report to you. Never call `subagent_claude`: it bills the user\'s Anthropic API key outside the team\'s settings. If provider "claudeApi" is on, `spawn` a child with it instead.',
+        'Hand the team\'s work to children with `spawn`, not to your own `subagent` tools: only children show in the user\'s team panel and report to you. Never call a fixed-model tool of another provider (`subagent_claude`, `subagent_deepseek` and the like): it bills the user\'s own key or account outside the team\'s settings. If provider "claudeApi" is on, `spawn` a child with it instead.',
       ]
       : []),
     '',

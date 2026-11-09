@@ -4,8 +4,10 @@ import { act, useStore } from '../../store'
 import type { FastProvider } from '../../types'
 import { byNewest, providerReady } from '../Pickers'
 import { isModelVisible } from '../../model-selection'
-import { effortLabel, pickableEfforts } from '../../util'
-import { CLAUDE_CODE } from '../WorkflowModelField'
+import { workflowLevels, workflowOptions } from '../../../../shared/workflow-effort.js'
+import { DROP_TYPE, ROUTE_KINDS, routesOf, targetGroups, type RouteParent, type SubagentRoute } from '../../subagent-routes'
+import { Dropdown, MenuItem } from '../Popover'
+import { CLAUDE_CODE, ModelField, modelGroups } from '../WorkflowModelField'
 import { TaskPresetModels } from '../TaskPresets'
 import { UsageFallbackSettings } from './UsageFallbackSettings'
 
@@ -111,16 +113,19 @@ function FastMode() {
   )
 }
 
-/** Delegation tools pinned to the other model family (subagent_claude / subagent_gpt). */
+/**
+ * Where each kind of task sends its subagents. The chip names the kind that runs
+ * them: pick another from its menu, or drag it onto another row. The pickers
+ * choose that kind's model and reasoning level.
+ */
 function Subagents() {
   const server = useStore((state) => state.server)
+  const [over, setOver] = useState<RouteParent | null>(null)
   if (!server) return null
   const enabled = server.settings.subagentsEnabled ?? true
-  const chosen = server.settings.subagentModels ?? { 'openai-codex': null, anthropic: null }
-  const rows: { provider: keyof typeof chosen; label: string; note: string }[] = [
-    { provider: 'anthropic', label: 'Claude', note: 'GPT のタスクから。API の従量課金です。' },
-    { provider: 'openai-codex', label: 'ChatGPT', note: 'すべてのタスクから。ChatGPT サブスクリプションの範囲です。' },
-  ]
+  const routes = routesOf(server.settings)
+  const groups = modelGroups(server, true)
+  const save = (parent: RouteParent, change: Partial<SubagentRoute>) => void act('settings.update', { patch: { subagentRoutes: { [parent]: change } } })
   return (
     <section className="account-card">
       <div className="account-head">
@@ -137,46 +142,74 @@ function Subagents() {
           <span />
         </label>
       </div>
-      {enabled && rows.map(({ provider, label, note }) => {
-        const models = server.catalog.models.filter((model) => model.provider === provider).sort(byNewest)
-        const ready = providerReady(server, provider)
-        const value = chosen[provider] ?? ''
-        const effort = server.settings.subagentEfforts?.[provider] ?? ''
-        const levelsFor = (model: string) => pickableEfforts(server.catalog.effortsByModel[JSON.stringify([provider, model])] ?? server.catalog.fallbackEfforts).map((item) => item.value)
-        const levels = value ? levelsFor(value) : []
+      {enabled && <div className="subagent-routes">{ROUTE_KINDS.map(({ id: parent, name }) => {
+        const route = routes[parent]
+        const target = ROUTE_KINDS.find((kind) => kind.id === route.target)!
+        const model = route.model ?? ''
+        // Claude Code's own subagents take the level of the task that starts them.
+        const fixedLevel = parent === 'cl' && route.target === 'cl'
+        const levels = model ? workflowLevels(server.catalog, model) : []
+        const choices = [
+          ...(route.target === parent ? [{ id: 'same', heading: '', note: '', models: [{ value: '', name: '指定なし' }] }] : []),
+          ...targetGroups(groups, route.target),
+        ]
         return (
-          <div key={provider} className="setting compact">
-            <div>
-              <h3>{label}</h3>
-              <p className="muted">{ready ? note : `${label} のアカウントを接続すると選べます。`}</p>
-            </div>
-            <div className="team-tier-pickers">
-              <select
-                value={value}
-                disabled={!ready && !value}
-                onChange={(event) => {
-                  const model = event.target.value
-                  void act('settings.update', { patch: {
-                    subagentModels: { [provider]: model || null },
-                    ...(effort && model && !levelsFor(model).includes(effort) ? { subagentEfforts: { [provider]: null } } : {}),
-                  } })
-                }}
-                aria-label={`${label} のサブエージェントに使うモデル`}
-              >
-                <option value="">使わない</option>
-                {value && !models.some((model) => model.id === value) && <option value={value}>{value}</option>}
-                {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-              </select>
-              <select value={effort} disabled={!value} aria-label={`${label} のサブエージェントの推論レベル`}
-                onChange={(event) => void act('settings.update', { patch: { subagentEfforts: { [provider]: event.target.value || null } } })}>
-                <option value="">既定</option>
-                {effort && !levels.includes(effort) && <option value={effort}>{effortLabel(effort)}（非対応）</option>}
-                {levels.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}
-              </select>
-            </div>
+          <div
+            key={parent}
+            className={`subagent-route${over === parent ? ' drop' : ''}`}
+            onDragOver={(event) => {
+              if (!Array.from(event.dataTransfer.types).includes(DROP_TYPE)) return
+              event.preventDefault()
+              setOver(parent)
+            }}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null) }}
+            onDrop={(event) => {
+              event.preventDefault()
+              setOver(null)
+              const kind = ROUTE_KINDS.find((entry) => entry.id === event.dataTransfer.getData(DROP_TYPE))
+              if (kind && kind.id !== route.target) save(parent, { target: kind.id })
+            }}
+          >
+            <ModelField
+              label={name}
+              labelAction={
+                <Dropdown portal placement="bottom" width={160} trigger={({ toggle, open }) => (
+                  <button
+                    type="button"
+                    className="route-chip"
+                    draggable
+                    aria-haspopup="menu"
+                    aria-expanded={open}
+                    aria-label={`${name}のサブエージェントの種類: ${target.name}`}
+                    onClick={toggle}
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData(DROP_TYPE, route.target)
+                      event.dataTransfer.effectAllowed = 'copy'
+                    }}
+                  >
+                    → {target.name}
+                  </button>
+                )}>
+                  {(close) => ROUTE_KINDS.map((kind) => (
+                    <MenuItem key={kind.id} label={kind.name} selected={kind.id === route.target} onSelect={() => { if (kind.id !== route.target) save(parent, { target: kind.id }); close() }} />
+                  ))}
+                </Dropdown>
+              }
+              value={model}
+              groups={choices}
+              disabled={false}
+              effort={route.effort ?? ''}
+              efforts={fixedLevel ? [] : workflowOptions(route.effort ?? '', levels)}
+              allowDefaultEffort
+              onChange={(value) => {
+                const next = value ? workflowLevels(server.catalog, value) : []
+                save(parent, { model: value || null, effort: route.effort && next?.includes(route.effort) ? route.effort : null })
+              }}
+              onEffort={(value) => save(parent, { effort: value || null })}
+            />
           </div>
         )
-      })}
+      })}</div>}
     </section>
   )
 }

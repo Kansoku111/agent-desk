@@ -1,11 +1,11 @@
 // Settings updates have one commit point: validate the entire patch, persist a
 // candidate, publish it, then apply its effects. No application startup here.
 import { isDeepStrictEqual } from 'node:util'
-import { CONTEXT_CHOICES, CONTEXT_PROVIDERS, INSTRUCTIONS_MAX, SUBAGENT_TOOLS } from './dsh-config.js'
+import { CONTEXT_CHOICES, CONTEXT_PROVIDERS, INSTRUCTIONS_MAX } from './dsh-config.js'
+import { defaultRoutes, mergeRoutes, savedRoutes } from './subagent-routes.js'
 import { UPDATE_CHANNELS } from './update-checks.js'
 import { FAST_PROVIDERS, recordFastPeriod } from './fast-mode.js'
 import { isLocalModelId, normalizeBaseUrl } from './local-llm.js'
-import { isModelId } from './model-catalog.js'
 import { PERMISSION_MODES } from './runtime.js'
 import { mergeTeamConfig, TEAM_DEFAULTS } from './team-config.js'
 import { parsePlaybooks, parsePolicies } from './team-playbooks.js'
@@ -22,6 +22,8 @@ export function migrateSettings(saved = {}) {
       ...saved.fastMode,
       'openai-codex': false,
     },
+    // Saves from before the routes kept a model per provider; those keys stay in the file, unused.
+    subagentRoutes: savedRoutes(saved),
   }
 }
 
@@ -57,8 +59,8 @@ export const DEFAULT_SETTINGS = {
   contextLimits: { 'openai-codex': null, anthropic: null },
   taskPresets: { delegate: { model: null, effort: null }, review: { model: null, effort: null } },
   subagentsEnabled: true,
-  subagentModels: { 'openai-codex': null, anthropic: null },
-  subagentEfforts: { 'openai-codex': null, anthropic: null },
+  // What each kind of task sends its subagents to (subagent-routes.js); a kind starts with its own.
+  subagentRoutes: defaultRoutes(),
   fastMode: { 'openai-codex': false, anthropic: false },
   fastModePeriods: { anthropic: [] },
   dshUpdateChannel: 'latest',
@@ -170,26 +172,9 @@ export function planSettingsUpdate(current, patch, now) {
       next.taskPresets[role] = choice
     }
   }
-  if (owns(patch, 'subagentModels')) {
-    assertRecord(patch.subagentModels, 'subagentModels')
-    next.subagentModels = { ...DEFAULT_SETTINGS.subagentModels, ...current.subagentModels }
-    for (const provider of Object.keys(SUBAGENT_TOOLS)) {
-      if (!owns(patch.subagentModels, provider)) continue
-      const value = patch.subagentModels[provider]
-      if (value !== null && !isModelId(value)) throw new Error('使えないモデル ID です')
-      next.subagentModels[provider] = value
-    }
-    effects.homePatch = true
-  }
-  if (owns(patch, 'subagentEfforts')) {
-    assertRecord(patch.subagentEfforts, 'subagentEfforts')
-    next.subagentEfforts = { ...DEFAULT_SETTINGS.subagentEfforts, ...current.subagentEfforts }
-    for (const provider of Object.keys(SUBAGENT_TOOLS)) {
-      if (!owns(patch.subagentEfforts, provider)) continue
-      const value = patch.subagentEfforts[provider]
-      if (value !== null && !['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) throw new Error('使えない推論レベルです')
-      next.subagentEfforts[provider] = value
-    }
+  if (owns(patch, 'subagentRoutes')) {
+    assertRecord(patch.subagentRoutes, 'subagentRoutes')
+    next.subagentRoutes = mergeRoutes(current.subagentRoutes ?? savedRoutes(current), patch.subagentRoutes)
     effects.homePatch = true
   }
   if (owns(patch, 'customInstructions')) {

@@ -17,6 +17,7 @@ import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 import { workflowEffortSupported, workflowLevels } from '../../../shared/workflow-effort.js'
 import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
+import { usesClaudeApi } from '../subagent-routes'
 
 const MAX_CHILDREN = 12
 const PROVIDERS: TeamProvider[] = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'openscale', 'commandCode', 'commandCodeClaude', 'local']
@@ -598,7 +599,7 @@ export function TeamSettings() {
   if (!saved) return <div className="settings-section"><p className="muted">Agent Desk を起動し直すと使えます。</p></div>
   const config = fullConfig(saved)
   const save: Change = (patch) => void act('settings.update', { patch: { agentTeams: patch } })
-  const apiSubagent = server.settings.subagentModels?.anthropic
+  const apiSubagent = usesClaudeApi(server.settings)
   return (
     <div className="settings-section">
       <ModeSection mark="TM" name="エージェントチーム">

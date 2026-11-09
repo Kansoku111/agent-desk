@@ -1,5 +1,5 @@
 // A separate task API keeps Codex sessions out of dsh's ACP/session policies.
-export function createCodexHandlers({ codex, teams, paths, getSettings, mutateSettings }) {
+export function createCodexHandlers({ codex, teams, paths, getSettings, mutateSettings, subagentMcp = () => null }) {
   function task(taskId) {
     const value = codex.get(taskId)
     if (!value) throw new Error('Codex タスクが見つかりません')
@@ -43,6 +43,9 @@ export function createCodexHandlers({ codex, teams, paths, getSettings, mutateSe
       const value = task(taskId)
       if (value.ab || value.team?.childId || (value.team && value.team.role !== 'leader')) throw new Error('この担当はAB・チームの画面から操作してください')
       if (value.team?.role === 'leader' && !codex.running(taskId)) await teams.refreshCodexLeader(taskId)
+      // An ordinary task's only MCP server is its subagent bridge, so follow the settings as of this message.
+      const mcpServers = !value.team && !codex.running(taskId) ? subagentMcp(value) : null
+      if (mcpServers) await codex.update(taskId, { mcpServers })
       await codex.send(taskId, { text, images })
       return { sent: true }
     },

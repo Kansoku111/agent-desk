@@ -42,7 +42,7 @@ function fakePty() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30))
 
-async function setup({ launch, preflight = () => null, fallbackPreflight = () => null, instructions, gptSubagent, imageMcp, usageFallbackRoutes, validateFallbackModel, handoffThread } = {}) {
+async function setup({ launch, preflight = () => null, fallbackPreflight = () => null, instructions, subagentRoute, imageMcp, usageFallbackRoutes, validateFallbackModel, handoffThread } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-terminals-'))
   const workspace = path.join(dir, 'project')
   const claudeHome = path.join(dir, 'claude')
@@ -57,7 +57,7 @@ async function setup({ launch, preflight = () => null, fallbackPreflight = () =>
     pty,
     findClaude: () => 'C:\\Tools\\claude.exe',
     claudeHome,
-    launch, preflight, fallbackPreflight, instructions, gptSubagent, imageMcp, usageFallbackRoutes, validateFallbackModel, handoffThread,
+    launch, preflight, fallbackPreflight, instructions, subagentRoute, imageMcp, usageFallbackRoutes, validateFallbackModel, handoffThread,
   }).load()
   return { dir, workspace, claudeHome, pty, sent, manager }
 }
@@ -352,45 +352,57 @@ test('a task cannot start the user\'s agents whose model only a proxy routes', a
   assert.deepEqual(unroutedAgents(path.join(dir, 'missing'), {}), [])
 })
 
-test('a task gets subagent_gpt on the chosen GPT model; a team\'s leader does not', async () => {
-  let gpt = { model: 'gpt-6.1-sol', home: 'C:\\AgentDesk' }
-  const { workspace, pty, manager, dir } = await setup({ gptSubagent: () => gpt, launch: () => ({ args: [] }) })
+test('a task whose subagents go to another kind gets the bridge tool and loses Claude Code\'s own; a team\'s leader does not', async () => {
+  const mcp = { name: 'agent-desk-subagent', server: { type: 'stdio', command: 'node', args: ['subagent-bridge-mcp.js'], env: { AGENT_DESK_SUBAGENT_PARENT: 'cl:x' } } }
+  let route = { mcp, nativeOff: true }
+  const { workspace, pty, manager, dir } = await setup({ subagentRoute: () => route, launch: () => ({ args: [] }) })
   const terminal = await manager.create({ workspace })
-  const file = path.join(dir, 'claude-gpt-subagent', `${terminal.id}.json`)
+  const file = path.join(dir, 'claude-task-mcp', `${terminal.id}.json`)
   const args = pty.spawned[0].args
-  assert.deepEqual(args.slice(-4), ['--mcp-config', file, '--settings', path.join(dir, 'claude-terminal-settings.json')])
-  const server = JSON.parse(await fs.readFile(file, 'utf8')).mcpServers['agent-desk-gpt']
-  assert.ok(server.args[0].endsWith('gpt-subagent-mcp.js'))
-  assert.deepEqual(server.args.slice(1), ['--workspace', workspace, '--name', 'gpt-6.1-sol'])
-  assert.deepEqual(server.env, { AGENT_DESK_HOME: 'C:\\AgentDesk' })
+  assert.deepEqual(args.slice(-6), ['--mcp-config', file, '--disallowedTools', 'Agent,Task', '--settings', path.join(dir, 'claude-terminal-settings.json')])
+  assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')).mcpServers, { 'agent-desk-subagent': mcp.server })
+  assert.equal(pty.spawned[0].options.env.CLAUDE_CODE_SUBAGENT_MODEL, undefined)
   await manager.create({ workspace, team: { id: 'team-1', role: 'leader' } })
   assert.ok(!pty.spawned[1].args.includes('--mcp-config'))
-  gpt = null
+  assert.ok(!pty.spawned[1].args.includes('--disallowedTools'))
+  route = null
   await manager.create({ workspace })
   assert.ok(!pty.spawned[2].args.includes('--mcp-config'))
+  assert.ok(!pty.spawned[2].args.includes('--disallowedTools'))
   await manager.remove(terminal.id)
   await assert.rejects(fs.stat(file))
 })
 
-test('ordinary Claude tasks get image MCP alongside GPT; the next start reflects settings', async (t) => {
-  let enabled = true, gpt = true
+test('a Claude Code route to Claude Code keeps its own subagents and pins their model', async () => {
+  const { workspace, pty, manager } = await setup({ subagentRoute: () => ({ claudeModel: 'haiku' }) })
+  await manager.create({ workspace })
+  const { args, options } = pty.spawned[0]
+  assert.ok(!args.includes('--disallowedTools'))
+  assert.ok(!args.includes('--mcp-config'))
+  assert.equal(options.env.CLAUDE_CODE_SUBAGENT_MODEL, 'haiku')
+  assert.equal(options.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE, '1')
+})
+
+test('ordinary Claude tasks get image MCP alongside the bridge; the next start reflects settings', async (t) => {
+  let enabled = true, routed = true
   const image = { type: 'stdio', command: 'node', args: ['imagegen-mcp.js'], env: {} }
+  const bridge = { type: 'stdio', command: 'node', args: ['subagent-bridge-mcp.js'], env: {} }
   const { workspace, pty, manager } = await setup({ imageMcp: () => enabled ? image : null,
-    gptSubagent: () => gpt ? { model: 'gpt-6-luna', home: 'app-home' } : null })
+    subagentRoute: () => routed ? { mcp: { name: 'agent-desk-subagent', server: bridge }, nativeOff: true } : null })
   t.after(() => manager.shutdown())
   await manager.create({ workspace })
   let args = pty.spawned[0].args
   let servers = JSON.parse(await fs.readFile(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers
   assert.deepEqual(servers.imagegen, image)
-  assert.ok(servers['agent-desk-gpt'])
+  assert.deepEqual(servers['agent-desk-subagent'], bridge)
   enabled = false
   await manager.create({ workspace })
   args = pty.spawned[1].args
   servers = JSON.parse(await fs.readFile(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers
   assert.equal(servers.imagegen, undefined)
-  assert.ok(servers['agent-desk-gpt'])
+  assert.deepEqual(servers['agent-desk-subagent'], bridge)
   enabled = true
-  gpt = false
+  routed = false
   await manager.create({ workspace })
   args = pty.spawned[2].args
   servers = JSON.parse(await fs.readFile(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers

@@ -314,6 +314,12 @@ export function summarizeTool(item: ToolItem, workspace?: string | null): ToolSu
   return summary
 }
 
+/** The fixed-model delegation tools Agent Desk adds to dsh (server/dsh-config.js SUBAGENT_TOOLS), by the model family they run. */
+const PINNED_SUBAGENTS: Record<string, string> = {
+  subagent_claude: 'Claude', subagent_gpt: 'GPT', subagent_deepseek: 'DeepSeek', subagent_opencode_go: 'OpenCode Go',
+  subagent_command_code: 'Command Code', subagent_command_code_claude: 'Command Code', subagent_openscale: 'OpenScale', subagent_local: 'ローカル',
+}
+
 function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary {
   const input = (item.input ?? {}) as Record<string, unknown>
   const name = item.name.toLowerCase()
@@ -406,7 +412,8 @@ function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary 
     return { icon: 'agent', verb: 'チーム', target: firstLine(str(input.description ?? input.prompt ?? input.name ?? '')), detail: output ? { kind: 'code', text: output } : null }
   }
   if (name.includes('agent') || name.includes('subagent') || name === 'task') {
-    const verb = name === 'subagent_claude' ? 'サブエージェント（Claude）' : name === 'subagent_gpt' ? 'サブエージェント（GPT）' : 'サブエージェント'
+    const family = PINNED_SUBAGENTS[name]
+    const verb = family ? `サブエージェント（${family}）` : 'サブエージェント'
     return { icon: 'agent', verb, target: firstLine(str(input.description ?? input.prompt ?? '')), detail: output ? { kind: 'code', text: output } : null }
   }
   if (name.includes('plan') || name.includes('todo') || name.includes('goal')) {

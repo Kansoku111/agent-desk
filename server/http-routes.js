@@ -75,7 +75,7 @@ async function serveStatic(res, pathname) {
 }
 
 /** Builds the request handler; the managers and state come from index.js. */
-export function createRequestHandler({ appVersion, codeStamp, busy, countClients, paths, terminals, teams, shutdown, log = (...args) => console.error(...args) }) {
+export function createRequestHandler({ appVersion, codeStamp, busy, countClients, paths, terminals, teams, subagentBridge, shutdown, log = (...args) => console.error(...args) }) {
   /** Serves one request on either listener; `ctx` says which (see localContext and RemoteAccess.context). */
   async function handleRequest(req, res, ctx) {
     try {
@@ -145,6 +145,30 @@ export function createRequestHandler({ appVersion, codeStamp, busy, countClients
           if (error.status === 403) return send(res, 403, 'forbidden')
           return send(res, 200, JSON.stringify({ ok: false, error: error.message }), 'application/json')
         }
+      }
+      // A task's subagent that runs as another kind of task (subagent-bridge-mcp.js), authenticated by the
+      // token issued for that task. It can run for hours, so blank lines keep the connection alive until
+      // the one line that carries the answer; the child stops when the connection closes.
+      if (url.pathname === '/api/subagent' && !ctx.remote) {
+        if (req.method !== 'POST') return send(res, 405, 'method not allowed')
+        const body = await readBody(req, 1024 * 1024)
+        if (body === null) return send(res, 413, 'too large')
+        const call = parseJson(body)
+        const parent = subagentBridge?.authorize(call?.parent, call?.token)
+        if (!parent || typeof call.prompt !== 'string') return send(res, 403, 'forbidden')
+        const controller = new AbortController()
+        res.on('close', () => { if (!res.writableEnded) controller.abort() })
+        res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', ...SECURITY_HEADERS })
+        const beat = setInterval(() => res.write('\n'), 15_000)
+        try {
+          const text = await subagentBridge.call({ parent, prompt: call.prompt, signal: controller.signal })
+          res.end(`${JSON.stringify({ ok: true, text })}\n`)
+        } catch (error) {
+          res.end(`${JSON.stringify({ ok: false, error: error.message })}\n`)
+        } finally {
+          clearInterval(beat)
+        }
+        return
       }
       // Lets a page tell a token that no longer works (a new link was made) from a server that is down.
       if (url.pathname === '/api/auth') {

@@ -3179,7 +3179,7 @@ test('a GPT leader that starts a Claude (API-billed) subagent is stopped and tol
   assert.deepEqual(threads.calls.filter((call) => call[0] === 'cancel'), [['cancel', leader]])
   threads.finish(leader, '', 'cancelled')
   await tick()
-  assert.match(sent()[0], /Anthropic API の従量課金/)
+  assert.match(sent()[0], /ChatGPT 以外のモデルのサブエージェント/)
 })
 
 test('a GPT leader\'s questions are answered when the user writes to it; deleting it deletes the team', async (t) => {

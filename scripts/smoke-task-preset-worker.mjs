@@ -11,6 +11,7 @@ import { TOOL_MODE_CONFIG } from '../server/ptc.js'
 import { appPaths } from '../server/paths.js'
 import { readJson } from '../server/json-file.js'
 import { writeTaskPresetPatch } from '../server/dsh-config.js'
+import { routePlan, savedRoutes } from '../server/subagent-routes.js'
 import { newTurn, applyUpdate, parseConfigOptions } from '../server/transcript.js'
 import { ClaudeRunner } from '../server/claude-runner.js'
 import { abClaudeArgs } from '../server/ab-runner.js'
@@ -37,7 +38,8 @@ try {
     const paths = appPaths()
     const settings = await readJson(path.join(paths.home, 'settings.json'), {})
     const patch = path.join(root, 'preset.patch.yml')
-    const subagents = Object.entries(settings.subagentModels ?? {}).filter(([, model]) => model).map(([provider, model]) => ({ provider, model }))
+    const { pinned } = routePlan('dsh', savedRoutes(settings).dsh)
+    const subagents = pinned ? [pinned] : []
     await writeTaskPresetPatch(patch, { subagents })
     const turn = newTurn({ id: randomUUID(), text: prompt, images: [] })
     const runtime = new AcpRuntime({ mode: permissionMode, paths, patches: [patch], onUpdate: (_id, update) => applyUpdate(turn, update), onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })

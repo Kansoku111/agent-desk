@@ -1,5 +1,5 @@
 // The environment of every dsh process Agent Desk starts. Kept apart from
-// runtime.js so a process that only spawns dsh (gpt-subagent-mcp.js) does not
+// runtime.js so a process that only spawns dsh (subagent-dsh.js) does not
 // load the ACP client with it.
 
 // Keys the app manages in the credential store. The launch environment would

@@ -9,6 +9,7 @@ import fsp from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { isDeepStrictEqual } from 'node:util'
 import { Catalog, matchesCommandCodeCatalog } from './catalog.js'
 import { codeStamp, uiBuild } from './code-stamp.js'
 import { ChatGptLogin } from './chatgpt-login.js'
@@ -16,7 +17,9 @@ import { Checkpoints } from './checkpoints.js'
 import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF, OPENSCALE_REF,
 } from './credentials.js'
-import { SUBAGENT_TOOLS, contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeGptSubagentPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch, writeChatWebPatch } from './dsh-config.js'
+import { contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeDshChildPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch, writeChatWebPatch } from './dsh-config.js'
+import { SubagentBridge, SUBAGENT_TOOL_TIMEOUT_SEC } from './subagent-bridge.js'
+import { routePlan, savedRoutes } from './subagent-routes.js'
 import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
 import { createAppRestarter } from './app-restart.js'
@@ -159,7 +162,15 @@ const terminals = await new TerminalManager({
   launch: (record) => teams?.launchFor(record) ?? null,
   instructions: () => effectiveCustomInstructions(settings),
   imageMcp: claudeImageMcp,
-  gptSubagent: () => (settings.subagentsEnabled !== false && settings.subagentModels?.['openai-codex'] ? { model: settings.subagentModels['openai-codex'], home: paths.home } : null),
+  subagentRoute: (record) => {
+    if (settings.subagentsEnabled === false) return null
+    const plan = routePlan('cl', savedRoutes(settings).cl)
+    if (plan.mode === 'bridge') {
+      const server = subagentBridge.mcpServer('cl', record.id, record.workspace)
+      return server ? { mcp: { name: server.name, server: claudeMcpServer(server) }, nativeOff: true } : null
+    }
+    return plan.claudeModel ? { claudeModel: plan.claudeModel } : null
+  },
   preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED,
   fallbackPreflight: (context) => teams?.claudeAuth.guard(null, context) ?? AUTH_REQUIRED,
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
@@ -168,7 +179,7 @@ const terminals = await new TerminalManager({
   log,
 }).load()
 /** Whether an agent or a Claude Code task is working: the app must not exit or be replaced then. */
-const busy = () => codex.busy || threads.busy || terminals.busy || agents.busy || teams.busy || ab.busy || abAgents.busy || presets.busy || presetAgents.busy
+const busy = () => codex.busy || threads.busy || terminals.busy || agents.busy || teams.busy || ab.busy || abAgents.busy || presets.busy || presetAgents.busy || subagentAgents.busy
 
 async function accounts() {
   let snapshot = { refs: {}, records: {} }
@@ -387,7 +398,7 @@ const catalogSignature = async (result) => JSON.stringify({
 })
 
 const getSettings = () => settings
-const mcpServersFor = createMcpServerList({ paths, getSettings, getTeams: () => teams })
+const mcpServersFor = createMcpServerList({ paths, getSettings, getTeams: () => teams, getSubagentBridge: () => subagentBridge })
 
 const catalog = await new Catalog(paths.catalog, await catalogSignature(await syncModelCatalog())).load()
 
@@ -400,14 +411,16 @@ async function modelLimits() {
 }
 
 /** Rewrites the dsh home patch (and the team children's layer) from the settings; true when it changed. */
+/** The DSH route's own fixed-model tool, in the shape the dsh-config.js writers take (empty when none). */
+function pinnedSubagents() {
+  const { pinned } = routePlan('dsh', savedRoutes(settings).dsh)
+  if (!pinned) return []
+  const name = catalog.data.models.find((entry) => entry.provider === pinned.provider && entry.id === pinned.model)?.name ?? null
+  return [{ ...pinned, name }]
+}
+
 async function applyHomePatch() {
-  const subagents = Object.keys(SUBAGENT_TOOLS)
-    .filter((provider) => settings.subagentModels?.[provider])
-    .map((provider) => {
-      const model = settings.subagentModels[provider]
-      const name = catalog.data.models.find((entry) => entry.provider === provider && entry.id === model)?.name ?? null
-      return { provider, model, name, effort: settings.subagentEfforts?.[provider] ?? null }
-    })
+  const subagents = pinnedSubagents()
   const persona = await shippedPersona()
   const home = await writeHomePatch(paths.homePatch, {
     anthropicWorkspaceId: settings.anthropicWorkspaceId,
@@ -415,6 +428,7 @@ async function applyHomePatch() {
     catalogModels: configuredModels,
     subagents,
     subagentsEnabled: settings.subagentsEnabled !== false,
+    nativeSubagents: routePlan('dsh', savedRoutes(settings).dsh).mode !== 'bridge',
     settingsFile: paths.settings,
     persona,
     webSearch: { plugin: WEB_SEARCH_PLUGIN, credentials: paths.credentials },
@@ -426,8 +440,6 @@ async function applyHomePatch() {
     commandCodeRoutes: (await accounts()).commandCode.configured ? commandCodeRoutes(commandCodeModels.models, { zdr: settings.commandCodeZdr }) : {},
   })
   const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
-  // Read by each subagent_gpt call, so no runtime restarts for it.
-  await writeGptSubagentPatch(paths.gptSubagentPatch, { subagents, persona, subagentsEnabled: settings.subagentsEnabled !== false })
   const abChanged = await writeAbPatches(paths, { subagents, persona })
   const presetsChanged = await writeTaskPresetPatch(paths.taskPresetPatch, { subagents, persona })
   const observerChanged = await writeObserverPatch(paths.observerPatch, { subagents, persona })
@@ -487,6 +499,25 @@ threads = new ThreadManager({
 })
 await threads.load()
 
+// Subagents that run as another kind of task (settings: subagentRoutes; see subagent-bridge.js).
+const subagentAgents = await new ClaudeRunner({ dir: paths.subagentAgents, preflight: (context) => teams?.claudeAuth.guard(null, context) ?? AUTH_REQUIRED, log }).load()
+const subagentBridge = await new SubagentBridge({
+  file: paths.subagentBridge, paths, settings: getSettings, claude: subagentAgents, codex,
+  url: () => `http://127.0.0.1:${server.address().port}/api/subagent`,
+  instructions: () => effectiveCustomInstructions(settings),
+  parents: {
+    dsh: (id) => { const thread = threads.threads.get(id); return thread ? { workspace: thread.workspace, mode: thread.permissionMode } : null },
+    // Claude Code has no sandbox here: the call's approval in Claude Code is the gate, as for any tool.
+    cl: (id) => { const record = terminals.records.get(id); return record ? { workspace: record.workspace, mode: 'danger-full-access' } : null },
+    gp: (id) => { const record = codex.records.get(id); return record ? { workspace: record.workspace, mode: record.permissionMode, model: record.model, effort: record.effort } : null },
+  },
+  dshPatch: async (kind, child) => {
+    const file = paths.dshChildPatch(kind)
+    await writeDshChildPatch(file, { child, subagents: pinnedSubagents(), persona: await shippedPersona(), subagentsEnabled: settings.subagentsEnabled !== false })
+    return file
+  },
+}).load()
+
 // Agent teams: a Claude Code leader hands work to GPT (dsh) and Claude Code children.
 // Claude children run headless (claude -p), after per-team auth consent checks.
 const agents = await new ClaudeRunner({ dir: path.join(paths.home, 'team-agents'), preflight: (context) => teams?.guardClaudeLaunch(context) ?? AUTH_REQUIRED, log }).load()
@@ -521,18 +552,19 @@ teams = await new TeamManager({
 }).load()
 
 codex.executionGuard = (record, context) => teams.guardExecution(record, context)
-codex.on('session', task => broadcast('codexTask', { task }))
+// A bridged subagent's Codex session is the bridge's own: the task list and notifications never see it.
+codex.on('session', task => { if (!task.subagent) broadcast('codexTask', { task }) })
 codex.on('turn', ({ id, turn }) => broadcast('codexTurn', { taskId: id, turn }))
 codex.on('turn-speed', ({ id, turnId, speed }) => broadcast('codexTurnSpeed', { taskId: id, turnId, speed }))
 codex.on('removed', ({ id }) => broadcast('codexTaskRemoved', { taskId: id }))
 codex.on('fault', error => log('Codex task:', error.message))
 codex.on('approval', ({ id }) => {
   const task = codex.get(id)
-  if (task && !task.ab && !task.team?.childId) broadcast('notify', { kind: 'codex', taskId: id, title: task.title, status: 'approval' })
+  if (task && !task.ab && !task.subagent && !task.team?.childId) broadcast('notify', { kind: 'codex', taskId: id, title: task.title, status: 'approval' })
 })
 codex.on('finished', ({ id, status }) => {
   const task = codex.get(id)
-  if (task && !task.ab && !task.team?.childId) broadcast('notify', { kind: 'codex', taskId: id, title: task.title, status: status === 'stopped' ? 'cancelled' : status })
+  if (task && !task.ab && !task.subagent && !task.team?.childId) broadcast('notify', { kind: 'codex', taskId: id, title: task.title, status: status === 'stopped' ? 'cancelled' : status })
 })
 codex.on('models', models => {
   broadcast('codexModels', { models })
@@ -642,10 +674,10 @@ threads.on('removed', ({ threadId }) => {
 subagents.on('change', ({ threadId, subagent }) => {
   broadcast('subagent', { threadId, subagent })
   // A team's children have no subagents (their dsh has none: this is the
-  // backstop). A child that starts a subagent, or a dsh leader that starts a
-  // Claude subagent outside the selected team routes, is stopped.
+  // backstop). A child that starts a subagent, or a dsh leader (always on ChatGPT) that starts
+  // one on another provider's model outside the selected team routes, is stopped.
   const starting = subagent.status === 'starting' || subagent.status === 'running'
-  if (starting && teams.inTeam(threadId) && (subagent.provider === 'anthropic' || teams.isChild(threadId) || teams.isExecution(threadId))) {
+  if (starting && teams.inTeam(threadId) && ((subagent.provider && subagent.provider !== 'openai-codex') || teams.isChild(threadId) || teams.isExecution(threadId))) {
     void teams.stopApiUse(threadId).catch((error) => log('team:', error.message))
   }
 })
@@ -946,7 +978,16 @@ const handlers = {
     checkEquivalentPricing: () => equivalentPricing.refresh({ force: true }),
   }),
   ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
-  ...createCodexHandlers({ paths, codex, teams, getSettings, mutateSettings }),
+  ...createCodexHandlers({
+    paths, codex, teams, getSettings, mutateSettings,
+    // Codex has no subagents of its own here, so a Codex task's subagents always come through the bridge.
+    // Returns the servers to mount when they differ from what the task has, otherwise null.
+    subagentMcp: (task) => {
+      const server = subagentBridge.mcpServer('gp', task.id, task.workspace)
+      const wanted = server ? { [server.name]: { ...claudeMcpServer(server), tool_timeout_sec: SUBAGENT_TOOL_TIMEOUT_SEC } } : {}
+      return isDeepStrictEqual(codex.records.get(task.id)?.mcpServers ?? {}, wanted) ? null : wanted
+    },
+  }),
 
   ...createAbHandlers(ab),
   'preset.inspect': ({ source }) => presets.inspect(source),
@@ -1024,7 +1065,7 @@ function localContext() {
 }
 
 const handleRequest = createRequestHandler({
-  appVersion: APP_VERSION, codeStamp: CODE_STAMP, busy, countClients, paths, terminals, teams, shutdown,
+  appVersion: APP_VERSION, codeStamp: CODE_STAMP, busy, countClients, paths, terminals, teams, subagentBridge, shutdown,
 })
 
 const server = http.createServer((req, res) => void handleRequest(req, res, localContext()))

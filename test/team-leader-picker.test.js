@@ -21,7 +21,7 @@ const groups = [
 ]
 const modules = {
   react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' }, 'lucide-react': {},
-  '../store': {}, '../model-selection': { isModelVisible: () => true },
+  '../store': {}, '../model-selection': { isModelVisible: () => true }, '../subagent-routes': {},
   '../util': { parseModel: (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }, pickableEfforts: (efforts) => efforts },
   './Modal': {}, './Popover': {}, './Pickers': { byNewest: () => 0 },
   './TerminalPickers': { claudeModels: () => [], claudeModelName: (_server, model) => model, claudeEfforts: () => ['low', 'high'] },

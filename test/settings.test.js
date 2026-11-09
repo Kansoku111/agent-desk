@@ -136,22 +136,38 @@ test('queued currency changes validate the last committed rate and retain it whe
   assert.deepEqual(h.events, ['save', 'publish', 'save', 'publish', 'save', 'publish'])
 })
 
-test('subagent efforts migrate, merge and validate before committing', async () => {
-  assert.deepEqual(migrateSettings({}).subagentEfforts, { 'openai-codex': null, anthropic: null })
+test('subagent routes default to each kind itself, migrate from the old per-provider models, merge and validate before committing', async () => {
+  const own = { dsh: { target: 'dsh', model: null, effort: null }, cl: { target: 'cl', model: null, effort: null }, gp: { target: 'gp', model: null, effort: null } }
+  assert.deepEqual(migrateSettings({}).subagentRoutes, own)
+  // A GPT model chosen before the routes existed still serves DSH and Claude Code; a Claude one only DSH.
+  const luna = JSON.stringify(['openai-codex', 'gpt-6-luna'])
+  const gpt = migrateSettings({ subagentModels: { 'openai-codex': 'gpt-6-luna', anthropic: 'claude-sonnet-5-5' }, subagentEfforts: { 'openai-codex': 'low' } }).subagentRoutes
+  assert.deepEqual(gpt.dsh, { target: 'dsh', model: luna, effort: 'low' })
+  assert.deepEqual(gpt.cl, gpt.dsh)
+  assert.deepEqual(gpt.gp, own.gp)
+  assert.deepEqual(migrateSettings({ subagentModels: { anthropic: 'claude-sonnet-5-5' } }).subagentRoutes.dsh.model, JSON.stringify(['anthropic', 'claude-sonnet-5-5']))
+  assert.deepEqual(migrateSettings({ subagentModels: { anthropic: 'claude-sonnet-5-5' } }).subagentRoutes.cl, own.cl)
+  // Once routes are saved the old keys no longer count; a damaged route falls back to its own kind.
+  assert.deepEqual(migrateSettings({ subagentModels: { 'openai-codex': 'gpt-6-luna' }, subagentRoutes: own }).subagentRoutes, own)
+  assert.deepEqual(migrateSettings({ subagentRoutes: { ...own, cl: { target: 'nowhere' } } }).subagentRoutes.cl, own.cl)
+
   const h = harness()
   await Promise.all([
-    h.service.update({ subagentEfforts: { anthropic: 'low' } }),
-    h.service.update({ subagentEfforts: { 'openai-codex': 'high' } }),
+    h.service.update({ subagentRoutes: { dsh: { model: luna, effort: 'low' } } }),
+    h.service.update({ subagentRoutes: { cl: { target: 'gp', model: 'codex:gpt-6-luna' } } }),
   ])
-  assert.deepEqual(h.live.subagentEfforts, { 'openai-codex': 'high', anthropic: 'low' })
-  assert.deepEqual(migrateSettings(JSON.parse(JSON.stringify(h.live))).subagentEfforts, h.live.subagentEfforts)
+  assert.deepEqual(h.live.subagentRoutes.dsh, { target: 'dsh', model: luna, effort: 'low' })
+  assert.deepEqual(h.live.subagentRoutes.cl, { target: 'gp', model: 'codex:gpt-6-luna', effort: null })
+  assert.deepEqual(migrateSettings(JSON.parse(JSON.stringify(h.live))).subagentRoutes, h.live.subagentRoutes)
   assert.deepEqual(h.events, ['save', 'publish', 'home', 'restart', 'save', 'publish', 'home', 'restart'])
-  for (const value of ['', 'bogus', 1, {}, []]) {
-    await assert.rejects(h.service.update({ subagentEfforts: { anthropic: value } }), /推論レベル/)
+  // Moving a route to another kind drops a model that belonged to the old one.
+  await h.service.update({ subagentRoutes: { dsh: { target: 'cl' } } })
+  assert.deepEqual(h.live.subagentRoutes.dsh, { target: 'cl', model: null, effort: null })
+  for (const bad of [{ target: 'x' }, { target: 'cl', model: luna }, { model: 'claude:sonnet' }, { effort: 7 }, 'text', [], null]) {
+    await assert.rejects(h.service.update({ subagentRoutes: { gp: bad } }), /サブエージェント|使えない/)
   }
-  await assert.rejects(h.service.update({ subagentEfforts: [] }), /オブジェクト/)
-  await h.service.update({ subagentEfforts: { anthropic: null } })
-  assert.equal(h.live.subagentEfforts.anthropic, null)
+  for (const value of [null, 1, false, 'text', []]) await assert.rejects(h.service.update({ subagentRoutes: value }), /オブジェクト/)
+  assert.deepEqual(h.live.subagentRoutes.gp, own.gp)
 })
 
 test('mixed valid/invalid patches have no persistence, publication or effects', async () => {
@@ -159,8 +175,8 @@ test('mixed valid/invalid patches have no persistence, publication or effects', 
     { customInstructions: 'valid', dshUpdateChannel: 'invalid' },
     { theme: 'light', usageCurrency: 'JPY' },
     { theme: 'light', usdJpyRate: 0 },
-    { contextLimits: { anthropic: 128_000 }, subagentModels: { anthropic: 123 } },
-    { subagentModels: { anthropic: 'claude-opus-5' }, customInstructions: 5 },
+    { contextLimits: { anthropic: 128_000 }, subagentRoutes: { dsh: { target: 'nowhere' } } },
+    { subagentRoutes: { cl: { model: 'claude:opus' } }, customInstructions: 5 },
     { fastMode: { anthropic: true }, modelAutoUpdate: 'false' },
     { browserTool: false, defaultPermissionMode: 'invalid' },
     { notifications: true, defaultModel: {} },
@@ -179,14 +195,14 @@ test('mixed valid/invalid patches have no persistence, publication or effects', 
 test('planning is pure and preserves existing settings and partial provider maps', () => {
   const current = freeze(defaults({
     contextLimits: { 'openai-codex': 272_000, anthropic: null },
-    subagentModels: { 'openai-codex': 'gpt-custom' },
+    subagentRoutes: { dsh: { target: 'dsh', model: JSON.stringify(['openai-codex', 'gpt-custom']), effort: null }, cl: { target: 'cl', model: null, effort: null }, gp: { target: 'gp', model: null, effort: null } },
     customModels: [{ provider: 'anthropic', id: 'custom', template: 'claude-opus-5' }],
     fastModePeriods: { anthropic: [[100, 200]], legacy: [[1, 2]] },
     savedExtension: { keep: true },
   }))
   const patch = freeze({
     contextLimits: { anthropic: 200_000, unsupported: 'ignored' },
-    subagentModels: { anthropic: 'claude-custom' },
+    subagentRoutes: { cl: { model: 'claude:custom' } },
     fastMode: { anthropic: true, unsupported: 'ignored' },
     customInstructions: '  日本語で\n{{model}}  ',
     customModels: [],
@@ -197,7 +213,7 @@ test('planning is pure and preserves existing settings and partial provider maps
   assert.deepEqual(a, planSettingsUpdate(current, patch, 300))
   assert.notStrictEqual(a.settings, current)
   assert.deepEqual(a.settings.contextLimits, { 'openai-codex': 272_000, anthropic: 200_000 })
-  assert.deepEqual(a.settings.subagentModels, { 'openai-codex': 'gpt-custom', anthropic: 'claude-custom' })
+  assert.deepEqual(a.settings.subagentRoutes, { dsh: current.subagentRoutes.dsh, cl: { target: 'cl', model: 'claude:custom', effort: null }, gp: current.subagentRoutes.gp })
   assert.deepEqual(a.settings.fastMode, { 'openai-codex': false, anthropic: true })
   assert.deepEqual(a.settings.fastModePeriods, { anthropic: [[100, 200], [300, null]], legacy: [[1, 2]] })
   assert.equal(a.settings.customInstructions, patch.customInstructions)
@@ -243,7 +259,7 @@ test('compound changes save, publish, patch and restart once, after persistence'
   })
   const result = await h.service.update({
     contextLimits: { anthropic: 200_000 },
-    subagentModels: { 'openai-codex': 'gpt-custom' },
+    subagentRoutes: { gp: { model: 'codex:gpt-custom' } },
     customInstructions: 'committed',
     fastMode: { anthropic: true },
     browserHeadless: true,
@@ -456,7 +472,7 @@ test('patch/maps, context choices, model IDs and instruction length are validate
     await assert.rejects(h.service.update(patch), /オブジェクト/)
     assert.deepEqual(h.events, [])
   }
-  for (const field of ['contextLimits', 'subagentModels', 'fastMode']) {
+  for (const field of ['contextLimits', 'subagentRoutes', 'fastMode']) {
     for (const value of [null, 1, false, 'text', [], new Date()]) {
       assert.throws(() => planSettingsUpdate(defaults(), { [field]: value }, 0), /オブジェクト/)
     }
@@ -467,10 +483,10 @@ test('patch/maps, context choices, model IDs and instruction length are validate
   for (const value of ['128000', 42, true, undefined]) {
     assert.throws(() => planSettingsUpdate(defaults(), { contextLimits: { anthropic: value } }, 0), /コンテキスト/)
   }
-  for (const value of [42, '', 'spaces not allowed', 'x'.repeat(101), {}, false]) {
-    assert.throws(() => planSettingsUpdate(defaults(), { subagentModels: { anthropic: value } }, 0), /モデル ID/)
+  for (const value of [42, '', 'spaces not allowed', 'x'.repeat(1001), {}, false, 'claude:bad id']) {
+    assert.throws(() => planSettingsUpdate(defaults(), { subagentRoutes: { cl: { model: value } } }, 0), /モデル/)
   }
-  assert.equal(planSettingsUpdate(defaults(), { subagentModels: { anthropic: null } }, 0).settings.subagentModels.anthropic, null)
+  assert.equal(planSettingsUpdate(defaults(), { subagentRoutes: { cl: { model: null } } }, 0).settings.subagentRoutes.cl.model, null)
   assert.equal(planSettingsUpdate(defaults(), { customInstructions: 'x'.repeat(10_000) }, 0).settings.customInstructions.length, 10_000)
   assert.throws(() => planSettingsUpdate(defaults(), { customInstructions: 'x'.repeat(10_001) }, 0), /文字まで/)
 })

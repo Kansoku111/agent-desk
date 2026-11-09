@@ -10,7 +10,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
 import { ClaudeTranscripts } from './claude-transcript.js'
 import { instructionsSection } from './instructions-plugin.js'
 import { readJson, writeJson } from './json-file.js'
@@ -29,9 +28,6 @@ export {
 } from './terminal-helpers.js'
 
 const require = createRequire(import.meta.url)
-const gptSubagentScript = fileURLToPath(new URL('./gpt-subagent-mcp.js', import.meta.url))
-/** The MCP server of a task's `subagent_gpt`; Claude Code calls it `mcp__agent-desk-gpt__subagent_gpt`. */
-const GPT_MCP_SERVER = 'agent-desk-gpt'
 const SCROLLBACK = 3000
 /** A model alias (opus, sonnet[1m]) or full name (claude-opus-5-5) for `claude --model`. */
 const MODEL_NAME = /^[a-z0-9][a-z0-9.\-[\]]{0,79}$/i
@@ -72,12 +68,14 @@ export class TerminalManager extends EventEmitter {
    * @param {string} [options.claudeHome]  Claude Code's own data folder (resumable transcripts)
    * @param {(record: object) => ({ args?: string[] } | null)} [options.launch]  more flags for a team's leader or child
    * @param {() => string} [options.instructions]  the user's custom instructions (a team's leader gets them in its own prompt, teams-launch.js)
-   * @param {() => ({ model: string, home: string } | null)} [options.gptSubagent]  the GPT subagent model and app home; null leaves `subagent_gpt` out
+   * @param {(record: object) => ({ mcp?: object, nativeOff?: boolean, claudeModel?: string } | null)} [options.subagentRoute]  where a task's
+   *   subagents go (index.js): `mcp` is the bridge tool (Claude Code's MCP config shape) for a route to another kind, which also
+   *   switches Claude Code's own Agent off (`nativeOff`); `claudeModel` makes Claude Code's own subagents run on that model
    */
   constructor({
     file, settingsFile, hookUrl, send, pty = null, findClaude: find = () => findClaude(), log = () => {},
     claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null, preflight = null, instructions = () => '',
-    gptSubagent = () => null, imageMcp = () => null, fallbackPreflight = null, usageFallbackRoutes = () => null, validateFallbackModel = () => {}, handoffThread = null,
+    subagentRoute = () => null, imageMcp = () => null, fallbackPreflight = null, usageFallbackRoutes = () => null, validateFallbackModel = () => {}, handoffThread = null,
   }) {
     super()
     this.file = file
@@ -87,9 +85,9 @@ export class TerminalManager extends EventEmitter {
     this.launch = launch
     this.instructions = instructions
     this.instructionsFile = path.join(path.dirname(settingsFile), 'claude-instructions.md')
-    this.gptSubagent = gptSubagent
+    this.subagentRoute = subagentRoute
     this.imageMcp = imageMcp
-    this.gptMcpDir = path.join(path.dirname(settingsFile), 'claude-gpt-subagent')
+    this.taskMcpDir = path.join(path.dirname(settingsFile), 'claude-task-mcp')
     this.preflight = preflight
     this.fallbackPreflight = fallbackPreflight
     this.usageFallbackRoutes = usageFallbackRoutes
@@ -432,20 +430,14 @@ export class TerminalManager extends EventEmitter {
   }
 
   /** Writes the ordinary task's MCP config; team leaders supply their own. */
-  #writeTaskMcp(record) {
-    const gpt = this.gptSubagent()
+  #writeTaskMcp(record, route) {
     const image = this.imageMcp(record.workspace)
-    if (!gpt && !image) return null
-    const file = path.join(this.gptMcpDir, `${record.id}.json`)
-    fs.mkdirSync(this.gptMcpDir, { recursive: true })
+    if (!route?.mcp && !image) return null
+    const file = path.join(this.taskMcpDir, `${record.id}.json`)
+    fs.mkdirSync(this.taskMcpDir, { recursive: true })
     fs.writeFileSync(file, JSON.stringify({
       mcpServers: {
-        ...(gpt ? { [GPT_MCP_SERVER]: {
-          type: 'stdio',
-          command: process.execPath,
-          args: [gptSubagentScript, '--workspace', record.workspace, '--name', gpt.model],
-          env: { AGENT_DESK_HOME: gpt.home },
-        } } : {}),
+        ...(route?.mcp ? { [route.mcp.name]: route.mcp.server } : {}),
         ...(image ? { imagegen: image } : {}),
       },
     }, null, 2), { encoding: 'utf8', mode: 0o600 })
@@ -469,7 +461,8 @@ export class TerminalManager extends EventEmitter {
     const settings = extra ? teamHookSettings(undefined, undefined, { deniedAgents }) : hookSettings(undefined, undefined, { deniedAgents })
     fs.writeFileSync(extra ? this.teamSettingsFile : this.settingsFile, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 })
     // A team's leader hands work to its children instead.
-    const gptMcp = record.team ? null : this.#writeTaskMcp(record)
+    const route = record.team ? null : this.subagentRoute(record)
+    const taskMcp = record.team ? null : this.#writeTaskMcp(record, route)
     const command = launchCommand(claude, [
       ...(resume ? ['--resume', record.sessionId] : ['--session-id', record.sessionId]),
       // Flags apply to this session only; `/model` typed in Claude Code would change the user's default everywhere.
@@ -478,7 +471,9 @@ export class TerminalManager extends EventEmitter {
       // Some of these flags take a list (--mcp-config, --allowedTools), so the
       // single-value --settings comes last: the prompt after it stays the prompt.
       ...(standing ? ['--append-system-prompt-file', this.instructionsFile] : []),
-      ...(gptMcp ? ['--mcp-config', gptMcp] : []),
+      ...(taskMcp ? ['--mcp-config', taskMcp] : []),
+      // A route to another kind of task replaces Claude Code's own subagents with the bridge tool.
+      ...(route?.nativeOff ? ['--disallowedTools', 'Agent,Task'] : []),
       ...(extra?.args ?? []),
       '--settings', extra ? this.teamSettingsFile : this.settingsFile,
       ...(prompt ? [prompt] : []),
@@ -492,6 +487,8 @@ export class TerminalManager extends EventEmitter {
       AGENT_DESK_TERMINAL_HOOK: this.hookUrl(),
       AGENT_DESK_TERMINAL_ID: record.id,
       AGENT_DESK_TERMINAL_SECRET: secret,
+      // Claude Code's own subagents (Explore and the others too) run on the model the route names.
+      ...(route?.claudeModel ? { CLAUDE_CODE_SUBAGENT_MODEL: route.claudeModel, CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' } : {}),
     })
 
     const { Terminal } = require('@xterm/headless')
@@ -1000,7 +997,7 @@ export class TerminalManager extends EventEmitter {
     live?.term.dispose()
     this.records.delete(id)
     this.subscribers.delete(id)
-    fs.rmSync(path.join(this.gptMcpDir, `${id}.json`), { force: true })
+    fs.rmSync(path.join(this.taskMcpDir, `${id}.json`), { force: true })
     await this.#save()
     this.emit('removed', { terminalId: id })
     return { removed: true }

@@ -5,7 +5,9 @@ import fs from 'node:fs'
 export const name = 'agent-desk-subagent-policy'
 export const inject = ['tools']
 
-const START_TOOLS = new Set(['subagent', 'subagent_fork', 'subagent_gpt', 'subagent_claude', 'workflow'])
+// The pinned tools are dsh-config.js SUBAGENT_TOOLS; not imported, to keep this plugin light.
+const START_TOOLS = new Set(['subagent', 'subagent_fork', 'workflow', 'subagent_claude', 'subagent_gpt', 'subagent_deepseek', 'subagent_opencode_go',
+  'subagent_command_code', 'subagent_command_code_claude', 'subagent_openscale', 'subagent_local'])
 
 export function subagentsAllowed(settingsFile) {
   if (!settingsFile) return true

@@ -97,7 +97,7 @@ export class CodexRunner extends EventEmitter {
   get(id) { const record = this.records.get(id); return record ? this.summary(record) : null }
   turns(id) { return this.records.get(id)?.turns ?? null }
   list({ includeOwned = false } = {}) {
-    return [...this.records.values()].filter(record => includeOwned || (!record.ab && !record.team?.childId && record.team?.role !== 'observer'))
+    return [...this.records.values()].filter(record => includeOwned || (!record.ab && !record.subagent && !record.team?.childId && record.team?.role !== 'observer'))
       .map(record => this.summary(record)).sort((a, b) => b.updatedAt - a.updatedAt)
   }
   running(id) { return this.live.has(id) }
@@ -153,7 +153,7 @@ export class CodexRunner extends EventEmitter {
     return { model: selected.id, effort: chosenEffort, accountKey: this.modelKeys.get(models) ?? null }
   }
 
-  async create({ workspace, model = null, effort = null, permissionMode = 'workspace-write', instructions = '', mcpServers = {}, permissionPolicy = 'ask', team = null, ab = null }) {
+  async create({ workspace, model = null, effort = null, permissionMode = 'workspace-write', instructions = '', mcpServers = {}, permissionPolicy = 'ask', team = null, ab = null, subagent = null }) {
     if (this.closing) throw new Error('アプリを終了しています')
     if (typeof workspace !== 'string' || !workspace.trim() || !(await fs.stat(workspace)).isDirectory()) throw new Error('ワークスペースのフォルダが不正です')
     if (!MODES.includes(permissionMode)) throw new Error('権限モードが不正です')
@@ -161,7 +161,7 @@ export class CodexRunner extends EventEmitter {
     const now = this.now()
     const record = { id: randomUUID(), title: '新しいタスク', workspace: path.resolve(workspace), ...selection, permissionMode, instructions, mcpServers, permissionPolicy,
       sessionId: null, status: 'idle', createdAt: now, updatedAt: now, archived: false, pinned: false, turns: [], score: emptyScore(), tokenTotal: null,
-      ...(team ? { team } : {}), ...(ab ? { ab } : {}) }
+      ...(team ? { team } : {}), ...(ab ? { ab } : {}), ...(subagent ? { subagent } : {}) }
     this.records.set(record.id, record)
     try { await this.#save(record, true); this.#index(); await this.indexWriter.flush() }
     catch (error) { this.records.delete(record.id); this.#index(); throw error }
@@ -268,7 +268,7 @@ export class CodexRunner extends EventEmitter {
         // The selected level must also be the conversation's own level. Sent only with turn/start, it reaches the model as a mid-conversation
         // update that applies weakly (measured: max ran like medium to high). thread/start honours this; thread/resume honours it only for a
         // conversation that is not loaded (see the unload below). The level is not stored with the conversation, so every resume must pass it.
-        config: { ...(record.effort ? { model_reasoning_effort: record.effort } : {}), mcp_servers: record.mcpServers ?? {}, 'features.default_mode_request_user_input': !record.ab && !record.team?.childId, 'features.multi_agent': false, 'features.goals': false, 'features.hooks': false, 'features.plugins': false, web_search: leanResearch ? 'disabled' : 'cached', 'features.shell_tool': !leanResearch, 'features.unified_exec': !leanResearch } }
+        config: { ...(record.effort ? { model_reasoning_effort: record.effort } : {}), mcp_servers: record.mcpServers ?? {}, 'features.default_mode_request_user_input': !record.ab && !record.subagent && !record.team?.childId, 'features.multi_agent': false, 'features.goals': false, 'features.hooks': false, 'features.plugins': false, web_search: leanResearch ? 'disabled' : 'cached', 'features.shell_tool': !leanResearch, 'features.unified_exec': !leanResearch } }
       const resume = () => this.server.rawRequest('thread/resume', { ...params, threadId: record.sessionId, excludeTurns: true })
       let result = record.sessionId ? await resume() : await this.server.rawRequest('thread/start', { ...params, ephemeral: false, serviceName: 'agent_desk_tasks' })
       // A conversation that is still loaded keeps the level it was loaded with and ignores resume's config, so a level changed since then would
@@ -363,7 +363,7 @@ export class CodexRunner extends EventEmitter {
     const record = this.records.get(id), live = this.live.get(id)
     if (method === 'item/tool/requestUserInput') {
       // Background workers report blockers to their owner; they must not wait for a hidden form.
-      if (!record || !live || live.ended || live.stopping || (live.turnId && params.turnId !== live.turnId) || record.ab || record.team?.childId) {
+      if (!record || !live || live.ended || live.stopping || (live.turnId && params.turnId !== live.turnId) || record.ab || record.subagent || record.team?.childId) {
         this.server.respond(requestId, { answers: {} })
         return
       }

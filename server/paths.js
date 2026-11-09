@@ -51,8 +51,11 @@ export function appPaths(home = defaultAppHome()) {
     abResearchPatch: path.join(home, 'ab-research.patch.yml'),
     abWritePatch: path.join(home, 'ab-write.patch.yml'),
     taskPresetPatch: path.join(home, 'task-preset.patch.yml'),
-    // The headless dsh behind a Claude Code task's subagent_gpt (dsh-config.js gptSubagentPatch).
-    gptSubagentPatch: path.join(home, 'gpt-subagent.patch.yml'),
+    // Subagents that run as another kind of task (subagent-bridge.js): its secret, its Claude Code
+    // sessions, and the model layer of the headless dsh a Claude Code or Codex task's DSH subagent runs.
+    subagentBridge: path.join(home, 'subagent-bridge.json'),
+    subagentAgents: path.join(home, 'subagent-agents'),
+    dshChildPatch: (kind) => path.join(home, `subagent-${kind}.patch.yml`),
     dshHome,
     credentials: path.join(dshHome, '.credentials.yaml'),
     homePatch: path.join(dshHome, 'cordis.patch.yml'),

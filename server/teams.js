@@ -675,7 +675,7 @@ export class TeamManager extends EventEmitter {
     return this.#byTask(taskId)?.child === null ? this.#byTask(taskId).team.id : null
   }
 
-  /** A child's subagents, and a dsh leader's Claude (API-billed) subagents, are stopped. */
+  /** A child's subagents, and a dsh leader's subagents on a model other than ChatGPT, are stopped. */
   inTeam(threadId) {
     return Boolean(this.#byTask(threadId))
   }
@@ -2548,8 +2548,8 @@ export class TeamManager extends EventEmitter {
 
   /**
    * A GPT or DeepSeek child started a subagent (its dsh has none, so this is
-   * the backstop), or a dsh leader started one on Claude, which bills the
-   * user's Anthropic API key: the turn stops at once and the leader hears why.
+   * the backstop), or a dsh leader started one on a model other than ChatGPT, which bills the
+   * user's own key or account: the turn stops at once and the leader hears why.
    */
   async stopApiUse(threadId) {
     const found = this.#byTask(threadId)
@@ -2773,7 +2773,7 @@ export class TeamManager extends EventEmitter {
     if (this.apiStopped.delete(`leader:${team.id}`)) {
       team.queue.unshift({
         id: randomUUID(), childId: null, kind: 'notice', at: this.now(),
-        text: 'Agent Desk があなたの作業を止めました: Claude のサブエージェント（subagent_claude）は Anthropic API の従量課金になるため、チームでは使えません。'
+        text: 'Agent Desk があなたの作業を止めました: ChatGPT 以外のモデルのサブエージェント（subagent_claude など）はチームの設定とは別の課金になるため、チームでは使えません。'
           + 'チームの作業は spawn で子に任せてください。',
       })
     }

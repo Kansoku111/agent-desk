@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import YAML from 'yaml'
-import { homePatch, gptSubagentPatch, writeGptSubagentPatch } from '../server/dsh-config.js'
+import { homePatch, dshChildPatch, writeDshChildPatch } from '../server/dsh-config.js'
 import { apply, subagentsAllowed } from '../server/subagent-policy-plugin.js'
 import { DEFAULT_SETTINGS, migrateSettings, planSettingsUpdate, createSettingsService } from '../server/settings.js'
 
@@ -25,7 +25,7 @@ test('OFF removes all base delegation plugins, pinned tools and generated guidan
   assert.doesNotMatch(off, /Subagents on a fixed model|Delegate with your own/)
   assert.ok(rows.some(row => row.id === 'web'))
   assert.ok(rows.flatMap(row => row.insert ?? []).some(row => row.config?.text === 'Keep this instruction'))
-  assert.equal(gptSubagentPatch({ subagents, subagentsEnabled: false }), null)
+  assert.equal(dshChildPatch({ child: { provider: 'openai-codex', model: 'gpt-6.1-sol' }, subagents, subagentsEnabled: false }), null)
   // Turning it back on restores the saved model routes, not an empty picker.
   assert.deepEqual(YAML.parse(homePatch({ ...options, subagentsEnabled: true })), enabled)
 })
@@ -33,13 +33,13 @@ test('OFF removes all base delegation plugins, pinned tools and generated guidan
 test('setting defaults ON, validates booleans, preserves model choices and applies the home patch before restarting', async () => {
   assert.equal(migrateSettings({}).subagentsEnabled, true)
   assert.equal(migrateSettings({ subagentsEnabled: false }).subagentsEnabled, false)
-  const current = { ...structuredClone(DEFAULT_SETTINGS), subagentModels: { anthropic: 'claude-sonnet-5-5', 'openai-codex': 'gpt-6.1-sol' } }
+  const current = { ...structuredClone(DEFAULT_SETTINGS), subagentRoutes: { ...DEFAULT_SETTINGS.subagentRoutes, dsh: { target: 'cl', model: 'claude:sonnet', effort: null } } }
   for (const value of [null, 0, 'false', {}, []]) {
     assert.throws(() => planSettingsUpdate(current, { subagentsEnabled: value }, Date.now()), /boolean/)
   }
   const plan = planSettingsUpdate(current, { subagentsEnabled: false }, Date.now())
   assert.equal(plan.settings.subagentsEnabled, false)
-  assert.deepEqual(plan.settings.subagentModels, current.subagentModels)
+  assert.deepEqual(plan.settings.subagentRoutes, current.subagentRoutes)
   assert.equal(plan.effects.homePatch, true)
   let live = current
   const events = []
@@ -62,7 +62,7 @@ test('live gate rejects fresh starts after OFF but keeps running-child controls 
   apply({ tools: { guard: fn => { guard = fn } } }, { settingsFile })
   assert.equal(subagentsAllowed(settingsFile), true)
   await fs.writeFile(settingsFile, JSON.stringify({ subagentsEnabled: false }))
-  for (const name of ['subagent', 'subagent_fork', 'subagent_gpt', 'subagent_claude', 'workflow']) {
+  for (const name of ['subagent', 'subagent_fork', 'subagent_gpt', 'subagent_claude', 'subagent_deepseek', 'subagent_local', 'workflow']) {
     assert.match(guard({ name }), /disabled/)
   }
   for (const name of ['read', 'list_agents', 'send_message', 'interrupt_agent']) assert.equal(guard({ name }), undefined)
@@ -72,11 +72,12 @@ test('live gate rejects fresh starts after OFF but keeps running-child controls 
   assert.equal(subagentsAllowed(settingsFile), false)
 })
 
-test('OFF removes the Claude Code GPT subagent layer so an already launched MCP cannot start it', async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-gpt-policy-'))
+test('OFF removes the DSH child layer so a bridged subagent cannot start without a model', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-dsh-child-policy-'))
   t.after(() => fs.rm(dir, { recursive: true, force: true }))
-  const file = path.join(dir, 'gpt-subagent.patch.yml')
-  assert.equal(await writeGptSubagentPatch(file, { subagents }), true)
-  assert.equal(await writeGptSubagentPatch(file, { subagents, subagentsEnabled: false }), true)
+  const file = path.join(dir, 'dsh-child.patch.yml')
+  const child = { provider: 'openai-codex', model: 'gpt-6.1-sol' }
+  assert.equal(await writeDshChildPatch(file, { child, subagents }), true)
+  assert.equal(await writeDshChildPatch(file, { child, subagents, subagentsEnabled: false }), true)
   await assert.rejects(fs.stat(file), { code: 'ENOENT' })
 })

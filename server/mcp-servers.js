@@ -25,7 +25,7 @@ export function claudeMcpServer(server) {
 }
 
 /** Builds `mcpServersFor(thread)`; `getSettings` and `getTeams` read index.js's current state. */
-export function createMcpServerList({ paths, getSettings, getTeams }) {
+export function createMcpServerList({ paths, getSettings, getTeams, getSubagentBridge = () => null }) {
   /** MCP servers mounted into a task's session; ACP stdio servers need an absolute command. */
   function mcpServersFor(thread) {
     const servers = []
@@ -58,6 +58,11 @@ export function createMcpServerList({ paths, getSettings, getTeams }) {
     // A GPT team leader's tools (teams.js); no other task gets them.
     const team = getTeams()?.mcpServerFor(thread)
     if (team) servers.push(team)
+    // Subagents that run as another kind of task: an ordinary task's route points elsewhere (subagent-bridge.js).
+    if (!thread.team && !thread.ab) {
+      const bridge = getSubagentBridge()?.mcpServer('dsh', thread.id, thread.workspace)
+      if (bridge) servers.push(bridge)
+    }
     return servers
   }
   /** The browser tool: chrome-devtools-mcp relayed through chrome-mcp.js. */
