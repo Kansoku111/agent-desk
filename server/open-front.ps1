@@ -37,6 +37,7 @@ public static class Front {
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr h, int c);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] static extern IntPtr SendMessageTimeoutW(
     IntPtr h, uint msg, UIntPtr wParam, IntPtr lParam, uint flags, uint timeout, out UIntPtr result);
   [DllImport("user32.dll")] static extern bool FlashWindowEx(ref FlashInfo info);
@@ -61,9 +62,16 @@ public static class Front {
     }
   }
 
+  // Explorer can keep hidden CabinetWClass windows in ShellWindows and reuse
+  // them for a selection. Activating one only raises what it owns (for
+  // example a shell extension's popup), so visibility is checked as well.
+  public static bool Shown(long handle) {
+    return IsWindowVisible(new IntPtr(handle));
+  }
+
   public static long VisibleForegroundHandle() {
     var h = GetForegroundWindow();
-    return IsIconic(h) ? 0 : h.ToInt64();
+    return IsIconic(h) || !IsWindowVisible(h) ? 0 : h.ToInt64();
   }
 
   // This helper is a child of the server, not the foreground process, so a
@@ -86,6 +94,10 @@ public static class Front {
 
   public static bool Raise(long handle) {
     var h = new IntPtr(handle);
+    if (!IsWindowVisible(h) && ShowWindowAsync(h, 5)) { // SW_SHOW
+      var shown = Stopwatch.StartNew();
+      while (!IsWindowVisible(h) && shown.ElapsedMilliseconds < 500) Thread.Sleep(15);
+    }
     if (IsIconic(h) && ShowWindowAsync(h, 9)) { // SW_RESTORE
       // The foreground handle can change before the restore is processed.
       var wait = Stopwatch.StartNew();
@@ -122,6 +134,7 @@ public static class Front {
   $wait = [Diagnostics.Stopwatch]::StartNew()
   do {
     $matchedHandle = 0
+    $matchedShown = $false
     $foreground = [Front]::VisibleForegroundHandle()
     foreach ($window in $shell.Windows()) {
       # ShellWindows also contains windows/tabs that are still navigating or
@@ -136,9 +149,13 @@ public static class Front {
         $handle = [long]$window.HWND
       } catch { continue }
       if (!$handle) { continue }
-      # Multiple views may already match. Keep the one the user can see.
+      # Multiple views may already match. Keep the one the user can see, and
+      # prefer a visible window to a hidden one Explorer kept for reuse.
       if ($handle -eq $foreground) { return }
-      if (!$matchedHandle) { $matchedHandle = $handle }
+      if (!$matchedHandle -or (!$matchedShown -and [Front]::Shown($handle))) {
+        $matchedHandle = $handle
+        $matchedShown = [Front]::Shown($handle)
+      }
     }
     if ($matchedHandle) {
       if (![Front]::Raise($matchedHandle)) { [Console]::WriteLine('background') }

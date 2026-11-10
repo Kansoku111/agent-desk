@@ -115,6 +115,9 @@ public static class Front {
     if (Environment.GetEnvironmentVariable("TEST_EXPLORER_MODE") == "native-error") throw new Exception("native selection failed");
     Folder = folder; Target = target;
   }
+  public static bool Shown(long handle) {
+    return handle != 42 || Environment.GetEnvironmentVariable("TEST_EXPLORER_MODE") != "hidden-match";
+  }
   public static long VisibleForegroundHandle() {
     return Environment.GetEnvironmentVariable("TEST_EXPLORER_MODE") == "already-visible" ? 43 : 0;
   }
@@ -207,6 +210,8 @@ test('Explorer helper focuses a matching existing view, ignores unrelated window
   assert.deepEqual(JSON.parse(stdout), { folder, target: file, raised: 42, opened: null, explored: null })
   const visible = JSON.parse((await mockedHelper(file, 'reveal', 'already-visible')).stdout)
   assert.equal(visible.raised, 0, 'keep the matching foreground window')
+  const hidden = JSON.parse((await mockedHelper(file, 'reveal', 'hidden-match')).stdout)
+  assert.equal(hidden.raised, 43, 'prefer a visible view to a hidden one Explorer kept for reuse')
 })
 
 test('Explorer helper handles folders, drive roots and default-app paths literally', windows, async (t) => {
