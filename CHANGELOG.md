@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-11-10
+
+### Added
+
+- Add Claude Fable 5.2 to the model catalog with adaptive thinking support.
+
 ### Fixed
 
 - Let dsh apply the provider's existing retry policy when its model stream is idle for five minutes, instead of immediately failing the turn. The watchdog still bounds stalled requests; repeated timeouts can still exhaust the retry limit.

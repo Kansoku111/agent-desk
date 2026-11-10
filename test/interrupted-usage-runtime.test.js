@@ -82,7 +82,8 @@ test('idle watchdog uses the existing retry policy without retrying cancellation
   const rows = YAML.parse(homePatch({ localRoute: localRoute({ baseURL: 'http://127.0.0.1:' + server.address().port + '/v1', models: [{ id: 'idle-fixture' }] }), persona: await shippedPersona() }))
   rows.find(row => row.id === 'acp').config = { provider: 'local-llm', model: 'idle-fixture' }
   const profile = rows.find(row => row.id === 'llm-pi-ai').config.providers['local-llm']
-  profile.streamIdleTimeoutMs = 300
+  // Leave headroom for loopback scheduling while the full real-runtime suite is busy.
+  profile.streamIdleTimeoutMs = 1500
   profile.retryPolicy = { mode: 'normal', maxRetries: 1, backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } }
   await fs.writeFile(paths.homePatch, YAML.stringify(rows))
   const runtime = new AcpRuntime({ paths, mode: 'read-only', onUpdate() {}, onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
