@@ -50,6 +50,8 @@ On Windows, you can also double-click `AgentDesk.cmd`. The first run installs th
 powershell -ExecutionPolicy Bypass -File scripts\install-shortcut.ps1
 ```
 
+Run the same command again after an icon change to refresh the Start menu shortcut and an existing taskbar pin.
+
 ## Quick start
 
 1. Open Settings (設定) and select the Account (アカウント) tab.

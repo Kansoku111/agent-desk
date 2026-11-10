@@ -47,7 +47,8 @@ try {
   $release = Join-Path $root 'release'
   New-Item -ItemType Directory -Path $release -Force | Out-Null
   $exe = Join-Path $release "AgentDeskUpdater-$version-$stamp.exe"
-  $icon = Get-ChildItem -LiteralPath (Join-Path $root 'assets') -Filter '*.ico' | Select-Object -First 1
+  # Older hashed icons remain for existing shortcuts; embed the current design.
+  $icon = Get-Item -LiteralPath (Join-Path $root 'assets\agent-desk-4ced0141.ico')
   $arguments = @('/nologo', '/target:exe', '/optimize+', '/codepage:65001', "/out:$exe",
     '/r:System.IO.Compression.dll', '/r:System.IO.Compression.FileSystem.dll',
     "/resource:$zip,payload.zip", "/resource:$script,update.ps1")

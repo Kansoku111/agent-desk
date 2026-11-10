@@ -16,41 +16,27 @@ $root = Split-Path -Parent $PSScriptRoot
 # ------------------------------------------------------------------ icon
 function New-AgentDeskIcon {
   Add-Type -AssemblyName System.Drawing
+  $source = [System.Drawing.Image]::FromFile((Join-Path $root 'assets\agent-desk-icon.png'))
   $sizes = 16, 24, 32, 48, 64, 128, 256
-  $frames = foreach ($size in $sizes) {
-    $bitmap = New-Object System.Drawing.Bitmap $size, $size
-    $g = [System.Drawing.Graphics]::FromImage($bitmap)
-    $g.SmoothingMode = 'AntiAlias'
-    $g.Clear([System.Drawing.Color]::Transparent)
-    $s = $size / 64.0
-    # Rounded square, as in web/public/favicon.svg.
-    $r = 16 * $s
-    $box = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $box.AddArc(0, 0, 2 * $r, 2 * $r, 180, 90)
-    $box.AddArc($size - 2 * $r, 0, 2 * $r, 2 * $r, 270, 90)
-    $box.AddArc($size - 2 * $r, $size - 2 * $r, 2 * $r, 2 * $r, 0, 90)
-    $box.AddArc(0, $size - 2 * $r, 2 * $r, 2 * $r, 90, 90)
-    $box.CloseFigure()
-    # Muted rainbow from the top-left to the bottom-right corner.
-    $rect = New-Object System.Drawing.RectangleF 0, 0, $size, $size
-    $fill = New-Object System.Drawing.Drawing2D.LinearGradientBrush $rect, ([System.Drawing.Color]::White), ([System.Drawing.Color]::White), 45.0, $true
-    $blend = New-Object System.Drawing.Drawing2D.ColorBlend 6
-    $blend.Colors = [System.Drawing.Color[]]@('#DCA3A3', '#E3BC98', '#DCD0A0', '#A9C9A9', '#A4BFD0', '#BDB0D3' | ForEach-Object { [System.Drawing.ColorTranslator]::FromHtml($_) })
-    $blend.Positions = [single[]]@(0, 0.2, 0.4, 0.6, 0.8, 1)
-    $fill.InterpolationColors = $blend
-    $g.FillPath($fill, $box)
-    $pen = New-Object System.Drawing.Pen ([System.Drawing.ColorTranslator]::FromHtml('#2E3142')), ([Math]::Max(1.5, 5 * $s))
-    $pen.StartCap = 'Round'; $pen.EndCap = 'Round'; $pen.LineJoin = 'Round'
-    $g.DrawLines($pen, [System.Drawing.PointF[]]@(
-      (New-Object System.Drawing.PointF (18 * $s), (32 * $s)),
-      (New-Object System.Drawing.PointF (28 * $s), (22 * $s)),
-      (New-Object System.Drawing.PointF (38 * $s), (32 * $s))))
-    $g.DrawLine($pen, (33 * $s), (43 * $s), (46 * $s), (43 * $s))
-    $g.Dispose()
-    $stream = New-Object System.IO.MemoryStream
-    $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bitmap.Dispose()
-    ,@($size, $stream.ToArray())
+  try {
+    $frames = foreach ($size in $sizes) {
+      $bitmap = New-Object System.Drawing.Bitmap $size, $size
+      $g = [System.Drawing.Graphics]::FromImage($bitmap)
+      $stream = New-Object System.IO.MemoryStream
+      try {
+        $g.InterpolationMode = 'HighQualityBicubic'
+        $g.PixelOffsetMode = 'HighQuality'
+        $g.DrawImage($source, 0, 0, $size, $size)
+        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+        ,@($size, $stream.ToArray())
+      } finally {
+        $stream.Dispose()
+        $g.Dispose()
+        $bitmap.Dispose()
+      }
+    }
+  } finally {
+    $source.Dispose()
   }
   # ICO container holding PNG frames.
   $out = New-Object System.IO.MemoryStream
@@ -72,7 +58,8 @@ function New-AgentDeskIcon {
 
 # Windows caches shortcut icons by file path, so a redrawn icon under the old
 # name keeps showing the old picture. The name carries a hash of the image
-# instead: a new design gets a new path, and older icons are removed.
+# instead: a new design gets a new path. Keep older icons for shortcuts that
+# were not refreshed by this script.
 $iconBytes = New-AgentDeskIcon
 $sha = [System.Security.Cryptography.SHA256]::Create()
 $hash = [System.BitConverter]::ToString($sha.ComputeHash($iconBytes)).Replace('-', '').Substring(0, 8).ToLower()
@@ -143,7 +130,6 @@ foreach ($path in $targets) {
   Write-Output "shortcut: $path"
 }
 
-# Older icons go once no shortcut points at them, and Explorer redraws.
-Get-ChildItem $assets -Filter 'agent-desk*.ico' | Where-Object { $_.FullName -ne $icon } | Remove-Item -Force -ErrorAction SilentlyContinue
+# Ask Explorer to redraw the updated shortcut icons.
 $ie4uinit = Join-Path $env:SystemRoot 'System32\ie4uinit.exe'
 if (Test-Path $ie4uinit) { & $ie4uinit -show }

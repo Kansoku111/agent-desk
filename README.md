@@ -53,7 +53,7 @@ git を使わない場合は、[リリース](https://github.com/Kansoku111/agen
 powershell -ExecutionPolicy Bypass -File scripts\install-shortcut.ps1
 ```
 
-スタートメニューに「Agent Desk」ができます。右クリック →「タスクバーにピン留めする」で固定してください（Windows はアプリ自身によるピン留めを許可していません）。
+スタートメニューに「Agent Desk」ができます。右クリック →「タスクバーにピン留めする」で固定してください（Windows はアプリ自身によるピン留めを許可していません）。アイコンの変更後は、このコマンドを再実行するとショートカットと既存のピン留めを更新できます。
 
 このショートカットは、常にこのフォルダの最新のコードで起動します。
 
