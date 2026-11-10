@@ -137,6 +137,18 @@ test('resolveReference keeps a name that ends in an unmatched parenthesis', asyn
   }
 })
 
+test('resolveReference prefers an unwrapped path ending in an apostrophe over its stripped spelling', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-refs-'))
+  t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  const folder = path.join(dir, "a 'quoted'")
+  const other = path.join(dir, "a 'quoted")
+  await fs.mkdir(folder)
+  await fs.mkdir(other)
+  assert.equal((await resolveReference(folder)).file, folder)
+  assert.equal((await resolveReference(path.basename(folder), dir)).file, folder)
+  assert.equal((await resolveReference(`'${other}'`)).file, other)
+})
+
 test('resolveReference handles a lone parenthesis name and refuses oversized input', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-refs-'))
   try {

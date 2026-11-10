@@ -62,6 +62,15 @@ test('Windows file actions report launcher failures instead of succeeding', asyn
   }
 })
 
+test('Windows file actions return background status separately from launch failures', async (t) => {
+  const { file } = await fixture(t)
+  const result = await openFile(file, 'reveal', {
+    platform: 'win32',
+    runCommand: async () => ({ stdout: 'background\r\n' }),
+  })
+  assert.deepEqual(result, { background: true })
+})
+
 test('file.open RPC waits for display completion, propagates errors, and keeps scripts non-executable', async (t) => {
   const { folder, file } = await fixture(t)
   let release, started
@@ -96,6 +105,7 @@ test('file.open RPC waits for display completion, propagates errors, and keeps s
 // Mock only OS interaction. The real helper still resolves literal paths,
 // matches the view/selection, waits, chooses a handle and reports failures.
 const mockShell = `
+$ErrorActionPreference = 'Stop'
 Add-Type @"
 using System;
 public static class Front {
@@ -104,6 +114,9 @@ public static class Front {
   public static void Reveal(string folder, string target) {
     if (Environment.GetEnvironmentVariable("TEST_EXPLORER_MODE") == "native-error") throw new Exception("native selection failed");
     Folder = folder; Target = target;
+  }
+  public static long VisibleForegroundHandle() {
+    return Environment.GetEnvironmentVariable("TEST_EXPLORER_MODE") == "already-visible" ? 43 : 0;
   }
   public static bool Raise(long handle) {
     Raised = handle;
@@ -119,28 +132,69 @@ function New-Object {
   $shell | Add-Member ScriptMethod Windows {
     if ($env:TEST_EXPLORER_MODE -eq 'missing-window') { return @() }
     $wrongFolder = [pscustomobject]@{ Folder = @{ Self = @{ Path = 'unrelated' } } }
-    $wrongSelection = [pscustomobject]@{ Folder = @{ Self = @{ Path = [Front]::Folder } } }
+    $folder = if ($global:explored) { $global:explored } else { [Front]::Folder }
+    $wrongSelection = [pscustomobject]@{ Folder = @{ Self = @{ Path = $folder } } }
     $wrongSelection | Add-Member ScriptMethod SelectedItems { @([pscustomobject]@{ Path = 'another file' }) }
-    $correct = [pscustomobject]@{ Folder = @{ Self = @{ Path = [Front]::Folder } } }
+    $correct = [pscustomobject]@{ Folder = @{ Self = @{ Path = $folder } } }
     $correct | Add-Member ScriptMethod SelectedItems { @([pscustomobject]@{ Path = [Front]::Target }) }
     @([pscustomobject]@{ HWND = 100; Document = $wrongFolder },
       [pscustomobject]@{ HWND = 200; Document = $wrongSelection },
-      [pscustomobject]@{ HWND = 42; Document = $correct })
+      [pscustomobject]@{ HWND = 42; Document = $correct },
+      [pscustomobject]@{ HWND = 43; Document = $correct })
   }
   return $shell
 }
-function Start-Sleep { Set-Variable -Name deadline -Value ([DateTime]::MinValue) -Scope 1 }
+function Start-Sleep { Set-Variable -Name wait -Value @{ ElapsedMilliseconds = 8000 } -Scope 1 }
 function Start-Process {
-  param($FilePath, $ErrorAction)
+  param($FilePath, $ErrorAction, $Verb)
   if ($env:TEST_EXPLORER_MODE -eq 'open-error') { throw 'association launch failed' }
-  $global:opened = $FilePath
+  if ($Verb -eq 'Explore') { $global:explored = $FilePath }
+  else { $global:opened = $FilePath }
 }
 & $env:TEST_EXPLORER_SCRIPT -Reveal:($env:TEST_EXPLORER_HOW -eq 'reveal')
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
-@{ folder = [Front]::Folder; target = [Front]::Target; raised = [Front]::Raised; opened = $global:opened } | ConvertTo-Json -Compress
+@{ folder = [Front]::Folder; target = [Front]::Target; raised = [Front]::Raised; opened = $global:opened; explored = $global:explored } | ConvertTo-Json -Compress
 `
 
 const windows = { skip: process.platform !== 'win32' }
+test('Windows file.open finishes each selection before launching the next, even after a failure', windows, async (t) => {
+  const { folder, file } = await fixture(t)
+  const nextFile = path.join(folder, 'next.txt')
+  await fs.writeFile(nextFile, 'test')
+  let rejectFirst
+  const firstSelection = new Promise((resolve, reject) => { rejectFirst = reject })
+  let started
+  const firstStarted = new Promise(resolve => { started = resolve })
+  const calls = []
+  const open = createWorkspaceHandlers({ openFile: (target) => {
+    calls.push(target)
+    if (target === file) {
+      started()
+      return firstSelection
+    }
+    return { background: true }
+  } })['file.open']
+
+  const first = open({ ref: file, how: 'reveal' })
+  const second = open({ ref: nextFile, how: 'reveal' })
+  await firstStarted
+  // The earlier launch is still in progress. A missing third path must wait
+  // behind it as well, so path resolution cannot reorder the launch requests.
+  const missing = open({ ref: path.join(folder, 'missing.txt'), how: 'reveal' })
+  let missingSettled = false
+  const missingRejected = assert.rejects(missing, /ファイルが見つかりません/).then(() => { missingSettled = true })
+  await new Promise(resolve => setTimeout(resolve, 40))
+  assert.deepEqual(calls, [file])
+  assert.equal(missingSettled, false)
+
+  const firstRejected = assert.rejects(first, /selection failed/)
+  rejectFirst(new Error('selection failed'))
+  await firstRejected
+  assert.deepEqual(await second, { file: nextFile, revealed: false, background: true })
+  await missingRejected
+  assert.deepEqual(calls, [file, nextFile])
+})
+
 async function mockedHelper(file, how = 'reveal', mode = '') {
   return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-Command', mockShell], {
     env: { ...process.env, AGENT_DESK_FILE_PATH: file, TEST_EXPLORER_SCRIPT: script, TEST_EXPLORER_MODE: mode, TEST_EXPLORER_HOW: how }, windowsHide: true, timeout: 15_000,
@@ -150,26 +204,44 @@ async function mockedHelper(file, how = 'reveal', mode = '') {
 test('Explorer helper focuses a matching existing view, ignores unrelated windows and verifies selection', windows, async (t) => {
   const { file, folder } = await fixture(t)
   const { stdout } = await mockedHelper(file)
-  assert.deepEqual(JSON.parse(stdout), { folder, target: file, raised: 42, opened: null })
+  assert.deepEqual(JSON.parse(stdout), { folder, target: file, raised: 42, opened: null, explored: null })
+  const visible = JSON.parse((await mockedHelper(file, 'reveal', 'already-visible')).stdout)
+  assert.equal(visible.raised, 0, 'keep the matching foreground window')
 })
 
 test('Explorer helper handles folders, drive roots and default-app paths literally', windows, async (t) => {
   const { folder, file } = await fixture(t)
   for (const [target, how, expectedFolder] of [[folder, 'reveal', path.dirname(folder)], [folder, 'open', folder], [path.parse(folder).root, 'reveal', path.parse(folder).root]]) {
     const result = JSON.parse((await mockedHelper(target, how)).stdout)
-    assert.equal(result.folder, expectedFolder)
-    assert.equal(result.target, target)
     assert.equal(result.opened, null)
-    if (target !== expectedFolder) assert.equal(result.raised, 42)
+    if (target !== expectedFolder) {
+      assert.equal(result.folder, expectedFolder)
+      assert.equal(result.target, target)
+      assert.equal(result.raised, 42)
+      assert.equal(result.explored, null)
+    } else {
+      assert.equal(result.explored, expectedFolder)
+      assert.equal(result.target, null, 'the selection API would open the parent')
+      assert.ok(result.raised, 'folder navigation is verified too')
+    }
   }
   const opened = JSON.parse((await mockedHelper(file, 'open')).stdout)
   assert.equal(opened.opened, file)
   assert.equal(opened.raised, 0, 'no unrelated new-window focus scan for associated apps')
 })
 
-test('Explorer helper reports native, missing-window, foreground and associated-app failures with exit 1', windows, async (t) => {
+test('Explorer helper reports a verified selection in the background without failing', windows, async (t) => {
   const { file } = await fixture(t)
-  for (const [mode, how, error] of [['native-error', 'reveal', /native selection failed/], ['missing-window', 'reveal', /did not show/], ['focus-error', 'reveal', /did not allow/], ['open-error', 'open', /association launch failed/]]) {
+  const { stdout, stderr } = await mockedHelper(file, 'reveal', 'focus-error')
+  const [status, detail] = stdout.trim().split(/\r?\n/)
+  assert.equal(status, 'background')
+  assert.equal(JSON.parse(detail).raised, 42)
+  assert.equal(stderr, '')
+})
+
+test('Explorer helper reports native, missing-window and associated-app failures with exit 1', windows, async (t) => {
+  const { file } = await fixture(t)
+  for (const [mode, how, error] of [['native-error', 'reveal', /native selection failed/], ['missing-window', 'reveal', /did not select the requested item/], ['open-error', 'open', /association launch failed/]]) {
     await assert.rejects(mockedHelper(file, how, mode), cause => {
       assert.equal(cause.code, 1)
       assert.match(cause.stderr, error)

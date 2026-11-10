@@ -117,13 +117,14 @@ export async function openFile(file, how, { platform = process.platform, runComm
   }
   try {
     const script = fileURLToPath(new URL('./open-front.ps1', import.meta.url))
-    await runCommand('powershell.exe', [
+    const { stdout } = await runCommand('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File', script,
       ...(how === 'reveal' ? ['-Reveal'] : []),
     ], {
       windowsHide: true, timeout: 15_000,
       env: { ...process.env, AGENT_DESK_FILE_PATH: file },
     })
+    if (stdout?.trim() === 'background') return { background: true }
   } catch (error) {
     const action = how === 'reveal' ? 'ファイルの場所を表示できませんでした' : 'ファイルを開けませんでした'
     throw new Error(`${action}: ${error.stderr?.trim() || error.message}`)

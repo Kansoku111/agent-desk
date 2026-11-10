@@ -41,6 +41,7 @@ export function referenceCandidates(ref, workspace) {
   // Decoration around a path: quotes, backticks, brackets, trailing punctuation.
   // A `)` is only decoration when it has no `(` to close, so `New folder (2)` survives.
   const raw = String(ref ?? '').trim()
+  if (!raw || raw.length > 1024 || /[\0\r\n]/.test(raw)) return []
   let text = raw.replace(/^[`'"<]+/, '')
   const stripTail = (value) => {
     for (;;) {
@@ -50,14 +51,15 @@ export function referenceCandidates(ref, workspace) {
       else return value
     }
   }
-  // The name as written (only quotes and backticks around it removed) comes before the decorated-away
-  // reading, so a real "report)" is not turned into "report".
   const literal = text.replace(/[`'">]+$/, '')
-  if (!literal || literal.length > 1024 || /[\0\r\n]/.test(literal)) return []
+  if (!literal) return []
+  // An unwrapped path may end in an apostrophe or backtick that belongs to
+  // the filename. Check it before trying the decorated readings.
+  const names = raw === text ? [raw, literal] : [literal]
   text = stripTail(text)
   // A leading `(` is decoration in "(src/a.ts)" but part of the name in "(1) a.txt": try the literal name first.
   const starts = []
-  for (const base of [literal, text]) {
+  for (const base of [...names, text]) {
     starts.push(base)
     if (base.startsWith('(')) starts.push(stripTail(base.replace(/^\(+/, '')))
   }

@@ -10,6 +10,18 @@ import { gitInfo, openExternal, openFile, openIn, pickFolder } from './system.js
 
 /** Handlers for workspaces and projects; index.js merges them into the request table. */
 export function createWorkspaceHandlers({ paths, getSettings, mutateSettings, openFile: launchFile = openFile }) {
+  // Explorer can reuse one view for several requests. Keep each launch and
+  // its selection check together, in request order across all local clients.
+  let fileActions = Promise.resolve()
+
+  async function openReference(ref, workspace, how) {
+    const found = await resolveReference(ref, typeof workspace === 'string' ? workspace : null)
+    if (!found.exists) throw new Error(`ファイルが見つかりません: ${ref}`)
+    // Programs and scripts are shown, never started, from a click in an answer.
+    const revealed = how === 'open' && !found.directory && isRunnable(found.file)
+    const result = await launchFile(found.file, revealed ? 'reveal' : how)
+    return { file: found.file, revealed, ...result }
+  }
 
   /** Where the folder picker starts: next to the most recent project, else the home folder. */
   function suggestedParent() {
@@ -106,12 +118,10 @@ export function createWorkspaceHandlers({ paths, getSettings, mutateSettings, op
 
     'file.open': async ({ ref, workspace, how }) => {
       if (!['open', 'reveal'].includes(how)) throw new Error('不明な開き方です')
-      const found = await resolveReference(ref, typeof workspace === 'string' ? workspace : null)
-      if (!found.exists) throw new Error(`ファイルが見つかりません: ${ref}`)
-      // Programs and scripts are shown, never started, from a click in an answer.
-      const reveal = how === 'open' && !found.directory && isRunnable(found.file)
-      await launchFile(found.file, reveal ? 'reveal' : how)
-      return { file: found.file, revealed: reveal }
+      if (process.platform !== 'win32') return openReference(ref, workspace, how)
+      const opening = fileActions.then(() => openReference(ref, workspace, how))
+      fileActions = opening.catch(() => {})
+      return opening
     },
 
     'workspace.git': async ({ path: dir }) => ({ git: await gitInfo(dir) }),

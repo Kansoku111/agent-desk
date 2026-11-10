@@ -113,8 +113,9 @@ export function localImageUrl(file: string) {
 // ------------------------------------------------------------------ actions and menu
 
 export async function openRef(ref: string, workspace: string | null, how: 'open' | 'reveal') {
-  const result = await act<{ revealed: boolean }>('file.open', { ref, workspace, how })
-  if (result?.revealed) toast('実行ファイルは直接開かず、場所を表示しました')
+  const result = await act<{ revealed: boolean; background?: boolean }>('file.open', { ref, workspace, how })
+  if (result?.background) toast('エクスプローラーに表示しました。タスクバーから開いてください。')
+  else if (result?.revealed) toast('実行ファイルは直接開かず、場所を表示しました')
 }
 
 interface MenuState {
