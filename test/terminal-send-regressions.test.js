@@ -23,6 +23,7 @@ function fakePty() {
             throw new Error('fake PTY write failed')
           }
           this.written.push(text)
+          this.afterWrite?.(text)
         },
         resize() {},
         kill() {
@@ -124,27 +125,29 @@ test('a stop before Enter rejects delivery and keeps the message in the field', 
 
 test('exit, replacement, and deletion reject a message before its Enter', async (t) => {
   const { workspace, pty, manager } = await setup(t)
-  const cases = []
+  const cases = [], operations = []
   for (const action of ['exit', 'replace', 'remove']) {
     const terminal = await createReady(manager, workspace)
-    const proc = pty.spawned.at(-1)
+    const proc = manager.live.get(terminal.id).proc
     const text = 'pending-' + action
+    // Trigger lifecycle changes in the PTY write itself, before sendMessage's
+    // paste-to-Enter delay can elapse under a busy test runner.
+    proc.afterWrite = (written) => {
+      if (written !== text) return
+      if (action === 'exit') proc.exit(1)
+      else if (action === 'replace') {
+        proc.exit(0)
+        manager.restart(terminal.id)
+      } else operations.push(manager.remove(terminal.id))
+    }
     const send = manager.sendMessage(terminal.id, text)
     // A send may reject while another terminal is still being prepared or restarted.
     void send.catch(() => {})
     cases.push({ action, terminal, proc, text, send })
   }
   await until(() => cases.every(({ proc, text }) => proc.written.includes(text)))
-
-  for (const entry of cases) {
-    if (entry.action === 'exit') entry.proc.exit(1)
-    else if (entry.action === 'replace') {
-      entry.proc.exit(0)
-      await manager.restart(entry.terminal.id)
-    } else await manager.remove(entry.terminal.id)
-  }
-
   const results = await Promise.allSettled(cases.map(({ send }) => send))
+  await Promise.all(operations)
   for (let i = 0; i < cases.length; i++) {
     assert.equal(results[i].status, 'rejected', cases[i].action)
     assert.deepEqual(cases[i].proc.written, [cases[i].text], cases[i].action)
