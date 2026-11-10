@@ -5,6 +5,7 @@ import { requestErrorMessage } from '../../rpc-client'
 import { workspaceLabel } from '../../util'
 import { openRef } from '../FileRef'
 import { ConfirmDialog } from '../Modal'
+import { FavoriteSkillButton, useFavoriteSkills } from '../SkillFavorites'
 
 interface SkillEntry {
   name: string
@@ -37,6 +38,7 @@ const SCOPES: { id: SkillEntry['scope']; label: string }[] = [
 
 /** Settings → Skills: what the agent can load in a project, and which skill wins a name clash. */
 export function SkillsSettings() {
+  const favorites = useFavoriteSkills()
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
   const known = useStore((state) => state.server?.settings.workspaces ?? [])
@@ -118,8 +120,8 @@ export function SkillsSettings() {
       {error && <p className="notice notice-warning" role="alert">{error}</p>}
       {!error && !skills && workspace && <p className="skill-empty">読み込み中…</p>}
       {skills && !skills.length && <p className="skill-empty">skills はありません</p>}
-      {skills && SCOPES.map(({ id, label }) => {
-        const rows = skills.filter((skill) => skill.scope === id)
+      {skills && [{ id: 'favorite', label: 'お気に入り' }, ...SCOPES].map(({ id, label }) => {
+        const rows = skills.filter((skill) => id === 'favorite' ? favorites.has(skill.name) : skill.scope === id && !favorites.has(skill.name))
         if (!rows.length) return null
         return (
           <section key={id} className="skill-group">
@@ -137,6 +139,7 @@ export function SkillsSettings() {
                   </div>
                   <p>{skill.descriptionJa ?? skill.description}</p>
                 </div>
+                <FavoriteSkillButton name={skill.name} favorite={favorites.has(skill.name)} />
                 <button type="button" className="icon-button small" onClick={() => reveal(skill)} title="場所を表示" aria-label={`${skill.name} の場所を表示`}>
                   <FolderOpen size={14} />
                 </button>

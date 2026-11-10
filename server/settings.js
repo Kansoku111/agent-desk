@@ -56,6 +56,7 @@ export const DEFAULT_SETTINGS = {
   checkpoints: true,
   projectNames: {},
   projectColors: {},
+  favoriteSkills: {},
   // null keeps each model's context size / leaves the fixed-model tool out.
   contextLimits: { 'openai-codex': null, anthropic: null },
   taskPresets: { delegate: { model: null, effort: null }, review: { model: null, effort: null } },
@@ -133,6 +134,20 @@ export function planSettingsUpdate(current, patch, now) {
     // Merge per model on the commit queue, so rapid toggles / other windows
     // cannot replace one another's choices. ACP values are opaque strings.
     next.modelVisibility = { ...current.modelVisibility, ...patch.modelVisibility }
+  }
+  if (owns(patch, 'favoriteSkills')) {
+    assertRecord(patch.favoriteSkills, 'favoriteSkills')
+    for (const [name, favorite] of Object.entries(patch.favoriteSkills)) {
+      if (!name.trim() || name.length > 1000) throw new Error('skill の名前が不正です')
+      assertBoolean(favorite, 'favoriteSkills の値')
+    }
+    // Merge individual choices on the settings queue so separate windows do not overwrite each other.
+    const favorites = { ...current.favoriteSkills }
+    for (const [name, favorite] of Object.entries(patch.favoriteSkills)) {
+      if (favorite) Object.defineProperty(favorites, name, { value: true, enumerable: true, configurable: true, writable: true })
+      else delete favorites[name]
+    }
+    next.favoriteSkills = favorites
   }
   if (owns(patch, 'contextLimits')) {
     assertRecord(patch.contextLimits, 'contextLimits')

@@ -3,12 +3,14 @@ import { ChevronDown, Sparkles } from 'lucide-react'
 import { request } from '../store'
 import { requestErrorMessage } from '../rpc-client'
 import { Dropdown, MenuItem } from './Popover'
+import { FavoriteSkillButton, useFavoriteSkills } from './SkillFavorites'
 
 interface Skill { name: string; description: string }
 
 function SkillList({ workspace, threadId, onSelect }: { workspace: string; threadId?: string; onSelect: (name: string) => void }) {
   const [skills, setSkills] = useState<Skill[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const favorites = useFavoriteSkills()
   useEffect(() => {
     let active = true
     request<{ skills: Skill[] }>('skills.list', { workspace, threadId }).then((result) => {
@@ -19,8 +21,12 @@ function SkillList({ workspace, threadId, onSelect }: { workspace: string; threa
   if (error) return <div className="menu-empty" role="alert">skills を取得できませんでした。{error}</div>
   if (!skills) return <div className="menu-empty">読み込み中…</div>
   if (!skills.length) return <div className="menu-empty">利用できる skills はありません</div>
-  return <div className="menu-scroll">{skills.map((skill) => (
-    <MenuItem key={skill.name} label={skill.name} description={skill.description.replace(/\s+/g, ' ').slice(0, 120)} onSelect={() => onSelect(skill.name)} />
+  const ordered = [...skills.filter((skill) => favorites.has(skill.name)), ...skills.filter((skill) => !favorites.has(skill.name))]
+  return <div className="menu-scroll">{ordered.map((skill) => (
+    <div className="skill-picker-row" key={skill.name}>
+      <MenuItem label={skill.name} description={skill.description.replace(/\s+/g, ' ').slice(0, 120)} onSelect={() => onSelect(skill.name)} />
+      <FavoriteSkillButton name={skill.name} favorite={favorites.has(skill.name)} menu />
+    </div>
   ))}</div>
 }
 

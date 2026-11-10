@@ -5293,6 +5293,13 @@ button.team-node:disabled {
 
 .ab-followup > div { min-width: 0; width: 100%; }
 
+/* Skill favorites in settings and the composer picker. */
+.skill-favorite { flex: none; color: var(--text-muted); }
+.skill-favorite.is-favorite { color: #c58b15; }
+.skill-picker-row { display: flex; align-items: center; }
+.skill-picker-row .menu-item { flex: 1; min-width: 0; }
+.skill-picker-row .skill-favorite { margin-right: 6px; }
+
 /* Settings → Skills */
 .skills-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .skills-bar select { min-width: 0; max-width: 60%; }

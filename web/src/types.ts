@@ -485,6 +485,8 @@ export interface Settings extends UsageDisplay {
   imageTool: boolean
   historyTool?: boolean
   checkpoints: boolean
+  /** Favorite skill invocation names, shared across projects. */
+  favoriteSkills?: Record<string, boolean>
   projectNames: Record<string, string>
   /** Sidebar tint of each project: an index into PROJECT_HUES, or -1 for none. */
   projectColors: Record<string, number>
