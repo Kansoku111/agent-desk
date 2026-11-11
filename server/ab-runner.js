@@ -84,7 +84,8 @@ export class AbRunner extends EventEmitter {
   async start(input) {
     const { runId, jobId, model, effort = '', toolMode = 'native', workspace, text, images = [], writable, lean, instructions, side = 'parent' } = input
     // Read at each start: a harness saved since the run began applies to its next stage.
-    const harness = harnessSection(this.harness(side), side)
+    // An AB stage's result goes straight to the next stage: no one can answer a question it asks.
+    const harness = harnessSection(this.harness(side), side, { ask: false })
     this.guard({ workspace })
     const owner = { runId, jobId, writable, denials: [], deniedIds: new Set() }
     if (model.startsWith('codex:')) {

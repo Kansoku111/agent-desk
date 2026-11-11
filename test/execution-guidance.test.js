@@ -53,6 +53,8 @@ test('no selected app checks means unverified, not no need for child verificatio
   assert.match(prompt, /検証コマンドはありません（未実行扱い）/)
   assert.match(prompt, /依頼に必要な確認を行い/)
   assert.doesNotMatch(prompt, /報告後にアプリが上記を実行/)
+  // Its report goes straight to verification, so a harness that says to ask must not stop it.
+  assert.match(prompt, /親に質問できません/)
 })
 
 test('research asks for evidence and a proposal when supported without promising command verification', () => {
@@ -62,7 +64,7 @@ test('research asks for evidence and a proposal when supported without promising
   assert.match(prompt, /根拠が十分なら実装方針・検証案も添え、不十分なら推測で埋めない/)
   assert.match(prompt, /実装は行いません/)
   assert.match(prompt, /アプリのコマンド検証は行いません/)
-  assert.doesNotMatch(prompt, /アプリの最終検証|報告後にアプリが上記を実行/)
+  assert.doesNotMatch(prompt, /アプリの最終検証|報告後にアプリが上記を実行|質問できません/)
 })
 
 test('ordinary TM tasks retain their original message', () => {

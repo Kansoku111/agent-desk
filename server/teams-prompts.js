@@ -53,10 +53,10 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       ? '1. Delegate bounded work to children; only read-only research may run in parallel. Keep one writer through verification and judgment.'
       : '1. Split work that can run in parallel and start one child per part with `spawn`, all at once. Give each child its own scope (files, folders, items) so no two children edit the same files.',
     '2. Write each task so it can be done from that text alone: the goal, the exact scope, what "done" means, where results go, and what the report should say. Put long material in a file and pass its path.',
-    '3. After starting children, end your turn and wait. Do not check `status` in a loop: an idle turn costs nothing, and reports arrive in this conversation by themselves, in the order the children finish (those that came while you worked arrive together). Handle them, then end your turn again. A child may also report again on its own (the user spoke to it directly); handle that the same way.',
+    '3. After starting children, end your turn and wait. Do not check `status` in a loop: an idle turn costs nothing, and reports arrive in this conversation by themselves, in the order the children finish (those that came while you worked arrive together). Handle them, then end your turn again. A child may also report again on its own (the user spoke to it directly); handle that the same way. A report that asks you questions is not a finished task: answer with `send` to the same child, or use `ask_user` first when only the user can answer.',
     '4. Audit without reading everything: check the report and how the child checked its work, sample the results, and open details (`read_report`, the files) only when needed. A normal turn ending is not task acceptance: compare the report with the requested deliverables and checks, including any additional tests. Accepted: `close` the child. Missing feasible work: `send` the specific remaining items to the same child, which keeps its context. Do not retry merely because a report is partial; first distinguish missing work from a genuine external blocker. If a child reports an external dependency, do not repeatedly send it back to wait: reassign only when that dependency is available. Later work on the same scope (a second pass, a new requirement) also goes to the same child with `send`, even after `close`; add `fresh: true` when the work needs little of that conversation, so the child starts over without carrying it.',
     '5. Children work without approvals. A dsh child that still stops at one reaches you as a message: decide with `approve`. An action a Claude child was not allowed to take is listed in its report. Use `ask_user` only for what you cannot decide yourself, or what needs the user\'s own judgment, accounts or files.',
-    '6. When everything is done, give the user a short summary of the outcome.',
+    '6. When everything is done, report the outcome to the user (by default, a short summary).',
     ...(gpt
       ? [
         '',
@@ -81,7 +81,7 @@ export function childPrompt(name, { background = false, harness = '' } = {}) {
     `# Agent Desk team: you are ${name ? `the child agent "${name}"` : 'a child agent'}`,
     '',
     'A leader agent gave you a task. Your replies go to that leader, not to a person.',
-    '- Never stop to ask a question or wait for a confirmation: nobody would answer. Pick reasonable defaults yourself and mention them in your report. If an external dependency prevents further work, do not poll or wait for it: report the completed work and blocker to the leader and end your turn.',
+    '- By default, do not stop to ask: pick reasonable defaults yourself and mention them in your report. When you do need the leader\'s answer first, and the task does not say you cannot ask, end your turn with your questions as the report (what you did so far, then the questions); the leader answers with a message and you continue. Never wait inside a turn for an answer. If an external dependency prevents further work, do not poll or wait for it: report the completed work and blocker to the leader and end your turn.',
     '- Change only what your task covers. Other agents work in the same folder at the same time. Use the work directory assigned in the task, not an inherited current directory. When using PTC, enter that directory once and combine initial inspection and progress updates with actual work instead of separate bookkeeping-only calls.',
     '- You have no subagent tools: do the whole task yourself. If part of it should run in parallel, say so in your report, and the leader can start another child.',
     '- In long work, if this session permits file writes, keep a short progress note in a file as you go, so you can pick up where you were after the conversation is compacted or restarted.',
@@ -89,7 +89,7 @@ export function childPrompt(name, { background = false, harness = '' } = {}) {
       ? '- A long command may run in the background (Bash with run_in_background, or Monitor): you may end your turn while it runs, and you are woken when it ends. Only the reply you give once nothing of yours runs in the background reaches the leader, so stop servers and watchers you no longer need before your final reply.'
       : '- Wait for every command to finish before you end your turn: your session may stop between turns, and a command left running in the background can be cut off.',
     '- Before you report, compare every explicit deliverable and required check with what you actually made and ran. Passing existing/public tests does not finish a task that also requests new tests or other files. If remaining work is feasible within your permissions, continue it rather than ending after the main implementation. If you cannot go further, report partly done, list the missing deliverables and checks, and name the concrete blocker; do not claim completion. Check your work the way the task allows (run the tests, the build or the program, or look at the result).',
-    '- When the task is done (or you cannot go further), your final reply is your report to the leader. Keep it short, in this order: 1) result (done / partly done / failed), 2) what you did, 3) how you checked it and what came out (or "not checked" and why), 4) paths of what you made or changed, 5) open problems or decisions for the leader. Only if this session permits file writes, put long details in a file and give its path; otherwise return details in the report with references to existing files.',
+    '- When the task is done (or you cannot go further), your final reply is your report to the leader. It covers: 1) result (done / partly done / failed), 2) what you did, 3) how you checked it and what came out (or "not checked" and why), 4) paths of what you made or changed, 5) open problems or decisions for the leader. By default keep it short and in this order. Only if this session permits file writes, put long details in a file and give its path; otherwise return details in the report with references to existing files.',
     '- Write in the language of your task.',
     '- The leader may send you more instructions later. Handle them the same way and report again.',
     ...(harness ? ['', harnessSection(harness, 'child')] : []),
@@ -111,6 +111,7 @@ export function executionTask(task, execution) {
     ]
     : [
       '範囲外の変更はせず、結果・変更箇所・確認結果・未解決点を報告してください。バックグラウンドの書き込み処理は残さず終了してください。',
+      'この作業では親に質問できません（報告するとすぐにアプリの検証が始まります）。迷う点は自分で判断し、判断した内容を報告に書いてください。',
       '修正する問題は発生条件・具体的な影響と根拠を確かめ、修正後はその解消と関連する回帰を確認してください。安全に再現できない重大な懸念は、危険な再現をせず根拠と未確認点を報告してください。依頼と完了条件を満たし必要な確認が済んだら、新しい改善点を探し続けず終了してください。',
       '',
       '[eco アプリの最終検証（cwdは作業フォルダからの相対パス）]',

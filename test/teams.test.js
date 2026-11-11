@@ -751,12 +751,20 @@ test('team children read only the child harness; an empty harness adds no sectio
     const { args } = f.agents.sessions.get(child.taskId)
     return fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
   }
-  assert.match(await promptOf(), /<child_harness>\n子だけの規則\n<\/child_harness>/)
-  assert.doesNotMatch(await promptOf(), /親だけの規則/)
+  const prompt = await promptOf()
+  assert.match(prompt, /<child_harness>\n子だけの規則\n<\/child_harness>/)
+  assert.doesNotMatch(prompt, /親だけの規則/)
+  // Autonomy is a default the harness may change: a TM child can ask by ending its turn, and is not told nobody answers.
+  assert.match(prompt, /By default, do not stop to ask/)
+  assert.match(prompt, /end your turn with your questions as the report/)
+  assert.doesNotMatch(prompt, /nobody would answer|nobody can answer/)
+  assert.match(prompt, /They replace Agent Desk's defaults on how you work/)
   harness.child = ''
   harness.parent = ''
   const { args } = f.manager.launchFor({ team: { id: f.team.id, role: 'leader' } })
-  assert.doesNotMatch(await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8'), /_harness>/)
+  const leader = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
+  assert.doesNotMatch(leader, /_harness>/)
+  assert.match(leader, /A report that asks you questions is not a finished task: answer with `send` to the same child/)
 })
 
 test('AB parent stages read the parent harness and consultants and the implementer the child harness', async (t) => {
@@ -776,6 +784,8 @@ test('AB parent stages read the parent harness and consultants and the implement
       const prompt = args[args.indexOf('--append-system-prompt') + 1]
       assert.ok(prompt.startsWith(`${instructions}\n\n# The user's ${side} harness`))
       assert.match(prompt, new RegExp(`<${side}_harness>\n${HARNESS[side]}\n</${side}_harness>\n\n通常のカスタム指示$`))
+      // No one replies to an AB stage, so a harness that says to ask yields to deciding.
+      assert.match(prompt, /nobody can answer a question before your result is used/)
       assert.ok(!prompt.includes(other))
       assert.ok(!args.includes('--mcp-config'))
     } else {

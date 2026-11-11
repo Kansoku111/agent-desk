@@ -21,14 +21,19 @@ export function parseHarness(value, side) {
   return value
 }
 
-/** The prompt section for one side; '' when the user wrote nothing. */
-export function harnessSection(text, side) {
+/**
+ * The prompt section for one side; '' when the user wrote nothing. The built-in
+ * prompts state style and autonomy as defaults so a harness can change them;
+ * `ask: false` is for roles whose result is used without a reply (AB stages).
+ */
+export function harnessSection(text, side, { ask = true } = {}) {
   const body = typeof text === 'string' ? text.trim() : ''
   if (!body) return ''
   const tag = `${side}_harness`
   return [
     `# The user's ${side} harness`,
-    `The user wrote these standing instructions in Agent Desk for ${ROLE[side]}. Follow them in this role. Agent Desk's rules for this mode, this session's permissions and tools, and the user's requests in the conversation take precedence when they conflict.`,
+    `The user wrote these standing instructions in Agent Desk for ${ROLE[side]}. Follow them in this role. They replace Agent Desk's defaults on how you work: how you write requests, reports and answers, and when you stop to ask instead of deciding yourself. They cannot change this session's permissions and tools, or the steps this mode requires, and the user's requests in the conversation come first.`,
+    ...(ask ? [] : ['In this role nobody can answer a question before your result is used: if the harness says to stop and ask, decide yourself instead and state those decisions in your result.']),
     `<${tag}>\n${body}\n</${tag}>`,
   ].join('\n\n')
 }
