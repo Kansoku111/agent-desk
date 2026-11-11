@@ -470,9 +470,9 @@ test('team PTC validates selections and stays off for legacy teams even when new
   assert.throws(() => mergeTeamConfig({}, { toolMode: 'other' }), /不明/)
   const f = await setup(t, { toolMode: 'ptc' })
   await f.tool('spawn', { title: 'Claude stays native', task: 'bounded task', tier: 'low', provider: 'claude' })
-  assert.equal('toolMode' in f.agents.calls.find((call) => call[0] === 'create')[1], false)
   f.terminals.set(f.leader, { activity: 'running' })
   assert.throws(() => f.manager.updateConfig(f.team.id, { toolMode: 'native' }), /実行中/)
+  assert.equal('toolMode' in f.agents.calls.find((call) => call[0] === 'create')[1], false)
   await f.manager.stop()
   const saved = JSON.parse(await fs.readFile(f.manager.file, 'utf8'))
   delete saved.teams[0].config
@@ -738,6 +738,7 @@ for (const parent of ['claude', 'gpt']) {
         assert.doesNotMatch(prompt, /子だけの規則|child_harness|team_policy|Playbooks/)
       }
     }
+    await assert.rejects(f.tool('playbook', { name: 'x' }), /unknown tool: playbook/)
   })
 }
 
@@ -788,10 +789,11 @@ test('AB parent stages read the parent harness and consultants and the implement
       assert.equal(message.includes(AB_CONSULT), false)
       if (role !== 'a') assert.ok(message.startsWith('AB専用の指示\n\n'))
       assert.ok(!message.includes(other))
-    await assert.rejects(f.tool('playbook', { name: 'x' }), /unknown tool: playbook/)
     }
     await runner.remove(handle)
   }
+  assert.deepEqual(['a', 'b', 'implementer', 'leader', 'instructions', 'direct', 'reviewer'].map(abHarnessSide),
+    ['child', 'child', 'child', 'parent', 'parent', 'parent', 'parent'])
 })
 
 for (const parent of ['claude', 'gpt']) for (const provider of ['claude', 'gpt']) for (const defaults of [false, true]) {
@@ -816,8 +818,6 @@ for (const parent of ['claude', 'gpt']) for (const provider of ['claude', 'gpt']
   })
 }
 
-  assert.deepEqual(['a', 'b', 'implementer', 'leader', 'instructions', 'direct', 'reviewer'].map(abHarnessSide),
-    ['child', 'child', 'child', 'parent', 'parent', 'parent', 'parent'])
 for (const provider of ['claude', 'gpt']) for (const mode of ['write', 'research']) {
   test(`eco ${provider} ${mode} children get extra tools even with saved lean settings`, async (t) => {
     const f = await setupExecution(t)
@@ -4118,6 +4118,7 @@ test('Codex child uses dedicated runner for launch, reports, steer, stop and del
   assert.equal(session.permissionMode, 'danger-full-access')
   assert.deepEqual(session.team, { id: f.team.id, childId: child.id })
   assert.match(session.instructions, /child agent/)
+  assert.doesNotMatch(session.instructions, /_harness>/)
   await f.tool('send', { child: child.id, message: 'follow up' })
   assert.deepEqual(child.pending, ['[リーダーから]\nfollow up'])
   codex.finish(child.taskId, 'first report')
@@ -4266,4 +4267,28 @@ test('OpenScale child choices retain model and effort through team creation and 
   assert.equal(child.provider, 'openscale')
   assert.equal(f.threads.threads.get(child.taskId).model, JSON.stringify(['openscale', model]))
   assert.equal(f.threads.threads.get(child.taskId).effort, 'low')
+})
+
+test('a Codex child reads only the child harness', async (t) => {
+  const codex = fakeCodex()
+  const f = await setup(t, { codex: codexConfig }, { codex, catalogState: () => codexCatalog, harness: () => HARNESS })
+  await f.tool('spawn', { title: 'child', task: 'work', provider: 'codex', tier: 'low' })
+  const { instructions } = codex.get(f.team.children[0].taskId)
+  assert.match(instructions, /<child_harness>\n子だけの規則\n<\/child_harness>/)
+  assert.ok(!instructions.includes('親だけの規則'))
+})
+
+test('AB Codex jobs read their side\'s harness after AB\'s own instructions', async (t) => {
+  const codex = fakeCodex()
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  const runner = new AbRunner({ threads: f.threads, agents: f.agents, codex, harness: (side) => HARNESS[side] })
+  for (const side of ['parent', 'child']) {
+    const handle = await runner.start({ runId: 'R', jobId: side, model: 'codex:codex-model', workspace: f.workspace,
+      writable: false, lean: true, instructions: 'AB専用の指示', side, text: 'ABの依頼' })
+    const { instructions } = codex.get(handle.id)
+    assert.ok(instructions.startsWith(`AB専用の指示\n\n# The user's ${side} harness`))
+    assert.ok(instructions.includes(HARNESS[side]))
+    assert.ok(!instructions.includes(HARNESS[side === 'parent' ? 'child' : 'parent']))
+    await runner.remove(handle)
+  }
 })

@@ -337,4 +337,9 @@ export class RuntimePool extends EventEmitter {
   async stopAll() {
     await Promise.all([...this.runtimes.values()].map((runtime) => runtime.stop()))
   }
+
+  /** Only the runtimes that read the children's layer (`team:<mode>`, not the observer's). */
+  async stopTeamChildren() {
+    await Promise.all([...this.runtimes].filter(([key]) => key.startsWith('team:') && key !== 'team:observer').map(([, runtime]) => runtime.stop()))
+  }
 }

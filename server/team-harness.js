@@ -4,7 +4,9 @@
 // consultants and delegated implementer. Neither reaches ordinary tasks.
 // They replace the TM-only 方針 and プレイブック, which are no longer read.
 
-export const HARNESS_MAX = 10_000
+import { HARNESS_MAX } from '../shared/text-limits.js'
+
+export { HARNESS_MAX }
 export const HARNESS_KEYS = { parent: 'teamParentHarness', child: 'teamChildHarness' }
 const LABEL = { parent: '親ハーネス', child: '子ハーネス' }
 const ROLE = {
@@ -15,7 +17,7 @@ const ROLE = {
 /** A harness as saved; throws on anything invalid. */
 export function parseHarness(value, side) {
   if (typeof value !== 'string') throw new Error(`${LABEL[side]}は文字列で指定してください`)
-  if (value.length > HARNESS_MAX) throw new Error(`${LABEL[side]}は ${HARNESS_MAX.toLocaleString()} 文字までです`)
+  if (value.length > HARNESS_MAX[side]) throw new Error(`${LABEL[side]}は ${HARNESS_MAX[side].toLocaleString()} 文字までです`)
   return value
 }
 

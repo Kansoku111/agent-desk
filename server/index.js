@@ -577,11 +577,11 @@ codex.on('models', models => {
 const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'),
   preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
 const abRunner = new AbRunner({ threads, agents: abAgents, codex, attachmentsDir: paths.attachmentsDir, instructions: () => effectiveCustomInstructions(settings),
+  harness: (side) => side === 'child' ? settings.teamChildHarness : settings.teamParentHarness,
   guard: (record) => teams.guardExecution(record) })
 const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalogState(),
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
   validateImages: async (images, config) => {
-  harness: (side) => side === 'child' ? settings.teamChildHarness : settings.teamParentHarness,
     const saved = await abImages(paths.attachmentsDir, images)
     if (saved.length) assertAbImageModels(config, catalogState().models)
     return saved
@@ -801,6 +801,7 @@ async function restartRuntimesWhenIdle() {
     return
   }
   restartPending = false
+  teamRestartPending = false
   const commandCodeRestartSignature = commandCodeDefinitionSignature()
   try {
     await pool.stopAll()
@@ -813,6 +814,24 @@ async function restartRuntimesWhenIdle() {
   broadcast('runtime', { runtime: pool.status() })
   broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
   if (catalog.stale || await commandCodeNeedsWarm()) void warmCatalogAndReport('model catalog refresh')
+}
+
+// A changed child harness touches only the children's layer: recycle the team
+// children's runtimes alone, so ordinary tasks, AB and presets keep theirs.
+let teamRestartPending = false
+async function restartTeamRuntimesWhenIdle() {
+  if (pool.paused) return
+  if (threads.busy) {
+    teamRestartPending = true
+    return
+  }
+  teamRestartPending = false
+  await pool.stopTeamChildren()
+  broadcast('runtime', { runtime: pool.status() })
+}
+async function applyTeamChildPatch() {
+  const changed = await writeTeamChildPatch(paths.teamChildPatch, { subagents: pinnedSubagents(), persona: await shippedPersona(), harness: settings.teamChildHarness })
+  if (changed) await restartTeamRuntimesWhenIdle()
 }
 
 /** Report failure only for the inventory that this asynchronous warm actually tried. */
@@ -879,6 +898,7 @@ async function performModelCatalogUpdate({ deferRuntimeEffects = false, forceOpe
 }
 threads.on('idle', () => {
   if (restartPending) void restartRuntimesWhenIdle().catch((error) => log('runtime restart failed:', error.message))
+  else if (teamRestartPending) void restartTeamRuntimesWhenIdle().catch((error) => log('team runtime restart failed:', error.message))
 })
 updates.on('state', (state) => broadcast('updates', { updates: state }))
 modelUpdater.on('state', () => broadcast('modelUpdate', { modelUpdate: modelUpdateState() }))
@@ -959,6 +979,7 @@ const settingsService = createSettingsService({
     if (notify) broadcast('settings', { settings })
   },
   applyHomePatch,
+  applyTeamChildPatch,
   applyFastMode,
   updateModelCatalog: () => updateModelCatalog({ deferRuntimeEffects: true }),
   restartRuntimesWhenIdle,

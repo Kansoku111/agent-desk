@@ -39,6 +39,7 @@ function harness(initial = {}, hooks = {}) {
       events.push('catalog')
       return hooks.catalog ? hooks.catalog(live) : { restartRequired: true }
     },
+    applyTeamChildPatch: async () => { events.push('team-child') },
     applyHomePatch: async () => {
       events.push('home')
       return hooks.home ? hooks.home(live) : true
@@ -745,24 +746,28 @@ test('background checks do not block later updates and failures are reported', a
   assert.ok(h.events.includes('background-error:offline'))
 })
 
-test('parent and child harnesses save as written; only the child one rewrites the dsh layers', async () => {
+test('parent and child harnesses save as written; only the child one rewrites the children\'s layer alone', async () => {
   const h = harness()
   assert.equal(h.live.teamParentHarness, '')
   assert.equal(h.live.teamChildHarness, '')
   await h.service.update({ teamParentHarness: '  親の規則\n' })
   assert.equal(h.live.teamParentHarness, '  親の規則\n')
-  assert.ok(!h.events.includes('home'), 'leaders read the parent harness at launch')
+  assert.ok(!h.events.some((event) => ['home', 'team-child', 'restart'].includes(event)), 'leaders read the parent harness at launch')
   await h.service.update({ teamChildHarness: '子の規則' })
   assert.equal(h.live.teamChildHarness, '子の規則')
-  assert.ok(h.events.includes('home'), 'dsh children read it from their layer')
+  assert.ok(h.events.includes('team-child'), 'dsh children read it from their layer')
+  assert.ok(!h.events.some((event) => ['home', 'restart'].includes(event)), 'other runtimes are not recycled')
   const before = h.events.length
   await h.service.update({ teamChildHarness: '子の規則' })
-  assert.ok(!h.events.slice(before).includes('home'), 'an unchanged harness rewrites nothing')
+  assert.ok(!h.events.slice(before).includes('team-child'), 'an unchanged harness rewrites nothing')
   for (const [patch, error] of [
     [{ teamParentHarness: 1 }, /親ハーネスは文字列/],
-    [{ teamChildHarness: 'x'.repeat(10_001) }, /子ハーネスは 10,000 文字まで/],
+    [{ teamChildHarness: 'x'.repeat(2_001) }, /子ハーネスは 2,000 文字まで/],
+    [{ teamParentHarness: 'x'.repeat(4_001) }, /親ハーネスは 4,000 文字まで/],
   ]) await assert.rejects(h.service.update({ theme: 'light', ...patch }), error)
+  await h.service.update({ teamChildHarness: 'x'.repeat(2_000), teamParentHarness: 'x'.repeat(4_000) })
   assert.equal(h.live.theme, 'dark', 'an invalid harness rejects the entire patch')
+  assert.equal(h.live.teamChildHarness.length, 2_000)
 })
 
 test('the removed 方針 and プレイブック become the parent harness, and their saved fields are kept', () => {

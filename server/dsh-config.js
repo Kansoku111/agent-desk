@@ -114,7 +114,7 @@ export const TEAM_CHILD_PLUGIN = new URL('./team-child-plugin.js', import.meta.u
 export const TEAM_CHILD_COMPACTION_PLUGIN = new URL('./team-child-compaction.js', import.meta.url).href
 
 /** Longest custom instructions the settings accept, in characters. */
-export const INSTRUCTIONS_MAX = 10_000
+export { INSTRUCTIONS_MAX } from '../shared/text-limits.js'
 
 /**
  * The prompt paragraph that tells the agent which model each pinned tool runs.

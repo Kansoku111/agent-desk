@@ -210,3 +210,16 @@ test('a start killed by its timeout can exit after the next start spawned; that 
   assert.equal(runtime.child.exitCode, null)
   assert.ok(runtime.conn)
 })
+
+test('a child harness change recycles only the team children\'s runtimes', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-team-recycle-'))
+  t.after(() => fs.rm(home, { recursive: true, force: true }))
+  const paths = appPaths(home)
+  const pool = new RuntimePool({ paths: { ...paths, observerPatch: path.join(home, 'observer.yml') }, onUpdate() {}, onPermission: async () => ({}) })
+  const stopped = []
+  for (const [key, runtime] of pool.runtimes) runtime.stop = async () => { stopped.push(key) }
+  await pool.stopTeamChildren()
+  assert.ok(stopped.length > 0)
+  assert.ok(stopped.every((key) => key.startsWith('team:') && key !== 'team:observer'), stopped.join(','))
+  assert.deepEqual(stopped.sort(), [...pool.runtimes.keys()].filter((key) => /^team:(?!observer$)/.test(key)).sort())
+})

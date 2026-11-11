@@ -226,8 +226,8 @@ export function planSettingsUpdate(current, patch, now) {
   for (const [side, key] of Object.entries(HARNESS_KEYS)) {
     if (!owns(patch, key)) continue
     next[key] = parseHarness(patch[key], side)
-    // dsh children read theirs from the children's layer, which the home patch step rewrites.
-    if (side === 'child' && next[key] !== current[key]) effects.homePatch = true
+    // dsh children read theirs from their own layer; rewriting it recycles only their runtimes.
+    if (side === 'child' && next[key] !== current[key]) effects.teamChildPatch = true
   }
   if (owns(patch, 'fastMode')) {
     assertRecord(patch.fastMode, 'fastMode')
@@ -309,13 +309,13 @@ export async function afterSettingsCommit(work) {
  */
 export function createSettingsService({
   getSettings, saveSettings, publishSettings,
-  applyHomePatch = () => false, applyFastMode = () => {},
+  applyHomePatch = () => false, applyTeamChildPatch = () => {}, applyFastMode = () => {},
   updateModelCatalog = () => ({ restartRequired: false }), restartRuntimesWhenIdle = () => {},
   onChannelChange = () => {}, checkModelUpdate = () => {}, onBackgroundError = () => {}, now = Date.now,
 }) {
   let pending = Promise.resolve()
   // Keep committed but incomplete effects on this queue, not in saved settings.
-  const outstanding = { homePatch: false, fastMode: false, modelCatalog: false, restart: false, channel: false, modelCheck: false }
+  const outstanding = { homePatch: false, teamChildPatch: false, fastMode: false, modelCatalog: false, restart: false, channel: false, modelCheck: false }
   // Only settings commits own this queue. Candidate creation belongs inside it,
   // never at request receipt; nested update/mutate waits would deadlock.
   const run = (work) => {
@@ -386,6 +386,11 @@ export function createSettingsService({
               throw error
             }
             outstanding.homePatch = false
+          }
+          if (outstanding.teamChildPatch) {
+            // Also written by the home patch step above; then this finds the file current.
+            await applyTeamChildPatch()
+            outstanding.teamChildPatch = false
           }
           if (outstanding.restart) {
             await restartRuntimesWhenIdle()
