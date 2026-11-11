@@ -52,9 +52,13 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
     execution
       ? '1. Delegate bounded work to children; only read-only research may run in parallel. Keep one writer through verification and judgment.'
       : '1. Split work that can run in parallel and start one child per part with `spawn`, all at once. Give each child its own scope (files, folders, items) so no two children edit the same files.',
-    '2. Write each task so it can be done from that text alone: the goal, the exact scope, what "done" means, where results go, and what the report should say. Put long material in a file and pass its path.',
+    '2. Write each task so it can be done from that text alone: the goal, the exact scope and what must not change, the constraints, what "done" means, how to check it, where results go, and what the report should say. Put long material in a file and pass its path.',
     '3. After starting children, end your turn and wait. Do not check `status` in a loop: an idle turn costs nothing, and reports arrive in this conversation by themselves, in the order the children finish (those that came while you worked arrive together). Handle them, then end your turn again. A child may also report again on its own (the user spoke to it directly); handle that the same way. A report that asks you questions is not a finished task: answer with `send` to the same child, or use `ask_user` first when only the user can answer.',
-    '4. Audit without reading everything: check the report and how the child checked its work, sample the results, and open details (`read_report`, the files) only when needed. A normal turn ending is not task acceptance: compare the report with the requested deliverables and checks, including any additional tests. Accepted: `close` the child. Missing feasible work: `send` the specific remaining items to the same child, which keeps its context. Do not retry merely because a report is partial; first distinguish missing work from a genuine external blocker. If a child reports an external dependency, do not repeatedly send it back to wait: reassign only when that dependency is available. Later work on the same scope (a second pass, a new requirement) also goes to the same child with `send`, even after `close`; add `fresh: true` when the work needs little of that conversation, so the child starts over without carrying it.',
+    '4. Audit without reading everything: check the report and how the child checked its work, sample the results, and open details (`read_report`, the files) only when needed. A normal turn ending is not task acceptance: compare the report with the requested deliverables and checks, including any additional tests. Then:',
+    '   - Accepted: `close` the child.',
+    '   - Feasible work is missing: `send` the specific remaining items to the same child, which keeps its context. Do not retry merely because a report is partial; first distinguish missing work from a genuine external blocker.',
+    '   - Blocked by an external dependency: do not send the child back to wait; reassign only when that dependency is available.',
+    '   - Later work on the same scope (a second pass, a new requirement): `send` to the same child, even after `close`; add `fresh: true` when the work needs little of that conversation, so the child starts over without carrying it.',
     '5. Children work without approvals. A dsh child that still stops at one reaches you as a message: decide with `approve`. An action a Claude child was not allowed to take is listed in its report. Use `ask_user` only for what you cannot decide yourself, or what needs the user\'s own judgment, accounts or files.',
     '6. When everything is done, report the outcome to the user (by default, a short summary).',
     ...(gpt
@@ -148,13 +152,12 @@ export function tierLines(config, models) {
   for (const provider of TEAM_PROVIDERS) {
     const part = config[provider]
     const what = PROVIDER_WHAT[provider]
-    if (!part.enabled) {
-      lines.push(`- provider "${provider}" (${what}): turned off by the user; do not use it.`)
-      continue
-    }
+    if (!part.enabled) continue
     const tiers = TEAM_TIERS.map((tier) => `${tier} = ${!part[tier].enabled ? 'turned off by the user (do not use)'
       : part[tier].model ? `${modelName({ provider, model: part[tier].model }, models)} [${part[tier].model}]${part[tier].effort ? `, effort ${part[tier].effort}` : ""}` : 'not set (do not use)'}`)
     lines.push(`- provider "${provider}" (${what}): ${tiers.join(', ')}.`)
   }
+  // One line instead of one per provider: this list is in every leader turn, and also tells a running leader what the user just turned off.
+  lines.push('Providers not listed here are turned off by the user: do not use them.')
   return lines
 }

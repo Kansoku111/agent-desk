@@ -3000,6 +3000,13 @@ test('a tier the user turned off is not offered to the leader', async (t) => {
   await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'low', provider: 'gpt' }), /GPTの低枠はユーザーがオフ/)
   assert.match(await tool('spawn', { title: 'x', task: 'y', tier: 'mid', provider: 'gpt' }), /GPT-6\.1 Sol・中/)
   assert.match(await tool('status'), /low = turned off by the user/)
+  // A provider that is off is left out, with one line saying so, also when it is turned off mid-run.
+  manager.updateConfig(team.id, { claude: { enabled: true } })
+  assert.match(typed().at(-1), /provider "claude"/)
+  manager.updateConfig(team.id, { claude: { enabled: false } })
+  const status = await tool('status')
+  assert.doesNotMatch(status, /provider "claude"|provider "deepseek"/)
+  assert.match(status, /Providers not listed here are turned off by the user: do not use them\./)
 })
 
 test('a DeepSeek child is a full-access dsh task on a DeepSeek model', async (t) => {
