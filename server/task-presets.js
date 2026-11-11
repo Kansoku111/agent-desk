@@ -335,9 +335,12 @@ export class TaskPresets extends EventEmitter {
     run.phase = 'verifying'
     await this.save(run)
     let verification
-    if (run.snapshotUnavailable && !run.checks.length) {
+    if (!run.checks.length) {
+      // With no command to run there is no result to invalidate, so edits by other tasks sharing the folder
+      // must not fail the run; only the fingerprint is recorded.
+      const hash = run.snapshotUnavailable ? null : (await this.snapshot(run.workspace)).hash
       const now = Date.now()
-      verification = { id: randomUUID(), ownerId: run.id, workspace: run.workspace, startedAt: now, finishedAt: now, status: 'unverified', checks: [], sourceHash: null, endHash: null, skippedReason: run.snapshotUnavailable, record: path.join(this.dir, 'runs', run.id, 'verification.json') }
+      verification = { id: randomUUID(), ownerId: run.id, workspace: run.workspace, startedAt: now, finishedAt: now, status: 'unverified', checks: [], sourceHash: hash, endHash: hash, ...(run.snapshotUnavailable ? { skippedReason: run.snapshotUnavailable } : {}), record: path.join(this.dir, 'runs', run.id, 'verification.json') }
       await writeJson(verification.record, verification)
     } else verification = await this.verifier.verify({ id: run.id, folder: run.workspace, checks: run.checks })
     if (verification.canRerun && !run.cancelled) verification = await this.verifier.verify({ id: run.id, folder: run.workspace, checks: run.checks, previousRun: verification })
@@ -360,7 +363,7 @@ export class TaskPresets extends EventEmitter {
       delete run.diffUnavailable
     } else { delete run.changedFiles; delete run.patch }
     run.warning = [recordingWarning(run), diffWarning, run.baseline?.warning, after?.warning].filter(Boolean).join('\n')
-    if (!run.snapshotUnavailable && (await this.snapshot(run.workspace)).hash !== verification.endHash) throw new Error('検証後にソースが変更されました。再確認が必要です。')
+    if (run.checks.length && (await this.snapshot(run.workspace)).hash !== verification.endHash) throw new Error('検証後にソースが変更されました。再確認が必要です。')
     if (result.status === 'verify') run.result = { ...result, status: 'complete', remaining: '', summary: result.summary + '\n\n登録されたアプリの検証が成功しました。' }
     run.phase = 'completed'
     run.error = null

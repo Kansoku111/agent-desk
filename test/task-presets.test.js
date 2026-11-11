@@ -188,6 +188,28 @@ test('an allocated worker with no report cannot forward application-only failure
 test('task handoff retains requested creative tools and does not inherit an assistant-only consultation restriction', () => {
   const run = { id: 'R', kind: 'delegate' }
   assert.match(preparePresetPrompt(run), /スキル/)
+test('another task editing the same folder does not fail a run without selected checks', async (t) => {
+  for (const input of [{}, { kind: 'review', reviewMode: 'opinion' }]) await t.test(input.reviewMode ?? 'delegate', async (t) => {
+    const f = await fixture(t)
+    const snapshot = f.manager.checkpoints.snapshot.bind(f.manager.checkpoints)
+    f.manager.checkpoints.snapshot = async (workspace, ref) => {
+      // An unrelated agent keeps writing while the run is being finalized.
+      if (ref.endsWith('/after')) await fs.writeFile(path.join(workspace, 'other-agent.txt'), String(Date.now()))
+      const value = await snapshot(workspace, ref)
+      await fs.writeFile(path.join(workspace, 'other-agent.txt'), 'later ' + Date.now())
+      return value
+    }
+    const run = await f.start(input)
+    await f.complete(f.parent.id, brief(run))
+    assert.equal(run.phase, 'running')
+    await f.complete(run.worker.id, result(run))
+    assert.equal(run.phase, 'completed', run.error)
+    assert.equal(run.verification.status, 'unverified')
+    assert.ok(run.verification.endHash)
+    if (input.reviewMode === 'opinion') assert.ok(run.deliveredAt, 'the opinion is still sent to the parent')
+  })
+})
+
   assert.match(preparePresetPrompt(run), /既定は実装/)
   assert.match(preparePresetPrompt(run), /利用者自身が相談のみ.*最優先/)
   assert.match(workerPresetInstructions(run), /artwork/)
