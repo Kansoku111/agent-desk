@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { ArrowDown, Loader2, ShieldQuestion, SquareTerminal } from 'lucide-react'
 import { request } from '../store'
 import type { TerminalSummary, Turn } from '../types'
@@ -94,11 +94,79 @@ export function useConversation(terminalId: string, terminal: TerminalSummary | 
   return { turns, omitted, loaded, error, poke: () => poke.current() }
 }
 
+type Question = { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }
+
 type Dialog = {
   dialogId: string
   text: string[]
   screen: string
   options: { key: string; label: string; detail: string; selected: boolean }[]
+  /** AskUserQuestion as Claude asked it (server/claude-question-hook.js); the screen is not read then. */
+  questions?: Question[]
+}
+
+/** Claude's questions as a form; the answers go back through its hook, not as keys typed into the CLI. */
+function QuestionCard({ terminalId, dialogId, questions, onDone }: { terminalId: string; dialogId: string; questions: Question[]; onDone: () => void }) {
+  const formId = useId()
+  const [values, setValues] = useState<{ picked: string[]; text: string }[]>(() => questions.map(() => ({ picked: [], text: '' })))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const sending = useRef(false)
+  const update = (index: number, patch: Partial<{ picked: string[]; text: string }>) =>
+    setValues((current) => current.map((value, at) => at === index ? { ...value, ...patch } : value))
+  // Claude Code joins several picks with ", " and takes typed text as the answer itself.
+  const answers = Object.fromEntries(questions.map((question, index) => {
+    const { picked, text } = values[index]
+    return [question.question, [...picked, text.trim()].filter(Boolean).join(', ')]
+  }))
+  const complete = Object.values(answers).every(Boolean)
+  const submit = async (decline = false) => {
+    if (sending.current || (!decline && !complete)) return
+    sending.current = true
+    setBusy(true)
+    setError('')
+    try {
+      await request('terminal.answer', { terminalId, dialogId, ...(decline ? { decline: true } : { answers }) })
+      onDone()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      sending.current = false
+      setBusy(false)
+    }
+  }
+  return (
+    <form className="approval-card codex-question-card claude-question-card" aria-label="Claude Code からの質問" onKeyDown={(event) => {
+      if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault()
+    }} onSubmit={(event) => { event.preventDefault(); void submit() }}>
+      {questions.map((question, index) => (
+        <fieldset key={question.question} disabled={busy}>
+          {question.header && <legend>{question.header}</legend>}
+          <p className="claude-question-text">{question.question}</p>
+          {question.options.map((option) => {
+            const picked = values[index].picked.includes(option.label)
+            return (
+              <label key={option.label} className={`codex-question-option claude-question-choice${picked ? ' picked' : ''}`}>
+                <input type={question.multiSelect ? 'checkbox' : 'radio'} name={`${formId}-${index}`} checked={picked}
+                  onChange={() => update(index, question.multiSelect
+                    ? { picked: picked ? values[index].picked.filter((label) => label !== option.label) : [...values[index].picked, option.label] }
+                    : { picked: [option.label], text: '' })} />
+                <span>{option.label}{option.description && <small>{option.description}</small>}</span>
+              </label>
+            )
+          })}
+          <textarea className="claude-question-other" rows={1} maxLength={8000} aria-label={`${question.header || question.question}の自由入力`}
+            placeholder={question.options.length ? 'その他（自由入力）' : '回答を入力'} value={values[index].text}
+            onChange={(event) => update(index, question.multiSelect ? { text: event.target.value } : { text: event.target.value, picked: [] })} />
+        </fieldset>
+      ))}
+      {error && <p role="alert">{error}</p>}
+      <div className="approval-actions claude-question-actions">
+        <button type="button" className="button" disabled={busy} onClick={() => void submit(true)}>スキップ</button>
+        <button type="submit" className="button primary" disabled={busy || !complete}>{busy ? '送信中…' : '回答を送信'}</button>
+      </div>
+    </form>
+  )
 }
 
 /** The CLI still owns the question; chat sends only explicit, screen-bound user input. */
@@ -180,6 +248,14 @@ export function DialogCard({ terminalId, onShowScreen }: { terminalId: string; o
   const staleAnswer = Boolean(answer.text && answer.dialogId !== dialog?.dialogId)
   const key = (value: string) => void respond('terminal.respond', { key: value })
   const optionLabel = (label: string) => /^Type something\.?$/i.test(label) ? '自由入力（その他）' : /^Chat about this$/i.test(label) ? 'この質問について相談する' : label
+
+  if (dialog?.questions) {
+    return (
+      <div className="terminal-dialog">
+        <QuestionCard key={dialog.dialogId} terminalId={terminalId} dialogId={dialog.dialogId} questions={dialog.questions} onDone={() => refresh.current()} />
+      </div>
+    )
+  }
 
   return (
     <div className="terminal-dialog">

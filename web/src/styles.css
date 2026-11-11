@@ -4690,6 +4690,21 @@ button.terminal-status.active {
   font-size: 12px;
 }
 
+/* Claude Code's AskUserQuestion: big tappable choices; the send buttons stay in view while the list scrolls. */
+.claude-question-card fieldset:first-child { margin-top: 0; }
+.claude-question-card legend { color: var(--amber); font-size: 13px; }
+.claude-question-text { margin: 4px 0 10px; font-size: 15px; line-height: 1.6; }
+.claude-question-choice {
+  margin: 6px 0;
+  padding: 10px 12px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.claude-question-choice.picked { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, transparent); }
+.claude-question-choice input { margin-top: 3px; }
+.claude-question-other { display: block; width: 100%; min-height: 44px; margin-top: 6px; resize: vertical; }
+.claude-question-actions { position: sticky; bottom: 0; margin: 0 -14px -14px; padding: 10px 14px 14px; background: var(--bg-elevated); border-radius: 0 0 16px 16px; }
 .terminal-dialog-input { margin: 12px 0; }
 .terminal-dialog-input summary { cursor: pointer; }
 .terminal-dialog-question {

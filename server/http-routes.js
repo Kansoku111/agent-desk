@@ -118,6 +118,20 @@ export function createRequestHandler({ appVersion, codeStamp, busy, countClients
         const accepted = typeof report?.id === 'string' && terminals.hook(report.id, report.secret, report.event)
         return send(res, accepted ? 204 : 403, '')
       }
+      // AskUserQuestion's questions (claude-question-hook.js): the reply waits for the answer given in chat.
+      if (url.pathname === '/api/terminal-question' && !ctx.remote) {
+        if (req.method !== 'POST') return send(res, 405, 'method not allowed')
+        const body = await readBody(req, 1024 * 1024)
+        if (body === null) return send(res, 413, 'too large')
+        const report = parseJson(body)
+        const asked = typeof report?.id === 'string' ? terminals.askQuestion(report.id, report.secret, report.input) : null
+        if (!asked) return send(res, 204, '')
+        // Claude Code ends the hook when the question is answered or cancelled in its own dialog.
+        res.on('close', () => { if (!res.writableFinished) asked.abandon() })
+        const decision = await asked.decision
+        if (!res.destroyed) send(res, 200, JSON.stringify({ decision }), 'application/json')
+        return
+      }
       // A team leader's tools (team-mcp.js), authenticated by the team's secret.
       if (url.pathname === '/api/team' && !ctx.remote) {
         if (req.method !== 'POST') return send(res, 405, 'method not allowed')

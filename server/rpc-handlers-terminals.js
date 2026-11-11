@@ -30,6 +30,7 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
     'terminal.dialog': async ({ terminalId }) => ({ dialog: await terminals.dialog(terminalId) }),
     'terminal.choose': ({ terminalId, key, label, dialogId }) => terminals.choose(terminalId, key, label, dialogId),
     'terminal.respond': ({ terminalId, dialogId, key, text }) => terminals.respond(terminalId, dialogId, { key, text }),
+    'terminal.answer': ({ terminalId, dialogId, answers, decline }) => terminals.answerQuestion(terminalId, dialogId, { answers, decline: decline === true }),
     'terminal.send': async ({ terminalId, text }) => {
       await terminals.sendMessage(terminalId, text)
       // Something other than null: the page takes null as a failure.

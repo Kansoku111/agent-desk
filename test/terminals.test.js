@@ -326,8 +326,14 @@ test('cleanTitle drops the spinner and Claude Code\'s default title', () => {
 test('hookSettings runs the hook script for each event, with forward slashes', () => {
   const settings = hookSettings('C:\\Program Files\\nodejs\\node.exe', 'F:\\app\\server\\claude-hook.js')
   assert.deepEqual(Object.keys(settings.hooks), [
-    'SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'StopFailure', 'PostModelSwitch', 'SubagentStart', 'SubagentStop',
+    'SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'Stop', 'StopFailure', 'PostModelSwitch', 'SubagentStart', 'SubagentStop', 'PermissionRequest',
   ])
+  // Only AskUserQuestion, and it waits (synchronously) for the answer given in chat.
+  const [ask] = settings.hooks.PermissionRequest
+  assert.equal(ask.matcher, 'AskUserQuestion')
+  assert.match(ask.hooks[0].command, /^"C:\/Program Files\/nodejs\/node\.exe" ".*\/server\/claude-question-hook\.js"$/)
+  assert.equal(ask.hooks[0].async, undefined)
+  assert.ok(ask.hooks[0].timeout >= 24 * 60 * 60)
   const [command] = settings.hooks.Stop[0].hooks
   assert.equal(command.command, '"C:/Program Files/nodejs/node.exe" "F:/app/server/claude-hook.js"')
   assert.equal(command.async, false)
@@ -961,6 +967,101 @@ test('interrupt presses Esc, then marks the task idle once the conversation file
   assert.equal(manager.status(terminal.id).activity, 'idle')
 })
 
+/** A task with a turn going and its conversation file, for questions and approvals ended by an Esc. */
+async function askingTask() {
+  const harness = await setup()
+  const terminal = await harness.manager.create({ workspace: harness.workspace })
+  const [proc] = harness.pty.spawned
+  const secret = proc.options.env.AGENT_DESK_TERMINAL_SECRET
+  const file = path.join(harness.dir, 'transcript.jsonl')
+  harness.manager.hook(terminal.id, secret, { hook_event_name: 'SessionStart', session_id: terminal.sessionId, transcript_path: file })
+  harness.manager.hook(terminal.id, secret, { hook_event_name: 'UserPromptSubmit' })
+  const line = (entry) => `${JSON.stringify(entry)}\n`
+  await fs.writeFile(file, line({ parentUuid: null, type: 'user', uuid: 'u1', timestamp: new Date().toISOString(), message: { role: 'user', content: 'hi' } }))
+  const interrupted = () => fs.appendFile(file, line({ parentUuid: 'u1', type: 'user', uuid: 'u2', timestamp: new Date().toISOString(), message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } }))
+  const until = async (activity) => {
+    for (let tries = 0; tries < 30 && harness.manager.status(terminal.id).activity !== activity; tries++) await new Promise((resolve) => setTimeout(resolve, 100))
+    return harness.manager.status(terminal.id).activity
+  }
+  return { ...harness, terminal, proc, secret, interrupted, until }
+}
+
+/** AskUserQuestion's input as Claude Code hands it to the PermissionRequest hook (captured from Claude Code 2.1). */
+const ASKED = {
+  questions: [
+    { question: 'どの色が好みですか？', header: 'Color', options: [{ label: 'Red', description: '赤' }, { label: 'Blue', description: '青' }], multiSelect: false },
+    { question: '使う場所は？', header: '用途', options: [{ label: 'Web' }, { label: '印刷' }], multiSelect: true },
+  ],
+}
+
+test('a question Claude asks is answered in chat through its hook, not by keys typed into the CLI', async (t) => {
+  const { manager, terminal, proc, secret } = await askingTask()
+  t.after(() => manager.shutdown())
+  assert.equal(manager.askQuestion(terminal.id, 'wrong', ASKED), null)
+  assert.equal(manager.askQuestion(terminal.id, secret, { questions: [] }), null)
+  const asked = manager.askQuestion(terminal.id, secret, ASKED)
+  assert.equal(manager.status(terminal.id).activity, 'approval')
+  const dialog = await manager.dialog(terminal.id)
+  assert.deepEqual(dialog.questions.map((question) => [question.header, question.multiSelect, question.options.map((option) => option.label)]), [['Color', false, ['Red', 'Blue']], ['用途', true, ['Web', '印刷']]])
+  assert.throws(() => manager.answerQuestion(terminal.id, 'old', { answers: {} }), /質問が変わりました/)
+  assert.throws(() => manager.answerQuestion(terminal.id, dialog.dialogId, { answers: { 'どの色が好みですか？': 'Blue' } }), /すべての質問/)
+  assert.throws(() => manager.answerQuestion(terminal.id, dialog.dialogId, { answers: { 'どの色が好みですか？': 'Blue', '使う場所は？': 'a\x1bb' } }), /制御文字/)
+  const before = proc.written.length
+  assert.deepEqual(manager.answerQuestion(terminal.id, dialog.dialogId, { answers: { 'どの色が好みですか？': 'Blue', '使う場所は？': 'Web, 印刷', extra: 'x' } }), { answered: true })
+  assert.deepEqual(await asked.decision, { behavior: 'allow', updatedInput: { ...ASKED, answers: { 'どの色が好みですか？': 'Blue', '使う場所は？': 'Web, 印刷' } } })
+  assert.equal(proc.written.length, before)
+  assert.equal(manager.status(terminal.id).activity, 'running')
+  assert.equal(await manager.dialog(terminal.id), null)
+  assert.throws(() => manager.answerQuestion(terminal.id, dialog.dialogId, { answers: {} }), /質問が変わりました/)
+})
+
+test('a question skipped in chat is denied without interrupting; one left behind by its turn is dropped', async (t) => {
+  const { manager, terminal, secret } = await askingTask()
+  t.after(() => manager.shutdown())
+  const skipped = manager.askQuestion(terminal.id, secret, ASKED)
+  manager.answerQuestion(terminal.id, (await manager.dialog(terminal.id)).dialogId, { decline: true })
+  assert.equal((await skipped.decision).behavior, 'deny')
+  const left = manager.askQuestion(terminal.id, secret, ASKED)
+  manager.hook(terminal.id, secret, { hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion' })
+  assert.equal(await left.decision, null)
+  assert.equal(manager.status(terminal.id).activity, 'running')
+  const stopped = manager.askQuestion(terminal.id, secret, ASKED)
+  manager.stop(terminal.id)
+  assert.equal(await stopped.decision, null)
+})
+
+test('a question cancelled with Esc in the CLI leaves "waiting for approval" and goes idle once the interruption is written', async (t) => {
+  const { manager, terminal, secret, interrupted, until } = await askingTask()
+  t.after(() => manager.shutdown())
+  const asked = manager.askQuestion(terminal.id, secret, ASKED)
+  // Claude Code ends the hook and runs no other hook for the cancelled question.
+  asked.abandon()
+  assert.equal(await asked.decision, null)
+  assert.equal(manager.status(terminal.id).activity, 'running')
+  await interrupted()
+  assert.equal(await until('idle'), 'idle')
+})
+
+test('an approval cancelled with Esc from chat goes idle once the interruption is written', async (t) => {
+  const { manager, terminal, proc, secret, interrupted, until } = await askingTask()
+  t.after(() => manager.shutdown())
+  proc.emit(APPROVAL_SCREEN.join('\r\n'))
+  manager.hook(terminal.id, secret, { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+  const dialog = await manager.dialog(terminal.id)
+  await manager.respond(terminal.id, dialog.dialogId, { key: 'escape' })
+  assert.equal(manager.status(terminal.id).activity, 'approval')
+  await interrupted()
+  assert.equal(await until('idle'), 'idle')
+})
+
+test('a tool that fails after its approval leaves "waiting for approval"', async (t) => {
+  const { manager, terminal, secret } = await askingTask()
+  t.after(() => manager.shutdown())
+  manager.hook(terminal.id, secret, { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+  manager.hook(terminal.id, secret, { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash' })
+  assert.equal(manager.status(terminal.id).activity, 'running')
+})
+
 /** A task whose prompt Claude Code took (and wrote to the conversation file) but never answered. */
 async function droppedTurn() {
   const harness = await setup()
@@ -1035,7 +1136,8 @@ test('a team title stays as given; model and level are checked', async () => {
 test('teamHookSettings: an error ends a leader\'s turn too, and bypass mode starts without its dialog', () => {
   const leader = teamHookSettings('C:\\node.exe', 'F:\\app\\claude-hook.js')
   assert.equal(leader.hooks.StopFailure[0].hooks[0].command, '"C:/node.exe" "F:/app/claude-hook.js"')
-  assert.equal(leader.hooks.PermissionRequest, undefined)
+  // Nothing approves tools on a leader's behalf; only its questions can be answered in chat.
+  assert.deepEqual(leader.hooks.PermissionRequest.map((entry) => entry.matcher), ['AskUserQuestion'])
   assert.equal(leader.skipDangerousModePermissionPrompt, true)
   assert.deepEqual(hookEffect({ hook_event_name: 'StopFailure' }, 'running'), { activity: 'idle', touched: true, finished: true, failed: true })
 })

@@ -20,7 +20,7 @@ import { addScores } from '../shared/usage-score.js'
 import {
   API_KEY_ENV, DEFAULT_TITLE, DIALOG_RULE, EFFORTS, INHERITED_MARKERS, READY_DELAY_MS, READY_FALLBACK_MS, isFile,
   REDRAW_DELAY_MS, clampSize, cleanTitle, findClaude, hookEffect, hookSettings, launchCommand, parseDialog,
-  teamHookSettings, unroutedAgents,
+  questionAnswers, questionsFrom, teamHookSettings, unroutedAgents,
 } from './terminal-helpers.js'
 export {
   API_KEY_ENV, DEFAULT_TITLE, EFFORTS, INHERITED_MARKERS, READY_DELAY_MS, READY_FALLBACK_MS, REDRAW_DELAY_MS,
@@ -327,21 +327,34 @@ export class TerminalManager extends EventEmitter {
    * answered leaves nothing in that file either; Claude Code's own report that
    * it went idle ends it then. True when it is idle now.
    */
-  async settle(id, { quietMs = 30_000 } = {}) {
+  async settle(id, { quietMs = 30_000, cancelled = false } = {}) {
     const record = this.records.get(id)
     const live = this.live.get(id)
     if (!record || !live?.alive) return false
-    if (live.activity !== 'running') return live.activity === 'idle'
+    // After an Esc, an approval (or question) it was waiting on may have ended the turn: Esc there
+    // rejects the tool and interrupts, and Claude Code runs no hook for either.
+    const open = () => live.alive && (live.activity === 'running' || (cancelled && live.activity === 'approval'))
+    if (!open()) return live.activity === 'idle'
     const file = this.#transcriptFile(record)
     if (file && (quietMs <= 0 || Date.now() - fs.statSync(file).mtimeMs >= quietMs)) {
       const last = (await this.conversation(id)).turns.at(-1)
-      if (last && last.status !== 'running' && live.activity === 'running' && live.alive) return this.#settled(id, record, live, 'the conversation file')
+      if (last && last.status !== 'running' && open()) return this.#settled(id, record, live, 'the conversation file')
     }
     const idleAt = await this.#claudeIdleAt(record, live)
-    if (idleAt !== null && Date.now() - idleAt >= IDLE_GRACE_MS && live.activity === 'running' && live.alive) {
+    if (idleAt !== null && Date.now() - idleAt >= IDLE_GRACE_MS && open()) {
       return this.#settled(id, record, live, 'Claude Code\'s session file')
     }
     return false
+  }
+
+  /** Watches for the turn an Esc may have ended (see settle); quickly at first, as a long command can take a while to write that it was stopped. */
+  #settleAfterEsc(id, live) {
+    void (async () => {
+      for (let tries = 0; tries < 136 && this.live.get(id) === live && live.alive; tries++) {
+        await new Promise((resolve) => setTimeout(resolve, tries < 16 ? 400 : 2500))
+        if (await this.settle(id, { quietMs: 0, cancelled: true }).catch(() => false)) return
+      }
+    })()
   }
 
   #settled(id, record, live, source) {
@@ -543,6 +556,7 @@ export class TerminalManager extends EventEmitter {
       if (this.live.get(record.id) !== live) return
       live.alive = false
       live.exitCode = exitCode
+      this.#endQuestion(live, null)
       this.#note(record.id, `Claude Code exited (code ${exitCode}${live.replacing ? ', being replaced' : ''})`)
       live.exited?.()
       if (!this.closing && this.records.get(record.id) === record) void this.#refreshUsage(record.id)
@@ -662,14 +676,7 @@ export class TerminalManager extends EventEmitter {
    */
   interrupt(id, client) {
     if (!this.input(id, client, '\x1b')) return false
-    const live = this.live.get(id)
-    void (async () => {
-      // Quickly at first; a long command can take a while to write that it was stopped.
-      for (let tries = 0; tries < 136 && this.live.get(id) === live && live.alive; tries++) {
-        await new Promise((resolve) => setTimeout(resolve, tries < 16 ? 400 : 2500))
-        if (await this.settle(id, { quietMs: 0 }).catch(() => false)) return
-      }
-    })()
+    this.#settleAfterEsc(id, this.live.get(id))
     return true
   }
 
@@ -819,6 +826,8 @@ export class TerminalManager extends EventEmitter {
     if (this.records.get(id)?.usageFallbackPending) throw new Error('切り替え先を準備中です')
     const live = this.live.get(id)
     if (!live?.alive || live.activity !== 'approval') return null
+    // The question as Claude asked it, from its hook: no screen to read.
+    if (live.question) return { dialogId: live.question.id, questions: live.question.questions, text: [], options: [], screen: '' }
     await new Promise((resolve) => live.term.write('', resolve))
     if (this.live.get(id) !== live || !live.alive || live.activity !== 'approval') return null
     const lines = this.#screenLines(live)
@@ -857,7 +866,71 @@ export class TerminalManager extends EventEmitter {
       if (!live.term.modes.bracketedPasteMode && text.includes('\n')) throw new Error('この入力欄には複数行を送れません。一行で回答してください')
       return live.term.modes.bracketedPasteMode ? '\x1b[200~' + text + '\x1b[201~' : text
     })
+    if (key === 'escape') this.#settleAfterEsc(id, this.live.get(id))
     return { sent: true }
+  }
+
+  /**
+   * AskUserQuestion's questions, from claude-question-hook.js. `decision` settles
+   * with what the hook tells Claude Code (null: nothing, its own dialog decides);
+   * `abandon` is for when Claude Code ended the hook (answered or cancelled there).
+   * Null when the report is not from this task's Claude Code or the questions cannot be shown.
+   */
+  askQuestion(id, secret, input) {
+    const record = this.records.get(id)
+    const live = this.live.get(id)
+    if (!record || !live?.alive || !sameToken(secret, live.secret)) return null
+    const questions = questionsFrom(input)
+    if (!questions) return null
+    this.#endQuestion(live, null)
+    let resolve
+    const decision = new Promise((done) => { resolve = done })
+    const question = { id: randomUUID(), input, questions, resolve }
+    live.question = question
+    const before = live.activity
+    live.activity = 'approval'
+    this.#changed(record)
+    if (before !== 'approval') this.emit('approval-needed', { terminalId: id, title: record.title })
+    return {
+      decision,
+      abandon: () => {
+        if (live.question !== question) return
+        this.#endQuestion(live, null)
+        // Answered there (PostToolUse follows) or cancelled with Esc, which ends the turn without a hook.
+        if (live.alive && live.activity === 'approval') {
+          live.activity = 'running'
+          this.#changed(record)
+          this.#settleAfterEsc(id, live)
+        }
+      },
+    }
+  }
+
+  /** Answers the question shown in chat (`answers`: question text -> answer), or dismisses it (`decline`). */
+  answerQuestion(id, dialogId, { answers, decline = false } = {}) {
+    const record = this.#record(id)
+    if (record.fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
+    const live = this.live.get(id)
+    const question = live?.alive ? live.question : null
+    if (!question || question.id !== dialogId) throw new Error('質問が変わりました。表示を確かめてください')
+    const decision = decline
+      // Not an interruption: Claude goes on, and can ask again in its reply.
+      ? { behavior: 'deny', message: 'The user dismissed these questions without answering. Continue without the answers, or ask in your reply if they are essential.' }
+      : { behavior: 'allow', updatedInput: { ...question.input, answers: questionAnswers(question.questions, answers) } }
+    this.executionGuard?.(record)
+    this.#endQuestion(live, decision)
+    live.dialogRevision = (live.dialogRevision ?? 0) + 1
+    live.inputAt = Date.now()
+    if (live.activity === 'approval') live.activity = 'running'
+    this.#changed(record)
+    return { answered: true }
+  }
+
+  #endQuestion(live, decision) {
+    const question = live.question
+    if (!question) return
+    live.question = null
+    question.resolve(decision)
   }
 
   async #respond(id, dialogId, data) {
@@ -1051,6 +1124,8 @@ export class TerminalManager extends EventEmitter {
         routes: Array.isArray(routes) ? structuredClone(routes) : [] }
       if (record.usageFallbackError) { delete record.usageFallbackError; save = true }
     }
+    // A question answered in Claude Code's own dialog, or one its turn left behind.
+    if (['UserPromptSubmit', 'Stop', 'StopFailure'].includes(event) || (/^PostToolUse/.test(event) && input.tool_name === 'AskUserQuestion')) this.#endQuestion(live, null)
     const before = live.activity
     live.activity = effect.activity
     if (live.activity === 'running' && (before !== 'running' || event === 'UserPromptSubmit')) live.runningAt = Date.now()

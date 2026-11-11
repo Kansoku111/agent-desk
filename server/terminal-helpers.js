@@ -5,6 +5,48 @@ import { fileURLToPath } from 'node:url'
 
 const hookScript = fileURLToPath(new URL('./claude-hook.js', import.meta.url))
 const effortHookScript = fileURLToPath(new URL('./subagent-effort-hook.js', import.meta.url))
+const questionHookScript = fileURLToPath(new URL('./claude-question-hook.js', import.meta.url))
+/** How long a question can wait for its answer in chat (Claude Code's own dialog stays usable throughout). */
+const QUESTION_WAIT_S = 7 * 24 * 60 * 60
+const QUESTION_TEXT_MAX = 8000
+const QUESTIONS_MAX = 10
+const OPTIONS_MAX = 20
+
+/**
+ * AskUserQuestion's questions as the chat form shows them; null when the
+ * input is not shaped as expected (Claude Code's own dialog still asks them).
+ */
+export function questionsFrom(input) {
+  const list = input?.questions
+  if (!Array.isArray(list) || !list.length || list.length > QUESTIONS_MAX) return null
+  const text = (value) => typeof value === 'string' ? value.slice(0, QUESTION_TEXT_MAX) : ''
+  const questions = []
+  for (const entry of list) {
+    const question = text(entry?.question).trim()
+    const options = Array.isArray(entry?.options) ? entry.options.slice(0, OPTIONS_MAX) : []
+    if (!question || questions.some((other) => other.question === question)) return null
+    questions.push({
+      question,
+      header: text(entry.header).trim(),
+      multiSelect: entry.multiSelect === true,
+      options: options.map((option) => ({ label: text(option?.label).trim(), description: text(option?.description).trim() })).filter((option) => option.label),
+    })
+  }
+  return questions
+}
+
+/** The answers the user gave in chat, checked against the questions: one non-empty answer per question. */
+export function questionAnswers(questions, answers) {
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new Error('回答の形式が正しくありません')
+  const checked = {}
+  for (const { question } of questions) {
+    const answer = Object.hasOwn(answers, question) ? answers[question] : undefined
+    if (typeof answer !== 'string' || !answer.trim()) throw new Error('すべての質問に答えてください')
+    if (answer.length > QUESTION_TEXT_MAX || /[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(answer)) throw new Error('回答は制御文字を含まない8000文字以内のテキストにしてください')
+    checked[question] = answer.trim()
+  }
+  return checked
+}
 
 export const DEFAULT_TITLE = 'Claude Code'
 const MAX_COLS = 500
@@ -97,11 +139,15 @@ export function hookSettings(node = process.execPath, script = hookScript, { den
   const command = { type: 'command', command: `"${slash(node)}" "${slash(script)}"`, timeout: 10, async: true }
   // SubagentStart / SubagentStop: a turn ends (Stop) while its background agents go on working.
   // StopFailure: a turn that ended on an API error (rate limit, overload) runs no Stop.
-  const events = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'StopFailure', 'PostModelSwitch', 'SubagentStart', 'SubagentStop']
+  // PostToolUseFailure: a tool that failed after its approval runs no PostToolUse, which would leave the task "waiting for approval".
+  const events = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'Stop', 'StopFailure', 'PostModelSwitch', 'SubagentStart', 'SubagentStop']
   // Prompt admission and lifecycle reports must arrive before later failures;
   // otherwise an old prompt can be mistaken for the turn that hit its limit.
   const ordered = new Set(['UserPromptSubmit', 'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'Notification'])
   const settings = { wheelScrollAccelerationEnabled: false, hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [{ ...command, async: !ordered.has(event) }] }]])) }
+  // Synchronous and long: the hook waits until the question is answered in chat (claude-question-hook.js).
+  // Claude Code shows its own dialog meanwhile and ends the hook when the question is answered or cancelled there.
+  settings.hooks.PermissionRequest = [{ matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: `"${slash(node)}" "${slash(questionHookScript)}"`, timeout: QUESTION_WAIT_S }] }]
   // Synchronous: the hook's reply changes the Agent call before it runs (subagent-effort-hook.js).
   if (subagentEffort) {
     settings.hooks.PreToolUse = [{ matcher: 'Agent|Task', hooks: [{ type: 'command', command: `"${slash(node)}" "${slash(effortHookScript)}"`, timeout: 10 }] }]
@@ -219,7 +265,7 @@ function hookActivity(input, event, activity) {
     return { session: input.session_id, transcript: input.transcript_path, activity: input.source === 'compact' ? activity : 'idle' }
   }
   if (event === 'UserPromptSubmit') return { activity: 'running', touched: true }
-  if (event === 'PostToolUse') return { activity: activity === 'approval' ? 'running' : activity }
+  if (event === 'PostToolUse' || event === 'PostToolUseFailure') return { activity: activity === 'approval' ? 'running' : activity }
   if (event === 'Notification') {
     const type = String(input.notification_type ?? '')
     const waiting = type === 'permission_prompt' || type === 'elicitation_dialog' || (!type && /permission|approval|許可/i.test(String(input.message ?? '')))
