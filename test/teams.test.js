@@ -712,9 +712,9 @@ test('team usage recovery updates totals without starting another leader turn', 
 const HARNESS = { parent: '親だけの規則', child: '子だけの規則' }
 
 for (const parent of ['claude', 'gpt']) {
-  test(`TM and eco ${parent} leaders read only the parent harness, restored or not, as saved now`, async (t) => {
-    const harness = { ...HARNESS }
-    const f = await setup(t, { leaderProvider: parent }, { harness: () => harness })
+  test(`TM and eco ${parent} leaders read only their own mode's parent harness, restored or not, as saved now`, async (t) => {
+    const harness = { tm: { ...HARNESS }, eco: { parent: 'ecoの親の規則', child: 'ecoの子の規則' } }
+    const f = await setup(t, { leaderProvider: parent }, { harness: (mode) => harness[mode] })
     const { manager } = f
     const { team: eco } = await manager.create({ workspace: f.workspace, execution: {} })
     const promptFor = async (team) => {
@@ -730,12 +730,14 @@ for (const parent of ['claude', 'gpt']) {
     for (const restored of [false, true]) {
       if (restored) {
         await manager.load()
-        harness.parent = '更新した親の規則'
+        harness.tm.parent = '更新した親の規則'
       }
-      for (const team of [manager.teams.get(f.team.id), manager.teams.get(eco.id)]) {
+      for (const [team, mode] of [[manager.teams.get(f.team.id), 'tm'], [manager.teams.get(eco.id), 'eco']]) {
         const prompt = await promptFor(team)
-        assert.match(prompt, new RegExp(`<parent_harness>\n${harness.parent}\n</parent_harness>`))
-        assert.doesNotMatch(prompt, /子だけの規則|child_harness|team_policy|Playbooks/)
+        const other = mode === 'tm' ? 'eco' : 'tm'
+        assert.match(prompt, new RegExp(`<parent_harness>\n${harness[mode].parent}\n</parent_harness>`))
+        assert.ok(!prompt.includes(harness[other].parent), `${mode} does not read ${other}'s harness`)
+        assert.doesNotMatch(prompt, /子だけの規則|ecoの子の規則|child_harness|team_policy|Playbooks/)
       }
     }
     await assert.rejects(f.tool('playbook', { name: 'x' }), /unknown tool: playbook/)

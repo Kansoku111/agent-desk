@@ -43,8 +43,10 @@ export function appPaths(home = defaultAppHome()) {
     checkpoints: path.join(home, 'checkpoints'),
     // Which providers run in fast mode, read by each dsh process per request.
     fastMode: path.join(home, 'fast-mode.json'),
-    // The extra dsh layer of agent teams' children (dsh-config.js teamChildPatch).
+    // The extra dsh layers of TM children and of eco children (dsh-config.js teamChildPatch),
+    // the same but for each mode's child harness.
     teamChildPatch: path.join(home, 'team-child.patch.yml'),
+    ecoChildPatch: path.join(home, 'eco-child.patch.yml'),
     observerPatch: path.join(home, 'team-observer.patch.yml'),
     chatWebPatch: path.join(home, 'chat-web.patch.yml'),
     abLeanPatch: path.join(home, 'ab-lean.patch.yml'),

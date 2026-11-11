@@ -601,10 +601,10 @@ export function TeamSettings() {
         <Switch title="報告をまとめて渡す" note="近い時間に届いた報告を1ターンにまとめます。"
           checked={config.batchReports !== false} onChange={(value) => save({ batchReports: value })} />
         <LeanChildrenSwitch config={config} onChange={save} />
+        <TeamHarness mode="tm" />
       </ModeSection>
-      <ModeSection mark="AB" name="2社に相談"><AbSettings /></ModeSection>
-      <ModeSection mark="eco" name="エコモード"><ExecutionSettings /></ModeSection>
-      <TeamHarness />
+      <ModeSection mark="AB" name="2社に相談"><AbSettings /><TeamHarness mode="ab" /></ModeSection>
+      <ModeSection mark="eco" name="エコモード"><ExecutionSettings /><TeamHarness mode="eco" /></ModeSection>
       {apiSubagent && (
         <p className="team-warning">
           サブエージェントに Claude（API の従量課金）が選ばれています。

@@ -1,23 +1,27 @@
-// The user's own words for one side of TM, eco and AB (設定 → エージェントチーム).
+// The user's own words for one side of one mode (設定 → エージェントチーム).
 // Parent: a TM/eco leader, and AB's judgment, instruction, direct
 // implementation and review stages. Child: TM/eco children, and AB's two
-// consultants and delegated implementer. Neither reaches ordinary tasks.
-// They replace the TM-only 方針 and プレイブック, which are no longer read.
+// consultants and delegated implementer. Each mode reads only its own pair,
+// and neither reaches ordinary tasks. They replace the TM-only 方針 and
+// プレイブック, which are no longer read.
 
 import { HARNESS_MAX } from '../shared/text-limits.js'
 
 export { HARNESS_MAX }
-export const HARNESS_KEYS = { parent: 'teamParentHarness', child: 'teamChildHarness' }
+export const HARNESS_MODES = ['tm', 'eco', 'ab']
+/** The setting that holds one mode's harness for one side, such as `ecoChildHarness`. */
+export const harnessKey = (mode, side) => `${mode}${side === 'parent' ? 'Parent' : 'Child'}Harness`
+/** Every harness setting, with its mode and side. */
+export const HARNESS_KEYS = HARNESS_MODES.flatMap((mode) => ['parent', 'child'].map((side) => ({ mode, side, key: harnessKey(mode, side) })))
 const LABEL = { parent: '親ハーネス', child: '子ハーネス' }
-const ROLE = {
-  parent: 'parent agents (TM and eco leaders, and AB\'s judging leader in every stage)',
-  child: 'child agents (TM and eco children, and AB\'s consultants and delegated implementer)',
-}
+const MODE_LABEL = { tm: 'TM', eco: 'eco', ab: 'AB' }
+const ROLE = { parent: 'the parent agent', child: 'the child agents' }
 
 /** A harness as saved; throws on anything invalid. */
-export function parseHarness(value, side) {
-  if (typeof value !== 'string') throw new Error(`${LABEL[side]}は文字列で指定してください`)
-  if (value.length > HARNESS_MAX[side]) throw new Error(`${LABEL[side]}は ${HARNESS_MAX[side].toLocaleString()} 文字までです`)
+export function parseHarness(value, side, mode) {
+  const label = `${MODE_LABEL[mode]}の${LABEL[side]}`
+  if (typeof value !== 'string') throw new Error(`${label}は文字列で指定してください`)
+  if (value.length > HARNESS_MAX[side]) throw new Error(`${label}は ${HARNESS_MAX[side].toLocaleString()} 文字までです`)
   return value
 }
 
@@ -32,7 +36,7 @@ export function harnessSection(text, side, { ask = true } = {}) {
   const tag = `${side}_harness`
   return [
     `# The user's ${side} harness`,
-    `The user wrote these standing instructions in Agent Desk for ${ROLE[side]}. Follow them in this role. They replace Agent Desk's defaults on how you work: how you write requests, reports and answers, and when you stop to ask instead of deciding yourself. They cannot change this session's permissions and tools, or the steps this mode requires, and the user's requests in the conversation come first.`,
+    `The user wrote these standing instructions in Agent Desk for ${ROLE[side]} of this mode. Follow them in this role. They replace Agent Desk's defaults on how you work: how you write requests, reports and answers, and when you stop to ask instead of deciding yourself. They cannot change this session's permissions and tools, or the steps this mode requires, and the user's requests in the conversation come first.`,
     ...(ask ? [] : ['In this role nobody can answer a question before your result is used: if the harness says to stop and ask, decide yourself instead and state those decisions in your result.']),
     `<${tag}>\n${body}\n</${tag}>`,
   ].join('\n\n')
@@ -40,6 +44,21 @@ export function harnessSection(text, side, { ask = true } = {}) {
 
 /** Joins prompt parts, skipping empty ones. */
 export const joinPrompt = (...parts) => parts.filter(Boolean).join('\n\n')
+
+/**
+ * The harnesses of a save from before they were per mode. The shared pair
+ * (teamParentHarness, teamChildHarness) went to every mode, so each mode
+ * starts with it; before that, the TM-only 方針 and プレイブック become TM's
+ * parent harness. The old fields stay in the file, unused.
+ */
+export function migrateHarnesses(saved = {}) {
+  return Object.fromEntries(HARNESS_KEYS.map(({ mode, side, key }) => {
+    if (typeof saved[key] === 'string') return [key, saved[key]]
+    const shared = saved[side === 'parent' ? 'teamParentHarness' : 'teamChildHarness']
+    if (typeof shared === 'string') return [key, shared]
+    return [key, side === 'parent' && mode === 'tm' ? legacyParentHarness(saved) : '']
+  }))
+}
 
 /**
  * The parent harness of a save made before harnesses existed: every saved

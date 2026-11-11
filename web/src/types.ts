@@ -494,8 +494,12 @@ export interface Settings extends UsageDisplay {
   localLlm?: { baseURL: string | null; models: { id: string; contextWindow?: number; maxTokens?: number }[] }
   agentTeams: TeamSettings
   /** Read only by the parent or only by the child agents of TM, eco and AB (server/team-harness.js). */
-  teamParentHarness?: string
-  teamChildHarness?: string
+  tmParentHarness?: string
+  tmChildHarness?: string
+  ecoParentHarness?: string
+  ecoChildHarness?: string
+  abParentHarness?: string
+  abChildHarness?: string
 }
 
 /**

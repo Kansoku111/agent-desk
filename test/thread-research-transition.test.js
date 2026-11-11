@@ -22,7 +22,7 @@ async function research(t) {
     async newSession() { throw new Error('must not replace the investigation session') },
   }
   const previousHolder = f.pool.holderOf
-  f.pool.get = async (key) => key === 'team:danger-full-access' ? writer : f.runtime
+  f.pool.get = async (key) => key === 'eco:danger-full-access' ? writer : f.runtime
   f.pool.holderOf = (id) => sessions.has(id) ? writer : previousHolder(id)
   return { ...f, thread, writer }
 }

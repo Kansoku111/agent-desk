@@ -8,7 +8,7 @@ import { FAST_PROVIDERS, recordFastPeriod } from './fast-mode.js'
 import { isLocalModelId, normalizeBaseUrl } from './local-llm.js'
 import { PERMISSION_MODES } from './runtime.js'
 import { mergeTeamConfig, TEAM_DEFAULTS } from './team-config.js'
-import { HARNESS_KEYS, legacyParentHarness, parseHarness } from './team-harness.js'
+import { HARNESS_KEYS, migrateHarnesses, parseHarness } from './team-harness.js'
 import { isUsdJpyRate } from '../shared/usage-score.js'
 import { validateUsageFallbackRoutes } from '../shared/usage-fallback.js'
 
@@ -24,8 +24,8 @@ export function migrateSettings(saved = {}) {
     },
     // Saves from before the routes kept a model per provider; those keys stay in the file, unused.
     subagentRoutes: savedRoutes(saved),
-    // Saves from before harnesses: the removed 方針・プレイブック become the parent harness.
-    teamParentHarness: typeof saved.teamParentHarness === 'string' ? saved.teamParentHarness : legacyParentHarness(saved),
+    // Saves from before per-mode harnesses, or before harnesses (方針・プレイブック).
+    ...migrateHarnesses(saved),
   }
 }
 
@@ -78,8 +78,12 @@ export const DEFAULT_SETTINGS = {
   // 設定 → エージェントチーム (see team-config.js).
   agentTeams: structuredClone(TEAM_DEFAULTS),
   // What only the parent or only the child agents of TM, eco and AB read (see team-harness.js).
-  teamParentHarness: '',
-  teamChildHarness: '',
+  tmParentHarness: '',
+  tmChildHarness: '',
+  ecoParentHarness: '',
+  ecoChildHarness: '',
+  abParentHarness: '',
+  abChildHarness: '',
 }
 
 const BOOLEAN_SETTINGS = [
@@ -223,11 +227,12 @@ export function planSettingsUpdate(current, patch, now) {
     // Read at a team's next launch or child; nothing restarts.
     next.agentTeams = mergeTeamConfig(current.agentTeams, patch.agentTeams)
   }
-  for (const [side, key] of Object.entries(HARNESS_KEYS)) {
+  for (const { mode, side, key } of HARNESS_KEYS) {
     if (!owns(patch, key)) continue
-    next[key] = parseHarness(patch[key], side)
-    // dsh children read theirs from their own layer; rewriting it recycles only their runtimes.
-    if (side === 'child' && next[key] !== current[key]) effects.teamChildPatch = true
+    next[key] = parseHarness(patch[key], side, mode)
+    // TM and eco dsh children read theirs from their own layer; rewriting it recycles only their runtimes.
+    // AB reads its pair as each stage starts.
+    if (side === 'child' && mode !== 'ab' && next[key] !== current[key]) effects.teamChildPatch = true
   }
   if (owns(patch, 'fastMode')) {
     assertRecord(patch.fastMode, 'fastMode')

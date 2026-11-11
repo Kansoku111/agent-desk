@@ -23,7 +23,7 @@ export { dshEnv }
 export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access', 'chat-web']
 
 /** The runtime a thread's session runs in: its mode's, or the team children's of that mode. */
-export const runtimeKey = (thread) => thread.team?.role === 'observer' ? 'team:observer' : thread.preset ? 'preset:' + thread.permissionMode : thread.ab ? (thread.ab.writable ? 'ab:write' : thread.ab.lean ? 'ab:lean' : 'ab:research') : (thread.team?.childId ? `team:${thread.permissionMode}` : thread.permissionMode)
+export const runtimeKey = (thread) => thread.team?.role === 'observer' ? 'team:observer' : thread.preset ? 'preset:' + thread.permissionMode : thread.ab ? (thread.ab.writable ? 'ab:write' : thread.ab.lean ? 'ab:lean' : 'ab:research') : (thread.team?.childId ? `${thread.team.executionMode ? 'eco' : 'team'}:${thread.permissionMode}` : thread.permissionMode)
 
 const STDERR_TAIL = 16_000
 
@@ -259,14 +259,14 @@ export class AcpRuntime extends EventEmitter {
 
 /**
  * Lazily started runtimes, one per permission mode, and one per mode for
- * agent teams' children (`team:<mode>`, see {@link runtimeKey}).
+ * TM children (`team:<mode>`) and eco children (`eco:<mode>`), see {@link runtimeKey}.
  */
 export class RuntimePool extends EventEmitter {
   constructor({ paths, onUpdate, onPermission }) {
     super()
     this.runtimes = new Map()
     for (const mode of PERMISSION_MODES) {
-      for (const [key, patches] of (mode === 'chat-web' ? [[mode, [paths.chatWebPatch]]] : [[mode, []], [`team:${mode}`, [paths.teamChildPatch]]])) {
+      for (const [key, patches] of (mode === 'chat-web' ? [[mode, [paths.chatWebPatch]]] : [[mode, []], [`team:${mode}`, [paths.teamChildPatch]], [`eco:${mode}`, [paths.ecoChildPatch]]])) {
         const runtime = new AcpRuntime({ mode: mode === 'chat-web' ? 'read-only' : mode, paths, patches, onUpdate, onPermission })
         runtime.on('exit', (info) => this.emit('exit', { mode, key, ...info }))
         this.runtimes.set(key, runtime)
@@ -338,8 +338,8 @@ export class RuntimePool extends EventEmitter {
     await Promise.all([...this.runtimes.values()].map((runtime) => runtime.stop()))
   }
 
-  /** Only the runtimes that read the children's layer (`team:<mode>`, not the observer's). */
+  /** Only the runtimes that read a children's layer (`team:<mode>`, `eco:<mode>`; not the observer's). */
   async stopTeamChildren() {
-    await Promise.all([...this.runtimes].filter(([key]) => key.startsWith('team:') && key !== 'team:observer').map(([, runtime]) => runtime.stop()))
+    await Promise.all([...this.runtimes].filter(([key]) => /^(team|eco):/.test(key) && key !== 'team:observer').map(([, runtime]) => runtime.stop()))
   }
 }

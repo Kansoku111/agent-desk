@@ -622,7 +622,8 @@ export class ThreadManager extends EventEmitter {
       if (!thread.team?.childId || thread.team.executionMode !== 'research' || thread.permissionMode !== 'read-only') throw new Error('ecoの調査専用タスクだけ実装へ切り替えられます')
       if (this.active.has(threadId) || thread.pendingApproval) throw new Error('調査が終わってから実装へ切り替えてください')
       if (!thread.sessionId) throw new Error('調査のセッションがありません。別の実装の子を起動してください')
-      const runtime = await this.pool.get('team:danger-full-access')
+      // Research and writing both run in eco's children's layer; only the permission mode changes.
+      const runtime = await this.pool.get('eco:danger-full-access')
       this.#available(threadId, thread)
       const holder = this.pool.holderOf(thread.sessionId)
       if (holder) await holder.closeSession(thread.sessionId)

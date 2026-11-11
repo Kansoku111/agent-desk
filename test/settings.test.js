@@ -746,42 +746,61 @@ test('background checks do not block later updates and failures are reported', a
   assert.ok(h.events.includes('background-error:offline'))
 })
 
-test('parent and child harnesses save as written; only the child one rewrites the children\'s layer alone', async () => {
+test('each mode\'s harnesses save as written; only a TM or eco child one rewrites the children\'s layers', async () => {
   const h = harness()
-  assert.equal(h.live.teamParentHarness, '')
-  assert.equal(h.live.teamChildHarness, '')
-  await h.service.update({ teamParentHarness: '  親の規則\n' })
-  assert.equal(h.live.teamParentHarness, '  親の規則\n')
+  for (const key of ['tmParentHarness', 'tmChildHarness', 'ecoParentHarness', 'ecoChildHarness', 'abParentHarness', 'abChildHarness']) assert.equal(h.live[key], '')
+  await h.service.update({ tmParentHarness: '  親の規則\n', ecoParentHarness: 'eco親', abParentHarness: 'AB親' })
+  assert.equal(h.live.tmParentHarness, '  親の規則\n')
+  assert.equal(h.live.ecoParentHarness, 'eco親')
   assert.ok(!h.events.some((event) => ['home', 'team-child', 'restart'].includes(event)), 'leaders read the parent harness at launch')
-  await h.service.update({ teamChildHarness: '子の規則' })
-  assert.equal(h.live.teamChildHarness, '子の規則')
+  await h.service.update({ abChildHarness: 'AB子' })
+  assert.ok(!h.events.includes('team-child'), 'AB reads its child harness as each stage starts')
+  await h.service.update({ ecoChildHarness: '子の規則' })
+  assert.equal(h.live.ecoChildHarness, '子の規則')
+  assert.equal(h.live.tmChildHarness, '', 'modes do not share a harness')
   assert.ok(h.events.includes('team-child'), 'dsh children read it from their layer')
   assert.ok(!h.events.some((event) => ['home', 'restart'].includes(event)), 'other runtimes are not recycled')
   const before = h.events.length
-  await h.service.update({ teamChildHarness: '子の規則' })
+  await h.service.update({ ecoChildHarness: '子の規則' })
   assert.ok(!h.events.slice(before).includes('team-child'), 'an unchanged harness rewrites nothing')
   for (const [patch, error] of [
-    [{ teamParentHarness: 1 }, /親ハーネスは文字列/],
-    [{ teamChildHarness: 'x'.repeat(2_001) }, /子ハーネスは 2,000 文字まで/],
-    [{ teamParentHarness: 'x'.repeat(4_001) }, /親ハーネスは 4,000 文字まで/],
+    [{ tmParentHarness: 1 }, /TMの親ハーネスは文字列/],
+    [{ ecoChildHarness: 'x'.repeat(2_001) }, /ecoの子ハーネスは 2,000 文字まで/],
+    [{ abParentHarness: 'x'.repeat(4_001) }, /ABの親ハーネスは 4,000 文字まで/],
   ]) await assert.rejects(h.service.update({ theme: 'light', ...patch }), error)
-  await h.service.update({ teamChildHarness: 'x'.repeat(2_000), teamParentHarness: 'x'.repeat(4_000) })
+  await h.service.update({ tmChildHarness: 'x'.repeat(2_000), tmParentHarness: 'x'.repeat(4_000) })
   assert.equal(h.live.theme, 'dark', 'an invalid harness rejects the entire patch')
-  assert.equal(h.live.teamChildHarness.length, 2_000)
+  assert.equal(h.live.tmChildHarness.length, 2_000)
 })
 
-test('the removed 方針 and プレイブック become the parent harness, and their saved fields are kept', () => {
+test('the shared harnesses of an earlier save start every mode', () => {
+  const saved = { teamParentHarness: '共通の親', teamChildHarness: '共通の子', teamPolicies: [{ id: 'p1', name: 'A', text: '方針' }] }
+  const migrated = migrateSettings(saved)
+  for (const mode of ['tm', 'eco', 'ab']) {
+    assert.equal(migrated[`${mode}ParentHarness`], '共通の親')
+    assert.equal(migrated[`${mode}ChildHarness`], '共通の子')
+  }
+  assert.equal(migrated.teamParentHarness, '共通の親', 'the old fields stay in the file')
+  // Once a mode's own harness is saved (even empty), the shared one is no longer read for it.
+  assert.equal(migrateSettings({ ...saved, ecoChildHarness: '' }).ecoChildHarness, '')
+  assert.equal(DEFAULT_SETTINGS.teamParentHarness, undefined)
+})
+
+test('the removed TM-only 方針 and プレイブック become TM\'s parent harness, and their saved fields are kept', () => {
   const one = { teamPolicies: [{ id: 'p1', name: '使い分け', text: ' 設計は Claude ' }], teamPlaybooks: [] }
-  assert.equal(migrateSettings(one).teamParentHarness, '設計は Claude')
+  assert.equal(migrateSettings(one).tmParentHarness, '設計は Claude')
+  assert.equal(migrateSettings(one).ecoParentHarness, '')
+  assert.equal(migrateSettings(one).abParentHarness, '')
   assert.deepEqual(migrateSettings(one).teamPolicies, one.teamPolicies)
   const many = migrateSettings({
     teamPolicies: [{ id: 'p1', name: 'A', text: 'a' }, { id: 'p2', name: 'B', text: '' }],
     teamPlaybooks: [{ id: 'b1', name: '大改修', description: '大きな改修', body: '手順' }, { id: 'b2', name: '空', description: '', body: ' ' }],
   })
-  assert.equal(many.teamParentHarness, '## A\na\n\n## 大改修（大きな改修）\n手順')
-  assert.equal(migrateSettings({}).teamParentHarness, '')
+  assert.equal(many.tmParentHarness, '## A\na\n\n## 大改修（大きな改修）\n手順')
+  assert.equal(migrateSettings({}).tmParentHarness, '')
   // Once a harness is saved (even empty), the old fields are no longer read.
-  assert.equal(migrateSettings({ ...one, teamParentHarness: '' }).teamParentHarness, '')
+  assert.equal(migrateSettings({ ...one, teamParentHarness: '' }).tmParentHarness, '')
+  assert.equal(migrateSettings({ ...one, tmParentHarness: '' }).tmParentHarness, '')
   assert.equal(DEFAULT_SETTINGS.teamPolicies, undefined)
 })
 

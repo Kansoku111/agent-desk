@@ -18,6 +18,7 @@ import {
   ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF, OPENSCALE_REF,
 } from './credentials.js'
 import { contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeDshChildPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch, writeChatWebPatch } from './dsh-config.js'
+import { harnessKey } from './team-harness.js'
 import { BRIDGE_MCP_SERVER, CODEX_BRIDGE_GUIDANCE, SubagentBridge, SUBAGENT_TOOL_TIMEOUT_SEC } from './subagent-bridge.js'
 import { routePlan, savedRoutes } from './subagent-routes.js'
 import { UpdateChecker } from './update-checks.js'
@@ -439,7 +440,7 @@ async function applyHomePatch() {
     openscale: (await accounts()).openscale.configured,
     commandCodeRoutes: (await accounts()).commandCode.configured ? commandCodeRoutes(commandCodeModels.models, { zdr: settings.commandCodeZdr }) : {},
   })
-  const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona, harness: settings.teamChildHarness })
+  const children = await writeTeamChildPatches({ subagents, persona })
   const abChanged = await writeAbPatches(paths, { subagents, persona })
   const presetsChanged = await writeTaskPresetPatch(paths.taskPresetPatch, { subagents, persona })
   const observerChanged = await writeObserverPatch(paths.observerPatch, { subagents, persona })
@@ -547,7 +548,7 @@ teams = await new TeamManager({
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
   apiUrl: () => `http://127.0.0.1:${server.address().port}/api/team`,
   instructions: () => effectiveCustomInstructions(settings),
-  harness: () => ({ parent: settings.teamParentHarness, child: settings.teamChildHarness }),
+  harness: (mode) => ({ parent: settings[harnessKey(mode, 'parent')], child: settings[harnessKey(mode, 'child')] }),
   log,
 }).load()
 
@@ -577,7 +578,7 @@ codex.on('models', models => {
 const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'),
   preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
 const abRunner = new AbRunner({ threads, agents: abAgents, codex, attachmentsDir: paths.attachmentsDir, instructions: () => effectiveCustomInstructions(settings),
-  harness: (side) => side === 'child' ? settings.teamChildHarness : settings.teamParentHarness,
+  harness: (side) => settings[harnessKey('ab', side)],
   guard: (record) => teams.guardExecution(record) })
 const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalogState(),
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
@@ -829,8 +830,14 @@ async function restartTeamRuntimesWhenIdle() {
   await pool.stopTeamChildren()
   broadcast('runtime', { runtime: pool.status() })
 }
+/** The TM and eco children's layers, each with its mode's child harness; true when either changed. */
+async function writeTeamChildPatches(options) {
+  const changed = await Promise.all([['tm', paths.teamChildPatch], ['eco', paths.ecoChildPatch]]
+    .map(([mode, file]) => writeTeamChildPatch(file, { ...options, harness: settings[harnessKey(mode, 'child')] })))
+  return changed.some(Boolean)
+}
 async function applyTeamChildPatch() {
-  const changed = await writeTeamChildPatch(paths.teamChildPatch, { subagents: pinnedSubagents(), persona: await shippedPersona(), harness: settings.teamChildHarness })
+  const changed = await writeTeamChildPatches({ subagents: pinnedSubagents(), persona: await shippedPersona() })
   if (changed) await restartTeamRuntimesWhenIdle()
 }
 

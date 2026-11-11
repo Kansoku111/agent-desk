@@ -129,10 +129,10 @@ export class TeamManager extends EventEmitter {
    * @param {() => object} options.getSettings  the saved `agentTeams` settings: the values a new team starts from
    * @param {() => string} options.apiUrl  where team-mcp.js calls (POST /api/team)
    * @param {() => string} [options.instructions]  the user's custom instructions, added to a Claude leader's and child's prompt
-   * @param {() => { parent: string, child: string }} [options.harness]  the user's parent and child harnesses (team-harness.js)
+   * @param {(mode: 'tm' | 'eco') => { parent: string, child: string }} [options.harness]  one mode's parent and child harnesses (team-harness.js)
    */
   constructor({
-    file, dir, attachmentsDir, threads, terminals, agents, codex, catalog, catalogState = () => catalog.data, getSettings, apiUrl, instructions = () => '', harness = () => ({ parent: '', child: '' }), authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
+    file, dir, attachmentsDir, threads, terminals, agents, codex, catalog, catalogState = () => catalog.data, getSettings, apiUrl, instructions = () => '', harness = (mode) => ({ parent: '', child: '' }), authFile = path.join(path.dirname(file), 'claude-auth-consent.json'),
     node = process.execPath, script = mcpScript, log = () => {}, now = Date.now, gatherMs = REPORT_GATHER_MS, usageFallbackRoutes = () => null, modelVisibility = () => ({}), imageMcp = () => null,
   }) {
     super()
@@ -720,7 +720,7 @@ export class TeamManager extends EventEmitter {
     if (!team || record.team.role !== 'leader' || team.retiredLeaders?.some((entry) => entry.id === record.id)) return null
     return leaderLaunch({
       team, config: this.config(team), models: this.catalogState().models, dir: this.#teamDir(team),
-      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(), harness: this.harness().parent, imageMcp: this.imageMcp(team.workspace),
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(), harness: this.#harness(team).parent, imageMcp: this.imageMcp(team.workspace),
     })
   }
 
@@ -730,7 +730,7 @@ export class TeamManager extends EventEmitter {
     const lean = this.#lean(team, child)
     // Image output writes to the workspace, so do not add it to research-only children.
     const imageMcp = !lean && child.execution?.mode !== 'research' ? this.imageMcp(team.workspace) : null
-    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions(), harness: this.harness().child, lean, imageMcp })
+    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions(), harness: this.#harness(team).child, lean, imageMcp })
   }
 
   /** A child without the browser, desktop and image tools (its MCP servers): the team keeps children lean and its spawn did not ask for them. */
@@ -757,8 +757,13 @@ export class TeamManager extends EventEmitter {
     if (!team || team.retiredLeaders?.some((entry) => entry.id === thread.id)) return null
     return leaderMcpServer({
       team, config: this.config(team), models: this.catalogState().models, dir: this.#teamDir(team),
-      node: this.node, script: this.script, apiUrl: this.apiUrl(), harness: this.harness().parent,
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), harness: this.#harness(team).parent,
     })
+  }
+
+  /** The harnesses of this team's mode: eco reads its own pair, every other team TM's. */
+  #harness(team) {
+    return this.harness(team.execution ? 'eco' : 'tm')
   }
 
   /** Only the observer's own thread may mount its separate capability. */
@@ -893,7 +898,7 @@ export class TeamManager extends EventEmitter {
 
   #codexLeaderOptions(team) {
     const server = leaderMcpServer({ team, config: this.config(team), models: this.catalogState().models, dir: this.#teamDir(team),
-      node: this.node, script: this.script, apiUrl: this.apiUrl(), harness: this.harness().parent })
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), harness: this.#harness(team).parent })
     const env = Object.fromEntries(server.env.map(({ name, value }) => [name, value]))
     const instructions = fs.readFileSync(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8')
     delete env.AGENT_DESK_TEAM_INSTRUCTIONS
@@ -1409,7 +1414,7 @@ export class TeamManager extends EventEmitter {
         const session = await this.codex.create({
           workspace: team.workspace, model: child.model, effort: child.effort,
           permissionMode: child.execution?.mode === 'research' ? 'read-only' : 'danger-full-access', permissionPolicy: 'deny',
-          instructions: childPrompt(child.name, { harness: this.harness().child }),
+          instructions: childPrompt(child.name, { harness: this.#harness(team).child }),
           mcpServers: imageMcp ? { imagegen: imageMcp } : {},
           team: { id: team.id, childId: child.id, ...(child.execution ? { executionMode: child.execution.mode } : {}) },
         })

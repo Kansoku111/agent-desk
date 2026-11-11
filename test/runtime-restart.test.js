@@ -220,6 +220,7 @@ test('a child harness change recycles only the team children\'s runtimes', async
   for (const [key, runtime] of pool.runtimes) runtime.stop = async () => { stopped.push(key) }
   await pool.stopTeamChildren()
   assert.ok(stopped.length > 0)
-  assert.ok(stopped.every((key) => key.startsWith('team:') && key !== 'team:observer'), stopped.join(','))
-  assert.deepEqual(stopped.sort(), [...pool.runtimes.keys()].filter((key) => /^team:(?!observer$)/.test(key)).sort())
+  assert.ok(stopped.every((key) => /^(team|eco):/.test(key) && key !== 'team:observer'), stopped.join(','))
+  assert.ok(stopped.includes('team:danger-full-access') && stopped.includes('eco:read-only'), stopped.join(','))
+  assert.deepEqual(stopped.sort(), [...pool.runtimes.keys()].filter((key) => /^(team:(?!observer$)|eco:)/.test(key)).sort())
 })

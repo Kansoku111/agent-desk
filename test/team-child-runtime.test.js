@@ -99,11 +99,15 @@ test('team children run in runtimes of their own, which load the layer', () => {
   assert.equal(runtimeKey({ permissionMode: 'danger-full-access' }), 'danger-full-access')
   assert.equal(runtimeKey({ permissionMode: 'danger-full-access', team: { id: 't', role: 'leader' } }), 'danger-full-access')
   assert.equal(runtimeKey({ permissionMode: 'danger-full-access', team: { id: 't', childId: 'c' } }), 'team:danger-full-access')
-  const pool = new RuntimePool({ paths: { teamChildPatch: 'C:\\home\\team-child.patch.yml' }, onUpdate: () => {}, onPermission: async () => ({}) })
+  // eco children have their own layer, for eco's child harness; research and writing differ only in permission mode.
+  assert.equal(runtimeKey({ permissionMode: 'read-only', team: { id: 't', childId: 'c', executionMode: 'research' } }), 'eco:read-only')
+  assert.equal(runtimeKey({ permissionMode: 'danger-full-access', team: { id: 't', childId: 'c', executionMode: 'write' } }), 'eco:danger-full-access')
+  const pool = new RuntimePool({ paths: { teamChildPatch: 'C:\\home\\team-child.patch.yml', ecoChildPatch: 'C:\\home\\eco-child.patch.yml' }, onUpdate: () => {}, onPermission: async () => ({}) })
   assert.deepEqual(pool.runtimes.get('danger-full-access').patches, [])
   const child = pool.runtimes.get('team:danger-full-access')
   assert.equal(child.mode, 'danger-full-access')
   assert.deepEqual(child.patches, ['C:\\home\\team-child.patch.yml'])
+  assert.deepEqual(pool.runtimes.get('eco:read-only').patches, ['C:\\home\\eco-child.patch.yml'])
   // Settings show the users' runtimes only.
   assert.deepEqual(Object.keys(pool.status()), ['read-only', 'workspace-write', 'danger-full-access', 'chat-web'])
 })
