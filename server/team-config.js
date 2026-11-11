@@ -1,7 +1,6 @@
 // Settings of the agent teams (設定 → エージェントチーム): who leads (Claude
 // Code or a dsh task, on which model), and which model each provider's
 // "low" and "mid" tier means, or a list of directly selected child models.
-import { ENTRY_ID } from './team-playbooks.js'
 import { assertToolMode } from './ptc.js'
 
 /**
@@ -74,8 +73,6 @@ export const TEAM_DEFAULTS = {
   // Children start without the browser, desktop and image tools (a Claude child without its MCP
   // servers) unless the leader's `spawn` asks for them: smaller tool lists on every turn.
   leanChildren: false,
-  // The policy (team-playbooks.js) a new team's leader reads; null: none.
-  policy: null,
 }
 
 /** The switches of 設定 → エージェントチーム that are not a team's own choices. */
@@ -111,7 +108,6 @@ export function teamConfig(saved) {
     commandCodeClaude: provider('commandCodeClaude'),
     local: provider('local'),
     maxChildren: Number.isInteger(value.maxChildren) ? value.maxChildren : TEAM_DEFAULTS.maxChildren,
-    policy: typeof value.policy === 'string' && ENTRY_ID.test(value.policy) ? value.policy : null,
   }
 }
 
@@ -218,7 +214,6 @@ export function mergeTeamConfig(current, patch) {
     if (!Number.isInteger(count) || count < 1 || count > MAX_CHILDREN_LIMIT) throw new Error(`子の上限は 1〜${MAX_CHILDREN_LIMIT} で指定してください`)
     next.maxChildren = count
   }
-  if (Object.hasOwn(patch, 'policy')) next.policy = choice(patch.policy, ENTRY_ID, '方針')
   for (const provider of TEAM_PROVIDERS) {
     if (next[provider].enabled && !TEAM_TIERS.some((tier) => next[provider][tier].enabled)) {
       throw new Error(`${PROVIDER_NAMES[provider]} の低枠と中枠の少なくとも一方はオンにしてください`)

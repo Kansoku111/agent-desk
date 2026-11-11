@@ -745,66 +745,39 @@ test('background checks do not block later updates and failures are reported', a
   assert.ok(h.events.includes('background-error:offline'))
 })
 
-for (const [key, body] of [['teamPolicies', { text: 'original' }], ['teamPlaybooks', { description: 'when', body: 'original' }]]) {
-  test(`${key}: queued stale saves cannot overwrite another window's changes`, async () => {
-    const base = [{ id: 'a', name: 'A', ...body }, { id: 'b', name: 'B', ...body }]
-    const field = key === 'teamPolicies' ? 'text' : 'body'
-    const started = deferred()
-    const finish = deferred()
-    let first = true
-    const h = harness({ [key]: base }, { save: async () => {
-      if (!first) return
-      first = false
-      started.resolve()
-      await finish.promise
-    } })
-    const one = structuredClone(base)
-    one[0][field] = 'saved in window one'
-    const two = structuredClone(base)
-    two[1][field] = 'draft in window two'
-    const saving = h.service.update({ [key]: one, teamGuidesBase: { [key]: base } })
-    await started.promise
-    const stale = h.service.update({ theme: 'light', [key]: two, teamGuidesBase: { [key]: base } })
-    const rejected = assert.rejects(stale, /別の画面で更新/)
-    finish.resolve()
-    await saving
-    await rejected
-    assert.deepEqual(h.live[key], one)
-    assert.equal(h.live.theme, 'dark', 'a conflict rejects the entire patch')
-    assert.equal(h.writes.length, 1)
-    assert.equal(h.published.length, 1)
-    assert.equal(h.live.teamGuidesBase, undefined, 'save preconditions are not persisted')
-
-    // Reloading the latest snapshot makes the next edit safe; the queue recovers.
-    const latest = structuredClone(h.live[key])
-    const retried = structuredClone(latest)
-    retried[1][field] = 'rebased edit'
-    await h.service.update({ [key]: retried, teamGuidesBase: { [key]: latest } })
-    assert.equal(h.live[key][0][field], 'saved in window one')
-    assert.equal(h.live[key][1][field], 'rebased edit')
-  })
-
-  test(`${key}: additions, deletions and missing bases cannot bypass conflict detection`, async () => {
-    const base = [{ id: 'a', name: 'A', ...body }]
-    for (const current of [[], [...base, { id: 'b', name: 'B', ...body }]]) {
-      const h = harness({ [key]: current })
-      await assert.rejects(h.service.update({ [key]: base, teamGuidesBase: { [key]: base } }), /別の画面で更新/)
-      await assert.rejects(h.service.update({ [key]: base }), /編集元を確認/)
-      assert.deepEqual(h.live[key], current)
-      assert.deepEqual(h.events, [])
-    }
-    const h = harness({ [key]: base })
-    await h.service.update({ [key]: [], teamGuidesBase: { [key]: base } })
-    assert.deepEqual(h.live[key], [], 'deleting entries with the current base is allowed')
-  })
-}
-
-test('policy and playbook save preconditions are independent', async () => {
+test('parent and child harnesses save as written; only the child one rewrites the dsh layers', async () => {
   const h = harness()
-  await h.service.update({ teamPolicies: [{ id: 'a', name: 'A', text: 'policy' }], teamGuidesBase: { teamPolicies: [] } })
-  await h.service.update({ teamPlaybooks: [{ id: 'b', name: 'B', description: '', body: 'steps' }], teamGuidesBase: { teamPlaybooks: [] } })
-  assert.equal(h.live.teamPolicies[0].text, 'policy')
-  assert.equal(h.live.teamPlaybooks[0].body, 'steps')
+  assert.equal(h.live.teamParentHarness, '')
+  assert.equal(h.live.teamChildHarness, '')
+  await h.service.update({ teamParentHarness: '  親の規則\n' })
+  assert.equal(h.live.teamParentHarness, '  親の規則\n')
+  assert.ok(!h.events.includes('home'), 'leaders read the parent harness at launch')
+  await h.service.update({ teamChildHarness: '子の規則' })
+  assert.equal(h.live.teamChildHarness, '子の規則')
+  assert.ok(h.events.includes('home'), 'dsh children read it from their layer')
+  const before = h.events.length
+  await h.service.update({ teamChildHarness: '子の規則' })
+  assert.ok(!h.events.slice(before).includes('home'), 'an unchanged harness rewrites nothing')
+  for (const [patch, error] of [
+    [{ teamParentHarness: 1 }, /親ハーネスは文字列/],
+    [{ teamChildHarness: 'x'.repeat(10_001) }, /子ハーネスは 10,000 文字まで/],
+  ]) await assert.rejects(h.service.update({ theme: 'light', ...patch }), error)
+  assert.equal(h.live.theme, 'dark', 'an invalid harness rejects the entire patch')
+})
+
+test('the removed 方針 and プレイブック become the parent harness, and their saved fields are kept', () => {
+  const one = { teamPolicies: [{ id: 'p1', name: '使い分け', text: ' 設計は Claude ' }], teamPlaybooks: [] }
+  assert.equal(migrateSettings(one).teamParentHarness, '設計は Claude')
+  assert.deepEqual(migrateSettings(one).teamPolicies, one.teamPolicies)
+  const many = migrateSettings({
+    teamPolicies: [{ id: 'p1', name: 'A', text: 'a' }, { id: 'p2', name: 'B', text: '' }],
+    teamPlaybooks: [{ id: 'b1', name: '大改修', description: '大きな改修', body: '手順' }, { id: 'b2', name: '空', description: '', body: ' ' }],
+  })
+  assert.equal(many.teamParentHarness, '## A\na\n\n## 大改修（大きな改修）\n手順')
+  assert.equal(migrateSettings({}).teamParentHarness, '')
+  // Once a harness is saved (even empty), the old fields are no longer read.
+  assert.equal(migrateSettings({ ...one, teamParentHarness: '' }).teamParentHarness, '')
+  assert.equal(DEFAULT_SETTINGS.teamPolicies, undefined)
 })
 
 test('agent team settings merge per field, validate everything and need no runtime effects', async () => {

@@ -25,7 +25,7 @@ const modules = {
   '../util': { parseModel: (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }, pickableEfforts: (efforts) => efforts },
   './Modal': {}, './Popover': {}, './Pickers': { byNewest: () => 0 },
   './TerminalPickers': { claudeModels: () => [], claudeModelName: (_server, model) => model, claudeEfforts: () => ['low', 'high'] },
-  './ClaudeAuthConsent': {}, './TeamGuides': {}, './ModeSections': {}, './PtcToggle': {}, './FallbackSummary': {}, '../team-auth-consent': {},
+  './ClaudeAuthConsent': {}, './TeamHarness': {}, './ModeSections': {}, './PtcToggle': {}, './FallbackSummary': {}, '../team-auth-consent': {},
   '../../../shared/usage-fallback.js': usageFallback,
   '../../../shared/workflow-effort.js': {},
   './WorkflowModelField': { ModelField: field, modelGroups: (server) => server.groups.map((group) => ({ ...group, models: [...group.models] })) },
@@ -33,7 +33,7 @@ const modules = {
 const component = {}
 new Function('require', 'exports', outputText)((name) => { assert.ok(name in modules, name); return modules[name] }, component)
 const server = {
-  groups, settings: { teamPolicies: [{ id: 'p1', name: '方針' }] }, accounts: { chatgpt: { signedIn: true } },
+  groups, settings: {}, accounts: { chatgpt: { signedIn: true } },
   catalog: { models: groups.flatMap((group) => group.models), effortsByModel: {}, fallbackEfforts: [{ value: 'low' }, { value: 'high' }] },
 }
 function nodes(node, match) {
@@ -46,15 +46,14 @@ function harness(saved) {
   return { get draft() { return draft }, tree: render, field: () => nodes(render(), (node) => node.type === field)[0].props }
 }
 
-test('one leader picker preserves old Claude and GPT settings and the policy', () => {
-  const legacy = harness({ leaderProvider: 'gpt', gptLeader: { model: null, effort: 'high' }, gpt: { mid: { model: 'gpt-6-luna' } }, policy: 'p1' })
+test('one leader picker preserves old Claude and GPT settings', () => {
+  const legacy = harness({ leaderProvider: 'gpt', gptLeader: { model: null, effort: 'high' }, gpt: { mid: { model: 'gpt-6-luna' } } })
   assert.equal(legacy.field().value, JSON.stringify(['openai-codex', 'gpt-6-luna']))
   assert.equal(legacy.field().effort, 'high')
   assert.equal(legacy.field().allowClearUnavailableEffort, true)
   legacy.field().onChange(legacy.field().value)
   assert.equal(legacy.draft.gptLeader.model, null, 'reselecting the same model does not overwrite legacy fallback')
   assert.equal(legacy.draft.gptLeader.effort, 'high')
-  assert.equal(nodes(legacy.tree(), (node) => node.type === 'select')[0].props.value, 'p1')
   const claude = harness({ leader: { model: null, effort: null } })
   assert.equal(claude.field().value, 'claude:')
   assert.ok(claude.field().groups.flatMap((group) => group.models).some((entry) => entry.name === 'Claude Code の既定'))

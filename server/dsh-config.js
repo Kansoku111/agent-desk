@@ -293,12 +293,13 @@ const BASE_SUBAGENT_TOOLS = ['tool-subagent', 'tool-subagent-fork', 'tool-subage
  * size stays what the user set. Applied after {@link homePatch}, so it also
  * removes the fixed-model tools that patch adds, with their prompt section.
  * Children report to the leader; neither goal tools nor the round driver run here.
- * Same options as homePatch (`subagents`, `persona`). The child's standing
+ * Same options as homePatch (`subagents`, `persona`), plus the user's child
+ * `harness` (team-harness.js). The child's standing
  * instructions go in the system prompt ({@link TEAM_CHILD_PLUGIN}), where
  * compaction leaves them be. The child backend bounds automatic compaction
  * pressure without changing model capacity, reply caps, or other roles.
  */
-export function teamChildPatch({ subagents = [], persona = null } = {}) {
+export function teamChildPatch({ subagents = [], persona = null, harness = '' } = {}) {
   const pinned = subagents.filter(({ provider, model }) => SUBAGENT_TOOLS[provider] && isLocalModelId(model))
   const rows = [
     ...BASE_SUBAGENT_TOOLS.map((id) => ({ id, disabled: true })),
@@ -314,7 +315,7 @@ export function teamChildPatch({ subagents = [], persona = null } = {}) {
     const { personaPrefix = '', personaSuffix = '' } = persona ?? {}
     rows.push({ id: 'system-prompt', config: { personaPrefix, personaSuffix } })
   }
-  rows.push({ insert: [{ id: 'agent-desk-team-child', name: TEAM_CHILD_PLUGIN, config: { text: childPrompt() } }] })
+  rows.push({ insert: [{ id: 'agent-desk-team-child', name: TEAM_CHILD_PLUGIN, config: { text: childPrompt(undefined, { harness }) } }] })
   return `# Managed by Agent Desk: this file is rewritten on every start.
 # Applied after cordis.patch.yml in the runtimes of agent teams' children:
 # children have no subagent tools, and have their standing instructions.

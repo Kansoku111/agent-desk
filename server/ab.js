@@ -14,6 +14,9 @@ import { isLeaderUsageLimit } from './leader-usage-limit.js'
 import { usageFallbackChoice } from '../shared/usage-fallback.js'
 
 const ROLES = ['a', 'b', 'leader', 'implementer']
+// Which harness (team-harness.js) a job reads: consultants and the delegated implementer are
+// children; every leader stage (judgment, instructions, direct implementation, review) is the parent.
+export const abHarnessSide = (role) => ['a', 'b', 'implementer'].includes(role) ? 'child' : 'parent'
 // Raw preferences retain legacy blanks; new-run resolution below materializes medium.
 export const AB_DEFAULTS = { a: '', b: '', leader: '', implementer: '', leaderFallback: '', fallbackEffort: '', efforts: { a: '', b: '', leader: '', implementer: '' }, lean: true, delegate: true, review: true, toolMode: 'ptc' }
 // Implementation always runs unsandboxed; every other stage is read-only.
@@ -181,7 +184,7 @@ export class AbManager extends EventEmitter {
   async launch(run, job) {
     try {
       const handle = await this.runner.start({ runId: run.id, jobId: job.id, workspace: run.workspace, model: job.model, effort: job.effort ?? '', strictEffort: run.strictEffort === true,
-        toolMode: job.toolMode ?? run.config.toolMode, ...(run.leaderFallbackUsed && job.model === run.config.leaderFallback ? { strictModel: true } : {}), text: job.text, images: await this.validateImages(job.images ?? abContextImages(run), run.config), instructions: job.instructions, writable: job.writable, lean: run.config.lean, permissionMode: job.permissionMode })
+        toolMode: job.toolMode ?? run.config.toolMode, ...(run.leaderFallbackUsed && job.model === run.config.leaderFallback ? { strictModel: true } : {}), text: job.text, images: await this.validateImages(job.images ?? abContextImages(run), run.config), instructions: job.instructions, side: abHarnessSide(job.role), writable: job.writable, lean: run.config.lean, permissionMode: job.permissionMode })
       job.handle = handle
       await this.save(run)
     } catch (error) {

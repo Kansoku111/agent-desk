@@ -227,33 +227,19 @@ test('a GPT leader\'s MCP server gives the leader instructions as its own', asyn
   }
 })
 
-test('eco MCP rejects playbook calls even with a stale TM playbook flag', async () => {
-  const desk = await fakeDesk(() => [200, { ok: true, text: 'TM-only body' }])
-  const mcp = startMcp(desk.url, { AGENT_DESK_EXECUTION: '1', AGENT_DESK_TEAM_PLAYBOOKS: '1' })
-  try {
-    const listed = await mcp.request('tools/list', {})
-    assert.ok(!listed.result.tools.some((tool) => tool.name === 'playbook'))
-    const read = await mcp.request('tools/call', { name: 'playbook', arguments: { name: '改修' } })
-    assert.equal(read.error.code, -32602)
-    assert.deepEqual(desk.calls, [])
-  } finally {
-    await mcp.close()
-    desk.close()
+test('no leader lists a playbook tool, even with a flag from an older launch', async () => {
+  const desk = await fakeDesk(() => [200, { ok: true, text: 'body' }])
+  for (const env of [{ AGENT_DESK_TEAM_PLAYBOOKS: '1' }, { AGENT_DESK_EXECUTION: '1', AGENT_DESK_TEAM_PLAYBOOKS: '1' }]) {
+    const mcp = startMcp(desk.url, env)
+    try {
+      const listed = await mcp.request('tools/list', {})
+      assert.ok(!listed.result.tools.some((tool) => tool.name === 'playbook'))
+      const read = await mcp.request('tools/call', { name: 'playbook', arguments: { name: '改修' } })
+      assert.equal(read.error.code, -32602)
+    } finally {
+      await mcp.close()
+    }
   }
-})
-
-test('the playbook tool is listed only when the user has playbooks', async () => {
-  const desk = await fakeDesk((call) => [200, { ok: true, text: `# Playbook: ${call.args.name}` }])
-  const mcp = startMcp(desk.url, { AGENT_DESK_TEAM_PLAYBOOKS: '1' })
-  try {
-    await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } })
-    const listed = await mcp.request('tools/list', {})
-    assert.equal(listed.result.tools.at(-1).name, 'playbook')
-    const read = await mcp.request('tools/call', { name: 'playbook', arguments: { name: '改修' } })
-    assert.equal(read.result.content[0].text, '# Playbook: 改修')
-    assert.deepEqual(desk.calls[0], { teamId: 'team-1', secret: 's3cret', tool: 'playbook', args: { name: '改修' } })
-  } finally {
-    await mcp.close()
-    desk.close()
-  }
+  assert.deepEqual(desk.calls, [])
+  desk.close()
 })

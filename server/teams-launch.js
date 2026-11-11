@@ -22,9 +22,6 @@ const CHILD_DISALLOWED = [
   'Task', 'Agent', 'Workflow', 'SendMessage', 'ListAgents', 'RemoteTrigger', 'CronCreate', 'ScheduleWakeup',
 ].join(',')
 
-/** A leader without the user's policy or playbooks (team-playbooks.js leaderGuides). */
-const NO_GUIDES = { policy: '', playbooks: [] }
-
 /** Writes a file a Claude Code reads (its MCP config, its instructions). */
 function writeFile(dir, name, text) {
   fs.mkdirSync(dir, { recursive: true })
@@ -45,9 +42,7 @@ ${section}` : prompt
  * The flags a team leader's Claude Code starts with (TerminalManager's
  * `launch`). The files are written each time: the server's port may have changed.
  */
-export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, instructions = '', guides = NO_GUIDES, imageMcp = null }) {
-  // Policy and playbooks belong to TM, not eco (including previously saved teams).
-  if (team.execution) guides = NO_GUIDES
+export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, instructions = '', harness = '', imageMcp = null }) {
   const mcp = writeFile(dir, 'mcp.json', JSON.stringify({
     mcpServers: {
       ...(imageMcp ? { imagegen: imageMcp } : {}),
@@ -59,13 +54,12 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
           AGENT_DESK_TEAM_URL: apiUrl, AGENT_DESK_TEAM_ID: team.id, AGENT_DESK_TEAM_SECRET: team.secret,
           ...(team.execution ? { AGENT_DESK_EXECUTION: '1' } : {}),
           ...(team.execution?.planImplement ? { AGENT_DESK_PLAN_IMPLEMENT: '1' } : {}),
-          ...(guides.playbooks.length ? { AGENT_DESK_TEAM_PLAYBOOKS: '1' } : {}),
         },
       },
     },
   }, null, 2))
   const prompt = writeFile(dir, 'leader.md', withInstructions(leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: !team.execution && config.leanChildren, execution: Boolean(team.execution), ...guides,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), lean: !team.execution && config.leanChildren, execution: Boolean(team.execution), harness,
   }) + (team.execution ? executionPrompt(team.execution.planImplement) : '') + (team.execution?.planImplement ? PLAN_IMPLEMENT_PROMPT : ''), instructions))
   return {
     args: [
@@ -84,10 +78,9 @@ export function leaderLaunch({ team, config, models, dir, node, script, apiUrl, 
  * the team's tools, with its instructions as the server's own. Written each
  * time a session starts: the server's port may have changed.
  */
-export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl, guides = NO_GUIDES }) {
-  if (team.execution) guides = NO_GUIDES
+export function leaderMcpServer({ team, config, models, dir, node, script, apiUrl, harness = '' }) {
   const prompt = writeFile(dir, 'leader.md', leaderPrompt({
-    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: !team.execution && config.leanChildren, execution: Boolean(team.execution), ...guides,
+    workspace: team.workspace, maxChildren: config.maxChildren, tiers: tierLines(config, models), gpt: true, lean: !team.execution && config.leanChildren, execution: Boolean(team.execution), harness,
   }) + (team.execution ? executionPrompt(team.execution.planImplement) : '') + (team.execution?.planImplement ? PLAN_IMPLEMENT_PROMPT : ''))
   return {
     name: MCP_SERVER,
@@ -100,7 +93,6 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
       { name: 'AGENT_DESK_TEAM_INSTRUCTIONS', value: prompt },
       ...(team.execution ? [{ name: 'AGENT_DESK_EXECUTION', value: '1' }] : []),
       ...(team.execution?.planImplement ? [{ name: 'AGENT_DESK_PLAN_IMPLEMENT', value: '1' }] : []),
-      ...(guides.playbooks.length ? [{ name: 'AGENT_DESK_TEAM_PLAYBOOKS', value: '1' }] : []),
     ],
   }
 }
@@ -112,9 +104,9 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
  * Any other child gets Claude in Chrome, which `-p` leaves out without `--chrome`
  * (and `--strict-mcp-config` keeps when it is asked for).
  */
-export function childTurnArgs({ child, dir, instructions = '', lean = false, imageMcp = null }) {
+export function childTurnArgs({ child, dir, instructions = '', harness = '', lean = false, imageMcp = null }) {
   const mcp = imageMcp && !lean ? writeFile(dir, `${child.id}-image-mcp.json`, JSON.stringify({ mcpServers: { imagegen: imageMcp } })) : null
-  const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name, { background: true }), instructions))
+  const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name, { background: true, harness }), instructions))
   return [
     '--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt,
     ...(child.execution?.mode === 'research' ? ['--tools', 'Read,Glob,Grep'] : []),

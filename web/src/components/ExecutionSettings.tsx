@@ -204,7 +204,6 @@ export function ExecutionStartDialog({ workspace }: { workspace: string }) {
       choices.leanChildren = false
       choices.batchReports = true
       choices.maxChildren = 6
-      choices.policy = null
       if (await startTeam(workspace, choices, usesClaude ? auth.confirmation : undefined, { ...(leader.startsWith('claude:') ? {} : { leaderModel: leader }), planImplement: current.planImplement })) {
         close()
       }

@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import { DELIVERY_CHECK_MS, DELIVERY_GIVE_UP_MS, LEADER_SETTLE_MS, MCP_SERVER, PREFIX, REPORT_PREVIEW, REPORT_GATHER_MS, RESUME_DELAY_MS, TeamManager, TYPING_QUIET_MS, describeTool, transientError } from '../server/teams.js'
 import { assertChildrenOn, mergeTeamConfig, teamConfig, TEAM_DEFAULTS } from '../server/team-config.js'
 import { AbRunner } from '../server/ab-runner.js'
+import { AB_CONSULT, abHarnessSide } from '../server/ab.js'
 import { createMcpServerList } from '../server/mcp-servers.js'
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
@@ -708,65 +709,73 @@ test('team usage recovery updates totals without starting another leader turn', 
   assert.equal(f.threads.calls.length, calls)
 })
 
-const GUIDES = {
-  policies: [{ id: 'p1', name: 'TMの方針', text: 'TM専用の方針本文' }],
-  playbooks: [{ id: 'b1', name: 'TM専用の手順', description: 'TM専用の場面', body: 'TM専用の手順本文' }],
-}
+const HARNESS = { parent: '親だけの規則', child: '子だけの規則' }
 
-for (const parent of ['claude', 'gpt', 'claudeApi']) {
-  test(`TM guides stay out of eco ${parent} parents, including restored teams and direct API calls`, async (t) => {
-    const guides = structuredClone(GUIDES)
-    const f = await setup(t, { policy: 'p1', leaderProvider: parent === 'claude' ? 'claude' : 'gpt' }, { guides: () => guides })
+for (const parent of ['claude', 'gpt']) {
+  test(`TM and eco ${parent} leaders read only the parent harness, restored or not, as saved now`, async (t) => {
+    const harness = { ...HARNESS }
+    const f = await setup(t, { leaderProvider: parent }, { harness: () => harness })
     const { manager } = f
-    const { team: eco } = await manager.create({
-      workspace: f.workspace, execution: parent === 'claudeApi' ? { leaderModel: '["anthropic","claude-haiku-5-5"]' } : {},
-    })
+    const { team: eco } = await manager.create({ workspace: f.workspace, execution: {} })
     const promptFor = async (team) => {
       const record = { team: { id: team.id, role: 'leader' } }
       if (team.leaderKind === 'terminal') {
         const { args } = manager.launchFor(record)
-        const mcp = JSON.parse(await fs.readFile(args[args.indexOf('--mcp-config') + 1], 'utf8'))
-        return { env: mcp.mcpServers['agent-team'].env, prompt: await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8') }
+        return fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
       }
       const env = Object.fromEntries(manager.mcpServerFor(record).env.map(({ name, value }) => [name, value]))
-      return { env, prompt: await fs.readFile(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8') }
+      assert.equal(env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
+      return fs.readFile(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8')
     }
     for (const restored of [false, true]) {
-      if (restored) await manager.load()
-      const tmTeam = manager.teams.get(f.team.id)
-      const ecoTeam = manager.teams.get(eco.id)
-      // Even a saved eco with a selected TM policy must not read it.
-      assert.equal(ecoTeam.config.policy, 'p1')
-      const tm = await promptFor(tmTeam)
-      assert.match(tm.prompt, /<team_policy>\nTM専用の方針本文\n<\/team_policy>/)
-      assert.match(tm.prompt, /"TM専用の手順": TM専用の場面/)
-      assert.equal(tm.env.AGENT_DESK_TEAM_PLAYBOOKS, '1')
-      const ex = await promptFor(ecoTeam)
-      assert.doesNotMatch(ex.prompt, /team_policy|Playbooks|TM専用/)
-      assert.equal(ex.env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
-      assert.equal(ex.env.AGENT_DESK_EXECUTION, '1')
-      guides.playbooks[0].body = restored ? '更新済みの手順本文' : 'TM専用の手順本文'
-      assert.match(await f.tool('playbook', { name: 'TM専用の手順' }), new RegExp(guides.playbooks[0].body))
-      for (const name of ['TM専用の手順', 'unknown']) {
-        await assert.rejects(manager.call(eco.id, ecoTeam.secret, 'playbook', { name }), /unknown tool: playbook/)
+      if (restored) {
+        await manager.load()
+        harness.parent = '更新した親の規則'
+      }
+      for (const team of [manager.teams.get(f.team.id), manager.teams.get(eco.id)]) {
+        const prompt = await promptFor(team)
+        assert.match(prompt, new RegExp(`<parent_harness>\n${harness.parent}\n</parent_harness>`))
+        assert.doesNotMatch(prompt, /子だけの規則|child_harness|team_policy|Playbooks/)
       }
     }
   })
 }
 
-test('AB Claude and dsh jobs never receive TM guides or its MCP server', async (t) => {
-  const f = await setup(t, { policy: 'p1', leaderProvider: 'gpt' }, { guides: () => structuredClone(GUIDES) })
+test('team children read only the child harness; an empty harness adds no section', async (t) => {
+  const harness = { ...HARNESS }
+  const f = await setup(t, {}, { harness: () => harness })
+  await f.tool('spawn', { title: 'Claude child', task: 'bounded task', tier: 'low', provider: 'claude' })
+  const child = f.team.children.at(-1)
+  const promptOf = async () => {
+    const { args } = f.agents.sessions.get(child.taskId)
+    return fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
+  }
+  assert.match(await promptOf(), /<child_harness>\n子だけの規則\n<\/child_harness>/)
+  assert.doesNotMatch(await promptOf(), /親だけの規則/)
+  harness.child = ''
+  harness.parent = ''
+  const { args } = f.manager.launchFor({ team: { id: f.team.id, role: 'leader' } })
+  assert.doesNotMatch(await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8'), /_harness>/)
+})
+
+test('AB parent stages read the parent harness and consultants and the implementer the child harness', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
   f.agents.live = new Map()
   f.threads.active = new Map()
-  const runner = new AbRunner({ threads: f.threads, agents: f.agents, instructions: () => '通常のカスタム指示' })
+  const runner = new AbRunner({ threads: f.threads, agents: f.agents, instructions: () => '通常のカスタム指示',
+    harness: (side) => HARNESS[side] })
   const getServers = createMcpServerList({ paths: {}, getSettings: () => ({}), getTeams: () => f.manager })
-  for (const model of ['claude:sonnet', '["openai-codex","gpt-6.1-sol"]']) for (const writable of [false, true]) {
+  for (const model of ['claude:sonnet', '["openai-codex","gpt-6.1-sol"]']) for (const [role, instructions] of [['a', AB_CONSULT], ['leader', 'AB専用の指示'], ['implementer', 'AB専用の指示'], ['direct', 'AB専用の指示']]) {
+    const side = abHarnessSide(role)
+    const other = side === 'parent' ? '子だけの規則' : '親だけの規則'
     const handle = await runner.start({ runId: 'R', jobId: 'J', model, workspace: f.workspace,
-      writable, lean: true, instructions: 'AB専用の指示', text: 'ABの依頼' })
+      writable: ['implementer', 'direct'].includes(role), lean: true, instructions, side, text: 'ABの依頼' })
     if (handle.kind === 'claude') {
       const { args } = f.agents.sessions.get(handle.id)
-      assert.match(args[args.indexOf('--append-system-prompt') + 1], /AB専用の指示\n\n通常のカスタム指示/)
-      assert.doesNotMatch(args.join('\n'), /TM専用|team_policy|Playbooks|agent-team/)
+      const prompt = args[args.indexOf('--append-system-prompt') + 1]
+      assert.ok(prompt.startsWith(`${instructions}\n\n# The user's ${side} harness`))
+      assert.match(prompt, new RegExp(`<${side}_harness>\n${HARNESS[side]}\n</${side}_harness>\n\n通常のカスタム指示$`))
+      assert.ok(!prompt.includes(other))
       assert.ok(!args.includes('--mcp-config'))
     } else {
       const thread = f.threads.threads.get(handle.id)
@@ -774,7 +783,12 @@ test('AB Claude and dsh jobs never receive TM guides or its MCP server', async (
       assert.equal(f.manager.mcpServerFor(thread), null)
       assert.deepEqual(getServers(thread), [])
       const message = f.threads.calls.findLast(([op, id]) => op === 'send' && id === handle.id)[2]
-      assert.doesNotMatch(message, /TM専用|team_policy|Playbooks/)
+      // A consultant gets the user's text unchanged after the harness, without AB's own instructions.
+      assert.ok(message.endsWith(`</${side}_harness>\n\nABの依頼`))
+      assert.equal(message.includes(AB_CONSULT), false)
+      if (role !== 'a') assert.ok(message.startsWith('AB専用の指示\n\n'))
+      assert.ok(!message.includes(other))
+    await assert.rejects(f.tool('playbook', { name: 'x' }), /unknown tool: playbook/)
     }
     await runner.remove(handle)
   }
@@ -802,6 +816,8 @@ for (const parent of ['claude', 'gpt']) for (const provider of ['claude', 'gpt']
   })
 }
 
+  assert.deepEqual(['a', 'b', 'implementer', 'leader', 'instructions', 'direct', 'reviewer'].map(abHarnessSide),
+    ['child', 'child', 'child', 'parent', 'parent', 'parent', 'parent'])
 for (const provider of ['claude', 'gpt']) for (const mode of ['write', 'research']) {
   test(`eco ${provider} ${mode} children get extra tools even with saved lean settings`, async (t) => {
     const f = await setupExecution(t)

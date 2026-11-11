@@ -381,3 +381,10 @@ test('AB config validates boolean switches', () => {
   assert.throws(() => abConfig({ leader: {} }))
   assert.equal(abConfig().lean, true)
 })
+
+test('AB consultants read the child harness and the judging leader the parent harness', async (t) => {
+  const f = await setup(t)
+  assert.deepEqual(f.runner.calls.map((call) => call.side), ['child', 'child'])
+  await f.finish('a'); await f.finish('b')
+  assert.equal(f.runner.calls.at(-1).side, 'parent')
+})

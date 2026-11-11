@@ -10,7 +10,7 @@ let fail = '', delay = '', release: (() => void) | undefined
 const config: any = { a: model, b: model, leader: model, implementer: model, efforts: { a: 'medium', b: 'medium', leader: 'medium', implementer: 'medium' }, lean: true, delegate: true, review: true, toolMode: 'native' }
 const provider = (enabled = false) => ({ enabled, low: { enabled: true, model: 'fixture', effort: 'medium' }, mid: { enabled: true, model: 'fixture', effort: 'medium' } })
 const teamConfig: any = { leaderProvider: 'gpt', gptLeader: { model: 'fixture', effort: 'medium' }, leader: { model: 'opus', effort: null },
-  leaderBypass: true, batchReports: true, leanChildren: false, maxChildren: 6, policy: null, toolMode: 'native',
+  leaderBypass: true, batchReports: true, leanChildren: false, maxChildren: 6, toolMode: 'native',
   gpt: provider(true), claude: provider(), claudeApi: provider(), deepseek: provider(), opencodeGo: provider(), local: provider() }
 let savedModels: any = { leader: model, provider: 'gpt', model: 'fixture', leaderEffort: 'medium', childEffort: 'medium', toolMode: 'native' }
 const run: any = { id: 'run', workspace, title: 'PTC fixture', text: 'original request', config: { ...config }, phase: 'completed', jobs: [], messages: [], revision: 1, createdAt: 1, updatedAt: 1 }

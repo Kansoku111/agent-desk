@@ -439,7 +439,7 @@ async function applyHomePatch() {
     openscale: (await accounts()).openscale.configured,
     commandCodeRoutes: (await accounts()).commandCode.configured ? commandCodeRoutes(commandCodeModels.models, { zdr: settings.commandCodeZdr }) : {},
   })
-  const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona })
+  const children = await writeTeamChildPatch(paths.teamChildPatch, { subagents, persona, harness: settings.teamChildHarness })
   const abChanged = await writeAbPatches(paths, { subagents, persona })
   const presetsChanged = await writeTaskPresetPatch(paths.taskPresetPatch, { subagents, persona })
   const observerChanged = await writeObserverPatch(paths.observerPatch, { subagents, persona })
@@ -547,7 +547,7 @@ teams = await new TeamManager({
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
   apiUrl: () => `http://127.0.0.1:${server.address().port}/api/team`,
   instructions: () => effectiveCustomInstructions(settings),
-  guides: () => ({ policies: settings.teamPolicies, playbooks: settings.teamPlaybooks }),
+  harness: () => ({ parent: settings.teamParentHarness, child: settings.teamChildHarness }),
   log,
 }).load()
 
@@ -581,6 +581,7 @@ const abRunner = new AbRunner({ threads, agents: abAgents, codex, attachmentsDir
 const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalogState(),
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
   validateImages: async (images, config) => {
+  harness: (side) => side === 'child' ? settings.teamChildHarness : settings.teamParentHarness,
     const saved = await abImages(paths.attachmentsDir, images)
     if (saved.length) assertAbImageModels(config, catalogState().models)
     return saved

@@ -2,6 +2,7 @@
 // the model tiers they offer), a child's instructions, and a tool call an
 // approval is about in one line.
 import { TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
+import { harnessSection } from './team-harness.js'
 
 /** Messages Agent Desk types into the leader start with this, so it can tell them from the user's. */
 export const PREFIX = '[Agent Desk チーム]'
@@ -30,7 +31,7 @@ export const oneLine = (text) => text.replace(/\s+/g, ' ').trim()
  * The leader's standing instructions (a Claude leader's --append-system-prompt-file,
  * a dsh leader's MCP server instructions).
  */
-export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean = false, execution = false, policy = '', playbooks = [] }) {
+export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean = false, execution = false, harness = '' }) {
   return [
     '# Agent Desk team: you are the leader',
     '',
@@ -42,7 +43,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       : []),
     ...(execution
       ? ['Children use only tier "low".']
-      : ['By default omit model, tier, provider and effort when calling spawn: Agent Desk uses the selected choices evenly. If the user, the team policy or an applicable playbook specifies a model, tier, provider or reasoning level, pass the requested choice to spawn instead. Only the models listed below are available; use status for the current list.']),
+      : ['By default omit model, tier, provider and effort when calling spawn: Agent Desk uses the selected choices evenly. If the user or the parent harness specifies a model, tier, provider or reasoning level, pass the requested choice to spawn instead. Only the models listed below are available; use status for the current list.']),
     ...tiers,
     `At most ${maxChildren} children can be open at once; \`status\` shows the team.`,
     '',
@@ -64,22 +65,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
       : []),
     '',
     `Messages that start with "${PREFIX}" come from Agent Desk (your children's reports), not from the user.`,
-    ...(policy
-      ? [
-        '',
-        '## The user\'s policy for this team',
-        'The user wrote this for how you lead. Follow it: model, tier, provider or reasoning level choices here take precedence over the default even distribution, but do not make unavailable choices available.',
-        `<team_policy>\n${policy}\n</team_policy>`,
-      ]
-      : []),
-    ...(playbooks.length
-      ? [
-        '',
-        '## Playbooks',
-        'The user wrote playbooks for kinds of work. When a job matches one, read it with `playbook` before you split the work, and follow it. Its model choices take precedence over the default even distribution.',
-        ...playbooks.map(({ name, description }) => `- "${name}"${description ? `: ${oneLine(description)}` : ''}`),
-      ]
-      : []),
+    ...(harness ? ['', harnessSection(harness, 'parent')] : []),
   ].join('\n')
 }
 
@@ -90,7 +76,7 @@ export function leaderPrompt({ workspace, maxChildren, tiers, gpt = false, lean 
  * A Claude child (`background`) is woken when its background commands end
  * (claude-runner.js waits for them), so it may end a turn while they run.
  */
-export function childPrompt(name, { background = false } = {}) {
+export function childPrompt(name, { background = false, harness = '' } = {}) {
   return [
     `# Agent Desk team: you are ${name ? `the child agent "${name}"` : 'a child agent'}`,
     '',
@@ -106,6 +92,7 @@ export function childPrompt(name, { background = false } = {}) {
     '- When the task is done (or you cannot go further), your final reply is your report to the leader. Keep it short, in this order: 1) result (done / partly done / failed), 2) what you did, 3) how you checked it and what came out (or "not checked" and why), 4) paths of what you made or changed, 5) open problems or decisions for the leader. Only if this session permits file writes, put long details in a file and give its path; otherwise return details in the report with references to existing files.',
     '- Write in the language of your task.',
     '- The leader may send you more instructions later. Handle them the same way and report again.',
+    ...(harness ? ['', harnessSection(harness, 'child')] : []),
   ].join('\n')
 }
 

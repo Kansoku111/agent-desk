@@ -4,8 +4,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { teamConfig } from '../server/team-config.js'
-import { leaderGuides } from '../server/team-playbooks.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from '../server/teams-launch.js'
+import { teamChildPatch } from '../server/dsh-config.js'
+import YAML from 'yaml'
 
 const promptOf = (args) => fs.readFileSync(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
 const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agent-desk-launch-'))
@@ -99,72 +100,46 @@ test('both leader runtimes receive every free-mode reasoning choice', () => {
   }
 })
 
-test('eco leaders ignore TM policy and playbooks even when explicitly supplied', () => {
-  const options = {
-    team: { id: 'eco', secret: 's', workspace: 'C:/work', execution: {} },
-    config: teamConfig({ policy: 'p1' }), models: [], dir: dir(),
-    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
-    instructions: '通常のカスタム指示',
-    guides: { policy: 'TM専用の方針', playbooks: [{ name: 'TM専用の手順', description: 'TM専用の場面' }] },
-  }
-  const { args } = leaderLaunch(options)
-  const prompt = promptOf(args)
-  assert.doesNotMatch(prompt, /team_policy|Playbooks|TM専用/)
-  assert.match(prompt, /通常のカスタム指示/)
-  const mcp = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'))
-  assert.equal(mcp.mcpServers['agent-team'].env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
-  assert.equal(mcp.mcpServers['agent-team'].env.AGENT_DESK_EXECUTION, '1')
+test('TM and eco leaders, Claude or dsh, read the parent harness and never the playbook flag', () => {
+  for (const execution of [undefined, {}]) {
+    const options = {
+      team: { id: 't', secret: 's', workspace: 'C:/work', execution }, config: teamConfig({}), models: [], dir: dir(),
+      node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
+      instructions: '通常のカスタム指示', harness: '親の規則',
+    }
+    const { args } = leaderLaunch(options)
+    const prompt = promptOf(args)
+    assert.match(prompt, /<parent_harness>\n親の規則\n<\/parent_harness>/)
+    // The parent harness comes before the user's custom instructions, which stay last.
+    assert.ok(prompt.indexOf('<parent_harness>') < prompt.indexOf('<user_instructions>'))
+    const mcp = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'))
+    assert.equal(mcp.mcpServers['agent-team'].env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
 
-  const server = leaderMcpServer(options)
-  const env = Object.fromEntries(server.env.map(({ name, value }) => [name, value]))
-  assert.doesNotMatch(fs.readFileSync(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8'), /team_policy|Playbooks|TM専用/)
-  assert.equal(env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
-  assert.equal(env.AGENT_DESK_EXECUTION, '1')
+    const env = Object.fromEntries(leaderMcpServer(options).env.map(({ name, value }) => [name, value]))
+    assert.match(fs.readFileSync(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8'), /<parent_harness>\n親の規則\n<\/parent_harness>/)
+    assert.equal(env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
+  }
 })
 
 test('without custom instructions a child prompt has no instructions section', () => {
   assert.doesNotMatch(promptOf(childTurnArgs({ child: { id: 'c2', name: 'B' }, dir: dir() })), /user_instructions/)
 })
 
-test('a leader reads its policy in full and the playbooks by name only', () => {
-  const guides = leaderGuides({
-    policies: [{ id: 'p1', name: 'Claude中心', text: '設計は Claude の中枠に任せる' }, { id: 'p2', name: '節約', text: '低枠を使う' }],
-    playbooks: [{ id: 'b1', name: '大改修', description: '大きな改修を\n始めるとき', body: '手順の本文' }],
-    policy: 'p1',
-  })
+test('a Claude child reads the child harness, and nothing without one', () => {
+  const prompt = promptOf(childTurnArgs({ child: { id: 'c3', name: 'C' }, dir: dir(), harness: '  子の規則  ', instructions: '通常のカスタム指示' }))
+  assert.match(prompt, /<child_harness>\n子の規則\n<\/child_harness>/)
+  assert.ok(prompt.indexOf('<child_harness>') < prompt.indexOf('<user_instructions>'))
+  assert.doesNotMatch(promptOf(childTurnArgs({ child: { id: 'c4', name: 'D' }, dir: dir(), harness: ' \n ' })), /_harness>/)
   const { args } = leaderLaunch({
-    team: { id: 't', secret: 's', workspace: 'C:\w' }, config: teamConfig({ policy: 'p1' }), models: [], dir: dir(),
-    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team', guides,
+    team: { id: 't', secret: 's', workspace: 'C:/w' }, config: teamConfig({}), models: [], dir: dir(),
+    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
   })
-  const prompt = promptOf(args)
-  assert.match(prompt, /<team_policy>\n設計は Claude の中枠に任せる\n<\/team_policy>/)
-  assert.doesNotMatch(prompt, /低枠を使う/)
-  assert.match(prompt, /- "大改修": 大きな改修を 始めるとき/)
-  assert.doesNotMatch(prompt, /手順の本文/)
-  const mcp = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'))
-  assert.equal(mcp.mcpServers['agent-team'].env.AGENT_DESK_TEAM_PLAYBOOKS, '1')
+  assert.doesNotMatch(promptOf(args), /_harness>/)
 })
 
-test('a leader without policy or playbooks gets neither section nor the playbook tool', () => {
-  const { args } = leaderLaunch({
-    team: { id: 't', secret: 's', workspace: 'C:\w' }, config: teamConfig({ policy: 'gone' }), models: [], dir: dir(),
-    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
-    guides: leaderGuides({ policies: [], playbooks: [], policy: 'gone' }),
-  })
-  assert.doesNotMatch(promptOf(args), /team_policy|Playbooks/)
-  const mcp = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'))
-  assert.equal(mcp.mcpServers['agent-team'].env.AGENT_DESK_TEAM_PLAYBOOKS, undefined)
-})
-
-test('a GPT leader gets the policy in its MCP instructions and the playbook tool with playbooks', () => {
-  const server = leaderMcpServer({
-    team: { id: 't', secret: 's', workspace: 'C:\w' }, config: teamConfig({}), models: [], dir: dir(),
-    node: 'node', script: 'team-mcp.js', apiUrl: 'http://127.0.0.1:1/api/team',
-    guides: { policy: '節約する', playbooks: [{ name: '調査', description: '' }] },
-  })
-  const env = Object.fromEntries(server.env.map(({ name, value }) => [name, value]))
-  assert.equal(env.AGENT_DESK_TEAM_PLAYBOOKS, '1')
-  const prompt = fs.readFileSync(env.AGENT_DESK_TEAM_INSTRUCTIONS, 'utf8')
-  assert.match(prompt, /<team_policy>\n節約する\n<\/team_policy>/)
-  assert.match(prompt, /- "調査"$/m)
+test('dsh children read the child harness from their layer', () => {
+  const textOf = (patch) => YAML.parse(patch.split('\n').filter((line) => !line.startsWith('#')).join('\n'))
+    .find((row) => row.insert?.[0]?.id === 'agent-desk-team-child').insert[0].config.text
+  assert.match(textOf(teamChildPatch({ harness: '子の規則' })), /<child_harness>\n子の規則\n<\/child_harness>$/)
+  assert.doesNotMatch(textOf(teamChildPatch()), /_harness>/)
 })

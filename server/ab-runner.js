@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { AB_CONSULT, abJobPermission } from './ab.js'
 import { claudeImageBlocks } from './ab-images.js'
 import { describeTool } from './teams-prompts.js'
+import { harnessSection, joinPrompt } from './team-harness.js'
 
 export function abClaudeArgs({ writable, lean, instructions }) {
   return ['--permission-mode', 'bypassPermissions', '--strict-mcp-config', '--no-chrome',
@@ -11,13 +12,14 @@ export function abClaudeArgs({ writable, lean, instructions }) {
 }
 
 export class AbRunner extends EventEmitter {
-  constructor({ threads, agents, codex, instructions = () => '', guard = () => {}, stopTimeoutMs = 10_000, attachmentsDir }) {
+  constructor({ threads, agents, codex, instructions = () => '', harness = () => '', guard = () => {}, stopTimeoutMs = 10_000, attachmentsDir }) {
     super()
     this.attachmentsDir = attachmentsDir
     this.threads = threads
     this.agents = agents
     this.codex = codex
     this.instructions = instructions
+    this.harness = harness
     this.guard = guard
     this.stopTimeoutMs = stopTimeoutMs
     this.owned = new Map()
@@ -80,13 +82,15 @@ export class AbRunner extends EventEmitter {
     })
   }
   async start(input) {
-    const { runId, jobId, model, effort = '', toolMode = 'native', workspace, text, images = [], writable, lean, instructions } = input
+    const { runId, jobId, model, effort = '', toolMode = 'native', workspace, text, images = [], writable, lean, instructions, side = 'parent' } = input
+    // Read at each start: a harness saved since the run began applies to its next stage.
+    const harness = harnessSection(this.harness(side), side)
     this.guard({ workspace })
     const owner = { runId, jobId, writable, denials: [], deniedIds: new Set() }
     if (model.startsWith('codex:')) {
       if (!this.codex) throw new Error('Codexを利用できません')
       const session = await this.codex.create({ workspace, model: model.slice(6), effort: effort || null,
-        permissionMode: abJobPermission(writable), instructions, mcpServers: {}, ab: { runId, jobId, writable, lean } })
+        permissionMode: abJobPermission(writable), instructions: joinPrompt(instructions, harness), mcpServers: {}, ab: { runId, jobId, writable, lean } })
       this.owned.set(session.id, { ...owner, kind: 'codex' })
       try { this.codex.run(session.id, text, { images }) } catch (error) {
         this.owned.delete(session.id)
@@ -98,7 +102,7 @@ export class AbRunner extends EventEmitter {
     if (model.startsWith('claude:')) {
       const blocks = await claudeImageBlocks(this.attachmentsDir, images)
       const session = await this.agents.create({ workspace, model: model.slice(7), effort: effort || null,
-        args: abClaudeArgs({ writable, lean, instructions: `${instructions}\n\n${this.instructions()}` }) })
+        args: abClaudeArgs({ writable, lean, instructions: `${joinPrompt(instructions, harness)}\n\n${this.instructions()}` }) })
       this.owned.set(session.id, owner)
       try { this.agents.run(session.id, text, { images, blocks }) } catch (error) {
         this.owned.delete(session.id)
@@ -111,8 +115,9 @@ export class AbRunner extends EventEmitter {
       ab: { runId, jobId, writable, lean, ...(input.strictEffort ? { strictEffort: true } : {}), ...(input.strictModel ? { strictModel: true } : {}) } })
     this.owned.set(thread.id, owner)
     try {
-      // Consultation user content is not rewritten or prefixed by a leader.
-      await this.threads.send(thread.id, { images, text: instructions === AB_CONSULT ? text : `${instructions}\n\n${text}` })
+      // Consultation user content is not rewritten or prefixed by a leader; only the user's own harness goes before it.
+      // dsh roles share their AB layer, so the harness travels in the message, not the system prompt.
+      await this.threads.send(thread.id, { images, text: joinPrompt(instructions === AB_CONSULT ? '' : instructions, harness, text) })
     } catch (error) {
       this.owned.delete(thread.id)
       await this.threads.remove(thread.id)

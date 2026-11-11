@@ -8,7 +8,7 @@ import { FAST_PROVIDERS, recordFastPeriod } from './fast-mode.js'
 import { isLocalModelId, normalizeBaseUrl } from './local-llm.js'
 import { PERMISSION_MODES } from './runtime.js'
 import { mergeTeamConfig, TEAM_DEFAULTS } from './team-config.js'
-import { parsePlaybooks, parsePolicies } from './team-playbooks.js'
+import { HARNESS_KEYS, legacyParentHarness, parseHarness } from './team-harness.js'
 import { isUsdJpyRate } from '../shared/usage-score.js'
 import { validateUsageFallbackRoutes } from '../shared/usage-fallback.js'
 
@@ -24,6 +24,8 @@ export function migrateSettings(saved = {}) {
     },
     // Saves from before the routes kept a model per provider; those keys stay in the file, unused.
     subagentRoutes: savedRoutes(saved),
+    // Saves from before harnesses: the removed 方針・プレイブック become the parent harness.
+    teamParentHarness: typeof saved.teamParentHarness === 'string' ? saved.teamParentHarness : legacyParentHarness(saved),
   }
 }
 
@@ -75,9 +77,9 @@ export const DEFAULT_SETTINGS = {
   commandCodeZdr: false,
   // 設定 → エージェントチーム (see team-config.js).
   agentTeams: structuredClone(TEAM_DEFAULTS),
-  // What team leaders read (see team-playbooks.js): a team's chosen policy, and the playbooks by name.
-  teamPolicies: [],
-  teamPlaybooks: [],
+  // What only the parent or only the child agents of TM, eco and AB read (see team-harness.js).
+  teamParentHarness: '',
+  teamChildHarness: '',
 }
 
 const BOOLEAN_SETTINGS = [
@@ -221,19 +223,11 @@ export function planSettingsUpdate(current, patch, now) {
     // Read at a team's next launch or child; nothing restarts.
     next.agentTeams = mergeTeamConfig(current.agentTeams, patch.agentTeams)
   }
-  // Read at a leader's next launch (a playbook, when the leader opens it); nothing restarts.
-  for (const [key, parse, label] of [
-    ['teamPolicies', parsePolicies, '方針'],
-    ['teamPlaybooks', parsePlaybooks, 'プレイブック'],
-  ]) {
+  for (const [side, key] of Object.entries(HARNESS_KEYS)) {
     if (!owns(patch, key)) continue
-    // Compare on the commit queue, not on receipt: another window's save may
-    // still be in flight. Require a base so older clients cannot bypass this.
-    const base = patch.teamGuidesBase?.[key]
-    if (!Array.isArray(base) || !isDeepStrictEqual(base, current[key] ?? [])) {
-      throw new Error(`${label}が別の画面で更新されたか、編集元を確認できません。編集内容を控え、「元に戻す」で最新の内容を読み直してください。`)
-    }
-    next[key] = parse(patch[key])
+    next[key] = parseHarness(patch[key], side)
+    // dsh children read theirs from the children's layer, which the home patch step rewrites.
+    if (side === 'child' && next[key] !== current[key]) effects.homePatch = true
   }
   if (owns(patch, 'fastMode')) {
     assertRecord(patch.fastMode, 'fastMode')

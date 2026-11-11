@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { act, request, setState, startTeam, useStore } from '../store'
-import type { AppState, TeamModelChoice, TeamPolicy, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
+import type { AppState, TeamModelChoice, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
 import { isModelVisible } from '../model-selection'
 import { effortLabel, parseModel, pickableEfforts, workspaceLabel } from '../util'
 import { Modal } from './Modal'
 import { byNewest } from './Pickers'
 import { claudeEfforts, claudeModelName, claudeModels } from './TerminalPickers'
 import { ClaudeAuthConsent } from './ClaudeAuthConsent'
-import { TeamGuides } from './TeamGuides'
+import { TeamHarness } from './TeamHarness'
 import { AbSettings, ExecutionSettings, ModeSection } from './ModeSections'
 import { PtcToggle } from './PtcToggle'
 import { FallbackSummary } from './FallbackSummary'
@@ -325,7 +325,6 @@ function ChildModels({ server, config, onChange }: { server: AppState; config: C
 
 /** A leader's existing choice is kept even when it is hidden or not connected. */
 function LeaderSection({ server, config, onChange }: { server: AppState; config: Config; onChange: Change }) {
-  const policies: TeamPolicy[] = server.settings.teamPolicies ?? []
   const provider = config.leaderProvider
   const model = provider === 'claude' ? config.leader.model : provider === 'gpt'
     ? config.gptLeader.model ?? config.gpt.mid.model ?? config.gpt.low.model ?? (config.modelMode === 'free' ? config.freeModels?.find((entry) => entry.provider === 'gpt')?.model : null)
@@ -355,16 +354,6 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
             : provider === 'gpt' ? { gptLeader: { effort: next || null } } : { dshLeader: { effort: next || null } })} />
         <p className="muted">{PROVIDER_NOTE[provider]}{provider === 'gpt' && !server.accounts.chatgpt.signedIn && ' · 要サインイン'}</p>
       </div>
-      {policies.length > 0 && (
-        <div className="setting compact">
-          <div><h3>方針</h3></div>
-          <select value={policies.some((policy) => policy.id === config.policy) ? config.policy! : ''}
-            onChange={(event) => onChange({ policy: event.target.value || null })} aria-label="方針">
-            <option value="">なし</option>
-            {policies.map((policy) => <option key={policy.id} value={policy.id}>{policy.name}</option>)}
-          </select>
-        </div>
-      )}
     </section>
   )
 }
@@ -615,7 +604,7 @@ export function TeamSettings() {
       </ModeSection>
       <ModeSection mark="AB" name="2社に相談"><AbSettings /></ModeSection>
       <ModeSection mark="eco" name="エコモード"><ExecutionSettings /></ModeSection>
-      <TeamGuides policies={server.settings.teamPolicies ?? []} playbooks={server.settings.teamPlaybooks ?? []} modelGroups={teamModelGroups(server)} catalogLoaded={server.catalog.models.length > 0} />
+      <TeamHarness />
       {apiSubagent && (
         <p className="team-warning">
           サブエージェントに Claude（API の従量課金）が選ばれています。
