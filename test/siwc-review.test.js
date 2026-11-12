@@ -11,7 +11,7 @@ import { newerModels, readFetchedCatalog } from '../server/model-updates.js'
 import { homePatch } from '../server/dsh-config.js'
 import { SIWC_API, SIWC_BASE_URL } from '../server/siwc-route.js'
 import { withSiwc } from '../server/siwc-request.js'
-import { SIWC_ARGUMENT_RUNAWAY, SIWC_ARGUMENT_WHITESPACE_LIMIT } from '../server/siwc-stream-guard.js'
+import { SIWC_ARGUMENT_REPEAT, SIWC_ARGUMENT_RUNAWAY, SIWC_ARGUMENT_WHITESPACE_LIMIT } from '../server/siwc-stream-guard.js'
 import { SIWC_LIMIT_CODE, SIWC_LIMIT_MESSAGE, SIWC_LIMIT_TEXT, explainSiwcUsage } from '../server/siwc-usage-error.js'
 import { describeError } from '../server/thread-utils.js'
 import { stream } from '@earendil-works/pi-ai/api/openai-responses'
@@ -336,4 +336,23 @@ test('the installed GPT SDK preserves the runaway marker as a non-retryable prov
   assert.equal(result.stopReason, 'error')
   assert.ok(result.errorMessage.includes(SIWC_ARGUMENT_RUNAWAY), result.errorMessage)
   assert.equal((await classify())(result.errorMessage), 'PI_AI_ERROR')
+})
+
+test('the installed GPT SDK passes a repeated-argument loop on as a retryable failure', async () => {
+  const piPackage = findPackageJSON('@earendil-works/pi-ai', pathToFileURL(require.resolve('@deepseek-ai/dsh-llm-pi-ai')))
+  const { stream: dshStream } = await import(new URL('./dist/api/openai-responses.js', pathToFileURL(piPackage)).href)
+  // The loop observed after a broken data array, streamed in small pieces.
+  const loop = '{"code":"return await tools.edit(await input.get())","data":[{"file_path":"a.js",' + '}]} (sic) '.repeat(2000)
+  const events = [
+    { type: 'response.output_item.added', output_index: 0, item: { id: 'fixture-fc', type: 'function_call', call_id: 'fixture-call', name: 'run_code', arguments: '' } },
+    ...loop.match(/[\s\S]{1,200}/g).map(delta => ({ type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fixture-fc', delta })),
+  ]
+  const options = withSiwc(model, { maxRetries: 0 }, {
+    client: { auth: async () => ({ access_token: 'mock-only' }) }, diagnostics: null,
+    fetch: async () => new Response(events.map(e => 'data: ' + JSON.stringify(e) + '\n\n').join('')),
+  })
+  const result = await dshStream(model, { messages: [{ role: 'user', content: 'fixture', timestamp: 0 }] }, options).result()
+  assert.equal(result.stopReason, 'error')
+  assert.ok(result.errorMessage.includes(SIWC_ARGUMENT_REPEAT), result.errorMessage)
+  assert.equal((await classify())(result.errorMessage), 'TRANSPORT')
 })

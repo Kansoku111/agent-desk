@@ -139,3 +139,9 @@ test('runaway tool arguments stay terminal even when the provider text also ment
   for (const suffix of ['', ' network timeout', ' 503 server error', ' 429 rate limit'])
     assert.equal(classify('SIWC_TOOL_ARGUMENT_RUNAWAY' + suffix), 'PI_AI_ERROR')
 })
+
+test('a repeated-argument loop is retried like an interrupted stream', () => {
+  const classify = classifier(patchRetrySource(installedSource()))
+  for (const suffix of ['', ' 400 bad request', ' invalid'])
+    assert.equal(classify('SIWC_TOOL_ARGUMENT_REPEAT: ツール引数で10文字の同じ並びが繰り返されたため、この応答を止めて再試行します。' + suffix), 'TRANSPORT')
+})

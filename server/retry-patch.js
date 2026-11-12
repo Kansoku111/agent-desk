@@ -31,6 +31,8 @@ export const RETRYABLE_KEY = 'agentDesk.isRetryableProviderError'
  */
 export const TERMINAL_RULE = [
   'if (/SIWC_TOOL_ARGUMENT_RUNAWAY/.test(message)) return "PI_AI_ERROR";',
+  // A repetition loop is cut by the guard and retried, like the backend's own cut of it.
+  'if (/SIWC_TOOL_ARGUMENT_REPEAT/.test(message)) return "TRANSPORT";',
   'if (/subscription[_\\s]sharing[_\\s]usage[_\\s]/i.test(message)) return "PI_AI_ERROR";',
   'if (/\\b(?:401|403)\\b/.test(message)) return "AUTH";',
   `if (/\\b429\\b/.test(message) && globalThis[Symbol.for(${JSON.stringify(RETRYABLE_KEY)})]?.(message) === false) return QUOTA_EXCEEDED_CODE;`,
