@@ -11,7 +11,9 @@
 // calls flagged only real loops (docs/investigations/dsh-vs-codex-harness-20261112.md).
 // The window is 32,768 characters so legitimate repetitive content (a fixture,
 // a separator line, a generated table) has room: the observed loops ran past
-// 100,000 characters, so the wider window still stops them within seconds.
+// 100,000 characters. At the slowest observed rate (about 75 characters a
+// second) a full window takes about 7 minutes, against the 3-37 minutes the
+// backend took to cut them.
 // Whitespace inside a string (blank lines are `\n\n...` in JSON) and a run of
 // one character stay allowed, as the padding rule allows them.
 export const SIWC_ARGUMENT_WHITESPACE_LIMIT = 8192
@@ -25,12 +27,30 @@ const CHECK_EVERY = 4096
 // early keeps that outcome without the wait.
 export const SIWC_ARGUMENT_REPEAT = 'SIWC_TOOL_ARGUMENT_REPEAT'
 
+// A loop is not always exact. One observed loop turned `\u001b[0m` into
+// `\u001b[0b` twice in 76,000 characters; requiring an exact match over the
+// whole window waited until both slips had left it (77,800 characters and 15
+// minutes instead of about 10,000), and slips more often than once a window
+// would never be stopped. A slipped character breaks at most two comparisons,
+// so a tail that matches itself one unit later in all but SLIPS places is still
+// one unit repeated: 32 is 0.1% of the window.
+const SLIPS = 32
+
+function mismatches(tail, period) {
+  let count = 0
+  for (let at = period; at < tail.length; at++) if (tail.charCodeAt(at) !== tail.charCodeAt(at - period) && ++count > SLIPS) break
+  return count
+}
+
 /** The repeating unit's length when `tail` is one short unit repeated, else 0. */
 export function repeatingPeriod(tail) {
-  if (tail.slice(1) === tail.slice(0, -1)) return 0
+  if (mismatches(tail, 1) <= SLIPS) return 0
   for (let period = 2; period <= MAX_PERIOD; period++) {
-    if (tail.slice(period) !== tail.slice(0, tail.length - period)) continue
-    return blankUnit(tail.slice(-period)) ? 0 : period
+    if (mismatches(tail, period) > SLIPS) continue
+    // A slip or the end of a string can fall in any one unit, so the unit is
+    // read at the start, middle and end of the tail and the majority decides.
+    const blank = [0, (tail.length - period) >> 1, tail.length - period].filter(at => blankUnit(tail.slice(at, at + period))).length
+    return blank >= 2 ? 0 : period
   }
   return 0
 }

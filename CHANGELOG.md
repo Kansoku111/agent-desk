@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Stop a GPT tool call whose arguments keep repeating one short piece of text, and retry it under the normal retry policy, like a dropped stream. After a broken JSON argument the model can loop (for example `}]} (sic) ` for 181k characters); the stream stayed busy for 3–37 minutes until the backend cut it, and only then was it retried. The guard looks at the last 32,768 characters, so shorter repetitive content such as a fixture is kept; blank lines, whitespace and runs of one character inside strings are not affected. Tool calls that were already complete in the stopped response are not run; the retry starts from the previous step.
+- Stop a GPT tool call whose arguments keep repeating one short piece of text, and retry it under the normal retry policy, like a dropped stream. After a broken JSON argument the model can loop (for example `}]} (sic) ` for 181k characters); the stream stayed busy for 3–37 minutes until the backend cut it, and only then was it retried. The guard looks at the last 32,768 characters, so shorter repetitive content such as a fixture is kept, and it allows a few slipped characters, since a loop can now and then write one character differently; blank lines, whitespace and runs of one character inside strings are not affected. Tool calls that were already complete in the stopped response are not run; the retry starts from the previous step.
 
 ## [0.1.15] - 2026-11-10
 

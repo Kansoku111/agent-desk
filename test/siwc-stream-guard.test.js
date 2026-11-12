@@ -46,6 +46,16 @@ test('a short unit repeated for a whole window stops function and custom calls',
   assert.throws(() => stream(new SiwcArgumentGuard(), JSON.stringify({ code: 'nr'.repeat(SIWC_ARGUMENT_REPEAT_WINDOW) })), error => error.code === SIWC_ARGUMENT_REPEAT)
 })
 
+test('a loop that slips one character every few thousand is still stopped within a window', () => {
+  // The observed shape: `\u001b[0m` written out in a JSON string, now and then as `\u001b[0b`.
+  const unit = String.raw`\u001b[0m`, slip = String.raw`\u001b[0b`
+  const loop = '{"code":"throw new Error(' + Array.from({ length: SIWC_ARGUMENT_REPEAT_WINDOW }, (_, i) => i % 800 === 799 ? slip : unit).join('')
+  const guard = new SiwcArgumentGuard()
+  let seen = 0
+  assert.throws(() => { for (let at = 0; at < loop.length; at += 100) { seen = at + 100; guard.observe(delta(loop.slice(at, at + 100))) } }, error => error.code === SIWC_ARGUMENT_REPEAT)
+  assert.ok(seen <= SIWC_ARGUMENT_REPEAT_WINDOW + 8192, `stopped after ${seen} characters`)
+})
+
 test('long blank-line, single-character, varied and shorter repetitive content is not a repetition runaway', () => {
   const guard = new SiwcArgumentGuard()
   // Escaped blank lines and tab/space/CRLF runs, whichever character the window starts on.
