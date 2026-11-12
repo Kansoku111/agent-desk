@@ -34,6 +34,7 @@ async function fixture(settings = {}) {
     static CLOSING = 2
     readyState = 1
     constructor() { socket = this }
+    close() { this.readyState = 2 }
     send(data) {
       const request = JSON.parse(data)
       sent.push(request)
@@ -45,8 +46,9 @@ async function fixture(settings = {}) {
     static permission = 'granted'
     constructor(title, options) { this.title = title; this.options = options; notifications.push(this) }
   }
-  const window = { matchMedia: () => ({ matches: false }), addEventListener() {}, Notification, focus() {} }
-  const document = { addEventListener() {}, hidden: false }
+  const windowEvents = new Map(), documentEvents = new Map()
+  const window = { matchMedia: () => ({ matches: false }), addEventListener: (name, fn) => windowEvents.set(name, fn), Notification, focus() {} }
+  const document = { addEventListener: (name, fn) => documentEvents.set(name, fn), hidden: false }
   new Function('require', 'exports', 'location', 'sessionStorage', 'localStorage', 'history', 'window', 'document', 'WebSocket', 'Notification', outputText)(
     require, exports, { hostname: '127.0.0.1', href: 'http://127.0.0.1/?t=test', protocol: 'http:', host: '127.0.0.1' },
     storage, storage, { replaceState() {} }, window, document, WebSocket, Notification,
@@ -56,8 +58,48 @@ async function fixture(settings = {}) {
   const frame = (value) => socket.onmessage({ data: JSON.stringify(value) })
   const hello = (patch = {}) => frame({ event: 'hello', state: { app: { uiBuild: 'test' }, settings: patch, threads: [], terminals: [], teams: [] } })
   hello(settings)
-  return { store: exports, frame, hello, document, notifications, sent, storage, getSocket: () => socket, setOnSend: (callback) => { onSend = callback } }
+  return { store: exports, frame, hello, document, windowEvents, documentEvents, notifications, sent, storage, getSocket: () => socket, setOnSend: (callback) => { onSend = callback } }
 }
+
+for (const event of ['visibilitychange', 'online', 'pageshow']) {
+  test(`a half-open socket is replaced on ${event} without replaying a pending send`, async () => {
+    const { store, frame, hello, documentEvents, windowEvents, getSocket, sent } = await fixture()
+    const oldSocket = getSocket()
+    const read = assert.rejects(store.request('terminal.conversation', { terminalId: 'parent' }), /接続/)
+    const send = assert.rejects(store.request('terminal.send', { terminalId: 'parent', text: 'only once' }), /接続/)
+    // Mobile browsers can retain OPEN and never deliver close after suspension.
+    assert.equal(oldSocket.readyState, 1)
+    const listener = (event === 'visibilitychange' ? documentEvents : windowEvents).get(event)
+    assert.ok(listener, `${event} listener`)
+    listener({ persisted: true })
+    assert.notEqual(getSocket(), oldSocket)
+    assert.equal(oldSocket.readyState, 2)
+    assert.equal(store.getState().connection, 'connecting')
+    await Promise.all([read, send])
+    getSocket().onopen()
+    hello()
+    const next = store.request('terminal.conversation', { terminalId: 'parent' })
+    const request = sent.at(-1)
+    await oldSocket.onclose()
+    oldSocket.onmessage({ data: JSON.stringify({ id: request.id, ok: true, result: 'stale' }) })
+    frame({ id: request.id, ok: true, result: { turns: [{ id: 'parent-turn' }] } })
+    assert.deepEqual(await next, { turns: [{ id: 'parent-turn' }] })
+    assert.equal(store.getState().connection, 'open')
+    assert.equal(sent.filter((request) => request.type === 'terminal.send').length, 1)
+  })
+}
+
+test('hidden pages and a fresh pageshow do not replace a healthy connection', async () => {
+  const { document, documentEvents, windowEvents, getSocket } = await fixture()
+  const socket = getSocket()
+  document.hidden = true
+  documentEvents.get('visibilitychange')({})
+  windowEvents.get('online')({})
+  assert.equal(getSocket(), socket)
+  document.hidden = false
+  windowEvents.get('pageshow')?.({ persisted: false })
+  assert.equal(getSocket(), socket)
+})
 
 test('a team verification snapshot is refreshed after reconnect', async () => {
   const { store, frame, getSocket } = await fixture()

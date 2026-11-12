@@ -291,15 +291,24 @@ export function connect() {
   }
 }
 
-/** Skips the back-off wait: a phone coming back to the page, or back online, reconnects at once. */
+/** Mobile suspension can leave a dead socket OPEN without ever delivering close. */
 function reconnectNow() {
-  if (state.connection !== 'closed' || document.hidden) return
+  if (!token || document.hidden) return
   clearTimeout(retryTimer)
   retry = 0
+  const previous = socket
+  if (previous) {
+    // Reject pending reads/sends now, not when the old network eventually closes.
+    // Mutations remain delivery-unknown; reconnecting must not replay them.
+    socket = null
+    rpc.detach(previous)
+    previous.close()
+  }
   connect()
 }
 document.addEventListener('visibilitychange', reconnectNow)
 window.addEventListener('online', reconnectNow)
+window.addEventListener('pageshow', (event) => { if (event.persisted) reconnectNow() })
 
 function upsertThread(thread: ThreadSummary) {
   const server = state.server
