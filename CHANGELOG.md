@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the bundled DeepSeek Harness (`@deepseek-ai/dsh` and `@deepseek-ai/dsh-atomic-write`) from 0.2.2-rc.1 to 0.2.2-rc.2 (bundled pi-ai 1.5.0 → 1.5.2); refreshed dependency notices. All 18 runtime hooks apply unchanged; tests follow dsh's new child-drain wait (`waitForTreeWork`), subagent detection by session origin, and the HTTP status constant in the pi-ai error classifier.
+
 ## [0.1.15] - 2026-11-10
 
 ### Added

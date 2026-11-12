@@ -40,7 +40,9 @@ async function classify() {
   const end = source.indexOf('\n}', start)
   // dsh's own quota rule, as the installed dsh judges an exhausted quota.
   const dshLlm = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-llm')).href)
-  return new Function('isQuotaExceededError', 'QUOTA_EXCEEDED_CODE', `${source.slice(start, end + 2)} return classifyPiAiError`)(dshLlm.isQuotaExceededError, dshLlm.QUOTA_EXCEEDED_CODE)
+  // 0.2.2-rc.2 reads the HTTP status through a module constant declared just above it.
+  const status = source.match(/const LEADING_HTTP_STATUS = .*;/)?.[0] ?? ''
+  return new Function('isQuotaExceededError', 'QUOTA_EXCEEDED_CODE', `${status}${source.slice(start, end + 2)} return classifyPiAiError`)(dshLlm.isQuotaExceededError, dshLlm.QUOTA_EXCEEDED_CODE)
 }
 test('DSH retry policy restores eight retries while usage/auth/4xx stay terminal and a rate limit is retried', async () => {
   globalThis[Symbol.for(RETRYABLE_KEY)] = retryableCheck(isRetryableAssistantError)

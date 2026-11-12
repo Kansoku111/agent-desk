@@ -27,8 +27,9 @@ test('bridge releases the exact declaration before switching, rejects busy/inval
   const gate = deferred()
   let fail = false
   let hold = false
-  // The executors only read these from the context while being built.
-  const record = { assertActive() {}, agent: { status: 'idle', ctx: { systemPrompt: { getSectionOrder: () => 0 }, tools: { setExecutor(executor) {
+  // The executors only read these from the context while being built (0.2.2-rc.2 also
+  // subscribes to session events and registers a cleanup effect).
+  const record = { assertActive() {}, agent: { status: 'idle', ctx: { on() {}, effect() {}, systemPrompt: { getSectionOrder: () => 0 }, tools: { setExecutor(executor) {
     const mode = executor.sections?.some(section => section.name === PTC_GUIDANCE_SECTION) ? 'ptc' : 'native'
     if (fail) throw new Error('declaration failed')
     calls.push(mode)

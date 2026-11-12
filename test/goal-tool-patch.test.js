@@ -23,7 +23,8 @@ function fixture({ authority = 'human', rounds = 3, phase = 'active', eventRevis
     ? { kind: 'goal', goalId: goal.id, revision: eventRevision, round: rounds }
     : { kind: 'user' }
   const events = [{ type: 'turn/start' }, { type: 'user/message', data: { source } }]
-  const agent = { id: 'agent', status: 'running', session: { snapshotEvents: () => events } }
+  // 0.2.2-rc.2 recognizes a child by its session origin, not by its absence from roots().
+  const agent = { id: 'agent', status: 'running', session: { header: { origin: authority === 'child' ? 'subagent' : 'user' }, snapshotEvents: () => events } }
   const ctx = {
     tools: { register: (tool) => tools.set(tool.name, tool) },
     systemPrompt: { section: (section) => sections.push(section), getSectionOrder: () => 0 },

@@ -259,7 +259,7 @@ test('settlement drains children before completing the prompt', async (t) => {
   const child = Promise.withResolvers()
   let waits = 0
   const session = fakeSession({ goal: undefined })
-  session.subagents = { waitForChildren: () => { waits++; return child.promise } }
+  session.subagents = { waitForTreeWork: () => { waits++; return child.promise } }
   const prompt = settle(Bridge, session)
   await tick(20)
   assert.equal(waits, 1)
@@ -274,7 +274,7 @@ test('cancelling while waiting for children disarms the goal and settles', async
   if (!Bridge.prototype.cancelPrompt) return t.skip('legacy dsh has no child-drain settlement')
   const goal = activeGoal()
   const session = fakeSession({ goal })
-  session.subagents = { waitForChildren: () => new Promise(() => {}) }
+  session.subagents = { waitForTreeWork: () => new Promise(() => {}) }
   const prompt = settle(Bridge, session)
   await tick(20)
   prompt.bridge.cancelPrompt('test cancellation')

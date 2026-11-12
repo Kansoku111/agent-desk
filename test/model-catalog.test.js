@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyCatalogAdditions, configuredModelCatalog, isModelId } from '../server/model-catalog.js'
+import { applyCatalogAdditions, configuredModelCatalog, isModelId, shippedCatalog } from '../server/model-catalog.js'
 
 const base = {
   'anthropic-messages': {
@@ -33,7 +33,15 @@ test('Fable 5.2 is bundled with official limits and adaptive thinking', async ()
   assert.deepEqual(model.cost, { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 })
   const configured = await configuredModelCatalog()
   const runtime = configured.definitions.anthropic.find((entry) => entry.id === model.id)
-  assert.deepEqual(runtime.compat, { forceAdaptiveThinking: true, supportsTemperature: false })
+  // pi-ai 1.5.2 (dsh 0.2.2-rc.2) ships Fable 5.2 itself; dsh then takes the installed
+  // compat, so Agent Desk's bundled copy is left out and must not override it.
+  const shipped = (await shippedCatalog()).providers.anthropic?.['anthropic-messages']?.['claude-fable-5-2']
+  if (shipped) {
+    assert.equal(runtime.compat, undefined)
+    assert.equal(shipped.compat.forceAdaptiveThinking, true)
+  } else {
+    assert.deepEqual(runtime.compat, { forceAdaptiveThinking: true, supportsTemperature: false })
+  }
   assert.deepEqual(runtime.reasoningEfforts, { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' })
   assert.deepEqual(configured.pricing['anthropic/claude-fable-5-2'], model.cost)
 })
