@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Updated the bundled DeepSeek Harness (`@deepseek-ai/dsh` and `@deepseek-ai/dsh-atomic-write`) from 0.2.2-rc.1 to 0.2.2-rc.2 (bundled pi-ai 1.5.0 → 1.5.2); refreshed dependency notices. All 18 runtime hooks apply unchanged; tests follow dsh's new child-drain wait (`waitForTreeWork`), subagent detection by session origin, and the HTTP status constant in the pi-ai error classifier.
+- Stop Claude requests from asking Anthropic for a server-side fallback model. pi-ai lists Claude Opus as a fallback for Claude Fable 5 and 5.2, which would answer from another model without Agent Desk showing it; a busy model now fails and is retried as before.
+- Tell PTC programs to write regex metacharacters in `grep` patterns as bracket classes (`[(]`). A JavaScript string drops a single backslash, and in measured runs about one program in seven failed on the bare `(` that reached ripgrep.
 
 ## [0.1.15] - 2026-11-10
 

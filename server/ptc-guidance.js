@@ -30,11 +30,17 @@ const BATCH = [
   '- Pass a JSON arguments object to every tools binding, including `{}` when there are no fields. To enter the task directory, call `tools.working_directory({cd: "the assigned directory"})` once and batch the initial inspection with it; do not query the inherited directory and then browse a different project. Combine progress-only `todo_write` updates with actual work instead of spending a separate model response on them.',
 ].join('\n') + '\n'
 
+// Programs write grep patterns as JavaScript string literals, where `'f\('` loses its
+// backslash and ripgrep rejects the bare `(`. In measured runs about 1 in 7 programs
+// failed this way, taking the other results of a Promise.all down with them; a bracket
+// class needs no backslash (docs/investigations/dsh-vs-codex-harness-20261112.md).
+const GREP = '- `grep` patterns are ripgrep regexes inside JavaScript strings, where a single backslash is dropped (`\'f\\(\'` is just `f(`). Match a literal regex character with a bracket class instead: `[(]`, `[)]`, `[.]`, `[?]`, `[|]` (for example `pattern: \'setOption[(]\'`).\n'
+
 export const PTC_GUIDANCE_SECTION = 'agent-desk:ptc-guidance'
 
 export function ptcGuidance(tools, runtime) {
   if (runtime.language !== 'typescript') return ''
-  return BATCH + ptcDataExamples(tools, runtime.programFormat)
+  return BATCH + (tools.some(tool => tool.name === 'grep') ? GREP : '') + ptcDataExamples(tools, runtime.programFormat)
 }
 
 // Bind guidance to the selected executor, not a global persona: switching off

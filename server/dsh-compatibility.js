@@ -175,6 +175,11 @@ export async function verifyDshCompatibility({ root = fileURLToPath(new URL('../
       // These are the minimum contracts the wrapper relies on. Do not require
       // the entire provider source to retain an exact upstream implementation.
       if (!/\bonPayload\s*(?:\?\.)?\s*\(/.test(source)) throw new Error(`fast-mode: ${api} no longer calls onPayload`)
+      // The stand-in drops server-side fallbacks by removing this compat field; a
+      // renamed field would send them again without any error.
+      if (api === 'anthropic-messages' && /\bfallbacks\b/.test(source) && !source.includes('compat?.allowedFallbackModels')) {
+        throw new Error('fast-mode: anthropic-messages no longer reads compat.allowedFallbackModels')
+      }
       if (!lazy.includes(`import("./${api}.js")`) && !lazy.includes(`import('./${api}.js')`)) {
         throw new Error(`fast-mode: ${api} lazy entry no longer loads the wrapped module`)
       }

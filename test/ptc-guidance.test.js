@@ -36,6 +36,17 @@ test('guidance follows the runtime language and currently exposed capabilities',
   assert.doesNotMatch(ptcGuidance([{ name: 'read' }], runtime), /"code":/)
 })
 
+test('grep guidance appears only with grep and shows a pattern that survives a JavaScript string', () => {
+  const runtime = { language: 'typescript', programFormat: 'function-body' }
+  assert.doesNotMatch(ptcGuidance([{ name: 'read' }], runtime), /bracket class/)
+  const line = ptcGuidance([{ name: 'grep' }], runtime).split('\n').find(text => text.includes('bracket class'))
+  // The shown example must reach ripgrep unchanged: the backslash-free form is what the model copies.
+  const example = /pattern: '([^']+)'/.exec(line)[1]
+  assert.equal(example, 'setOption[(]')
+  assert.ok(new RegExp(example).test('setOption('))
+  assert.match(line, /`'f\\\('` is just `f\(`/)
+})
+
 test('the public executor adapter adds a literal section without changing dispatch or schemas', async () => {
   const sections = [{ name: 'upstream', order: 5000, text: 'unchanged' }]
   const model = { schemas: [{ name: 'run_code' }], knownNames: ['run_code'] }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
+import { createRequire, findPackageJSON } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -113,4 +114,50 @@ test('the hook adds fast mode to requests pi-ai sends', async (t) => {
   assert.equal(sonnet.body.speed, undefined)
   assert.doesNotMatch(sonnet.beta ?? '', /fast-mode/)
   assert.equal(codex.body.service_tier, undefined)
+})
+
+test('the hook keeps Claude requests from asking for a server-side fallback model', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-fallback-'))
+  t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  const stateFile = path.join(dir, 'fast-mode.json')
+  await fs.writeFile(stateFile, '{}')
+  // The pi-ai copy dsh loads, which is the one whose catalog lists fallbacks.
+  const adapter = createRequire(path.join(root, 'node_modules/@deepseek-ai/dsh/package.json')).resolve('@deepseek-ai/dsh-llm-pi-ai/package.json')
+  const pi = findPackageJSON('@earendil-works/pi-ai', pathToFileURL(adapter))
+  const lazy = pathToFileURL(path.join(path.dirname(pi), 'dist/api/anthropic-messages.lazy.js')).href
+  const probe = `
+    import http from 'node:http'
+    import { anthropicMessagesApi } from ${JSON.stringify(lazy)}
+    let seen
+    const server = http.createServer((req, res) => {
+      const chunks = []
+      req.on('data', (chunk) => chunks.push(chunk))
+      req.on('end', () => {
+        seen = { beta: req.headers['anthropic-beta'] ?? '', body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'probe' } }))
+      })
+    })
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const model = { id: 'claude-fable-5-2', name: 'Fable', api: 'anthropic-messages', provider: 'anthropic', baseUrl: 'http://127.0.0.1:' + server.address().port,
+      reasoning: false, input: ['text'], contextWindow: 100000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      compat: { allowedFallbackModels: [{ provider: 'anthropic', model: 'claude-opus-5', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } }
+    await anthropicMessagesApi().streamSimple(model, { messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] }, { apiKey: 'sk-ant-api-test', maxRetries: 0 }).result()
+    server.close()
+    console.log(JSON.stringify({ fallbacks: seen.body.fallbacks ?? null, beta: seen.beta }))
+  `
+  const run = async (hook) => {
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      ...(hook ? ['--import', pathToFileURL(path.join(root, 'server', 'fast-mode-hook.js')).href] : []),
+      '--input-type=module', '-e', probe,
+    ], { cwd: root, env: { ...process.env, AGENT_DESK_FAST_MODE: stateFile }, timeout: 30_000 })
+    return JSON.parse(stdout.trim().split('\n').at(-1))
+  }
+  // Without the hook the installed pi-ai does send the fallback, so the check below is meaningful.
+  const upstream = await run(false)
+  assert.deepEqual(upstream.fallbacks, [{ model: 'claude-opus-5' }])
+  assert.match(upstream.beta, /server-side-fallback/)
+  const hooked = await run(true)
+  assert.equal(hooked.fallbacks, null)
+  assert.doesNotMatch(hooked.beta, /server-side-fallback/)
 })
