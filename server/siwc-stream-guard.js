@@ -9,13 +9,17 @@
 // fires either. A tail of WINDOW characters that is one unit of at most
 // MAX_PERIOD characters repeated is a runaway too. Replaying 152,778 logged
 // calls flagged only real loops (docs/investigations/dsh-vs-codex-harness-20261112.md).
+// The window is 32,768 characters so legitimate repetitive content (a fixture,
+// a separator line, a generated table) has room: the observed loops ran past
+// 100,000 characters, so the wider window still stops them within seconds.
 // Whitespace inside a string (blank lines are `\n\n...` in JSON) and a run of
 // one character stay allowed, as the padding rule allows them.
 export const SIWC_ARGUMENT_WHITESPACE_LIMIT = 8192
 export const SIWC_ARGUMENT_RUNAWAY = 'SIWC_TOOL_ARGUMENT_RUNAWAY'
-const WINDOW = 8192
+export const SIWC_ARGUMENT_REPEAT_WINDOW = 32768
+const WINDOW = SIWC_ARGUMENT_REPEAT_WINDOW
 const MAX_PERIOD = 64
-const CHECK_EVERY = 1024
+const CHECK_EVERY = 4096
 // Unlike padding, a repetition loop is retried: the backend already cut every
 // observed loop after 3-37 minutes and dsh retried that interruption. Stopping
 // early keeps that outcome without the wait.
@@ -26,10 +30,17 @@ export function repeatingPeriod(tail) {
   if (tail.slice(1) === tail.slice(0, -1)) return 0
   for (let period = 2; period <= MAX_PERIOD; period++) {
     if (tail.slice(period) !== tail.slice(0, tail.length - period)) continue
-    // The window can start inside an escape, so the unit may be `n\` rather than `\n`.
-    return tail.slice(-period).replace(/[\\nrt\s]/g, '') ? period : 0
+    return blankUnit(tail.slice(-period)) ? 0 : period
   }
   return 0
+}
+
+const BLANK = /^(?:\\[nrt]|\s)+$/
+// Whitespace and JSON whitespace escapes only. The window can start inside an
+// escape, so the unit may read `n\` for `\n`; any rotation of it may match.
+function blankUnit(unit) {
+  for (let at = 0; at < unit.length; at++) if (BLANK.test(unit.slice(at) + unit.slice(0, at))) return true
+  return false
 }
 
 function runaway() {

@@ -342,7 +342,7 @@ test('the installed GPT SDK passes a repeated-argument loop on as a retryable fa
   const piPackage = findPackageJSON('@earendil-works/pi-ai', pathToFileURL(require.resolve('@deepseek-ai/dsh-llm-pi-ai')))
   const { stream: dshStream } = await import(new URL('./dist/api/openai-responses.js', pathToFileURL(piPackage)).href)
   // The loop observed after a broken data array, streamed in small pieces.
-  const loop = '{"code":"return await tools.edit(await input.get())","data":[{"file_path":"a.js",' + '}]} (sic) '.repeat(2000)
+  const loop = '{"code":"return await tools.edit(await input.get())","data":[{"file_path":"a.js",' + '}]} (sic) '.repeat(5000)
   const events = [
     { type: 'response.output_item.added', output_index: 0, item: { id: 'fixture-fc', type: 'function_call', call_id: 'fixture-call', name: 'run_code', arguments: '' } },
     ...loop.match(/[\s\S]{1,200}/g).map(delta => ({ type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fixture-fc', delta })),

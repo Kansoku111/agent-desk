@@ -116,3 +116,70 @@ test('idle watchdog uses the existing retry policy without retrying cancellation
   assert.equal(cancelled.stopReason, 'cancelled')
   assert.equal(calls, 1, 'user cancellation does not retry')
 })
+
+// The repetition guard stops a response mid-stream after an earlier call in it was already
+// complete. A retry must not run that call: dsh executes tool calls only from a finished
+// message, so the stopped response is kept as an attempt and the retry starts clean.
+test('a response stopped by the repetition guard is retried without running its completed tool call', { timeout: 60000 }, async t => {
+  const parent = path.resolve(os.tmpdir()), home = await fs.mkdtemp(path.join(parent, 'agent-desk-repeat-runtime-'))
+  const paths = appPaths(home), workspace = path.join(home, 'workspace')
+  await fs.mkdir(paths.dshHome, { recursive: true }); await fs.mkdir(workspace)
+  await fs.writeFile(path.join(workspace, 'input.txt'), 'fixture')
+  let calls = 0
+  const server = http.createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const body = JSON.parse(raw)
+    calls++
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = event => res.write('data: ' + JSON.stringify(event) + '\n\n')
+    send({ type: 'response.created', response: { id: 'resp-' + calls, status: 'in_progress', output: [] } })
+    if (calls === 1) {
+      const tool = body.tools.find(entry => entry.name === 'read') ?? body.tools[0]
+      const args = tool.name === 'read' ? JSON.stringify({ file_path: 'input.txt' }) : '{}'
+      const done = { id: 'fc_done', type: 'function_call', call_id: 'call_done', name: tool.name, arguments: args, status: 'completed' }
+      send({ type: 'response.output_item.added', output_index: 0, item: { ...done, arguments: '', status: 'in_progress' } })
+      send({ type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fc_done', delta: args })
+      send({ type: 'response.function_call_arguments.done', output_index: 0, item_id: 'fc_done', arguments: args })
+      send({ type: 'response.output_item.done', output_index: 0, item: done })
+      send({ type: 'response.output_item.added', output_index: 1, item: { id: 'fc_loop', type: 'function_call', call_id: 'call_loop', name: tool.name, arguments: '', status: 'in_progress' } })
+      send({ type: 'response.function_call_arguments.delta', output_index: 1, item_id: 'fc_loop', delta: '{"code":"x","data":[{"a":"b",' + '}]} (sic) '.repeat(20) })
+      // How the guard's stop reaches the SDK: the stream fails with the guard's message.
+      send({ type: 'error', code: 'stream', message: 'SIWC_TOOL_ARGUMENT_REPEAT: fixture loop' })
+      res.end()
+      return
+    }
+    const message = { id: 'msg', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'complete', annotations: [] }] }
+    send({ type: 'response.output_item.added', output_index: 0, item: { ...message, status: 'in_progress', content: [] } })
+    send({ type: 'response.output_text.delta', output_index: 0, item_id: 'msg', content_index: 0, delta: 'complete' })
+    send({ type: 'response.output_item.done', output_index: 0, item: message })
+    send({ type: 'response.completed', response: { id: 'resp-' + calls, status: 'completed', output: [message], usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } } })
+    res.end()
+  })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const rows = YAML.parse(homePatch({ localRoute: localRoute({ baseURL: 'http://127.0.0.1:' + server.address().port + '/v1', models: [{ id: 'repeat-fixture' }] }), persona: await shippedPersona() }))
+  rows.find(row => row.id === 'acp').config = { provider: 'local-llm', model: 'repeat-fixture' }
+  const profile = rows.find(row => row.id === 'llm-pi-ai').config.providers['local-llm']
+  // The SIWC route speaks the Responses API, where a call is complete before the response is.
+  profile.api = 'openai-responses'
+  delete profile.compat
+  profile.retryPolicy = { mode: 'normal', maxRetries: 1, backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } }
+  await fs.writeFile(paths.homePatch, YAML.stringify(rows))
+  const runtime = new AcpRuntime({ paths, mode: 'read-only', onUpdate() {}, onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
+  t.after(async () => {
+    await runtime.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve))
+    assert.equal(path.dirname(home), parent); assert.match(path.basename(home), /^agent-desk-repeat-runtime-/)
+    await fs.rm(home, { recursive: true, force: true })
+  })
+  await runtime.start()
+  const session = await runtime.newSession(workspace)
+  assert.equal((await runtime.prompt(session.sessionId, [{ type: 'text', text: 'fixture' }])).stopReason, 'end_turn', runtime.stderr)
+  assert.equal(calls, 2, 'the stopped response is retried once')
+  const events = decodeSessionLog(await fs.readFile(await findSessionLog(paths.dshHome, session.sessionId)))
+  const attempts = events.filter(e => e.type === 'assistant/attempt')
+  assert.equal(attempts.length, 1)
+  const ended = attempts[0].data.stream.filter(part => part.chunk?.type === 'block-end').map(part => part.chunk.block.type)
+  assert.ok(ended.includes('tool-call'), 'the stopped response held a completed tool call: ' + ended.join(','))
+  assert.equal(events.filter(e => e.type === 'tool/call' || e.type === 'tool/result').length, 0, 'no tool ran from the stopped response')
+  assert.equal(events.filter(e => e.type === 'llm/retry').length, 1)
+})
