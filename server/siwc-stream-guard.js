@@ -14,11 +14,11 @@
 // 100,000 characters. At the slowest observed rate (about 75 characters a
 // second) a full window takes about 7 minutes, against the 3-37 minutes the
 // backend took to cut them.
-// Blank lines inside a string (`\n\n...` in JSON) count too: 12 logged calls
-// streamed tens of thousands of them for about 15 minutes until the backend cut
-// them, and no call that finished normally had more than 8,400 characters of
-// them in a row (both were loops that happened to end). A run of one character
-// stays allowed.
+// Blank lines inside a string (`\n\n...` in JSON) count too: three logged write
+// calls streamed tens of thousands of them for about 15 minutes until the
+// backend cut them, and no call that finished normally had more than 8,400
+// characters of them in a row (that one was itself a loop that happened to
+// end). A run of one character stays allowed.
 export const SIWC_ARGUMENT_WHITESPACE_LIMIT = 8192
 export const SIWC_ARGUMENT_RUNAWAY = 'SIWC_TOOL_ARGUMENT_RUNAWAY'
 export const SIWC_ARGUMENT_REPEAT_WINDOW = 32768

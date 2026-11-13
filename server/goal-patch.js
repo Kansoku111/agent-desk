@@ -1,7 +1,7 @@
 // How goal-hook.js changes dsh-acp, kept apart so tests can check the patch
 // without registering the hook.
 //
-// A goal (`create_goal`) keeps a dsh session working on its own: whenever the
+// A goal (started with `/goal`) keeps a dsh session working on its own: whenever the
 // agent goes idle with an active, armed goal, dsh's goal-round driver queues
 // the next `<goal_round>` prompt. dsh-acp settles a `session/prompt` as soon
 // as the agent first goes idle, though, so the prompt answered `end_turn`
