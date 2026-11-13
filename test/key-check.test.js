@@ -131,8 +131,10 @@ test('the subagent guidance sends each model family to its own pinned tool, in n
 
   // Without this a GPT model other than the pinned one picks the plain `subagent`, which runs on itself.
   const both = guidance([claude, gpt])
-  assert.match(both, /Delegate with your own family's tool \(`subagent_claude` for Claude, `subagent_gpt` for GPT\), else `subagent`/)
-  assert.match(both, /`subagent` and `subagent_fork` run on your own model; use `subagent_fork` only when the child must see this conversation/)
+  assert.match(both, /Delegate with your own family's tool \(`subagent_claude` for Claude, `subagent_gpt` for GPT\), else any of them/)
+  // As with one pinned tool, the plain `subagent` runs on the parent's model and is used only when asked.
+  assert.doesNotMatch(both, /else `subagent`/)
+  assert.match(both, /`subagent`\/`subagent_fork` run on your own model: only on request, the fork only if the child must see this chat/)
   // The paragraph this one replaced was 510 characters for the same two tools.
   assert.ok(both.length <= 510, `${both.length} characters`)
 

@@ -125,8 +125,9 @@ function subagentGuidance(subagents) {
   const tools = subagents.map(({ provider, model, name }) => ({ ...SUBAGENT_TOOLS[provider], label: name || model }))
   const choice = tools.length === 1
     // The one tool is the user's subagent for this kind of task, whatever family the parent is.
+    // With several, the plain `subagent` is likewise only on request: the user picked the models.
     ? `The user chose this one for delegated work: use \`${tools[0].toolName}\` by default. \`subagent\` and \`subagent_fork\` run on your own model; use them only when asked, and \`subagent_fork\` only when the child must see this conversation.`
-    : `The user chose these. Delegate with your own family's tool (${tools.map(({ toolName, family }) => `\`${toolName}\` for ${family}`).join(', ')}), else \`subagent\`; use another family's only for a second opinion or when asked. \`subagent\` and \`subagent_fork\` run on your own model; use \`subagent_fork\` only when the child must see this conversation.`
+    : `The user chose these. Delegate with your own family's tool (${tools.map(({ toolName, family }) => `\`${toolName}\` for ${family}`).join(', ')}), else any of them; another family's otherwise only for a second opinion or on request. \`subagent\`/\`subagent_fork\` run on your own model: only on request, the fork only if the child must see this chat.`
   return [
     'Subagents on a fixed model:',
     ...tools.map(({ toolName, label, billing }) => `- \`${toolName}\`: ${label}; ${billing}.`),
