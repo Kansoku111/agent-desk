@@ -36,6 +36,14 @@ test('guidance follows the runtime language and currently exposed capabilities',
   assert.doesNotMatch(ptcGuidance([{ name: 'read' }], runtime), /"code":/)
 })
 
+test('guidance moves to another directory only when the request names one', () => {
+  // An unconditional "enter the task directory" made the model cd into a folder name taken
+  // from the request text and lose its first program (lab/RESULTS.md, C series).
+  const text = ptcGuidance([{ name: 'read' }], { language: 'typescript', programFormat: 'function-body' })
+  assert.match(text, /Programs start in the session's working directory. Only when the request gives a path to a different directory/)
+  assert.doesNotMatch(text, /enter the task directory/)
+})
+
 test('grep guidance appears only with grep and shows a pattern that survives a JavaScript string', () => {
   const runtime = { language: 'typescript', programFormat: 'function-body' }
   assert.doesNotMatch(ptcGuidance([{ name: 'read' }], runtime), /bracket class/)
