@@ -19,6 +19,17 @@ import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
 import { PLAN_INSTRUCTION } from '../server/thread-utils.js'
 import { ptcDataExamples } from '../server/ptc-guidance.js'
 
+// Goals start only from /goal (create_goal is not offered); the app puts the new
+// goal's id into the prompt. capGoal answers the /goal turn with an edit to a round
+// cap, which only a direct human turn may make.
+const goalPrompt = (f, objective, sessionId = f.session.sessionId) => f.runtime.prompt(sessionId, [{ type: 'text', text: '/goal ' + objective }], objective)
+const capGoal = (rounds, toolMode) => (request) => {
+  const args = { goal_id: JSON.stringify(request.messages).match(/goal-[a-z0-9-]+/)[0], revision: 1, action: 'edit', max_goal_rounds: rounds }
+  return toolMode === 'ptc'
+    ? { name: 'run_code', args: { description: 'Cap the goal rounds', code: 'return await tools.update_goal(' + JSON.stringify(args) + ');' } }
+    : { name: 'update_goal', args }
+}
+
 async function setup(t, mode, profile) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-ptc-'))
   const paths = appPaths(home)
@@ -409,11 +420,10 @@ for (const toolMode of ['native', 'ptc']) {
     await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
     const tool = (name, args) => ({ name: toolMode === 'ptc' ? 'run_code' : name, args: toolMode === 'ptc'
       ? { code: 'return await tools.' + name + '(' + JSON.stringify(args) + ');', description: 'Exercise team goal scheduling' } : args })
-    f.queue.push(tool('create_goal', { objective: 'Finish local fixture work after its child reports', max_goal_rounds: 3 }))
     // Simulate the server setting the wait before a delegated tool returns, while the parent is active.
     f.queue.push(async () => { await f.runtime.setGoalWaiting(f.session.sessionId, true) })
-    assert.equal((await f.prompt()).stopReason, 'end_turn')
-    assert.equal(f.requests.length, 2, 'no goal round after the parent says it is waiting')
+    assert.equal((await goalPrompt(f, 'Finish local fixture work after its child reports')).stopReason, 'end_turn')
+    assert.equal(f.requests.length, 1, 'no goal round after the parent says it is waiting')
     for (const message of ['User asks how it is going', 'Child report arrived while another child still works']) {
       f.queue.push(tool('get_goal', {}))
       const before = f.requests.length
@@ -434,9 +444,10 @@ for (const toolMode of ['native', 'ptc']) {
     assert.equal(f.requests.length, before + 2)
     // Another session in the very same process must retain ordinary autonomous goal rounds.
     const sibling = await f.runtime.newSession(f.workspace)
-    f.queue.push({ name: 'create_goal', args: { objective: 'Continue ordinary work without an eco wait', max_goal_rounds: 1 } })
+    // The sibling keeps the default (native) tool mode.
+    f.queue.push(capGoal(1, 'native'))
     const from = f.requests.length
-    await f.runtime.prompt(sibling.sessionId, [{ type: 'text', text: 'Create the goal and keep working until its round limit' }])
+    await goalPrompt(f, 'Continue ordinary work without an eco wait', sibling.sessionId)
     assert.equal(f.requests.length, from + 3)
     assert.match(JSON.stringify(f.requests.at(-1).messages), /goal_round/)
   })
@@ -448,14 +459,12 @@ for (const toolMode of ['native', 'ptc']) {
     const f = await setup(t, 'danger-full-access')
     await f.runtime.setOption(f.session.sessionId, TOOL_MODE_CONFIG, toolMode)
     await f.runtime.setGoalWaiting(f.session.sessionId, true)
-    const args = { objective: 'Perform independent work after the human answers', max_goal_rounds: 1 }
-    f.queue.push({ name: toolMode === 'ptc' ? 'run_code' : 'create_goal', args: toolMode === 'ptc'
-      ? { description: 'Create a waiting goal', code: 'return await tools.create_goal(' + JSON.stringify(args) + ');' } : args })
+    f.queue.push(capGoal(1, toolMode))
     let entered, release
     const started = new Promise((resolve) => { entered = resolve })
     const ready = new Promise((resolve) => { release = resolve })
     f.queue.push(async () => { entered(); await ready })
-    const prompt = f.prompt()
+    const prompt = goalPrompt(f, 'Perform independent work after the human answers')
     await started
     const accepted = await f.runtime.steer(f.session.sessionId, [{ type: 'text', text: 'human-answer-for-atomic-admission' }], false)
     assert.equal(accepted, true)
@@ -483,14 +492,13 @@ test('a late steer into an idle parent cannot start an orphan model turn or clea
 test('cancelling a parked parent disarms its goal without restarting it', { timeout: 120_000 }, async (t) => {
   const f = await setup(t, 'danger-full-access')
   await f.runtime.setGoalWaiting(f.session.sessionId, true)
-  f.queue.push({ name: 'create_goal', args: { objective: 'Wait for a child then finish', max_goal_rounds: 3 } })
-  await f.prompt()
-  assert.equal(f.requests.length, 2)
+  await goalPrompt(f, 'Wait for a child then finish')
+  assert.equal(f.requests.length, 1)
   await f.runtime.cancel(f.session.sessionId)
   await f.runtime.setGoalWaiting(f.session.sessionId, false)
   f.queue.push({ name: 'get_goal', args: {} })
   await f.prompt()
-  assert.equal(f.requests.length, 4)
+  assert.equal(f.requests.length, 3)
   const text = f.requests.at(-1).messages.filter((entry) => entry.role === 'tool').at(-1).content
   assert.match(text, /disarmed/)
   assert.match(text, /active/)
@@ -533,7 +541,7 @@ test('real ACP switches native → PTC → native, forwards internal tools, resu
   assert.ok(f.requests.at(-1).messages.some((message) => message.role === 'tool'), 'prior tool history survives switching and resume')
 })
 
-test('real ACP shares SDK output types while retaining every native binding', { timeout: 120_000 }, async (t) => {
+test('real ACP output types follow the sharing rule while retaining every native binding', { timeout: 120_000 }, async (t) => {
   const f = await setup(t, 'workspace-write')
   await f.prompt()
   const nativeNames = f.requests.at(-1).tools.map(tool => tool.function.name).sort()
@@ -552,7 +560,14 @@ test('real ACP shares SDK output types while retaining every native binding', { 
   const outputs = parsed.statements.find(node => ts.isInterfaceDeclaration(node) && node.name.text === 'ToolOutputMap')
   assert.deepEqual(args.members.map(member => member.name.text).sort(), nativeNames)
   assert.deepEqual(outputs.members.map(member => member.name.text).sort(), nativeNames)
-  assert.ok(parsed.statements.some(node => ts.isTypeAliasDeclaration(node) && node.name.text.startsWith('SharedOutput')))
+  // Which tools repeat an output type depends on the tool set (the three goal tools did until
+  // create_goal was hidden), so check the rule rather than a count: an inline type is never
+  // left repeated three or more times, and every alias is used more than once.
+  const typeTexts = outputs.members.map(member => member.type.getText(parsed))
+  for (const text of new Set(typeTexts)) if (!text.startsWith('SharedOutput')) assert.ok(typeTexts.filter(t => t === text).length < 3, text.slice(0, 80))
+  for (const alias of parsed.statements.filter(node => ts.isTypeAliasDeclaration(node) && node.name.text.startsWith('SharedOutput'))) {
+    assert.ok(typeTexts.filter(t => t === alias.name.text).length >= 2, alias.name.text)
+  }
 })
 
 test('complete data examples edit literal contents and batch writes with progress in real PTC', { timeout: 120_000 }, async (t) => {

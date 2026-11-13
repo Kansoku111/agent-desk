@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Goals now start only from the `/goal` command. dsh's `create_goal` tool is no longer offered to the model, which used to set a goal for ordinary requests on its own; on a nine-minute lab task that doubled time and cost against Codex. Reading, completing, pausing and resuming a goal are unchanged.
 - Add the optional additional-instruction field to the independent review start dialog, as in “子に委託”. The text goes to the parent model that writes the reviewer's brief, as the user's top-priority instruction, so you can say which part to consult on or review.
 - Updated the bundled DeepSeek Harness (`@deepseek-ai/dsh` and `@deepseek-ai/dsh-atomic-write`) from 0.2.2-rc.1 to 0.2.2-rc.2 (bundled pi-ai 1.5.0 → 1.5.2); refreshed dependency notices. All 18 runtime hooks apply unchanged; tests follow dsh's new child-drain wait (`waitForTreeWork`), subagent detection by session origin, and the HTTP status constant in the pi-ai error classifier.
 - Stop Claude requests from asking Anthropic for a server-side fallback model. pi-ai lists Claude Opus as a fallback for Claude Fable 5 and 5.2, which would answer from another model without Agent Desk showing it; a busy model now fails and is retried as before.

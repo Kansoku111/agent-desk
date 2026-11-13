@@ -11,7 +11,7 @@ registerHooks({
     if (!url.startsWith('file:') || !TARGET.test(new URL(url).pathname) || result.source == null) return result
     const patched = patchGoalToolSource(String(result.source))
     if (!patched) {
-      process.stderr.write('[agent-desk] goal tool hook: dsh-tool-goal did not match; goal argument guidance is unchanged\n')
+      process.stderr.write('[agent-desk] goal tool hook: dsh-tool-goal did not match; the model can create goals again and goal argument guidance is unchanged\n')
       return result
     }
     return { ...result, source: patched }

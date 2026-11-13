@@ -49,6 +49,8 @@ test('installed goal tools take the patch; changed or already-patched sources ar
   assert.equal(patchGoalToolSource(patched), null)
   assert.equal(patchGoalToolSource('export {}'), null)
   for (const anchor of [
+    'create_goal may infer goal intent from a direct human request in any language. ',
+    'ctx.tools.register(defineTool({\n\t\tname: "create_goal",',
     'difficulty, uncertainty, or useful remaining work is not blocked.',
     'description: "Update the current goal."',
     'Replacement objective; valid only with action edit.',
@@ -56,6 +58,14 @@ test('installed goal tools take the patch; changed or already-patched sources ar
     'Required only with action blocked: the concrete condition that persisted across rounds and blocks progress.',
   ]) assert.equal(patchGoalToolSource(source.replace(anchor, 'changed upstream')), null, anchor)
   assert.equal(patchGoalToolSource(source + '\n// Replacement cap; valid only with action edit.'), null)
+})
+
+test('the model cannot create a goal; reading and updating one stay available for /goal', () => {
+  const f = fixture()
+  assert.deepEqual([...f.tools.keys()].sort(), ['get_goal', 'update_goal'])
+  assert.doesNotMatch(f.sections[0].text, /infer goal intent/)
+  assert.match(f.sections[0].text, /Only the user starts a goal, with the \/goal command/)
+  assert.match(f.sections[0].text, /use update_goal action resume to rearm it/)
 })
 
 test('model guidance explains omission and fillers without changing required fields or authority policy', () => {
