@@ -93,6 +93,7 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
   const legacyChoice = useRef(!server?.settings.taskPresets?.reviewSelected)
   const [mode, setMode] = useState<'opinion' | 'fix'>('opinion')
   const [permission, setPermission] = useState('workspace-write')
+  const [instruction, setInstruction] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [auth, setAuth] = useState<AuthConsentState>({ ready: false })
@@ -117,7 +118,7 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
     if (!inspection || busy || preset.saving) return
     setBusy(true); setError('')
     try {
-      const payload = { source, kind: 'review', ...(legacyChoice.current ? { harness } : {}), reviewMode: mode, permissionMode: harness === 'dsh' && mode === 'fix' ? permission : 'workspace-write', expectedModel: model, expectedEffort: effort }
+      const payload = { source, kind: 'review', ...(legacyChoice.current ? { harness } : {}), instruction, reviewMode: mode, permissionMode: harness === 'dsh' && mode === 'fix' ? permission : 'workspace-write', expectedModel: model, expectedEffort: effort }
       const fingerprint = JSON.stringify(payload)
       if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: messageId() }
       const result = await request<{ run: TaskPresetRun }>('preset.create', { ...payload, requestId: intent.current.id, authConfirmation: auth.confirmation })
@@ -139,6 +140,7 @@ function ReviewStartDialog({ source }: { source: TaskPresetSource }) {
       </fieldset>
       <div className="preset-model-line muted">{group && <span>{group.heading}{group.note ? ' · ' + group.note : ''}</span>}<span>{harness === 'claude' ? 'フルアクセス' : mode === 'opinion' ? '読み取り専用' : permission === 'danger-full-access' ? 'フルアクセス' : '作業フォルダーに書き込み'}</span></div>
       {harness === 'dsh' && mode === 'fix' && <label>権限<select value={permission} disabled={busy} onChange={(event) => setPermission(event.target.value)}><option value="workspace-write">作業フォルダーへの書き込み</option><option value="danger-full-access">フルアクセス</option></select></label>}
+      <textarea aria-label="追加指示" rows={3} maxLength={8000} placeholder="追加指示（任意）" value={instruction} disabled={busy} onChange={(event) => setInstruction(event.target.value)} />
       {harness === 'claude' && inspection && selected && <ClaudeAuthConsent workspace={inspection.workspace} taskPreset onChange={setAuth} />}
       {(preset.saveError || error) && <p className="team-warning" role="alert">{preset.saveError || error}</p>}
       {busy ? <div className="preset-start-note muted">閉じても開始処理は続きます。</div> : mode === 'opinion' && <div className="preset-start-note muted">完了後、元のセッションへ自動で返します。</div>}

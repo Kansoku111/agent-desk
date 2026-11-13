@@ -217,6 +217,7 @@ test('another task editing the same folder does not fail a run without selected 
   assert.doesNotMatch(workerPresetInstructions({ id: 'R', kind: 'review' }), /Default to implementation/)
   assert.match(preparePresetPrompt({ id: 'R', kind: 'review' }), /報告や修正方針の相談だけで止める依頼にせず.*利用者自身が指摘の報告のみ.*最優先/)
   assert.match(preparePresetPrompt({ id: 'R', kind: 'review' }), /レビューの対象.*あなたが判断して依頼に明記/)
+  assert.match(preparePresetPrompt({ id: 'R', kind: 'review', reviewMode: 'opinion', instruction: 'キャッシュ設計だけ相談' }), /利用者の追加指示（最優先。これ以外の要求を広げない）: キャッシュ設計だけ相談/)
   assert.match(workerPresetInstructions({ id: 'R', kind: 'review' }), /scope named in the brief.*only if the project has it/)
   assert.match(workerPresetInstructions({ id: 'R', kind: 'review' }), /do not stop to ask whether to fix them\. Explicit user instructions .* take precedence/)
   assert.doesNotMatch(workerPresetInstructions(run), /running implementation worker/)

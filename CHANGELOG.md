@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Add the optional additional-instruction field to the independent review start dialog, as in “子に委託”. The text goes to the parent model that writes the reviewer's brief, as the user's top-priority instruction, so you can say which part to consult on or review.
 - Updated the bundled DeepSeek Harness (`@deepseek-ai/dsh` and `@deepseek-ai/dsh-atomic-write`) from 0.2.2-rc.1 to 0.2.2-rc.2 (bundled pi-ai 1.5.0 → 1.5.2); refreshed dependency notices. All 18 runtime hooks apply unchanged; tests follow dsh's new child-drain wait (`waitForTreeWork`), subagent detection by session origin, and the HTTP status constant in the pi-ai error classifier.
 - Stop Claude requests from asking Anthropic for a server-side fallback model. pi-ai lists Claude Opus as a fallback for Claude Fable 5 and 5.2, which would answer from another model without Agent Desk showing it; a busy model now fails and is retried as before.
 - Tell PTC programs to call `working_directory` only when the request gives a path to another directory; they already start in the session's working directory. The earlier unconditional "enter the task directory" made the model move into a folder name taken from the request text and lose its first program.
