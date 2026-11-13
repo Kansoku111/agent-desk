@@ -15,7 +15,7 @@ test('argument padding is bounded across chunks and independent calls', () => {
 })
 
 test('code strings, escaped quotes and ordinary formatted JSON are preserved', async () => {
-  const event = delta(JSON.stringify({ code: '\"' + '\n'.repeat(SIWC_ARGUMENT_WHITESPACE_LIMIT * 2) + '\\' }))
+  const event = delta(JSON.stringify({ code: '\"' + '\n'.repeat(SIWC_ARGUMENT_WHITESPACE_LIMIT + 1) + '\\' }))
   const guard = new SiwcArgumentGuard()
   for (const char of event.delta) guard.observe(delta(char))
   const formatted = '{' + ' '.repeat(SIWC_ARGUMENT_WHITESPACE_LIMIT) + '\"code\":' + ' '.repeat(SIWC_ARGUMENT_WHITESPACE_LIMIT) + '\"ok\"}'
@@ -56,10 +56,17 @@ test('a loop that slips one character every few thousand is still stopped within
   assert.ok(seen <= SIWC_ARGUMENT_REPEAT_WINDOW + 8192, `stopped after ${seen} characters`)
 })
 
-test('long blank-line, single-character, varied and shorter repetitive content is not a repetition runaway', () => {
+test('a window of blank lines inside a string is a loop', () => {
+  // The observed shape: a write whose content turned into `\n\n...` for 80k characters and 15 minutes.
+  const loop = JSON.stringify({ file_path: 'notes.md', content: '# Notes\n' + '\n'.repeat(SIWC_ARGUMENT_REPEAT_WINDOW) })
+  assert.throws(() => stream(new SiwcArgumentGuard(), loop), error => error.code === SIWC_ARGUMENT_REPEAT)
+  assert.throws(() => stream(new SiwcArgumentGuard(), JSON.stringify({ code: '\t \r\n'.repeat(SIWC_ARGUMENT_REPEAT_WINDOW / 2) })), error => error.code === SIWC_ARGUMENT_REPEAT)
+})
+
+test('shorter blank-line, single-character, varied and shorter repetitive content is not a repetition runaway', () => {
   const guard = new SiwcArgumentGuard()
-  // Escaped blank lines and tab/space/CRLF runs, whichever character the window starts on.
-  stream(guard, JSON.stringify({ code: '\n'.repeat(SIWC_ARGUMENT_REPEAT_WINDOW * 2) + '\t \r\n'.repeat(SIWC_ARGUMENT_REPEAT_WINDOW / 2) }), 'blank')
+  // The longest blank run in a call that finished normally was 8,400 characters.
+  stream(guard, JSON.stringify({ code: 'x' + '\n'.repeat(SIWC_ARGUMENT_REPEAT_WINDOW / 2 - 1000) + 'y' }), 'blank')
   stream(guard, JSON.stringify({ code: '='.repeat(SIWC_ARGUMENT_REPEAT_WINDOW * 2) }), 'rule')
   const varied = Array.from({ length: 4000 }, (_, i) => `line ${i};`).join('\n')
   stream(guard, JSON.stringify({ code: varied }), 'varied')

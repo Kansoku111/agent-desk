@@ -14,8 +14,11 @@
 // 100,000 characters. At the slowest observed rate (about 75 characters a
 // second) a full window takes about 7 minutes, against the 3-37 minutes the
 // backend took to cut them.
-// Whitespace inside a string (blank lines are `\n\n...` in JSON) and a run of
-// one character stay allowed, as the padding rule allows them.
+// Blank lines inside a string (`\n\n...` in JSON) count too: 12 logged calls
+// streamed tens of thousands of them for about 15 minutes until the backend cut
+// them, and no call that finished normally had more than 8,400 characters of
+// them in a row (both were loops that happened to end). A run of one character
+// stays allowed.
 export const SIWC_ARGUMENT_WHITESPACE_LIMIT = 8192
 export const SIWC_ARGUMENT_RUNAWAY = 'SIWC_TOOL_ARGUMENT_RUNAWAY'
 export const SIWC_ARGUMENT_REPEAT_WINDOW = 32768
@@ -45,22 +48,8 @@ function mismatches(tail, period) {
 /** The repeating unit's length when `tail` is one short unit repeated, else 0. */
 export function repeatingPeriod(tail) {
   if (mismatches(tail, 1) <= SLIPS) return 0
-  for (let period = 2; period <= MAX_PERIOD; period++) {
-    if (mismatches(tail, period) > SLIPS) continue
-    // A slip or the end of a string can fall in any one unit, so the unit is
-    // read at the start, middle and end of the tail and the majority decides.
-    const blank = [0, (tail.length - period) >> 1, tail.length - period].filter(at => blankUnit(tail.slice(at, at + period))).length
-    return blank >= 2 ? 0 : period
-  }
+  for (let period = 2; period <= MAX_PERIOD; period++) if (mismatches(tail, period) <= SLIPS) return period
   return 0
-}
-
-const BLANK = /^(?:\\[nrt]|\s)+$/
-// Whitespace and JSON whitespace escapes only. The window can start inside an
-// escape, so the unit may read `n\` for `\n`; any rotation of it may match.
-function blankUnit(unit) {
-  for (let at = 0; at < unit.length; at++) if (BLANK.test(unit.slice(at) + unit.slice(0, at))) return true
-  return false
 }
 
 function runaway() {
