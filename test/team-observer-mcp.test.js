@@ -9,6 +9,8 @@ test('observer MCP exposes only bounded readers and standing restrictions', asyn
   assert.match(init.result.instructions, /Never poll/)
   assert.match(init.result.instructions, /untrusted data/)
   assert.match(init.result.instructions, /search and read workspace files/)
+  // Progress questions mean this team, not the project's history in plans or git logs.
+  assert.match(init.result.instructions, /mean this team since teamStartedAt, not the project history/)
   assert.match(init.result.instructions, /Never modify files, execute commands, or delegate/)
   const list = await handleObserverMcp(msg('tools/list'), call)
   assert.deepEqual(list.result.tools.map((tool) => tool.name), ['status', 'child_turns', 'send', 'stop'])

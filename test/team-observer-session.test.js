@@ -129,6 +129,7 @@ test('switching to Claude preserves earlier chat and checks billing before launc
   assert.equal(args[args.indexOf('--allowedTools') + 1], 'Read,Glob,Grep,mcp__observer')
   const prompt = await fs.readFile(args[args.indexOf('--append-system-prompt-file') + 1], 'utf8')
   assert.match(prompt, /search and read workspace files/)
+  assert.match(prompt, /mean this team since teamStartedAt/)
   assert.match(prompt, /Never modify files, execute commands, or delegate/)
   assert.equal(calls.at(-1)[0], 'agent-run')
   assert.match(calls.at(-1)[3].blocks[0].text, /最初/)

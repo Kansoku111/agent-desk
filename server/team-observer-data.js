@@ -22,6 +22,8 @@ export function observerStatus(manager, teamId) {
   const leaderRecord = team.leaderKind === 'terminal' ? manager.terminals.records?.get(team.leaderId) : leader
   const queue = [...(manager.delivering?.get(teamId)?.items ?? []), ...(team.queue ?? [])]
   return {
+    // The scope of "progress so far": the leader task may have history from before the team.
+    teamStartedAt: Number.isFinite(team.createdAt) ? new Date(team.createdAt).toISOString() : null,
     leader: {
       kind: team.leaderKind,
       state: team.leaderKind === 'thread' ? leader?.status ?? null : leader?.state ?? null,

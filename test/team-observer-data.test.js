@@ -6,7 +6,7 @@ import { TeamManager } from '../server/teams.js'
 function fixture(kind = 'thread') {
   const calls = []
   const child = { id: 'child', name: '子1', kind, taskId: 'task' }
-  const team = { id: 'team', leaderId: 'leader', leaderKind: 'thread', children: [child], queue: [{ id: 'q', text: '待機中' }] }
+  const team = { id: 'team', leaderId: 'leader', leaderKind: 'thread', createdAt: Date.UTC(2026, 10, 12), children: [child], queue: [{ id: 'q', text: '待機中' }] }
   const turns = Array.from({ length: 12 }, (_, i) => ({ id: String(i), status: 'done', user: { text: 'request ' + i }, items: [
     { type: 'thought', text: 'private thought' }, { type: 'tool', output: 'tool output' }, { type: 'agent', text: 'answer ' + i },
   ] }))
@@ -23,6 +23,7 @@ test('status only reads saved state and does not consume queued reports', () => 
   const { manager, calls } = fixture()
   const snapshot = observerStatus(manager, 'team')
   assert.equal(snapshot.leader.state, 'idle')
+  assert.equal(snapshot.teamStartedAt, '2026-11-12T00:00:00.000Z')
   assert.equal(snapshot.children[0].lastReport.text, '報告')
   assert.deepEqual(snapshot.queue, [{ id: 'q', childId: undefined, kind: undefined, at: undefined, preview: '待機中' }])
   assert.equal(snapshot.queueCount, 1)
