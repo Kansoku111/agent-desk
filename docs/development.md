@@ -49,6 +49,8 @@ Skillsのお気に入りは同じフィクスチャサーバーの `skill-favori
 
 ## Claude Code の質問カード
 
+Code Mode の設定と起動は `node --test test/claude-code-mode.test.js` で検証します。既定オフ、タスクへの固定と再起動での維持、既存タスクとチームのリーダーの除外、同意判定を模擬PTYで確認し、実モデルは使いません。
+
 回帰確認は `node --test test/terminals.test.js test/terminal-dialog-ui.test.js test/rpc-handlers-terminals.test.js test/terminal-send-regressions.test.js test/terminal-input-delivery.test.js test/claude-login-ui.test.js` です。模擬PTYと実コンポーネントで自由入力・改行・明示的確定・複数選択用キー・古い質問・二重操作・制御文字の拒否・失敗時の入力保持を検査します。ブラウザ検証は `node test/fixtures/serve-ab-ui.mjs` のURLを `terminal-dialog-ui.html` に替え、DevToolsで `await terminalDialogTest.run()` を実行します。375px幅でも確認でき、実モデルや本番データは使いません。実IMEの変換や全CLIバージョンでの動作を保証する検証ではありません。
 
 設計上、質問の決定権は改造していないCLIに残します。既存の画面読み取りを拡張し、選択肢以外の画面にはテキスト表示と明示的なキー／貼り付け操作を用意します。CLI内部のAPIへの依存や質問ツールの置き換えを避けるためです。質問の画面指紋・プロセス固有値・入力世代を含む一時IDを操作前に照合し、同じ選択肢の別質問・別クライアントの操作・再起動後の古い操作を拒否します。自由入力とEnterは別操作で、通常メッセージ送信のEnter再送を流用しません。既存の `terminal.choose` のID省略形式は互換のため維持し、新しいチャットは必ずIDを付けます。新しい `terminal.respond` はID必須です。保存形式・セッション・認証・モデル・課金経路は変更せず、移行操作は不要です。

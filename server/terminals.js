@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { CODE_MODE_ENV } from './claude-code-mode.js'
 import { ClaudeTranscripts } from './claude-transcript.js'
 import { instructionsSection } from './instructions-plugin.js'
 import { readJson, writeJson } from './json-file.js'
@@ -76,8 +77,12 @@ export class TerminalManager extends EventEmitter {
     file, settingsFile, hookUrl, send, pty = null, findClaude: find = () => findClaude(), log = () => {},
     claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), launch = () => null, preflight = null, instructions = () => '',
     subagentRoute = () => null, imageMcp = () => null, fallbackPreflight = null, usageFallbackRoutes = () => null, validateFallbackModel = () => {}, handoffThread = null,
+    codeMode = () => false,
   }) {
     super()
+    // Whether a task created now starts in Code Mode. The choice is kept on the task: Claude Code resumes a
+    // Code Mode session only with Code Mode on, and turning it on for an older task would change that session.
+    this.codeMode = codeMode
     this.file = file
     this.settingsFile = settingsFile
     // A team's leader gets its own hook settings (teamHookSettings).
@@ -260,6 +265,8 @@ export class TerminalManager extends EventEmitter {
       createdAt: now, updatedAt: now, archived: false,
       model: model === undefined ? this.defaults.model : model, effort: effort === undefined ? this.defaults.effort : effort,
       ...(team ? { team } : {}),
+      // A team's leader is excluded: it runs unattended with bypassed permissions.
+      ...(!team && this.codeMode() ? { codeMode: true } : {}),
       ...(usageFallbackFrom ? { usageFallbackFrom, ...(usageFallbackPending ? { usageFallbackPending: true } : {}) } : {}),
     }
     this.records.set(record.id, record)
@@ -493,6 +500,7 @@ export class TerminalManager extends EventEmitter {
     ])
     const secret = randomBytes(18).toString('hex')
     for (const name of INHERITED_MARKERS) delete env[name]
+    if (record.codeMode) env[CODE_MODE_ENV] = '1'
     Object.assign(env, {
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',

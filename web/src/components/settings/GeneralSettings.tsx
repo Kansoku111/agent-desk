@@ -7,6 +7,7 @@ import { UsageDisplaySettings } from './UsageDisplaySettings'
 export function GeneralSettings() {
   const settings = useStore((state) => state.server?.settings)
   const platform = useStore((state) => state.server?.app.platform)
+  const codeModeConsented = useStore((state) => state.server?.app.codeModeConsented)
   if (!settings) return null
   const update = (patch: Record<string, unknown>) => void act('settings.update', { patch })
   const themes: { value: Theme; label: string; icon: typeof Sun }[] = [
@@ -127,6 +128,27 @@ export function GeneralSettings() {
         >
           {(Object.keys(PERMISSION_INFO) as PermissionMode[]).map((mode) => <option key={mode} value={mode}>{PERMISSION_INFO[mode].label}</option>)}
         </select>
+      </div>
+      <div className="setting">
+        <div>
+          <h3>Claude Code の Code Mode（実験）</h3>
+          <p className="muted">新しい CL タスクから、ツール呼び出しを JavaScript にまとめて実行します。</p>
+          {settings.claudeCodeMode === true && codeModeConsented === false && (
+            <p className="muted" id="code-mode-consent">
+              Claude Code の同意が未完了のため、通常どおり起動します。<code>CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1</code> を付けて claude を一度起動し、確認画面で Yes を選んでください。
+            </p>
+          )}
+        </div>
+        <label className="switch">
+          <input
+            type="checkbox"
+            aria-label="Claude Code の Code Mode"
+            aria-describedby={settings.claudeCodeMode === true && codeModeConsented === false ? 'code-mode-consent' : undefined}
+            checked={settings.claudeCodeMode === true}
+            onChange={(event) => update({ claudeCodeMode: event.target.checked })}
+          />
+          <span />
+        </label>
       </div>
     </div>
   )

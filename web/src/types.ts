@@ -467,6 +467,8 @@ export interface Settings extends UsageDisplay {
   desktopTool: boolean
   imageTool: boolean
   historyTool?: boolean
+  /** New Claude Code tasks start in its experimental Code Mode. */
+  claudeCodeMode?: boolean
   checkpoints: boolean
   /** Favorite skill invocation names, shared across projects. */
   favoriteSkills?: Record<string, boolean>
@@ -633,7 +635,9 @@ export type LoginState =
 
 export interface AppState {
   /** `remote`: this page is a phone using remote access, not a window on the PC. */
-  app: { version: string; dshVersion: string; platform: string; dataDir: string; myPc: string; uiBuild: string; remote: boolean }
+  app: { version: string; dshVersion: string; platform: string; dataDir: string; myPc: string; uiBuild: string; remote: boolean
+    /** Claude Code has recorded the user's consent to Code Mode. */
+    codeModeConsented?: boolean }
   settings: Settings
   accounts: Accounts
   catalog: Catalog

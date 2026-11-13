@@ -11,6 +11,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { isDeepStrictEqual } from 'node:util'
 import { Catalog, matchesCommandCodeCatalog } from './catalog.js'
+import { codeModeConsented } from './claude-code-mode.js'
 import { codeStamp, uiBuild } from './code-stamp.js'
 import { ChatGptLogin } from './chatgpt-login.js'
 import { Checkpoints } from './checkpoints.js'
@@ -163,6 +164,7 @@ const terminals = await new TerminalManager({
   launch: (record) => teams?.launchFor(record) ?? null,
   instructions: () => effectiveCustomInstructions(settings),
   imageMcp: claudeImageMcp,
+  codeMode: () => settings.claudeCodeMode === true && codeModeConsented(),
   subagentRoute: (record) => {
     if (settings.subagentsEnabled === false) return null
     const plan = routePlan('cl', savedRoutes(settings).cl)
@@ -949,6 +951,7 @@ async function fullState(client) {
     app: {
       version: APP_VERSION, dshVersion: DSH_VERSION, platform: process.platform, dataDir: paths.home, myPc: paths.myPc, uiBuild: UI_BUILD,
       remote: Boolean(client?.remote),
+      codeModeConsented: codeModeConsented(),
     },
     settings,
     accounts: await accounts(),

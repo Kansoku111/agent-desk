@@ -55,6 +55,8 @@ export const DEFAULT_SETTINGS = {
   desktopTool: false,
   imageTool: true,
   historyTool: false,
+  // Claude Code tasks created from now on start in its experimental Code Mode (see claude-code-mode.js).
+  claudeCodeMode: false,
   checkpoints: true,
   projectNames: {},
   projectColors: {},
@@ -88,7 +90,7 @@ export const DEFAULT_SETTINGS = {
 
 const BOOLEAN_SETTINGS = [
   'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool',
-  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'customInstructionsEnabled', 'commandCodeZdr',
+  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'customInstructionsEnabled', 'commandCodeZdr', 'claudeCodeMode',
 ]
 const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool']
 const ENUM_SETTINGS = {

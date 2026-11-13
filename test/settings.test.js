@@ -420,7 +420,7 @@ test('a failed queued request does not drop a following valid update', async () 
 })
 
 test('boolean settings and provider toggles reject coercion', async () => {
-  const keys = ['notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'checkpoints', 'modelAutoUpdate', 'customInstructionsEnabled']
+  const keys = ['notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'checkpoints', 'modelAutoUpdate', 'customInstructionsEnabled', 'claudeCodeMode']
   for (const key of keys) {
     for (const value of ['false', 0, 1, null, undefined, {}, []]) {
       const h = harness()
