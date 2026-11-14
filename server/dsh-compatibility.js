@@ -117,9 +117,7 @@ export function resolveCompatibilityModules(root) {
     }
   }
   const pi = packageFile('@earendil-works/pi-ai', llm)
-  // retry-hook imports the app's pi-ai, which may differ from dsh's nested copy.
-  const retryPi = packageFile('@earendil-works/pi-ai', path.join(root, 'server', 'retry-hook.js'))
-  return { acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, ptcWorker: path.join(path.dirname(ptcRuntime), 'process.js'), tools, pi, retryPi }
+  return { acp, llm, compaction, search, goalTool, goalDriver, ptcRuntime, ptcWorker: path.join(path.dirname(ptcRuntime), 'process.js'), tools, pi }
 }
 
 async function verifyActualHookChain(modules, expected) {
@@ -209,11 +207,12 @@ export async function verifyDshCompatibility({ root = fileURLToPath(new URL('../
         throw new Error(`fast-mode: ${api} must export stream and streamSimple`)
       }
     }
-    // Resolve through the public export exactly as retry-hook does, not a
-    // private file that might remain on disk after its public export vanished.
-    const retryUrl = import.meta.resolve('@earendil-works/pi-ai/utils/retry')
-    const retry = await import(retryUrl)
-    if (typeof retry.isRetryableAssistantError !== 'function') throw new Error('retry hook: isRetryableAssistantError is unavailable')
+    // The hook chain above loaded dsh-llm-pi-ai through retry-hook, which then took
+    // pi-ai's check from the copy that module resolves, through the public export
+    // (not a private file that might remain on disk after its export vanished).
+    const { engineRetryCheck } = await import(new URL('./retry-hook.js', import.meta.url).href)
+    const installed = await engineRetryCheck()
+    if (installed !== true) throw new Error(`retry hook: isRetryableAssistantError is unavailable (${installed ?? 'dsh-llm-pi-ai was not loaded'})`)
     return { ok: true, hooks: HOOKS.map(({ name }) => name) }
   } catch (error) {
     throw new Error(`dsh compatibility: ${error.message}`, { cause: error })
