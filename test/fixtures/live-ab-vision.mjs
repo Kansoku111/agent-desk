@@ -32,7 +32,7 @@ try {
   const file = `${randomUUID()}.png`; await fs.writeFile(path.join(dir, file), png)
   const runner = new AbRunner({ threads: new EventEmitter(), agents, attachmentsDir: dir })
   const result = once(runner, 'finished')
-  const handle = await runner.start({ runId: 'vision', jobId: 'vision', workspace: dir, model: 'claude:haiku', images: [{ file, mimeType: 'image/png', name: 'sample.png' }], text: 'What color fills the attached image? Reply with one English color word. Do not use tools.', instructions: 'This is a vision transport smoke check only. Do not read or change any files. Do not use tools.', writable: false, lean: true })
+  const handle = await runner.start({ runId: 'vision', jobId: 'vision', workspace: dir, model: 'claude:haiku', effort: 'low', images: [{ file, mimeType: 'image/png', name: 'sample.png' }], text: 'What color fills the attached image? Reply with one English color word. Do not use tools.', instructions: 'This is a vision transport smoke check only. Do not read or change any files. Do not use tools.', writable: false, lean: true })
   timer = setTimeout(() => agents.stop(handle.id), 90000)
   const [event] = await result
   console.log(JSON.stringify({ status: event.status, text: event.text, error: event.error ?? null }))

@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Stop a GPT tool call whose arguments keep repeating one short piece of text, and retry it under the normal retry policy, like a dropped stream. After a broken JSON argument the model can loop (for example `}]} (sic) ` for 181k characters); the stream stayed busy for 3–37 minutes until the backend cut it, and only then was it retried. The guard looks at the last 32,768 characters, so shorter repetitive content such as a fixture is kept, and it allows a few slipped characters, since a loop can now and then write one character differently; this includes blank lines inside a string (`\n\n…`), which logged calls repeated for about 15 minutes, while runs of one character are not affected. Tool calls that were already complete in the stopped response are not run; the retry starts from the previous step.
+- Keep a GP task's conversation when the task is renamed, pinned or archived while its first turn is starting. The change replaced the task's record with a copy, so the conversation ID the turn then received was lost and the next message began a new conversation.
+- Classify retryable provider errors with the pi-ai copy dsh actually runs (1.5.2, under `dsh-llm-pi-ai`) instead of the older copy at the app root (0.87.1), whose list of transient errors differs. The compatibility check now fails with the reason when that classifier cannot be loaded.
+- Ask before deleting a team from its leader when the leader is a dsh task (GPT and the other dsh models), in the sidebar and the task header, as Claude Code and GP leaders already did; deleting the leader deletes the children and their reports.
+- Stop a subagent's Codex session from appearing in the sidebar as an ordinary GP task after a reload while the subagent runs.
+- Show the parent's answer in a delegated task's view when no worker was started; it was read from the list entry, which never carries it.
+- Apply a fast-mode period change to usage amounts even when it arrives while rates are loading; the rates that load stored kept the old periods.
+- Stop a server started from inside a Claude Code task (an agent restarting the app, a test run) from passing that task's Code Mode switch and pinned subagent model on to every Claude Code task, team member and worker it launches. Set outside such a session, these variables are still passed through as your own Claude Code configuration.
+- Leave a task's title, pin and archive flag unchanged when the same settings request is refused.
+- Store an uploaded file whose type is `constructor` or another object property name as an ordinary file, not as an image.
+- Color the error lines of the AB and team panels, which used a style that did not exist.
+- Name every provider (Codex, OpenScale and Command Code (Claude) were missing) in the message shown when a team has all its child providers off.
+- Point the Codex sign-in messages at the card's current name, 「Codex（GP・画像生成）」.
 
 ## [0.1.15] - 2026-11-10
 

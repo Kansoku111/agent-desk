@@ -71,6 +71,6 @@ dshは専用の読み取り専用ランタイムと実行時の許可リスト�
 
 - 自動テスト：`node --test test/ab*.test.js test/workflow-effort.test.js`。実際のThreadManagerの承認イベントとdshのツール実行基盤も検証します。
 - 入力・推論UIの分離検証：`node test/fixtures/serve-ab-ui.mjs` を起動し、表示URLでDevToolsから `await abTest.run()`。開始／追加相談の貼り付け・失敗時保持・Enter／IME／タッチ分岐・二重送信、4担当のメニュー、リーダー実装の展開・再表示、停止エラーの複数担当表示と解除、ecoの保存待ちと実行リクエストを模擬RPCで検証します。狭い画面でも実行できます。IMEとタッチ分岐は合成イベント／ポインター判定の模擬であり、実IME・実スマホの確認とは別です。
-- 実Claude Codeの画像読み取り：`node test/fixtures/live-ab-vision.mjs --run`。現在のClaude認証で1回のモデル呼び出しを行う明示的な診断です（利用枠・課金を消費し得ます）。AB経路で色のサンプル画像を送り、読み取り結果を検証します。`npm test` では実行しません。認証切れなどの失敗を成功扱いしません。
+- 実Claude Codeの画像読み取り：`node test/fixtures/live-ab-vision.mjs --run`。現在のClaude認証で1回のモデル呼び出し（`haiku`、推論 `low`）を行う明示的な診断です（利用枠・課金を消費し得ます）。AB経路で色のサンプル画像を送り、読み取り結果を検証します。`npm test` では実行しません。認証切れなどの失敗を成功扱いしません。
 - ランタイム起動：`node test/manual/ab-runtime-smoke.mjs`。隔離した一時データで3種類のABランタイム（相談2種類・実装）を起動し、モデルへは送信しません。
 - 画面：`npm run build` 後に `node test/manual/ab-ui.mjs`。表示されたURLを開きます。応答は全て模擬です。環境変数 `AB_FIXTURE_FAIL_ONCE=1` で最初の実装を失敗、`AB_FIXTURE_DENIALS=1` で未実行操作を報告させられます。確認後は同じURLの `/fixture/shutdown` にアクセスして終了します。
