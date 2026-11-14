@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { readJson, writeJson, debouncedWriter } from './json-file.js'
+import { readJson, debouncedWriter } from './json-file.js'
 import { abImages } from './ab-images.js'
 import { applyCodexEvent } from './codex-events.js'
 import { CodexOutputSpeedMeter } from './codex-output-speed.js'
@@ -191,31 +191,41 @@ export class CodexRunner extends EventEmitter {
       this.configuring.add(id)
     }
     try {
-      const next = { ...record }
+      // Only the fields that change. A running turn keeps writing to `record` (the conversation id thread/start
+      // returns, the status, the usage), so the stored object has to stay this one: a copy put in its place lost
+      // whatever the turn wrote after the copy was taken, and a task renamed or pinned while its first turn was
+      // starting was saved without its conversation id and began a new conversation on the next message.
+      const changes = {}
       if (patch.permissionMode !== undefined) {
         if (!MODES.includes(patch.permissionMode)) throw new Error('権限モードが不正です')
-        next.permissionMode = patch.permissionMode
+        changes.permissionMode = patch.permissionMode
       }
       if (patch.fastMode !== undefined) {
         if (typeof patch.fastMode !== 'boolean') throw new Error('Fast モードの設定が不正です')
         if (record.team || record.ab || record.subagent) throw new Error('Fast モードは通常の GP タスクで変更できます')
-        next.fastMode = patch.fastMode
+        changes.fastMode = patch.fastMode
       }
       if (modelChange || patch.fastMode === true) {
         const { choice, fast } = await this.#selection(patch.model ?? record.model, patch.effort ?? record.effort)
         if (record.sessionId && (!record.accountKey || choice.accountKey !== record.accountKey)) throw new Error('Codex のサインイン先が変わったか照合できません。新しいタスクを作成してください。')
         if (patch.fastMode === true && !fast) throw new Error('この Codex モデルは Fast モードに対応していません')
-        if (modelChange) Object.assign(next, choice)
-        if (choice.model !== record.model && !fast && next.fastMode) next.fastMode = false
+        if (modelChange) Object.assign(changes, choice)
+        if (choice.model !== record.model && !fast && (changes.fastMode ?? record.fastMode)) changes.fastMode = false
       }
-      if (patch.title !== undefined) { if (typeof patch.title !== 'string' || !patch.title.trim()) throw new Error('タイトルが空です'); next.title = clip(patch.title.trim(), 200) }
-      for (const key of ['archived', 'pinned']) if (patch[key] !== undefined) { if (typeof patch[key] !== 'boolean') throw new Error('設定の形式が不正です'); next[key] = patch[key] }
-      for (const key of ['instructions', 'mcpServers', 'team', 'permissionPolicy']) if (patch[key] !== undefined) next[key] = patch[key]
-      next.updatedAt = this.now()
-      await this.#save(next, true)
-      this.records.set(id, next)
-      this.#emit(next)
-      return this.summary(next)
+      if (patch.title !== undefined) { if (typeof patch.title !== 'string' || !patch.title.trim()) throw new Error('タイトルが空です'); changes.title = clip(patch.title.trim(), 200) }
+      for (const key of ['archived', 'pinned']) if (patch[key] !== undefined) { if (typeof patch[key] !== 'boolean') throw new Error('設定の形式が不正です'); changes[key] = patch[key] }
+      for (const key of ['instructions', 'mcpServers', 'team', 'permissionPolicy']) if (patch[key] !== undefined) changes[key] = patch[key]
+      changes.updatedAt = this.now()
+      const before = Object.keys(changes).map(key => [key, Object.hasOwn(record, key), record[key]])
+      Object.assign(record, changes)
+      try { await this.#save(record, true) }
+      catch (error) {
+        // A change that could not be stored is not kept in memory either.
+        for (const [key, had, value] of before) { if (had) record[key] = value; else delete record[key] }
+        throw error
+      }
+      this.#emit(record)
+      return this.summary(record)
     } finally { if (configChange) this.configuring.delete(id) }
   }
 

@@ -378,6 +378,43 @@ test('stopped during initial save or thread start never starts a turn', async t 
   }
 })
 
+test('a task renamed and pinned while its first turn starts keeps the conversation that turn started', async t => {
+  const { dir, server, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  const gate = deferred(), entered = deferred()
+  t.after(() => gate.resolve())
+  const raw = server.rawRequest.bind(server)
+  server.rawRequest = async (method, params) => {
+    if (method === 'thread/start') { entered.resolve(); await gate.promise }
+    return raw(method, params)
+  }
+  runner.run(task.id, 'hello')
+  await entered.promise
+  // The conversation id is not known yet; the rename must not detach the turn from the stored task.
+  await runner.update(task.id, { title: 'Renamed', pinned: true })
+  gate.resolve()
+  await waitFor(() => runner.live.get(task.id)?.turnId)
+  assert.equal(runner.get(task.id).sessionId, 'thread-1')
+  assert.equal(runner.get(task.id).state, 'running')
+  await finish(runner, server, task.id, { threadId: 'thread-1', turnId: runner.live.get(task.id).turnId })
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'codex-tasks', task.id + '.json'), 'utf8'))
+  assert.deepEqual([saved.sessionId, saved.title, saved.pinned, saved.status], ['thread-1', 'Renamed', true, 'done'])
+  await finish(runner, server, task.id, await start(runner, task.id, 'again'))
+  assert.equal(server.calls.filter(call => call.method === 'thread/start').length, 1, 'the next message continues the same conversation')
+  assert.equal(server.calls.find(call => call.method === 'thread/resume').params.threadId, 'thread-1')
+})
+
+test('a change that cannot be saved is not applied to the task', async t => {
+  const { dir, runner } = await setup(t)
+  const task = await runner.create({ workspace: dir })
+  const writer = runner.writers.get(task.id), flush = writer.flush.bind(writer)
+  writer.flush = async () => { throw new Error('disk full') }
+  await assert.rejects(runner.update(task.id, { title: 'Renamed', pinned: true }), /disk full/)
+  writer.flush = flush
+  const { title, pinned } = runner.get(task.id)
+  assert.deepEqual([title, pinned], [task.title, false])
+})
+
 test('early completion retains live lock until turn/start response', async t => {
   const { dir, server, runner } = await setup(t)
   const task = await runner.create({ workspace: dir })
