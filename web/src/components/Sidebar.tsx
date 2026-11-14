@@ -186,8 +186,10 @@ function AbRow({ run, active, selection }: { run: AbRun; active: boolean; select
 
 function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; active: boolean; selection: ThreadSelection }) {
   const leads = thread.team?.role === 'leader'
-  const execution = useStore((state) => state.server?.teams?.find((team) => team.leaderId === thread.id)?.execution)
+  const team = useLedTeam(thread.id)
+  const execution = team?.execution
   const [renaming, setRenaming] = useState(false)
+  const [removing, setRemoving] = useState(false)
   const [title, setTitle] = useState(thread.title)
   const save = async () => {
     setRenaming(false)
@@ -286,12 +288,20 @@ function ThreadRow({ thread, active, selection }: { thread: ThreadSummary; activ
                 keys={['Backspace', 'Delete']}
                 onSelect={() => {
                   close()
-                  void act('thread.remove', { threadId: thread.id })
+                  // Deleting a team's leader deletes its children and their reports: asked first.
+                  if (leads) setRemoving(true)
+                  else void act('thread.remove', { threadId: thread.id })
                 }}
               />
             </>
           )}
         </Dropdown>
+      )}
+      {removing && (
+        <ConfirmDialog title="チームを削除しますか？"
+          body={<p>リーダーと子 {team?.children.length ?? 0} 人のタスクと、報告の記録を削除します。この操作は元に戻せません。実行中の作業は停止します。</p>}
+          confirmLabel="チームを削除" danger
+          onClose={() => setRemoving(false)} onConfirm={() => void act('thread.remove', { threadId: thread.id })} />
       )}
     </li>
   )

@@ -9,6 +9,7 @@ import { Composer } from './Composer'
 import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
 import { Dropdown, MenuDivider, MenuItem } from './Popover'
 import { SubagentPanel } from './SubagentPanel'
+import { ConfirmDialog } from './Modal'
 import { TeamPanel, TeamToggle, useLedTeam, useTeam } from './TeamPanel'
 import { TurnView } from './TurnView'
 import { useConversationScroll } from './useConversationScroll'
@@ -120,6 +121,7 @@ const Header = memo(function Header({ thread, presetOpen, onPresetToggle }: { th
   const git = useGit(thread.workspace, thread.status === 'running' ? 'running' : thread.updatedAt)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
+  const [removing, setRemoving] = useState(false)
   useEffect(() => setTitle(thread.title), [thread.title])
   const save = async () => {
     setRenaming(false)
@@ -181,21 +183,29 @@ const Header = memo(function Header({ thread, presetOpen, onPresetToggle }: { th
               <MenuItem icon={<Pencil size={14} />} label="名前を変更" onSelect={() => { close(); setRenaming(true) }} />
               <MenuItem
                 icon={<Trash2 size={14} />}
-                label="削除"
+                label={team ? 'チームを削除' : '削除'}
                 hint="⌫"
                 danger
                 keys={['Backspace', 'Delete']}
                 onSelect={() => {
                   close()
+                  // Deleting a team's leader deletes its children and their reports: asked first.
                   // The confirmed `removed` event handles navigation. Stay on
                   // the task if deletion fails so its error can be retried.
-                  void act('thread.remove', { threadId: thread.id })
+                  if (team) setRemoving(true)
+                  else void act('thread.remove', { threadId: thread.id })
                 }}
               />
             </>
           )}
         </Dropdown>
       </div>
+      {removing && (
+        <ConfirmDialog title="チームを削除しますか？"
+          body={<p>リーダーと子 {team?.children.length ?? 0} 人のタスクと、報告の記録を削除します。この操作は元に戻せません。実行中の作業は停止します。</p>}
+          confirmLabel="チームを削除" danger
+          onClose={() => setRemoving(false)} onConfirm={() => void act('thread.remove', { threadId: thread.id })} />
+      )}
     </header>
   )
 })
