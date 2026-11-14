@@ -181,6 +181,3 @@ export function nearestEffort(wanted, efforts) {
   return offered.sort((a, b) => EFFORT_ORDER.indexOf(a) - EFFORT_ORDER.indexOf(b))[0]
 }
 
-export function modelValue(provider, id) {
-  return JSON.stringify([provider, id])
-}

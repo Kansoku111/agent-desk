@@ -31,20 +31,6 @@ export const DISABLED_CODEX_FEATURES = [
   'goals', 'hooks', 'realtime_conversation', 'workspace_dependencies',
   'worktrees', 'sleep_tool', 'shell_tool', 'unified_exec', 'view_image',
 ]
-export function leanCodexConfig(home) {
-  return `# Managed by Agent Desk; isolated image-generation runtime.
-model_reasoning_effort = "low"
-project_doc_max_bytes = 0
-sandbox_mode = "read-only"
-approval_policy = "never"
-cli_auth_credentials_store = "file"
-model_instructions_file = ${JSON.stringify(path.join(home, 'image-instructions.txt'))}
-[features]
-${DISABLED_CODEX_FEATURES.map(feature => `${feature} = false`).join('\n')}
-code_mode_host = true
-image_generation = true
-`
-}
 // Shared authentication settings must not impose image-only restrictions on work threads.
 export async function prepareCodexHome(home) {
   await fs.mkdir(home, { recursive: true, mode: 0o700 })

@@ -362,7 +362,7 @@ export class TaskPresets extends EventEmitter {
       await writeText(run.patch, diff.patch)
       delete run.diffUnavailable
     } else { delete run.changedFiles; delete run.patch }
-    run.warning = [recordingWarning(run), diffWarning, run.baseline?.warning, after?.warning].filter(Boolean).join('\n')
+    run.warning = [recordingWarning(run), diffWarning].filter(Boolean).join('\n')
     if (run.checks.length && (await this.snapshot(run.workspace)).hash !== verification.endHash) throw new Error('検証後にソースが変更されました。再確認が必要です。')
     if (result.status === 'verify') run.result = { ...result, status: 'complete', remaining: '', summary: result.summary + '\n\n登録されたアプリの検証が成功しました。' }
     run.phase = 'completed'

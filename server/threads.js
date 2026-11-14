@@ -26,7 +26,7 @@ import { goalCommandObjective } from './goal-command.js'
 import { isLeaderUsageLimit } from './leader-usage-limit.js'
 import { fallbackProvider, usageFallbackChoice } from '../shared/usage-fallback.js'
 import { hasGoalHistory } from './normal-fallback-handoff.js'
-export { carryoverText, describeError, isUndoable, restoreNoteText } from './thread-utils.js'
+export { carryoverText, isUndoable, restoreNoteText } from './thread-utils.js'
 
 const TURN_EMIT_MS = 60
 

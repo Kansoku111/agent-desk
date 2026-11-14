@@ -24,9 +24,11 @@ async function appState() {
   })
 }
 
+const openscaleBusy = (state) => state.threads?.some(t => String(t.model).includes('"openscale"') && ['running', 'starting', 'restoring'].includes(t.status))
+
 try {
   const state = await appState()
-  if (state.threads?.some(t => String(t.model).includes('"openscale"') && ['running', 'starting', 'restoring'].includes(t.status))) {
+  if (openscaleBusy(state)) {
     log({ outcome: 'not_run', reason: 'openscale_task_running' }); process.exit(2)
   }
 } catch {
@@ -42,7 +44,7 @@ const prompt = 'Explain how a bicycle works in approximately 300 English words. 
 for (const mode of ['direct-messages', 'pi-ai-messages']) {
   // Recheck between probes: the user's work takes priority over diagnostics.
   const state = await appState()
-  if (state.threads?.some(t => String(t.model).includes('"openscale"') && t.status === 'running')) {
+  if (openscaleBusy(state)) {
     log({ outcome: 'not_run', reason: 'openscale_task_running', mode }); break
   }
   const started = performance.now(), controller = new AbortController()

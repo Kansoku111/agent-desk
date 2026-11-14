@@ -141,7 +141,6 @@ export function createAccountHandlers({ appVersion, credentials, login, codexApp
       await refreshChatGptUsage()
       return { accounts: next }
     },
-    'chatgpt.code': ({ code }) => login.submitManualCode(code),
     'chatgpt.cancel': () => login.cancel(),
     'chatgpt.usage': async ({ maxAgeMs = 60_000 } = {}) => {
       const fresh = getChatgptUsage()?.fetchedAt && Date.now() - getChatgptUsage().fetchedAt < maxAgeMs

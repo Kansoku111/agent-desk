@@ -55,7 +55,7 @@ export class Checkpoints {
    * Records the workspace as it is now.
    * @param {string} workspace
    * @param {string | null} ref  name that keeps the snapshot (e.g. `<thread>/<turn>/before`)
-   * @returns {Promise<{ commit: string, warning: string | null, omitted: string[] }>}
+   * @returns {Promise<{ commit: string, omitted: string[] }>}  `omitted`: files over the size limit, left out
    */
   async snapshot(workspace, ref = null) {
     const repo = await this.#repo(workspace)
@@ -291,7 +291,7 @@ export class Checkpoints {
     const message = METADATA_PREFIX + JSON.stringify({ omitted }) + '\n'
     const commit = (await git(repo, ['commit-tree', tree], { input: message })).trim()
     if (ref) await git(repo, ['update-ref', `refs/agent-desk/${ref}`, commit])
-    return { commit, warning: null, omitted }
+    return { commit, omitted }
   }
 
   async #metadata(repo, commit) {

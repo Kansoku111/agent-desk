@@ -139,7 +139,6 @@ export function nearestEffort(wanted: string, offered: string[]): string {
     : EFFORT_ORDER.indexOf(a) - EFFORT_ORDER.indexOf(b))[0]
 }
 
-/** How a workspace is named in the UI: My PC, the project's name, or the folder name. */
 /** The turn whose restore can still be undone: the latest one, with no message sent after it. */
 export function undoableRestore(turns: Turn[]): string | null {
   let latest: Turn | null = null
@@ -147,6 +146,7 @@ export function undoableRestore(turns: Turn[]): string | null {
   return latest && turns.length === latest.restore!.turns ? latest.id : null
 }
 
+/** How a workspace is named in the UI: My PC, the project's name, or the folder name. */
 export function workspaceLabel(workspace: string, myPc: string | null | undefined, names?: Record<string, string> | null) {
   if (myPc && workspace === myPc) return 'My PC'
   return names?.[workspace] || basename(workspace)

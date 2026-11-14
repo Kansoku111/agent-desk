@@ -103,16 +103,6 @@ export class CredentialStore {
   }
 }
 
-/** Decodes a JWT payload without verifying it (display purposes only). */
-export function decodeJwtPayload(token) {
-  try {
-    const part = String(token).split('.')[1]
-    return JSON.parse(Buffer.from(part, 'base64url').toString('utf8'))
-  } catch {
-    return null
-  }
-}
-
 /** UI-safe summary of the ChatGPT sign-in; never includes a token. */
 export function describeChatGpt(records) {
   const payload = records?.[SIWC_RECORD]?.payload

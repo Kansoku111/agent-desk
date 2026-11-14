@@ -3,13 +3,14 @@
 // dsh reads its model list from the pi-ai package it bundles
 // (`dist/providers/data/<provider>.json`). New models land in newer pi-ai
 // releases first, and dsh pins pi-ai to a major version it was built against.
-// Agent Desk therefore adds the missing entries to that catalog before any dsh
-// process starts: bundled definitions from pi-ai or provider documentation
+// Agent Desk therefore works out the missing entries before any dsh process
+// starts: bundled definitions from pi-ai or provider documentation
 // (`catalog-extras.json`), definitions read from the newest pi-ai release on
 // npm (model-updates.js), plus models the user registers in settings by
-// cloning an existing model's definition. Each added entry carries a marker so
-// the next pass can remove it again, which keeps the edit idempotent and lets
-// a removed custom model disappear.
+// cloning an existing model's definition. The installed package is only read:
+// the result goes into the dsh configuration Agent Desk owns (index.js,
+// dsh-config.js), and each added entry carries a marker saying where it came
+// from, so rates are never taken from a custom model's template.
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -153,12 +154,14 @@ export function applyCatalogAdditions(original, provider, customModels = [], fet
 }
 
 /**
- * Brings every pi-ai catalog copy up to date.
+ * The catalog with Agent Desk's additions, for a caller outside the app (scripts/check-dsh.mjs).
+ * Same as {@link configuredModelCatalog}: nothing on disk changes.
  * @param {{ provider: string, id: string, template?: string, templates?: string[], name?: string, source?: 'account' }[]} customModels
  *   `source: 'account'` entries come from the account's model list and pick the first of `templates` the catalog has.
  * @param {{ providers: object } | null} fetched  definitions kept by model-updates.js
- * @returns {Promise<{ changed: boolean, added: string[], models: object[], skipped: object[], warnings: string[] }>}
- *   `models`: the bundled and fetched models Agent Desk adds, with their provider.
+ * @returns {Promise<{ changed: boolean, definitions: object, pricing: object, added: string[], models: object[], skipped: object[], warnings: string[] }>}
+ *   `definitions`: each provider's whole model list for dsh; `models`: the bundled and fetched models
+ *   Agent Desk adds, with their provider. `changed` is false here: the app sets it when the definitions differ from what its runtimes loaded.
  */
 export async function ensureModelCatalog(customModels = [], fetched = null) {
   return configuredModelCatalog(customModels, fetched)

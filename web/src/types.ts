@@ -76,7 +76,6 @@ export interface ThreadSummary {
   score?: UsageScore
   status: ThreadStatus
   pendingApproval: boolean
-  /** Set when the task is a child of an agent team (server/teams.js). */
   /** The agent team this task works for: as a child ({ id, childId }), or as a GPT leader ({ id, role: 'leader' }). */
   team?: { id: string; childId?: string; role?: 'leader' | 'observer' }
 }
@@ -476,8 +475,8 @@ export interface Settings extends UsageDisplay {
   /** Sidebar tint of each project: an index into PROJECT_HUES, or -1 for none. */
   projectColors: Record<string, number>
   contextLimits: Record<'openai-codex' | 'anthropic', number | null>
-  /** Global subagent switch; older saves default to enabled. */
   taskPresets?: Record<TaskPresetKind, { model: string | null; effort: string | null }> & Partial<Record<'reviewDsh' | 'reviewClaude' | 'reviewSelected', { model: string | null; effort: string | null }>>
+  /** Global subagent switch; older saves default to enabled. */
   subagentsEnabled?: boolean
   /** Where each kind of task (DSH, Claude Code, GP) sends its subagents; older saves have none and send them to themselves. */
   subagentRoutes?: Record<RouteParent, SubagentRoute>

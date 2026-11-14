@@ -26,7 +26,7 @@ import { UpdateChecker } from './update-checks.js'
 import { createAppInstaller, githubRepository, installMethod, latestRelease, takeUpdateResult } from './app-update.js'
 import { createAppRestarter } from './app-restart.js'
 import { fastModels, fastPricing, writeFastModeState } from './fast-mode.js'
-import { createSettingsService, DEFAULT_SETTINGS, effectiveCustomInstructions, migrateSettings } from './settings.js'
+import { createSettingsService, effectiveCustomInstructions, migrateSettings } from './settings.js'
 import { localLlmSettings, localRoute } from './local-llm.js'
 import { CommandCodeModels, commandCodeRoutes, matchesCommandCodeEfforts } from './command-code.js'
 import { teamConfig } from './team-config.js'
@@ -750,7 +750,7 @@ codexApp.on('rateLimits', body => { chatgptUsageTracker.update(body) })
 async function refreshChatGptUsage() {
   return chatgptUsageTracker.refresh()
 }
-threads.on('turn-finished', ({ threadId }) => {
+threads.on('turn-finished', () => {
   // Images may be requested by GPT or Claude; these limits belong to the separate Codex account.
   if (!codexApp.accountState.signedIn) return
   clearTimeout(usageTimer)
@@ -1017,10 +1017,10 @@ const handlers = {
   }),
   ...createModelHandlers({
     threads, catalog, catalogState, updates, modelUpdater, modelUpdateState,
-    updateModelCatalog, refreshCodexModels, checkProviderModels,
+    refreshCodexModels, checkProviderModels,
     checkEquivalentPricing: () => equivalentPricing.refresh({ force: true }),
   }),
-  ...createTerminalHandlers({ paths, getSettings, mutateSettings, terminals, teams, agents }),
+  ...createTerminalHandlers({ paths, mutateSettings, terminals, teams, agents }),
   ...createCodexHandlers({
     paths, codex, teams, getSettings, mutateSettings,
     // A Codex task's subagents come through the bridge; its own (spawn_agent) cannot be switched off by a

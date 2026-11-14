@@ -63,8 +63,6 @@ export class ExecutionReview {
       if (!baseline?.commit) throw new Error(baseline?.error || '作業開始前の記録がありません（旧バージョンで開始した作業など）。')
       const after = await this.checkpoints.snapshot(folder, `${run.ownerId}/${run.id}/after`)
       const omitted = [...new Set([...(baseline.omitted ?? []), ...(after.omitted ?? [])])]
-      if (baseline.warning) warnings.push(baseline.warning)
-      if (after.warning) warnings.push(after.warning)
       if (omitted.length) warnings.push(`${this.checkpoints.maxFileBytes / 1024 / 1024}MiB超のため差分対象外: ${omitted.map((file) => JSON.stringify(file)).join(', ')}`)
       const diff = await this.checkpoints.reviewDiff(folder, baseline.commit, after.commit, omitted)
       files = diff.files

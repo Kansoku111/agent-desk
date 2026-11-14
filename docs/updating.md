@@ -61,7 +61,7 @@ dsh と同梱の Codex は `package.json` で版を固定しているため、�
 
 1. `package.json` の `@openai/codex` と、`server/codex-app-server.js` の `CODEX_VERSION` を同じ版にします。
 2. `npm install --save-exact --no-audit --no-fund @openai/codex@<版>`
-3. リリースノートで、app-server の JSON-RPC（`server/codex-client.js`、`server/codex-app-server.js`）、画像生成（`server/imagegen.js`）、利用上限（`server/chatgpt-usage.js`）に関わる変更を確認し、必要なら合わせます。
+3. リリースノートで、app-server の JSON-RPC（`server/codex-app-server.js`、`server/codex-runner.js`）、画像生成（`server/imagegen.js`）、利用上限（`server/chatgpt-usage.js`）に関わる変更を確認し、必要なら合わせます。
 4. `node --test test/codex-*.test.js test/imagegen.test.js test/chatgpt-usage.test.js` を実行します。
 5. 「共通」の確認とコミットをします。
 

@@ -8,7 +8,6 @@ export const SIWC_ISSUER = 'https://auth.openai.com'
 export const SIWC_RESOURCE = 'https://api.openai.com/v1'
 export const SIWC_TOKEN_URL = `${SIWC_ISSUER}/api/accounts/oauth/token`
 export const SIWC_SCOPES = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct'
-export const SIWC_USAGE_URL = 'https://chatgpt.com/settings/usage'
 export const SIWC_KEY_REF = 'AGENT_DESK_SIWC_MANAGED'
 export const SIWC_KEY_PLACEHOLDER = 'managed-by-agent-desk-siwc-hook'
 export function redactSiwc(value, credential = {}) {

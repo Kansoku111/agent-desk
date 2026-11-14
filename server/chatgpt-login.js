@@ -209,9 +209,6 @@ export class ChatGptLogin {
       await new Promise(yes => server.close(yes))
     }
   }
-  submitManualCode() {
-    throw new Error('Official sign-in uses the local browser callback; retry Continue with ChatGPT')
-  }
   cancel() {
     this.abort?.abort()
     this.set({
