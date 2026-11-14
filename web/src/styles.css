@@ -713,18 +713,9 @@ select:focus {
 }
 
 .brand-mark {
-  display: grid;
-  place-items: center;
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  /* The app icon's muted rainbow (web/public/favicon.svg). */
-  background: linear-gradient(135deg, #dca3a3, #e3bc98 20%, #dcd0a0 40%, #a9c9a9 60%, #a4bfd0 80%, #bdb0d3);
-  color: #2e3142;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: -1px;
 }
 
 .nav-button {
@@ -3686,7 +3677,7 @@ select:focus {
 .usage-bar span {
   width: 100%;
   border-radius: 3px 3px 1px 1px;
-  /* The app icon's muted rainbow, as in .brand-mark. */
+  /* Muted blue-green, from the app's former rainbow icon. */
   background: linear-gradient(180deg, #a4bfd0, #a9c9a9);
 }
 

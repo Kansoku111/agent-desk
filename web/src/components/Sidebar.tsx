@@ -802,7 +802,7 @@ export function Sidebar() {
     <aside className="sidebar" aria-label="タスク">
       <div className="sidebar-top">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">›_</span>
+          <img className="brand-mark" src="/favicon.png" alt="" />
           <span>Agent Desk</span>
         </div>
         <button type="button" className="icon-button" title="サイドバーを閉じる (Ctrl+B)" aria-label="サイドバーを閉じる" onClick={() => setState({ sidebarOpen: false })}>
