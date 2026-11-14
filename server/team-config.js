@@ -229,6 +229,6 @@ export function assertChildrenOn(config) {
     return
   }
   if (!TEAM_PROVIDERS.some((provider) => config[provider].enabled)) {
-    throw new Error('子に使う GPT・Claude・Claude（API）・DeepSeek・OpenCode Go・Command Code・ローカル LLM の少なくとも一つをオンにしてください')
+    throw new Error(`子に使う ${TEAM_PROVIDERS.map((provider) => PROVIDER_NAMES[provider]).join('・')} の少なくとも一つをオンにしてください`)
   }
 }

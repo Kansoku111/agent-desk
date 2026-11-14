@@ -379,6 +379,7 @@ function handleFrame(frame: any) {
       if (!turns) break
       const index = turns.findIndex((turn) => turn.id === frame.turn.id)
       const turn = shareTurn(turns[index], frame.turn)
+      if (index >= 0 && turn === turns[index]) break
       const next = index >= 0 ? turns.map((entry, i) => i === index ? turn : entry) : [...turns, turn]
       setState({ codexTurns: { ...state.codexTurns, [frame.taskId]: next } })
       break
@@ -520,7 +521,7 @@ function handleFrame(frame: any) {
     case 'codexLogin': {
       const codexLogin = frame.codexLogin as LoginState
       updateServer({ codexLogin })
-      if (codexLogin.phase === 'done') toast('画像生成と利用上限（Codex）にサインインしました', 'success')
+      if (codexLogin.phase === 'done') toast('Codex（GP・画像生成）にサインインしました', 'success')
       break
     }
     case 'notify':

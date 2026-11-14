@@ -166,7 +166,8 @@ export function createThreadHandlers({ paths, threads, teams, codexApp, subagent
       if (bytes.length === 0) throw new Error('ファイルが空です')
       if (bytes.length > MAX_ATTACHMENT_BYTES) throw new Error('ファイルは 10MB 以下にしてください')
       const label = String(name ?? '').slice(0, 200)
-      const ext = IMAGE_TYPES[mimeType]
+      // Own keys only: the type comes from the client, and 'constructor' is not an image type.
+      const ext = Object.hasOwn(IMAGE_TYPES, String(mimeType)) ? IMAGE_TYPES[mimeType] : null
       if (ext) {
         const file = `${randomUUID()}.${ext}`
         await fsp.writeFile(path.join(paths.attachmentsDir, file), bytes)

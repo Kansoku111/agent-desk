@@ -959,7 +959,9 @@ async function fullState(client) {
     fastModels: currentFastModels(),
     threads: threads.list(),
     terminals: terminals.list(),
-    codexTasks: codex.list({ includeOwned: true }),
+    // Without subagents' sessions: they are never announced (the 'session' listener above), and the sidebar
+    // would list one as an ordinary GP task until it is removed.
+    codexTasks: codex.list({ includeOwned: true }).filter((task) => !task.subagent),
     codexModels: codex.modelCache,
     teams: teams.list(),
     ab: ab.list(),

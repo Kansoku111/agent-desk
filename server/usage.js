@@ -331,7 +331,9 @@ export function resetPricing() {
 /** Sets the fast-mode periods (fast-mode.js's `fastPricing`); drops cached rates. */
 export function setFastPricing(fast) {
   fastPricingState = fast
-  pricingCache = null
+  // Through resetPricing, not just the cache: a load already in flight has to notice and start over, or it
+  // stores rates carrying the periods it read before this change.
+  resetPricing()
 }
 
 /** API-price equivalent; subscriptions may have rates without being metered bills. */

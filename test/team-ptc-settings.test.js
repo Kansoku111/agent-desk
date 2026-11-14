@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { teamConfig } from '../server/team-config.js'
+import { assertChildrenOn, PROVIDER_NAMES, TEAM_PROVIDERS, teamConfig } from '../server/team-config.js'
 
 const source = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, {
@@ -117,4 +117,12 @@ test('saving disables the PTC control and a failed save keeps the draft open', a
   assert.equal(h.toggle().disabled, false)
   assert.equal(h.toggle().mode, 'native')
   assert.equal(h.team.config.toolMode, 'ptc')
+})
+
+test('the message for a team with every provider off names every provider a child can use', () => {
+  const off = Object.fromEntries(TEAM_PROVIDERS.map((provider) => [provider, { enabled: false }]))
+  let message = ''
+  try { assertChildrenOn(off) } catch (error) { message = error.message }
+  for (const provider of TEAM_PROVIDERS) assert.ok(message.includes(PROVIDER_NAMES[provider]), PROVIDER_NAMES[provider])
+  assert.doesNotThrow(() => assertChildrenOn({ ...off, openscale: { enabled: true } }))
 })

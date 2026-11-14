@@ -87,3 +87,11 @@ test('removal waits for an in-flight research transition and cannot resurrect it
   assert.equal(f.manager.threads.has(f.thread.id), false)
   assert.equal(f.writer.liveSessions.size, 0)
 })
+
+test('a settings change that is refused leaves the title and flags as they were', async (t) => {
+  const f = await fixture(t)
+  const thread = f.manager.threads.get(f.thread.id)
+  const before = { title: thread.title, pinned: thread.pinned, archived: thread.archived }
+  await assert.rejects(f.manager.update(thread.id, { title: 'renamed', pinned: true, archived: true, permissionMode: 'no-such-mode' }), /不明な権限モード/)
+  assert.deepEqual({ title: thread.title, pinned: thread.pinned, archived: thread.archived }, before)
+})

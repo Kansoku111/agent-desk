@@ -3023,6 +3023,10 @@ select:focus {
   font-size: 13px;
 }
 
+.error-text {
+  color: var(--red);
+}
+
 .account-card .setting.compact {
   padding: 4px 0;
   border: 0;

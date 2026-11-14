@@ -41,7 +41,7 @@ export function SkillsSettings() {
   const favorites = useFavoriteSkills()
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
-  const known = useStore((state) => state.server?.settings.workspaces ?? [])
+  const known = useStore((state) => state.server?.settings.workspaces) ?? []
   const initial = useStore((state) => state.draft.workspace ?? state.server?.settings.lastWorkspace ?? myPc ?? null)
   const [workspace, setWorkspace] = useState(initial)
   const [skills, setSkills] = useState<SkillEntry[] | null>(null)

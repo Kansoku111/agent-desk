@@ -363,6 +363,7 @@ export function PresetView({ id }: { id: string }) {
   const sidebarOpen = useStore((state) => state.sidebarOpen)
   const [panelOpen, setPanelOpen] = useState(() => !isNarrow())
   const [brief, setBrief] = useState('')
+  const [parentReport, setParentReport] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [text, setText] = useDraft('preset:' + id)
@@ -376,10 +377,12 @@ export function PresetView({ id }: { id: string }) {
     void request<{ run: TaskPresetRun; turns: Turn[] }>('preset.get', { runId: id }).then((value) => {
       if (!alive) return
       setBrief(value.run.brief ?? '')
+      setParentReport(value.run.parentReport ?? '')
       if (worker?.kind === 'claude' && !loaded) setState((current) => ({ agentTurns: { ...current.agentTurns, [worker.id]: value.turns } }))
     }).catch(() => {})
     return () => { alive = false }
-  }, [id, worker?.kind, worker?.id, loaded])
+    // The phase too: the parent's answer and the brief arrive with a phase change, not with a worker.
+  }, [id, worker?.kind, worker?.id, loaded, run?.phase])
   if (!server || !run) return <div className="main-empty">委託が見つかりません</div>
   const working = active(run)
   const hasReport = !!(run.worker && (run.report?.trim() || run.result?.summary?.trim()))
@@ -418,7 +421,7 @@ export function PresetView({ id }: { id: string }) {
       <div className="thread-main">
         <div className="terminal-chat"><div className="scroller" ref={scroller} onScroll={onScroll}><div className="column">
           {brief && <details className="preset-brief"><summary>親からの指示</summary><Markdown text={brief} workspace={run.workspace} /></details>}
-          {!worker ? <div className="loading-turns">{working ? <><Loader2 size={14} className="spin" /> {PHASE[run.phase]}</> : run.parentReport ? <Markdown text={run.parentReport} workspace={run.workspace} /> : '担当は開始していません'}</div>
+          {!worker ? <div className="loading-turns">{working ? <><Loader2 size={14} className="spin" /> {PHASE[run.phase]}</> : parentReport ? <Markdown text={parentReport} workspace={run.workspace} /> : '担当は開始していません'}</div>
             : !turns ? <div className="loading-turns"><Loader2 size={14} className="spin" /> 読み込み中…</div>
               : turns.map((turn, index) => <TurnView key={turn.id} turn={turn} workspace={run.workspace} threadId={worker.id} hideUser={index === 0 || turn.user.text.startsWith(PRESET_PROMPT_MARK)} threadBusy={working} undoable={false} />)}
           {(run.error || error || run.deliveryError) && <p className="team-warning" role="alert">{error || run.error || run.deliveryError}</p>}

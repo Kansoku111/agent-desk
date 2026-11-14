@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
+import { createThreadHandlers } from '../server/rpc-handlers-threads.js'
 import { attachmentPath, fileListText, isImageFile, isOtherFile, otherFileId, safeFileName, turnAttachments } from '../server/attachments.js'
 
 const uuid = '0f8e2b0c-1234-4abc-9def-0123456789ab'
@@ -53,4 +56,19 @@ test('turnAttachments finds uploads, steered files and image previews, and nothi
   ]
   assert.deepEqual(turnAttachments(turns).sort(), [other, image, preview].sort())
   assert.deepEqual(turnAttachments(undefined), [])
+})
+
+test('an upload whose type is not an image type is stored as an ordinary file', async (t) => {
+  const attachmentsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-attach-'))
+  t.after(() => fs.rm(attachmentsDir, { recursive: true, force: true }))
+  const add = createThreadHandlers({ paths: { attachmentsDir }, threads: {} })['attachment.add']
+  const data = Buffer.from('hello').toString('base64')
+  // 'constructor' is a property of every object: it was read as an image extension.
+  for (const mimeType of ['constructor', 'toString', 'text/plain', undefined]) {
+    const saved = await add({ name: 'notes.txt', mimeType, data })
+    assert.ok(isOtherFile(saved.file), String(mimeType))
+    assert.equal(await fs.readFile(path.join(attachmentsDir, saved.file), 'utf8'), 'hello')
+  }
+  const image = await add({ name: 'a.png', mimeType: 'image/png', data })
+  assert.ok(isImageFile(image.file))
 })

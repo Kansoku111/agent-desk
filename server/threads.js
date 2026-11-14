@@ -561,15 +561,20 @@ export class ThreadManager extends EventEmitter {
       // Persist the choice now; apply and verify it immediately before the next prompt.
     }
     if ((thread.ab || thread.preset) && (patch.permissionMode !== undefined || patch.model !== undefined || (thread.preset && (patch.effort !== undefined || patch.toolMode !== undefined)))) throw new Error('AB・委託担当のモデルと実行設定は変更できません')
-    if (patch.toolMode !== undefined) thread.toolMode = patch.toolMode
-    if (typeof patch.title === 'string' && patch.title.trim()) thread.title = patch.title.trim().slice(0, 120)
-    if (typeof patch.archived === 'boolean') thread.archived = patch.archived
-    if (typeof patch.pinned === 'boolean') thread.pinned = patch.pinned
-    if (patch.permissionMode !== undefined && patch.permissionMode !== thread.permissionMode) {
+    // Every check before the first change: a title, flag or PTC choice set ahead of a check that then
+    // refused the request stayed in memory, unsaved and unannounced, until something else saved the task.
+    const modeChange = patch.permissionMode !== undefined && patch.permissionMode !== thread.permissionMode
+    if (modeChange) {
       if (thread.team && patch.permissionMode === 'chat-web') throw new Error('チームのタスクではチャット＋Web検索を選べません')
       if (thread.team?.executionMode === 'research') throw new Error('EXの調査専用タスクは読み取り専用です')
       if (!PERMISSION_MODES.includes(patch.permissionMode)) throw new Error('不明な権限モードです')
       if (running) throw new Error('実行中は権限モードを変更できません')
+    }
+    if (patch.toolMode !== undefined) thread.toolMode = patch.toolMode
+    if (typeof patch.title === 'string' && patch.title.trim()) thread.title = patch.title.trim().slice(0, 120)
+    if (typeof patch.archived === 'boolean') thread.archived = patch.archived
+    if (typeof patch.pinned === 'boolean') thread.pinned = patch.pinned
+    if (modeChange) {
       thread.permissionMode = patch.permissionMode
       // dsh records the sandbox mode in the session itself, and a resumed
       // session keeps it. A new mode therefore needs a new session in that

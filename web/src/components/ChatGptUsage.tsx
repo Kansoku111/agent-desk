@@ -35,7 +35,7 @@ export function ChatGptLimits() {
         </button>
       </div>
       {!usage && <p className="fine-print">確認しています…</p>}
-      {usage?.status === 'signed-out' && <p className="fine-print">画像生成と利用上限（Codex）にサインインしてください。</p>}
+      {usage?.status === 'signed-out' && <p className="fine-print">Codex（GP・画像生成）にサインインしてください。</p>}
       <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">ChatGPT Settings → Usage</a>
       {usage?.status === 'expired' && <p className="fine-print">ログインの有効期限が切れています。次にタスクを実行すると更新されます。</p>}
       {usage?.status === 'error' && <p className="fine-print">取得できませんでした（{usage.message}）。</p>}

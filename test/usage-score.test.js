@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { addScores, emptyScore, formatEquivalentCost, isUsdJpyRate, scoreFromUsd, scoresUpTo } from '../shared/usage-score.js'
-import { loadPricing, priceResponse, resetPricing, responseCost, scoreResponse, setCatalogPricing, summarizeUsage } from '../server/usage.js'
+import { loadPricing, priceResponse, resetPricing, responseCost, scoreResponse, setCatalogPricing, setFastPricing, summarizeUsage } from '../server/usage.js'
+import { fastPricing } from '../server/fast-mode.js'
 import { accountModelAdditions } from '../server/codex-models.js'
 import { configuredModelCatalog } from '../server/model-catalog.js'
 
@@ -179,5 +180,18 @@ test('catalog overlays carry new-model rates without changing a previously recor
   } finally {
     setCatalogPricing({})
     resetPricing()
+  }
+})
+
+test('fast-mode periods set while rates are loading are in the rates that load returns and keeps', async () => {
+  resetPricing()
+  try {
+    const loading = loadPricing()
+    const fast = fastPricing([[0, null]])
+    setFastPricing(fast)
+    assert.equal((await loading).fast, fast)
+    assert.equal((await loadPricing()).fast, fast)
+  } finally {
+    setFastPricing(null)
   }
 })
