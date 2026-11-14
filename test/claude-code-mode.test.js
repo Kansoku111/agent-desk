@@ -97,3 +97,14 @@ test('consent comes only from the flag Claude Code itself wrote', async () => {
   assert.equal(claudeConfigFile({ CLAUDE_CONFIG_DIR: dir }, 'C:\Users\me'), file)
   assert.equal(claudeConfigFile({}, 'C:\Users\me'), path.join('C:\Users\me', '.claude.json'))
 })
+
+test('a server that a Claude Code task started does not pass that task\'s own choices on to the tasks it launches', async () => {
+  const { inheritedMarkers } = await import('../server/terminal-helpers.js')
+  const choices = [CODE_MODE_ENV, 'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE']
+  const underTask = inheritedMarkers({ CLAUDECODE: '1' })
+  for (const name of [...choices, 'CLAUDECODE', 'AGENT_DESK_SUBAGENT_EFFORT', 'AGENT_DESK_TERMINAL_ID', 'AGENT_DESK_TERMINAL_SECRET']) assert.ok(underTask.includes(name), name)
+  // Started any other way, they are the user's own configuration of Claude Code and stay.
+  const plain = inheritedMarkers({})
+  for (const name of choices) assert.ok(!plain.includes(name), name)
+  assert.ok(plain.includes('AGENT_DESK_SUBAGENT_EFFORT'))
+})

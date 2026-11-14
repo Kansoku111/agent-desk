@@ -56,11 +56,25 @@ export const REDRAW_DELAY_MS = 250
 /** The reasoning levels `claude --effort` takes. */
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
-/** Set by a Claude Code that started this server; a child `claude` would think it is nested. */
-export const INHERITED_MARKERS = [
+const SESSION_MARKERS = [
   'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED',
   'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_PID', 'CLAUDE_EFFORT',
+  // What Agent Desk gives each of its own Claude Code tasks (terminals.js), when one of those started this server.
+  'AGENT_DESK_TERMINAL_HOOK', 'AGENT_DESK_TERMINAL_ID', 'AGENT_DESK_TERMINAL_SECRET', 'AGENT_DESK_SUBAGENT_EFFORT',
 ]
+// That session's own choices: Code Mode and the model its subagents are pinned to. A server started from a task
+// (an agent restarting the app, a test run) passed them on, so every task it launched ran in Code Mode with its
+// subagents on that model whatever the settings said. Dropped only under such a session: set anywhere else they
+// are the user's own configuration of Claude Code.
+const SESSION_CHOICES = ['CLAUDE_CODE_EXPERIMENTAL_CODE_MODE', 'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE']
+
+/** The variables of `env` a `claude` this process starts must not inherit. */
+export function inheritedMarkers(env = process.env) {
+  return [...SESSION_MARKERS, ...(env.CLAUDECODE ? SESSION_CHOICES : [])]
+}
+
+/** Set by a Claude Code that started this server; a child `claude` would think it is nested. */
+export const INHERITED_MARKERS = inheritedMarkers()
 
 /**
  * Credential/provider environment names retained for compatibility. Team
