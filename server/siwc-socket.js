@@ -12,12 +12,12 @@ const TERMINALS = new Set(['response.completed', 'response.failed', 'response.in
 const OPEN = 1
 // Measured handshakes take 0.6-1.1 s. Slower than this means HTTP is the better wait.
 const CONNECT_MS = 5_000
-// The prompt cache lives with the connection: a new connection, or HTTP, starts
-// from no cached input even for an identical prefix, while an open connection
-// still hit after 8, 15 and 22 idle minutes (probe 2026-11-15). Closing after
-// 5 minutes made every pause longer than that resend the whole history
-// uncached; 20 minutes stays inside what was measured.
-const IDLE_MS = 20 * 60_000
+// The prompt cache lives with the connection: a new connection, or HTTP, is not
+// sure to hit even for an identical prefix, while an open connection still hit
+// after 8, 15, 22 (6.6k input) and 35 (113k input) idle minutes (probes
+// 2026-11-15). Closing after 5 minutes made every pause longer than that resend
+// the whole history uncached; 35 minutes stays inside what was measured.
+const IDLE_MS = 35 * 60_000
 // The service ends a connection at 60 minutes and fails the request that crosses it.
 const MAX_AGE_MS = 55 * 60_000
 const COOLDOWN_MS = 5 * 60_000
