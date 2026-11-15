@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { effectiveHarness } from '../server/team-harness.js'
 import { createSettingsService, DEFAULT_SETTINGS, effectiveCustomInstructions, migrateSettings, planSettingsUpdate } from '../server/settings.js'
 
 const defaults = (patch = {}) => ({ ...structuredClone(DEFAULT_SETTINGS), ...patch })
@@ -771,6 +772,24 @@ test('each mode\'s harnesses save as written; only a TM or eco child one rewrite
   await h.service.update({ tmChildHarness: 'x'.repeat(2_000), tmParentHarness: 'x'.repeat(4_000) })
   assert.equal(h.live.theme, 'dark', 'an invalid harness rejects the entire patch')
   assert.equal(h.live.tmChildHarness.length, 2_000)
+})
+
+test('a switched-off harness keeps its text but is not read; a TM or eco child switch rewrites the children\'s layers', async () => {
+  const h = harness({ tmChildHarness: '子の規則', abChildHarness: 'AB子', tmParentHarness: '親の規則' })
+  assert.equal(effectiveHarness(h.live, 'tm', 'child'), '子の規則', 'older saves have no switch and count as on')
+  await h.service.update({ tmChildHarnessEnabled: false })
+  assert.equal(h.live.tmChildHarness, '子の規則')
+  assert.equal(effectiveHarness(h.live, 'tm', 'child'), '')
+  assert.ok(h.events.includes('team-child'))
+  const before = h.events.length
+  await h.service.update({ abChildHarnessEnabled: false, tmParentHarnessEnabled: false, tmChildHarness: '書き換え' })
+  assert.ok(!h.events.slice(before).includes('team-child'), 'AB, parents and the text of an off harness touch no layer')
+  assert.equal(effectiveHarness(h.live, 'ab', 'child'), '')
+  assert.equal(effectiveHarness(h.live, 'tm', 'parent'), '')
+  await h.service.update({ tmChildHarnessEnabled: true })
+  assert.equal(effectiveHarness(h.live, 'tm', 'child'), '書き換え')
+  assert.ok(h.events.slice(before).includes('team-child'))
+  await assert.rejects(h.service.update({ ecoParentHarnessEnabled: 'false' }), /boolean/)
 })
 
 test('the shared harnesses of an earlier save start every mode', () => {

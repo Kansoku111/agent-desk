@@ -501,6 +501,13 @@ export interface Settings extends UsageDisplay {
   ecoChildHarness?: string
   abParentHarness?: string
   abChildHarness?: string
+  /** Off keeps the text but no agent reads it; older saves default to on. */
+  tmParentHarnessEnabled?: boolean
+  tmChildHarnessEnabled?: boolean
+  ecoParentHarnessEnabled?: boolean
+  ecoChildHarnessEnabled?: boolean
+  abParentHarnessEnabled?: boolean
+  abChildHarnessEnabled?: boolean
 }
 
 /**

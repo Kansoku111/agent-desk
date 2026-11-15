@@ -11,8 +11,13 @@ export { HARNESS_MAX }
 export const HARNESS_MODES = ['tm', 'eco', 'ab']
 /** The setting that holds one mode's harness for one side, such as `ecoChildHarness`. */
 export const harnessKey = (mode, side) => `${mode}${side === 'parent' ? 'Parent' : 'Child'}Harness`
-/** Every harness setting, with its mode and side. */
-export const HARNESS_KEYS = HARNESS_MODES.flatMap((mode) => ['parent', 'child'].map((side) => ({ mode, side, key: harnessKey(mode, side) })))
+/** Every harness setting, with its mode, side and on/off switch (such as `ecoChildHarnessEnabled`). */
+export const HARNESS_KEYS = HARNESS_MODES.flatMap((mode) => ['parent', 'child'].map((side) => ({ mode, side, key: harnessKey(mode, side), enabledKey: `${harnessKey(mode, side)}Enabled` })))
+/** The harness one mode's side reads: '' while switched off, so the user can pause it without deleting the text. Older saves have no switch and count as on. */
+export const effectiveHarness = (settings, mode, side) => {
+  const key = harnessKey(mode, side)
+  return settings[`${key}Enabled`] !== false ? settings[key] : ''
+}
 const LABEL = { parent: '親ハーネス', child: '子ハーネス' }
 const MODE_LABEL = { tm: 'TM', eco: 'eco', ab: 'AB' }
 const ROLE = { parent: 'the parent agent', child: 'the child agents' }

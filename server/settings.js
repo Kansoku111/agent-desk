@@ -8,7 +8,7 @@ import { FAST_PROVIDERS, recordFastPeriod } from './fast-mode.js'
 import { isLocalModelId, normalizeBaseUrl } from './local-llm.js'
 import { PERMISSION_MODES } from './runtime.js'
 import { mergeTeamConfig, TEAM_DEFAULTS } from './team-config.js'
-import { HARNESS_KEYS, migrateHarnesses, parseHarness } from './team-harness.js'
+import { HARNESS_KEYS, effectiveHarness, migrateHarnesses, parseHarness } from './team-harness.js'
 import { isUsdJpyRate } from '../shared/usage-score.js'
 import { validateUsageFallbackRoutes } from '../shared/usage-fallback.js'
 
@@ -86,6 +86,12 @@ export const DEFAULT_SETTINGS = {
   ecoChildHarness: '',
   abParentHarness: '',
   abChildHarness: '',
+  tmParentHarnessEnabled: true,
+  tmChildHarnessEnabled: true,
+  ecoParentHarnessEnabled: true,
+  ecoChildHarnessEnabled: true,
+  abParentHarnessEnabled: true,
+  abChildHarnessEnabled: true,
 }
 
 const BOOLEAN_SETTINGS = [
@@ -229,12 +235,15 @@ export function planSettingsUpdate(current, patch, now) {
     // Read at a team's next launch or child; nothing restarts.
     next.agentTeams = mergeTeamConfig(current.agentTeams, patch.agentTeams)
   }
-  for (const { mode, side, key } of HARNESS_KEYS) {
-    if (!owns(patch, key)) continue
-    next[key] = parseHarness(patch[key], side, mode)
+  for (const { mode, side, key, enabledKey } of HARNESS_KEYS) {
+    if (owns(patch, key)) next[key] = parseHarness(patch[key], side, mode)
+    if (owns(patch, enabledKey)) {
+      assertBoolean(patch[enabledKey], enabledKey)
+      next[enabledKey] = patch[enabledKey]
+    }
     // TM and eco dsh children read theirs from their own layer; rewriting it recycles only their runtimes.
     // AB reads its pair as each stage starts.
-    if (side === 'child' && mode !== 'ab' && next[key] !== current[key]) effects.teamChildPatch = true
+    if (side === 'child' && mode !== 'ab' && effectiveHarness(next, mode, side) !== effectiveHarness(current, mode, side)) effects.teamChildPatch = true
   }
   if (owns(patch, 'fastMode')) {
     assertRecord(patch.fastMode, 'fastMode')
