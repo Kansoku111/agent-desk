@@ -68,3 +68,31 @@ test('surface corruption and unmatched tool results remain errors', () => {
   assert.throws(() => after(session, measurement, 75000), /no matching tool-call/)
   assert.throws(() => after(session, { nodes: measurement.nodes.slice(1) }, 75000), /surface does not match/)
 })
+
+function summarizer(source) {
+  const start = source.indexOf('async function summarizeWithLlm(')
+  const end = source.indexOf('\n}', start)
+  const BlockAssembler = class { push() {} finish = undefined; blocks() { return [{ type: 'text', text: 'summary' }] } }
+  return new Function('BlockAssembler', 'deepFreeze', 'COMPACTION_INSTRUCTION', 'finishError', 'summaryText',
+    source.slice(start, end + 2) + '; return summarizeWithLlm')(BlockAssembler, (value) => value, 'compact', () => undefined, (blocks) => blocks)
+}
+async function summaryOptions(summarize, header, config = { summarizationProvider: '', summarizationModel: '', maxTokens: 1000 }) {
+  let seen
+  const ctx = { llm: { async * stream(options) { seen = options } } }
+  const agent = { options: {}, session: { id: 'session-1', requestHeader: () => header && { config: header }, toolHistory: () => [] } }
+  await summarize(ctx, config, { messages: [], tools: [] }, agent)
+  return seen
+}
+
+test('the summary request keeps the reasoning effort of the request it continues', async () => {
+  const header = { provider: 'openai-codex', model: 'gpt-6-luna', reasoningEffort: 'max' }
+  assert.equal((await summaryOptions(summarizer(source), header)).reasoningEffort, undefined)
+  const patched = summarizer(patchCompactionSource(source))
+  assert.equal((await summaryOptions(patched, header)).reasoningEffort, 'max')
+  assert.equal('reasoningEffort' in await summaryOptions(patched, { provider: 'openai-codex', model: 'gpt-6-luna' }), false)
+  // A separately configured summarization model gets its own default effort.
+  const other = await summaryOptions(patched, header, { summarizationProvider: 'openai-codex', summarizationModel: 'gpt-6.1-terra', maxTokens: 1000 })
+  assert.equal(other.model, 'gpt-6.1-terra')
+  assert.equal('reasoningEffort' in other, false)
+  assert.equal(patchCompactionSource(source.replace('purpose: "compaction",', 'purpose: "summary",')), null)
+})
