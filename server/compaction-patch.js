@@ -34,7 +34,9 @@ export function patchCompactionSelectorSource(source) {
 // identical requests drops the hit from 6.5k to 0), and the omitted effort is
 // sent as the route's lowest, so every automatic summary of a max or high task
 // paid its whole ~100k input uncached. Reuse the effort of the request the
-// summary continues, only when the summary goes to that same model.
+// summary continues, only when the summary goes to that same model on the
+// ChatGPT route: that is where it was measured, and on other routes reasoning
+// counts against the summary's maxTokens, so a high effort could truncate it.
 export function patchSummaryEffortSource(source) {
   const anchor = '\t\tmaxTokens: config.maxTokens,\n\t\tsessionId: agent.session.id,\n\t\tpurpose: "compaction",'
   const head = 'async function summarizeWithLlm(ctx, config, input, agent, signal) {'
@@ -46,7 +48,7 @@ export function patchSummaryEffortSource(source) {
     || !body.includes('const target = configured ?? latest ?? agentTarget;')) return null
   const patched = body.replace(anchor, [
     '\t\tmaxTokens: config.maxTokens,',
-    '\t\t...target === latest && latest.reasoningEffort !== void 0 ? { reasoningEffort: latest.reasoningEffort } : {},',
+    '\t\t...target === latest && latest.provider === "openai-codex" && latest.reasoningEffort !== void 0 ? { reasoningEffort: latest.reasoningEffort } : {},',
     '\t\tsessionId: agent.session.id,',
     '\t\tpurpose: "compaction",',
   ].join('\n'))

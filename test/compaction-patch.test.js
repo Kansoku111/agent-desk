@@ -26,6 +26,14 @@ function fixture(entries) {
   return [session, { nodes: events.map(e => ({ seq: e.seq, tokens: e.tokens })) }]
 }
 
+test('the hook applies the selector and summary patches independently', async () => {
+  const { patchCompactionSelectorSource, patchSummaryEffortSource } = await import('../server/compaction-patch.js')
+  const drifted = source.replace('purpose: "compaction",', 'purpose: "summary",')
+  assert.equal(patchSummaryEffortSource(drifted), null)
+  assert.ok(patchCompactionSelectorSource(drifted))
+  assert.ok(patchSummaryEffortSource(source.replace('function selectCompactableRange(', 'function changedRange(')))
+})
+
 test('installed compaction selector takes the patch exactly once and refuses drift', () => {
   const patched = patchCompactionSource(source)
   assert.ok(patched)
@@ -90,6 +98,8 @@ test('the summary request keeps the reasoning effort of the request it continues
   const patched = summarizer(patchCompactionSource(source))
   assert.equal((await summaryOptions(patched, header)).reasoningEffort, 'max')
   assert.equal('reasoningEffort' in await summaryOptions(patched, { provider: 'openai-codex', model: 'gpt-6-luna' }), false)
+  // Other routes count reasoning against the summary's maxTokens; only the ChatGPT route was measured.
+  assert.equal('reasoningEffort' in await summaryOptions(patched, { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'max' }), false)
   // A separately configured summarization model gets its own default effort.
   const other = await summaryOptions(patched, header, { summarizationProvider: 'openai-codex', summarizationModel: 'gpt-6.1-terra', maxTokens: 1000 })
   assert.equal(other.model, 'gpt-6.1-terra')

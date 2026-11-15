@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { WebSocketServer } from 'ws'
 import { createCacheDiagnostics } from '../server/gpt-cache-diagnostics.js'
 import { SIWC_RESOURCE } from '../server/siwc-client.js'
-import { requireCompleted, withSiwc } from '../server/siwc-request.js'
+import { requireCompleted, socketAccount, withSiwc } from '../server/siwc-request.js'
 import { configuredSiwcSocket, createSiwcSocket, SIWC_SOCKET_URL } from '../server/siwc-socket.js'
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -127,6 +127,59 @@ test('withSiwc names the signed-in account, so a token refresh reuses the connec
   token = 'token-2'
   await (await options.fetch(REQUEST_URL, { method: 'POST', body })).text()
   assert.equal(local.state.connections.length, 1)
+})
+
+test('a refused request on a connection kept across a token refresh is sent once more on a new connection', async t => {
+  let count = 0
+  const local = await server(t, (_, client) => {
+    count++
+    if (count === 2) client.send(JSON.stringify({ type: 'error', status: 401, error: { message: 'expired' } }))
+    else for (const event of COMPLETED) client.send(JSON.stringify(event))
+  })
+  const socket = pipe(t, local)
+  const { http, calls } = httpSpy()
+  await (await socket.send(REQUEST_URL, request(), { key: 's1', http, account: 'a' })).text()
+  const retried = await socket.send(REQUEST_URL, request(undefined, undefined, 'Bearer token-2'), { key: 's1', http, account: 'a' })
+  assert.match(await retried.text(), /答え/)
+  assert.equal(calls.length, 0)
+  assert.equal(local.state.connections.length, 2)
+  assert.equal(local.state.connections[1].authorization, 'Bearer token-2')
+})
+
+test('a 401 on a connection opened with the current token is not repeated', async t => {
+  const local = await server(t, (_, client) => client.send(JSON.stringify({ type: 'error', status: 401, error: { message: 'no' } })))
+  const socket = pipe(t, local)
+  const { http } = httpSpy()
+  const response = await socket.send(REQUEST_URL, request(), { key: 's1', http, account: 'a' })
+  assert.equal(response.status, 401)
+  assert.equal(local.state.requests.length, 1)
+})
+
+test('a cooldown keeps other sessions on their open connections', async t => {
+  const local = await server(t, (message, client) => {
+    if (message.input[0].content === 'fail') client.close()
+    else for (const event of COMPLETED) client.send(JSON.stringify(event))
+  })
+  const socket = pipe(t, local)
+  const { http, calls } = httpSpy()
+  await (await socket.send(REQUEST_URL, request(), { key: 's1', http })).text()
+  const failing = request(undefined, { model: 'gpt-6-luna', stream: true, input: [{ role: 'user', content: 'fail' }] })
+  await socket.send(REQUEST_URL, failing, { key: 's2', http })
+  assert.equal(calls.length, 1, 'a new connection closing before any event goes to HTTP and starts the cooldown')
+  const used = []
+  await (await socket.send(REQUEST_URL, request(), { key: 's1', http, used: kind => used.push(kind) })).text()
+  assert.deepEqual(used, ['websocket'])
+  await socket.send(REQUEST_URL, request(), { key: 's3', http, used: kind => used.push(kind) })
+  assert.deepEqual(used, ['websocket', 'http'], 'a new connection still waits out the cooldown')
+})
+
+test('the connection owner survives a token refresh and changes with a new sign-in', () => {
+  const idToken = (claims) => ['e30', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'sig'].join('.')
+  const base = { issuer: 'https://auth.openai.com', subject: 'user-1' }
+  const first = socketAccount({ ...base, id_token: idToken({ auth_time: 100, iat: 100 }) })
+  assert.equal(socketAccount({ ...base, id_token: idToken({ auth_time: 100, iat: 3700 }) }), first)
+  assert.notEqual(socketAccount({ ...base, id_token: idToken({ auth_time: 5000, iat: 5000 }) }), first)
+  assert.equal(socketAccount({ access_token: 'x' }), undefined)
 })
 
 test('a connection past the service age limit is replaced before it can fail a request', async t => {

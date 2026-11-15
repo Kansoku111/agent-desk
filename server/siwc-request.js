@@ -196,6 +196,16 @@ export async function sendWithIdleLimit(send, url, init, idleMs = SIWC_IDLE_MS, 
     headers: response.headers
   })
 }
+// Who a kept WebSocket connection belongs to. A refresh keeps the id token's
+// sign-in time (auth_time) and only a new sign-in, where a different workspace
+// could be chosen, changes it, so a refresh reuses the connection and a new
+// sign-in does not. Read only for comparison; the token was verified when stored.
+export function socketAccount(credential) {
+  if (!credential?.subject) return undefined
+  let signedIn = ''
+  try { signedIn = String(JSON.parse(Buffer.from(String(credential.id_token).split('.')[1], 'base64url').toString()).auth_time ?? '') } catch {}
+  return `${credential.issuer ?? ''} ${credential.subject} ${signedIn}`
+}
 export function withSiwc(model, options, {
   credentials = process.env.AGENT_DESK_SIWC_CREDENTIALS,
   client,
@@ -240,7 +250,7 @@ export function withSiwc(model, options, {
       headers.delete('OpenAI-Beta')
       const transport = pipe ? (target, sendInit) => pipe.send(target, sendInit, {
         key: options?.sessionId,
-        account: credential.subject ? `${credential.issuer ?? ''} ${credential.subject}` : undefined,
+        account: socketAccount(credential),
         http: send,
         used: kind => observeCache(observation, 'transport', kind)
       }) : send

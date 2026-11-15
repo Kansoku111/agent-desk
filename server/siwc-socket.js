@@ -1,5 +1,6 @@
-// Official SIWC Responses over WebSocket. Only the pipe differs from HTTP: same
-// resource, same token, same plan billing, and the full input on every request.
+// Official SIWC Responses over WebSocket. The request is the same as over HTTP:
+// same resource, same token, same plan billing, and the full input every time.
+// The prompt cache is not: it is only certain within one open connection (see IDLE_MS).
 // previous_response_id is deliberately unused: measured no faster than resending
 // the input on an open socket (docs/gpt-efficiency.md), and it would make the
 // server's view of a conversation diverge from dsh's after a prune.
@@ -150,13 +151,13 @@ export function createSiwcSocket({
     entry.idle.unref?.()
   }
   /** The fetch contract for one request. `http` is what to use when this pipe cannot serve it. */
-  async function send(requestUrl, init, { key, http, used, account }) {
+  async function send(requestUrl, init, { key, http, used, account, retried = false }) {
     const viaHttp = () => {
       used?.('http')
       return http(requestUrl, init)
     }
     // Calls without a session (title, search helpers) have no next request to speed up.
-    if (!key || now() < coolUntil || String(init.body).length >= tooLarge) return viaHttp()
+    if (!key || String(init.body).length >= tooLarge) return viaHttp()
     let entry = sessions.get(key)
     // The socket serves one response at a time; an overlapping call in a session keeps HTTP.
     if (entry?.busy) return viaHttp()
@@ -174,6 +175,9 @@ export function createSiwcSocket({
     const reused = Boolean(entry)
     if (entry) clearTimeout(entry.idle)
     else {
+      // A cooldown holds back new connections only: an open one still works and
+      // keeps its cache, and HTTP would resend the whole history uncached.
+      if (now() < coolUntil) return viaHttp()
       entry = { socket: null, token, account, openedAt: now(), busy: true, idle: null }
       sessions.set(key, entry)
       try {
@@ -210,6 +214,12 @@ export function createSiwcSocket({
       return viaHttp()
     }
     if (result.refused.error?.code === 'websocket_connection_limit_reached') return viaHttp()
+    // A connection kept across a token refresh served after its handshake token
+    // expired, but that was observed, not documented: if the service refuses it,
+    // send once more on a connection opened with the current token.
+    if (reused && !retried && current.token !== token && [401, 403].includes(result.refused.status)) {
+      return send(requestUrl, init, { key, http, used, account, retried: true })
+    }
     // HTTP repeats a truly invalid request's error and serves one only this pipe rejects.
     if (result.refused.status === 400) {
       coolUntil = now() + cooldownMs
