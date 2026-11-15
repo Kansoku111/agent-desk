@@ -104,6 +104,31 @@ test('sessions do not share a connection, and a new token never uses the old one
   assert.equal(local.state.connections[2].authorization, 'Bearer token-2')
 })
 
+test('a refreshed token for the same account keeps the connection; another account replaces it', async t => {
+  const local = await server(t)
+  const socket = pipe(t, local)
+  const { http } = httpSpy()
+  await (await socket.send(REQUEST_URL, request(), { key: 's1', http, account: 'issuer user-1' })).text()
+  await (await socket.send(REQUEST_URL, request(undefined, undefined, 'Bearer token-2'), { key: 's1', http, account: 'issuer user-1' })).text()
+  assert.equal(local.state.connections.length, 1)
+  assert.equal(local.state.requests.length, 2)
+  await (await socket.send(REQUEST_URL, request(undefined, undefined, 'Bearer token-3'), { key: 's1', http, account: 'issuer user-2' })).text()
+  assert.equal(local.state.connections.length, 2)
+  assert.equal(local.state.connections[1].authorization, 'Bearer token-3')
+})
+
+test('withSiwc names the signed-in account, so a token refresh reuses the connection', async t => {
+  const local = await server(t)
+  let token = 'token-1'
+  const client = { auth: async () => ({ access_token: token, issuer: 'https://auth.openai.com', subject: 'user-1' }) }
+  const options = withSiwc(model, { sessionId: 's1' }, { client, diagnostics: null, socket: pipe(t, local) })
+  const body = JSON.stringify({ input: [{ role: 'user', content: 'x' }], stream: true })
+  await (await options.fetch(REQUEST_URL, { method: 'POST', body })).text()
+  token = 'token-2'
+  await (await options.fetch(REQUEST_URL, { method: 'POST', body })).text()
+  assert.equal(local.state.connections.length, 1)
+})
+
 test('a connection past the service age limit is replaced before it can fail a request', async t => {
   const local = await server(t)
   let clock = 1_000

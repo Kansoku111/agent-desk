@@ -240,6 +240,7 @@ export function withSiwc(model, options, {
       headers.delete('OpenAI-Beta')
       const transport = pipe ? (target, sendInit) => pipe.send(target, sendInit, {
         key: options?.sessionId,
+        account: credential.subject ? `${credential.issuer ?? ''} ${credential.subject}` : undefined,
         http: send,
         used: kind => observeCache(observation, 'transport', kind)
       }) : send

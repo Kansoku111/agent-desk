@@ -11,8 +11,12 @@ const TERMINALS = new Set(['response.completed', 'response.failed', 'response.in
 const OPEN = 1
 // Measured handshakes take 0.6-1.1 s. Slower than this means HTTP is the better wait.
 const CONNECT_MS = 5_000
-// A reconnect costs about as much as one request saves, so outlast ordinary tool runs.
-const IDLE_MS = 5 * 60_000
+// The prompt cache lives with the connection: a new connection, or HTTP, starts
+// from no cached input even for an identical prefix, while an open connection
+// still hit after 8, 15 and 22 idle minutes (probe 2026-11-15). Closing after
+// 5 minutes made every pause longer than that resend the whole history
+// uncached; 20 minutes stays inside what was measured.
+const IDLE_MS = 20 * 60_000
 // The service ends a connection at 60 minutes and fails the request that crosses it.
 const MAX_AGE_MS = 55 * 60_000
 const COOLDOWN_MS = 5 * 60_000
@@ -146,7 +150,7 @@ export function createSiwcSocket({
     entry.idle.unref?.()
   }
   /** The fetch contract for one request. `http` is what to use when this pipe cannot serve it. */
-  async function send(requestUrl, init, { key, http, used }) {
+  async function send(requestUrl, init, { key, http, used, account }) {
     const viaHttp = () => {
       used?.('http')
       return http(requestUrl, init)
@@ -158,14 +162,19 @@ export function createSiwcSocket({
     if (entry?.busy) return viaHttp()
     const headers = new Headers(init.headers)
     const token = headers.get('authorization')
-    if (entry && (entry.token !== token || now() - entry.openedAt >= maxAgeMs || entry.socket.readyState !== OPEN)) {
+    // The access token is refreshed about hourly, and the cache stays with the
+    // connection, so replacing it on every refresh resent each running task's
+    // whole history uncached. An open connection kept serving after its
+    // handshake token expired (probe 2026-11-15); only another account replaces it.
+    const changed = account === undefined || entry?.account === undefined ? entry?.token !== token : entry.account !== account
+    if (entry && (changed || now() - entry.openedAt >= maxAgeMs || entry.socket.readyState !== OPEN)) {
       drop(key, entry)
       entry = null
     }
     const reused = Boolean(entry)
     if (entry) clearTimeout(entry.idle)
     else {
-      entry = { socket: null, token, openedAt: now(), busy: true, idle: null }
+      entry = { socket: null, token, account, openedAt: now(), busy: true, idle: null }
       sessions.set(key, entry)
       try {
         entry.socket = await open(url, { authorization: token, 'user-agent': headers.get('user-agent') }, connectMs, init.signal)
