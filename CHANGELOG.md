@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - アプリの起動時と実行環境の再起動後に、既定の権限モードの dsh を先に起動します。再起動後の最初のタスクが dsh の起動を待たなくなります（CPU が混んでいると 30 秒以上かかっていました）。
+- Updated the bundled Codex app-server (`@openai/codex`) from 0.167.0 to 0.169.0. The app-server protocol Agent Desk uses only gained optional fields.
 
 ## [0.1.16] - 2026-11-16
 
