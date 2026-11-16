@@ -51,6 +51,7 @@ export const DEFAULT_SETTINGS = {
   modelVisibility: {},
   // Agent tools (desktop is opt-in and Windows only).
   browserTool: true,
+  browserBackend: 'chrome',
   browserHeadless: false,
   desktopTool: false,
   imageTool: true,
@@ -98,9 +99,10 @@ const BOOLEAN_SETTINGS = [
   'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool',
   'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'customInstructionsEnabled', 'commandCodeZdr', 'claudeCodeMode',
 ]
-const TOOL_SETTINGS = ['browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool']
+const TOOL_SETTINGS = ['browserTool', 'browserBackend', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool']
 const ENUM_SETTINGS = {
   theme: ['system', 'light', 'dark'],
+  browserBackend: ['chrome', 'browser-use'],
   usageCurrency: ['USD', 'JPY'],
   defaultPermissionMode: PERMISSION_MODES,
   dshUpdateChannel: UPDATE_CHANNELS,

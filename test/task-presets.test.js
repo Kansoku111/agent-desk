@@ -88,6 +88,31 @@ test('review fix uses the explicitly selected DSH permission and opinion stays r
 
 const sourceLimit = () => Object.assign(new Error('検証対象が多すぎます。プロジェクト範囲を絞ってください'), { code: 'SOURCE_SNAPSHOT_LIMIT' })
 
+test('Claude preset follow-ups use the current browser selection on the same worker', async (t) => {
+  const { manager, workspace, agents } = await fixture(t)
+  const settings = {}
+  manager.mcpServers = createMcpServerList({ paths: { chromeState: 'state', chromeProfile: 'profile' },
+    getSettings: () => settings, getTeams: () => null, browserUseCommand: process.execPath })
+  const configured = []
+  agents.setArgs = async (id, args) => {
+    const config = args.indexOf('--mcp-config')
+    configured.push({ id, servers: config < 0 ? [] : Object.keys(JSON.parse(args[config + 1]).mcpServers) })
+  }
+  const run = { id: 'preset', kind: 'delegate', phase: 'running', browser: true, workspace, worker: { kind: 'claude', id: 'worker' } }
+  for (const choice of [
+    { browserTool: true, browserBackend: 'chrome' },
+    { browserTool: true, browserBackend: 'browser-use' },
+    { browserTool: false, browserBackend: 'browser-use' },
+  ]) {
+    Object.assign(settings, choice)
+    await manager.sendWorker(run, 'Continue')
+  }
+  assert.deepEqual(configured, [
+    { id: 'worker', servers: ['chrome'] }, { id: 'worker', servers: ['browser_use'] }, { id: 'worker', servers: [] },
+  ])
+  assert.deepEqual(agents.calls.map(call => call.id), ['worker', 'worker', 'worker'])
+})
+
 test('large plain-folder creative delegation prepares the parent and finishes without pretending whole-folder checks ran', async (t) => {
   const f = await fixture(t)
   const readdir = fs.readdir.bind(fs)
@@ -163,6 +188,28 @@ test('checkpoint budget does not block delegated work, but its missing diff rema
   })
 })
 
+test('another task editing the same folder does not fail a run without selected checks', async (t) => {
+  for (const input of [{}, { kind: 'review', reviewMode: 'opinion' }]) await t.test(input.reviewMode ?? 'delegate', async (t) => {
+    const f = await fixture(t)
+    const snapshot = f.manager.checkpoints.snapshot.bind(f.manager.checkpoints)
+    f.manager.checkpoints.snapshot = async (workspace, ref) => {
+      // An unrelated agent keeps writing while the run is being finalized.
+      if (ref.endsWith('/after')) await fs.writeFile(path.join(workspace, 'other-agent.txt'), String(Date.now()))
+      const value = await snapshot(workspace, ref)
+      await fs.writeFile(path.join(workspace, 'other-agent.txt'), 'later ' + Date.now())
+      return value
+    }
+    const run = await f.start(input)
+    await f.complete(f.parent.id, brief(run))
+    assert.equal(run.phase, 'running')
+    await f.complete(run.worker.id, result(run))
+    assert.equal(run.phase, 'completed', run.error)
+    assert.equal(run.verification.status, 'unverified')
+    assert.ok(run.verification.endHash)
+    if (input.reviewMode === 'opinion') assert.ok(run.deliveredAt, 'the opinion is still sent to the parent')
+  })
+})
+
 test('checkpoint permission errors are not treated as optional recording budgets', async (t) => {
   const f = await fixture(t)
   f.manager.checkpoints.snapshot = async () => { throw Object.assign(new Error('checkpoint access denied'), { code: 'EACCES' }) }
@@ -188,28 +235,6 @@ test('an allocated worker with no report cannot forward application-only failure
 test('task handoff retains requested creative tools and does not inherit an assistant-only consultation restriction', () => {
   const run = { id: 'R', kind: 'delegate' }
   assert.match(preparePresetPrompt(run), /スキル/)
-test('another task editing the same folder does not fail a run without selected checks', async (t) => {
-  for (const input of [{}, { kind: 'review', reviewMode: 'opinion' }]) await t.test(input.reviewMode ?? 'delegate', async (t) => {
-    const f = await fixture(t)
-    const snapshot = f.manager.checkpoints.snapshot.bind(f.manager.checkpoints)
-    f.manager.checkpoints.snapshot = async (workspace, ref) => {
-      // An unrelated agent keeps writing while the run is being finalized.
-      if (ref.endsWith('/after')) await fs.writeFile(path.join(workspace, 'other-agent.txt'), String(Date.now()))
-      const value = await snapshot(workspace, ref)
-      await fs.writeFile(path.join(workspace, 'other-agent.txt'), 'later ' + Date.now())
-      return value
-    }
-    const run = await f.start(input)
-    await f.complete(f.parent.id, brief(run))
-    assert.equal(run.phase, 'running')
-    await f.complete(run.worker.id, result(run))
-    assert.equal(run.phase, 'completed', run.error)
-    assert.equal(run.verification.status, 'unverified')
-    assert.ok(run.verification.endHash)
-    if (input.reviewMode === 'opinion') assert.ok(run.deliveredAt, 'the opinion is still sent to the parent')
-  })
-})
-
   assert.match(preparePresetPrompt(run), /既定は実装/)
   assert.match(preparePresetPrompt(run), /利用者自身が相談のみ.*最優先/)
   assert.match(workerPresetInstructions(run), /artwork/)

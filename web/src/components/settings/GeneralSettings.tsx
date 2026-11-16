@@ -7,6 +7,7 @@ import { UsageDisplaySettings } from './UsageDisplaySettings'
 export function GeneralSettings() {
   const settings = useStore((state) => state.server?.settings)
   const platform = useStore((state) => state.server?.app.platform)
+  const browserUse = useStore((state) => state.server?.app.browserUse)
   const codeModeConsented = useStore((state) => state.server?.app.codeModeConsented)
   if (!settings) return null
   const update = (patch: Record<string, unknown>) => void act('settings.update', { patch })
@@ -50,14 +51,37 @@ export function GeneralSettings() {
       </div>
       <div className="setting">
         <div>
-          <h3>ブラウザ操作（Chrome）</h3>
+          <h3>ブラウザ操作</h3>
           <p className="muted">専用プロファイルの Chrome をエージェントが操作します。</p>
         </div>
         <label className="switch">
-          <input type="checkbox" checked={settings.browserTool} onChange={(event) => update({ browserTool: event.target.checked })} />
+          <input type="checkbox" aria-label="ブラウザ操作" checked={settings.browserTool} onChange={(event) => update({ browserTool: event.target.checked })} />
           <span />
         </label>
       </div>
+      {settings.browserTool && (
+        <div className="setting">
+          <div>
+            <h3>ブラウザ操作ツール</h3>
+            <p className="muted">実行中の dsh ターンがすべて終わると切り替わります。</p>
+            {browserUse && browserUse.status !== 'ready' && (
+              <p className="muted" id="browser-use-install">
+                {browserUse.status === 'missing' ? 'Browser Use は未導入です。' : 'Browser Use 1.0.0 を確認できません。'}
+                <code>{browserUse.installCommand}</code> を実行し、Agent Desk を再起動してください。
+              </p>
+            )}
+          </div>
+          <select
+            aria-label="ブラウザ操作ツール"
+            aria-describedby={browserUse && browserUse.status !== 'ready' ? 'browser-use-install' : undefined}
+            value={settings.browserBackend ?? 'chrome'}
+            onChange={(event) => update({ browserBackend: event.target.value })}
+          >
+            <option value="chrome">Chrome DevTools</option>
+            <option value="browser-use" disabled={browserUse?.status !== 'ready'}>Browser Use</option>
+          </select>
+        </div>
+      )}
       {settings.browserTool && (
         <div className="setting">
           <div>

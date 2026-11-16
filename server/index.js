@@ -13,6 +13,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { Catalog, matchesCommandCodeCatalog } from './catalog.js'
 import { codeModeConsented } from './claude-code-mode.js'
 import { codeStamp, uiBuild } from './code-stamp.js'
+import { findBrowserUse } from './browser-use.js'
 import { ChatGptLogin } from './chatgpt-login.js'
 import { Checkpoints } from './checkpoints.js'
 import {
@@ -401,7 +402,10 @@ const catalogSignature = async (result) => JSON.stringify({
 })
 
 const getSettings = () => settings
-const mcpServersFor = createMcpServerList({ paths, getSettings, getTeams: () => teams, getSubagentBridge: () => subagentBridge })
+const { command: browserUseCommand, ...browserUse } = await findBrowserUse(paths.home)
+const mcpServersFor = createMcpServerList({
+  paths, getSettings, getTeams: () => teams, getSubagentBridge: () => subagentBridge, browserUseCommand,
+})
 
 const catalog = await new Catalog(paths.catalog, await catalogSignature(await syncModelCatalog())).load()
 
@@ -951,6 +955,7 @@ async function fullState(client) {
     app: {
       version: APP_VERSION, dshVersion: DSH_VERSION, platform: process.platform, dataDir: paths.home, myPc: paths.myPc, uiBuild: UI_BUILD,
       remote: Boolean(client?.remote),
+      browserUse,
       codeModeConsented: codeModeConsented(),
     },
     settings,
@@ -1045,7 +1050,12 @@ const handlers = {
 
   'state.get': (_params, client) => fullState(client),
 
-  'settings.update': ({ patch }) => settingsService.update(patch),
+  'settings.update': ({ patch }) => {
+    if (patch?.browserBackend === 'browser-use' && !browserUseCommand) {
+      throw new Error(`Browser Use 1.0.0 を確認できません。${browserUse.installCommand} を実行して Agent Desk を再起動してください。`)
+    }
+    return settingsService.update(patch)
+  },
 
   // Builds the UI, then restarts this server whatever it is doing (the tasks stop).
   'app.restart': async () => {

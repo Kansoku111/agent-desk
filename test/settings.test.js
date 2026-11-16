@@ -440,6 +440,7 @@ test('boolean settings and provider toggles reject coercion', async () => {
 test('enum and string settings validate types without restricting opaque custom defaults', async () => {
   const choices = {
     theme: ['system', 'light', 'dark'],
+    browserBackend: ['chrome', 'browser-use'],
     defaultPermissionMode: ['read-only', 'workspace-write', 'danger-full-access'],
     dshUpdateChannel: ['latest', 'next', 'alpha'],
   }
@@ -466,6 +467,16 @@ test('enum and string settings validate types without restricting opaque custom 
   await h.service.update({ defaultModel: null, lastWorkspace: null })
   assert.equal(h.live.defaultModel, null)
   assert.equal(h.live.lastWorkspace, null)
+})
+
+test('browser selection keeps the Chrome default and recycles the runtime on change', () => {
+  const before = migrateSettings({ browserTool: false })
+  assert.equal(before.browserBackend, 'chrome')
+  assert.equal(before.browserTool, false)
+  const change = planSettingsUpdate(before, { browserBackend: 'browser-use' }, 0)
+  assert.equal(change.effects.restart, true)
+  assert.equal(migrateSettings(change.settings).browserBackend, 'browser-use')
+  assert.equal(planSettingsUpdate(change.settings, { browserBackend: 'browser-use' }, 0).effects.restart, false)
 })
 
 test('patch/maps, context choices, model IDs and instruction length are validated', async () => {

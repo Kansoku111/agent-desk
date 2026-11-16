@@ -279,6 +279,16 @@ const BROWSER_VERBS: Record<string, string> = {
   get_network_request: '通信を確認',
   emulate: 'エミュレート',
   resize_page: 'サイズを変更',
+  new_tab: 'ブラウザで開く',
+  navigate: 'ページを移動',
+  switch_tab: 'タブを切り替え',
+  close_tab: 'タブを閉じる',
+  list_tabs: 'タブ一覧',
+  read_page: 'ページを読み取り',
+  browser_screenshot: 'スクリーンショット',
+  press: 'キー入力',
+  scroll: 'スクロール',
+  back: '前のページへ戻る',
 }
 
 const DESKTOP_VERBS: Record<string, string> = {
@@ -333,6 +343,11 @@ function computeSummary(item: ToolItem, workspace?: string | null): ToolSummary 
     const script = str(input.function ?? '')
     const text = [script, output].filter(Boolean).join('\n\n')
     return { icon: 'web', verb, target: firstLine(target), detail: text ? { kind: 'code', text } : null }
+  }
+  if (name.startsWith('mcp__browser_use__')) {
+    const action = str(input.action) || name.slice('mcp__browser_use__'.length)
+    const target = str(input.url ?? input.selector ?? input.key ?? input.tab ?? '')
+    return { icon: 'web', verb: BROWSER_VERBS[action] ?? 'ブラウザ操作', target: firstLine(target), detail: output ? { kind: 'code', text: output } : null }
   }
 
   // The desktop tool (desktop-mcp.js, mounted as the "desktop" MCP server).

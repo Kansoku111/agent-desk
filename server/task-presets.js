@@ -251,6 +251,18 @@ export class TaskPresets extends EventEmitter {
       return null
     }
   }
+  claudeWorkerArgs(run) {
+    const args = abClaudeArgs({ writable: run.reviewMode !== 'opinion', instructions: workerPresetInstructions(run) + '\n\n' + this.instructions() })
+    if (run.browser) {
+      const servers = this.mcpServers({ workspace: run.workspace, preset: { browser: true } })
+      if (servers.length) {
+        const mcpServers = Object.fromEntries(servers.map(({ name, command, args, env }) =>
+          [name, { command, args, env: Object.fromEntries(env.map(({ name, value }) => [name, value])) }]))
+        args.push('--mcp-config', JSON.stringify({ mcpServers }))
+      }
+    }
+    return args
+  }
   async launch(run) {
     this.assertLive(run)
     const folder = path.join(this.dir, 'runs', run.id)
@@ -262,12 +274,7 @@ export class TaskPresets extends EventEmitter {
     this.assertLive(run)
     this.validateModel(run.model)
     if (run.model.startsWith('claude:')) {
-      let args = abClaudeArgs({ writable: run.reviewMode !== 'opinion', instructions: workerPresetInstructions(run) + '\n\n' + this.instructions() })
-      if (run.browser) {
-        const servers = this.mcpServers({ workspace: run.workspace, preset: { browser: true } })
-        args.push('--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(servers.map((server) => [server.name, { command: server.command, args: server.args, env: Object.fromEntries(server.env.map(({ name, value }) => [name, value])) }])) }))
-      }
-      const worker = await this.agents.create({ workspace: run.workspace, model: run.model.slice(7), effort: run.effort || null, args })
+      const worker = await this.agents.create({ workspace: run.workspace, model: run.model.slice(7), effort: run.effort || null, args: this.claudeWorkerArgs(run) })
       run.worker = { kind: 'claude', id: worker.id }
     } else {
       const worker = await this.threads.create({ workspace: run.workspace, model: run.model, effort: run.effort, permissionMode: run.permissionMode, toolMode: 'ptc', preset: { runId: run.id, browser: run.browser } })
@@ -289,8 +296,13 @@ export class TaskPresets extends EventEmitter {
       this.assertLive(run)
     }
     const body = user ? text : PRESET_PROMPT_MARK + '\n' + text
-    if (run.worker.kind === 'claude') this.agents.run(run.worker.id, body)
-    else await this.threads.send(run.worker.id, { text: body }, { presetRunId: run.id })
+    if (run.worker.kind === 'claude') {
+      if (run.browser) {
+        await this.agents.setArgs(run.worker.id, this.claudeWorkerArgs(run))
+        this.assertLive(run)
+      }
+      this.agents.run(run.worker.id, body)
+    } else await this.threads.send(run.worker.id, { text: body }, { presetRunId: run.id })
   }
   async retryWork(run, code, reason) {
     const state = run.snapshotUnavailable ? null : (await this.snapshot(run.workspace)).hash

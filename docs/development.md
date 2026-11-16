@@ -33,6 +33,8 @@ Skillsのお気に入りは同じフィクスチャサーバーの `skill-favori
 
 設定の回帰確認は同じフィクスチャサーバーの `settings-bug-audit-ui.html` で `await settingsAudit.run()` を実行します。候補が後から届くClaudeワークスペースの選択・送信と、検証行の削除→追加→保存を実コンポーネントで確認します。`usage-pricing-ui.html` の `await usagePricingTest.run()` は、未算定・一部未算定・非課金・利用なし・既知ゼロをタイル、モデル行、グラフのツールチップで確認します。どちらもRPCは模擬応答で、本番データや実モデルを使いません。
 
+ブラウザ操作の切り替えは `test/browser-mcp.test.js` と `test/ptc-runtime.test.js` で、MCPの登録と再開後にモデルへ送られるツール定義を確認します。Chromeの起動処理と専用プロファイルを共有し、dshを再接続して登録を入れ替えることで、選択中のツールだけをモデルに渡します。両方を登録してUI上の表示だけ切り替えると、モデル入力に両方のツール定義が残ります。Browser Useのブラウザ操作は、タスクのファイル権限を広げずに済むようアプリ側で定型化しています。
+
 ## コンテキスト圧縮
 
 `node --test test/compaction-patch.test.js test/context-overflow-patch.test.js test/context-compaction-runtime.test.js test/dsh-compatibility.test.js` で検証します。巨大な先頭メッセージと短い最近の会話を模擬し、実dsh／ACPで要約・続行・プロセス再起動後の再開を親子両方で確認します。ローカル模擬APIだけを使い、実モデルの要約品質や実際の最大入力容量を検証するものではありません。

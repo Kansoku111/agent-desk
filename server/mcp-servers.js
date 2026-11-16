@@ -25,7 +25,7 @@ export function claudeMcpServer(server) {
 }
 
 /** Builds `mcpServersFor(thread)`; `getSettings` and `getTeams` read index.js's current state. */
-export function createMcpServerList({ paths, getSettings, getTeams, getSubagentBridge = () => null }) {
+export function createMcpServerList({ paths, getSettings, getTeams, getSubagentBridge = () => null, browserUseCommand = null }) {
   /** MCP servers mounted into a task's session; ACP stdio servers need an absolute command. */
   function mcpServersFor(thread) {
     const servers = []
@@ -36,23 +36,28 @@ export function createMcpServerList({ paths, getSettings, getTeams, getSubagentB
       if (!server) throw new Error('観測者のセッションを確認できません')
       return [server]
     }
-    if (thread.preset) return thread.preset.browser ? [chromeServer(thread)] : servers
+    const settings = getSettings()
+    if (thread.preset) {
+      const browser = thread.preset.browser && browserServer(thread, settings)
+      return browser ? [browser] : servers
+    }
     // Consultation cannot use browser/desktop tools to bypass its read-only sandbox.
     // WebSearch/WebFetch are native tools in the non-lean AB runtime.
     if (thread.ab && !thread.ab.writable) return servers
     // A team's child the user keeps lean goes without them (teams.js toolsFor).
     const tools = getTeams()?.toolsFor(thread) ?? true
-    if (tools && getSettings().browserTool) servers.push(chromeServer(thread))
-    if (tools && getSettings().desktopTool && process.platform === 'win32') {
+    const browser = tools && browserServer(thread, settings)
+    if (browser) servers.push(browser)
+    if (tools && settings.desktopTool && process.platform === 'win32') {
       // Keep agent-desktop's snapshots (they hold on-screen text) in Agent Desk's own folder, not the user's home.
       const env = paths.desktopUiHome ? [{ name: 'AGENT_DESKTOP_HOME', value: paths.desktopUiHome }] : []
       servers.push({ name: 'desktop', command: process.execPath, args: [desktopMcpScript], env })
     }
-    if (tools && getSettings().historyTool === true) {
+    if (tools && settings.historyTool === true) {
       servers.push({ name: 'history', command: process.execPath,
         args: [historyMcpScript, '--home', paths.home, '--settings', paths.settings, '--workspace', thread.workspace], env: [] })
     }
-    if (tools && getSettings().imageTool) {
+    if (tools && settings.imageTool) {
       servers.push(imageMcpServer(paths, thread.workspace))
     }
     // A GPT team leader's tools (teams.js); no other task gets them.
@@ -65,17 +70,20 @@ export function createMcpServerList({ paths, getSettings, getTeams, getSubagentB
     }
     return servers
   }
-  /** The browser tool: chrome-devtools-mcp relayed through chrome-mcp.js. */
-  function chromeServer(thread) {
+  function browserServer(thread, settings) {
+    if (!settings.browserTool) return null
+    const useBrowserUse = settings.browserBackend === 'browser-use'
+    if (useBrowserUse && !browserUseCommand) return null
     return {
-      name: 'chrome',
+      name: useBrowserUse ? 'browser_use' : 'chrome',
       command: process.execPath,
       args: [
         chromeMcpScript,
         '--state', paths.chromeState,
         '--profile', paths.chromeProfile,
         '--workspace', thread.workspace,
-        ...(getSettings().browserHeadless ? ['--headless'] : []),
+        ...(settings.browserHeadless ? ['--headless'] : []),
+        ...(useBrowserUse ? ['--browser-use', browserUseCommand] : []),
       ],
       env: [],
     }

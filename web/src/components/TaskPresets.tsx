@@ -178,12 +178,14 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
   const selected = Boolean(group)
   const effort = workflowEffort(preset.choice.effort ?? '', workflowLevels(server.catalog, model))
   const cli = model.startsWith('claude:')
+  const browserAvailable = server.settings.browserTool &&
+    (server.settings.browserBackend !== 'browser-use' || server.app.browserUse?.status === 'ready')
   const ready = selected && workflowEffortSupported(effort, workflowLevels(server.catalog, model))
   const start = async () => {
     if (!inspection || busy || preset.saving) return
     setBusy(true); setError('')
     try {
-      const payload = { source, kind, instruction, browser, permissionMode: cli ? 'danger-full-access' : permission, checkIds, command, expectedModel: model, expectedEffort: effort }
+      const payload = { source, kind, instruction, browser: browserAvailable && browser, permissionMode: cli ? 'danger-full-access' : permission, checkIds, command, expectedModel: model, expectedEffort: effort }
       const fingerprint = JSON.stringify(payload)
       if (fingerprint !== intent.current.fingerprint) intent.current = { fingerprint, id: messageId() }
       const result = await request<{ run: TaskPresetRun }>('preset.create', { ...payload, requestId: intent.current.id, authConfirmation: auth.confirmation })
@@ -204,7 +206,7 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
       <textarea aria-label="追加指示" rows={3} maxLength={8000} placeholder="追加指示（任意）" value={instruction} disabled={busy} onChange={(event) => setInstruction(event.target.value)} />
       <details><summary>実行設定</summary><div className="preset-options">
         {cli ? <p className="muted">Claude Codeはフルアクセスで実行します。</p> : <label>権限<select value={permission} disabled={busy} onChange={(event) => setPermission(event.target.value)}><option value="workspace-write">作業フォルダーへの書き込み</option><option value="danger-full-access">フルアクセス</option></select></label>}
-        <label className="preset-check"><input type="checkbox" checked={browser} disabled={busy} onChange={(event) => setBrowser(event.target.checked)} />ブラウザを使う</label>
+        <label className="preset-check"><input type="checkbox" checked={browserAvailable && browser} disabled={busy || !browserAvailable} onChange={(event) => setBrowser(event.target.checked)} />ブラウザを使う{!browserAvailable && '（設定 → 一般で確認）'}</label>
         {inspection?.checks.map((check) => <label className="preset-check" key={check.id}><input type="checkbox" checked={checkIds.includes(check.id)} disabled={busy}
           onChange={(event) => setChecks(event.target.checked ? [...checkIds, check.id] : checkIds.filter((id) => id !== check.id))} /><span>{check.id}<code>{check.command}</code></span></label>)}
         <p className="muted">選択した検証コマンドはPC上で実行します（担当のサンドボックス外）。</p>

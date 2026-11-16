@@ -17,6 +17,7 @@ import { WEB_SEARCH_PLUGIN, abPatch, chatWebPatch, homePatch, shippedPersona, te
 import { localRoute } from '../server/local-llm.js'
 import { TOOL_MODE_CONFIG, toolModeOption } from '../server/ptc.js'
 import { PLAN_INSTRUCTION } from '../server/thread-utils.js'
+import { createMcpServerList } from '../server/mcp-servers.js'
 import { ptcDataExamples } from '../server/ptc-guidance.js'
 
 // Goals start only from /goal (create_goal is not offered); the app puts the new
@@ -107,6 +108,50 @@ test('web-only ACP sends only search and fetch tools with a short prompt', { tim
   assert.deepEqual(request.tools.map((tool) => tool.function.name).sort(), ['web_fetch', 'web_search'])
   const system = request.messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n')
   assert.ok(system.length < 6000, 'system prompt should stay small')
+})
+
+test('ACP resumes the same conversation with only the newly selected browser MCP', { timeout: 120_000 }, async (t) => {
+  const f = await setup(t, 'workspace-write')
+  const settings = { browserTool: true, browserBackend: 'chrome' }
+  // Listing tools must work without launching Chrome or the Browser Use executable.
+  const mount = createMcpServerList({ paths: f.paths, getSettings: () => settings, getTeams: () => null, browserUseCommand: process.execPath })
+  const thread = { workspace: f.workspace, permissionMode: 'workspace-write' }
+  const { sessionId } = await f.runtime.newSession(f.workspace, mount(thread))
+  const prompt = text => f.runtime.prompt(sessionId, [{ type: 'text', text }])
+  const browserTools = () => f.requests.at(-1).tools.map(tool => tool.function.name)
+    .filter(name => /^mcp__(chrome|browser_use)__/.test(name))
+  await prompt('Browser switch conversation history')
+  assert.ok(browserTools().length > 2)
+  assert.ok(browserTools().every(name => name.startsWith('mcp__chrome__')))
+  assert.equal(await fs.stat(f.paths.chromeProfile).then(() => true, () => false), false)
+
+  for (const [backend, enabled, expected] of [
+    ['browser-use', true, ['mcp__browser_use__browser_action', 'mcp__browser_use__browser_screenshot']],
+    ['browser-use', false, []],
+    ['chrome', true, null],
+  ]) {
+    Object.assign(settings, { browserBackend: backend, browserTool: enabled })
+    await f.runtime.stop()
+    await f.runtime.start()
+    await f.runtime.resumeSession(sessionId, f.workspace, mount(thread))
+    await f.runtime.setOption(sessionId, TOOL_MODE_CONFIG, 'native')
+    await prompt('Continue the same conversation')
+    if (expected) assert.deepEqual(browserTools().sort(), expected)
+    else {
+      assert.ok(browserTools().length > 2)
+      assert.ok(browserTools().every(name => name.startsWith('mcp__chrome__')))
+    }
+    assert.match(JSON.stringify(f.requests.at(-1).messages), /Browser switch conversation history/)
+    assert.doesNotMatch(JSON.stringify(f.requests.at(-1).tools), /browser_login|browser_exec/)
+
+    await f.runtime.setOption(sessionId, TOOL_MODE_CONFIG, 'ptc')
+    await prompt('Continue with PTC')
+    const request = JSON.stringify(f.requests.at(-1))
+    if (enabled && backend === 'browser-use') assert.match(request, /mcp__browser_use__browser_action/)
+    else assert.doesNotMatch(request, /mcp__browser_use__/)
+    if (enabled && backend === 'chrome') assert.match(request, /mcp__chrome__list_pages/)
+    else assert.doesNotMatch(request, /mcp__chrome__/)
+  }
 })
 
 test('chat-web thread overrides saved PTC selection and sends only web tools', { timeout: 120_000 }, async (t) => {

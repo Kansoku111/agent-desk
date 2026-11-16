@@ -462,6 +462,7 @@ export interface Settings extends UsageDisplay {
   /** Picker visibility keyed by ACP model value; missing entries are visible. */
   modelVisibility: Record<string, boolean>
   browserTool: boolean
+  browserBackend: 'chrome' | 'browser-use'
   browserHeadless: boolean
   desktopTool: boolean
   imageTool: boolean
@@ -641,9 +642,12 @@ export type LoginState =
 
 export interface AppState {
   /** `remote`: this page is a phone using remote access, not a window on the PC. */
-  app: { version: string; dshVersion: string; platform: string; dataDir: string; myPc: string; uiBuild: string; remote: boolean
+  app: {
+    version: string; dshVersion: string; platform: string; dataDir: string; myPc: string; uiBuild: string; remote: boolean
+    browserUse?: { status: 'ready' | 'missing' | 'unsupported'; installCommand: string }
     /** Claude Code has recorded the user's consent to Code Mode. */
-    codeModeConsented?: boolean }
+    codeModeConsented?: boolean
+  }
   settings: Settings
   accounts: Accounts
   catalog: Catalog
