@@ -74,6 +74,7 @@ SIWC uses a local 127.0.0.1 callback; cancel and retry if it does not complete. 
 - [使用量の表示](docs/usage.md): usage and cost display
 - [変更を戻す](docs/restore.md): restoring the workspace
 - [更新](docs/updating.md): the in-app update of Agent Desk itself, and the steps an AI agent follows to update dsh and Codex
+- [dsh への読み込み時フック](docs/dsh-hooks.md): the load hooks that change dsh's behavior, and how to fix them when a dsh update no longer matches
 - [仕組みとデータの保存場所](docs/architecture.md): architecture and where data is stored
 - [既知の制約](docs/known-issues.md): known limitations
 - [開発](docs/development.md): development commands and main files

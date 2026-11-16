@@ -102,6 +102,7 @@ npm start
 - [使用量の表示](docs/usage.md): 概算料金と Claude の請求額
 - [変更を戻す](docs/restore.md): ワークスペースの巻き戻し
 - [更新](docs/updating.md): Agent Desk 本体の更新ボタンと、dsh・Codex を AI に任せて更新する手順
+- [dsh への読み込み時フック](docs/dsh-hooks.md): dsh の挙動を変えているフックの一覧と、dsh の更新で合わなくなったときの直し方
 - [仕組みとデータの保存場所](docs/architecture.md): 構成と保存先
 - [既知の制約](docs/known-issues.md): 現在の制約
 - [開発](docs/development.md): 開発コマンドと主なファイルの役割

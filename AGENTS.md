@@ -8,7 +8,7 @@ dsh（ACP）・Codex app-server・Claude Code を扱うローカルアプリ。`
 - `npm test` は全テスト、`npm run typecheck` は画面側の型検査、`npm run build` は画面のビルド。変更に応じて実行する。領域別テストと画面フィクスチャは `docs/development.md`。
 - 検証用にアプリを起動するときは `AGENT_DESK_HOME` に本番と別の一時フォルダを指定する。同じデータフォルダを使うと、実行中の旧サーバーを引き継ぎ・停止することがある。
 - 動作確認先が古いサーバーのことがある。ローカルの `/api/ping` の `codeStamp` を、対象作業ツリーで `node --input-type=module -e "import { codeStamp } from './server/code-stamp.js'; console.log(codeStamp())"` を実行した結果と照合する。この指紋はサーバー・共有コード、依存関係のロック情報、ビルド済みUIの更新時刻に基づき、未ビルドの `web/` ソースや全ファイルの内容を追跡するものではない。
-- 依存パッケージのソースを直接書き換えない。dsh の挙動変更には既存の読み込み時フックを使い、新しいフックは `server/dsh-compatibility.js` の更新時互換性検査にも含める。dsh・同梱 Codex の更新は `docs/updating.md` に従う。稼働中の本体で `npm ci` を実行しない。
+- 依存パッケージのソースを直接書き換えない。dsh の挙動変更には既存の読み込み時フックを使い、新しいフックは `server/dsh-compatibility.js` の更新時互換性検査にも含める（一覧と保守の手順は `docs/dsh-hooks.md`）。dsh・同梱 Codex の更新は `docs/updating.md` に従う。稼働中の本体で `npm ci` を実行しない。
 - `recovery/` がある環境では、退避データなので通常の検索・編集対象に含めない。
 
 ## 互換性とデータ
