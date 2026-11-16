@@ -470,8 +470,6 @@ test('team PTC validates selections and stays off for legacy teams even when new
   assert.throws(() => mergeTeamConfig({}, { toolMode: 'other' }), /不明/)
   const f = await setup(t, { toolMode: 'ptc' })
   await f.tool('spawn', { title: 'Claude stays native', task: 'bounded task', tier: 'low', provider: 'claude' })
-  f.terminals.set(f.leader, { activity: 'running' })
-  assert.throws(() => f.manager.updateConfig(f.team.id, { toolMode: 'native' }), /実行中/)
   assert.equal('toolMode' in f.agents.calls.find((call) => call[0] === 'create')[1], false)
   await f.manager.stop()
   const saved = JSON.parse(await fs.readFile(f.manager.file, 'utf8'))
@@ -481,6 +479,32 @@ test('team PTC validates selections and stays off for legacy teams even when new
     terminals: f.terminals, agents: f.agents, catalog: CATALOG, getSettings: () => ({ toolMode: 'ptc' }), apiUrl: () => '' }).load()
   t.after(() => restored.stop())
   assert.equal(restored.teams.get(f.team.id).config.toolMode, 'native')
+})
+
+test('Claude Code work does not lock TM PTC for dsh children', async (t) => {
+  const { manager, team, leader, terminals, threads, agents, tool } = await setup(t, { toolMode: 'native' })
+  assert.equal(team.leaderKind, 'terminal')
+  terminals.set(leader, { activity: 'running' })
+  assert.equal(manager.summary(team).toolModeBusy, false)
+  await tool('spawn', { title: 'Claude child', task: 'bounded task', tier: 'low', provider: 'claude' })
+  assert.equal(agents.running(team.children[0].taskId), true)
+  assert.equal(manager.updateConfig(team.id, { toolMode: 'ptc' }).team.config.toolMode, 'ptc')
+
+  await tool('spawn', { title: 'dsh child', task: 'bounded task', tier: 'low', provider: 'gpt' })
+  const child = team.children[1]
+  const thread = threads.threads.get(child.taskId)
+  assert.equal(thread.toolMode, 'ptc')
+  assert.equal(manager.summary(team).toolModeBusy, true)
+  assert.throws(() => manager.updateConfig(team.id, { toolMode: 'native' }), /実行中/)
+  threads.finish(thread.id, 'ready for review')
+  assert.equal(manager.summary(team).toolModeBusy, false)
+  assert.equal(manager.updateConfig(team.id, { toolMode: 'native' }).team.config.toolMode, 'native')
+  assert.equal(threads.teamToolMode(thread), 'native', 'the existing dsh child uses the new mode on its next turn')
+
+  terminals.set(leader, { activity: 'idle' })
+  assert.equal(manager.summary(team).delivery, 'delivering')
+  assert.equal(manager.summary(team).toolModeBusy, true)
+  assert.throws(() => manager.updateConfig(team.id, { toolMode: 'ptc' }), /実行中/)
 })
 
 const exTask = { title: 'implement', task: 'do the bounded work', criteria: 'the test passes without unrelated changes', checks: [], tier: 'low', provider: 'gpt' }

@@ -683,12 +683,14 @@ export class TeamManager extends EventEmitter {
   isExecution(threadId) { return Boolean(this.#byTask(threadId)?.team.execution) }
 
   toolModeBusy(team) {
+    // TM applies PTC only to dsh turns. eco also locks settings during its work and verification cycle.
     const leaderBusy = team.leaderKind === 'thread'
       ? this.threads.threads.get(team.leaderId)?.status === 'running'
-      : team.leaderKind === 'codex' ? this.codex?.running(team.leaderId)
-        : this.terminals.status(team.leaderId)?.activity === 'running'
+      : team.execution && (team.leaderKind === 'codex' ? this.codex?.running(team.leaderId)
+        : this.terminals.status(team.leaderId)?.activity === 'running')
     return Boolean(leaderBusy || this.delivering.has(team.id)
-      || team.children.some((child) => ['working', 'verifying'].includes(child.execution?.phase) || (child.taskId ? this.#childBusy(child) : !child.closed)))
+      || team.children.some((child) => (team.execution || child.kind === 'thread')
+        && (['working', 'verifying'].includes(child.execution?.phase) || (child.taskId ? this.#childBusy(child) : !child.closed))))
   }
 
   #childBusy(child) {
