@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-11-16
+
+### Added
+
+- Browser Use as an optional browser backend. Settings → General → Browser chooses between Chrome DevTools (still the default) and Browser Use 1.0.0. Browser Use is not bundled: install it with `uv tool install browser-use==1.0.0` and restart Agent Desk. Until it is found, the setting shows that install command and cannot be selected. Both backends use the same Agent Desk Chrome profile, and Browser Use gets only the app's browser actions (tabs, navigation, reading, clicking, filling, keys, scrolling, screenshots). The choice applies to dsh tasks and delegated task presets.
+
 ### Changed
 
+- A team's PTC switch in TM now locks only while its dsh work runs: a Claude Code leader or Claude Code children no longer keep it locked. eco keeps the lock through its work and verification cycle.
+- TM leader instructions start children in parallel only where their write scopes are truly separate. Shared entry points, config, styles, lockfiles and generated output stay with one child or run in sequence. The leader checks the combined result once before accepting it, and children never revert or stage changes they did not make.
 - With two or more fixed-model subagents chosen, the plain `subagent` (the task's own model) is now used only on request, as with one; a parent of none of the chosen families uses one of the chosen tools instead.
 - Goals now start only from the `/goal` command. dsh's `create_goal` tool is no longer offered to the model, which used to set a goal for ordinary requests on its own; on a nine-minute lab task that doubled time and cost against Codex. Reading, completing, pausing and resuming a goal are unchanged.
 - Add the optional additional-instruction field to the independent review start dialog, as in “子に委託”. The text goes to the parent model that writes the reviewer's brief, as the user's top-priority instruction, so you can say which part to consult on or review.
