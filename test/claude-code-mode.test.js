@@ -75,10 +75,17 @@ test('an older task is not switched into Code Mode when the setting is turned on
   assert.equal(pty.spawned.at(-1).options.env[CODE_MODE_ENV], undefined)
 })
 
-test('a team leader never starts in Code Mode', async () => {
-  const { manager, workspace, pty } = await setup(() => true, { launch: () => ({ args: [] }), preflight: () => null })
+test('a team leader created while Code Mode is on starts with it and keeps it after the setting is off', async () => {
+  let on = true
+  const { manager, workspace, pty } = await setup(() => on, { launch: () => ({ args: [] }), preflight: () => null })
   const record = await manager.create({ workspace, team: { id: 'team-1', role: 'leader' } })
-  assert.equal(manager.records.get(record.id).codeMode, undefined)
+  assert.equal(manager.records.get(record.id).codeMode, true)
+  assert.equal(pty.spawned.at(-1).options.env[CODE_MODE_ENV], '1')
+  on = false
+  await manager.configure(record.id, null, { model: 'haiku', effort: 'low' })
+  assert.equal(pty.spawned.at(-1).options.env[CODE_MODE_ENV], '1')
+  const later = await manager.create({ workspace, team: { id: 'team-2', role: 'leader' } })
+  assert.equal(manager.records.get(later.id).codeMode, undefined)
   assert.equal(pty.spawned.at(-1).options.env[CODE_MODE_ENV], undefined)
 })
 

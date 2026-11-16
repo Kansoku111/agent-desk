@@ -265,8 +265,10 @@ export class TerminalManager extends EventEmitter {
       createdAt: now, updatedAt: now, archived: false,
       model: model === undefined ? this.defaults.model : model, effort: effort === undefined ? this.defaults.effort : effort,
       ...(team ? { team } : {}),
-      // A team's leader is excluded: it runs unattended with bypassed permissions.
-      ...(!team && this.codeMode() ? { codeMode: true } : {}),
+      // A team's leader (TM, eco) is included: it runs in this interactive terminal too, and Claude Code applies
+      // its hooks, deny rules and --disallowedTools to the calls inside REPL. Headless children and AB run
+      // `claude -p`, where Claude Code itself refuses Code Mode ("only works in the interactive terminal").
+      ...(this.codeMode() ? { codeMode: true } : {}),
       ...(usageFallbackFrom ? { usageFallbackFrom, ...(usageFallbackPending ? { usageFallbackPending: true } : {}) } : {}),
     }
     this.records.set(record.id, record)

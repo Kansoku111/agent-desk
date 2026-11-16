@@ -156,7 +156,7 @@ export function GeneralSettings() {
       <div className="setting">
         <div>
           <h3>Claude Code の Code Mode（実験）</h3>
-          <p className="muted">新しい CL タスクから、ツール呼び出しを JavaScript にまとめて実行します。</p>
+          <p className="muted">新しい CL タスクと TM・eco の Claude Code リーダーから、ツール呼び出しを JavaScript にまとめて実行します。</p>
           {settings.claudeCodeMode === true && codeModeConsented === false && (
             <p className="muted" id="code-mode-consent">
               Claude Code の同意が未完了のため、通常どおり起動します。<code>CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1</code> を付けて claude を一度起動し、確認画面で Yes を選んでください。

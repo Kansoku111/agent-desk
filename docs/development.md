@@ -51,7 +51,7 @@ Skillsのお気に入りは同じフィクスチャサーバーの `skill-favori
 
 ## Claude Code の質問カード
 
-Code Mode の設定と起動は `node --test test/claude-code-mode.test.js` で検証します。既定オフ、タスクへの固定と再起動での維持、既存タスクとチームのリーダーの除外、同意判定を模擬PTYで確認し、実モデルは使いません。
+Code Mode の設定と起動は `node --test test/claude-code-mode.test.js` で検証します。既定オフ、タスクへの固定と再起動での維持、既存タスクの除外、チームのリーダーへの適用、同意判定を模擬PTYで確認し、実モデルは使いません。
 
 回帰確認は `node --test test/terminals.test.js test/terminal-dialog-ui.test.js test/rpc-handlers-terminals.test.js test/terminal-send-regressions.test.js test/terminal-input-delivery.test.js test/claude-login-ui.test.js` です。模擬PTYと実コンポーネントで自由入力・改行・明示的確定・複数選択用キー・古い質問・二重操作・制御文字の拒否・失敗時の入力保持を検査します。ブラウザ検証は `node test/fixtures/serve-ab-ui.mjs` のURLを `terminal-dialog-ui.html` に替え、DevToolsで `await terminalDialogTest.run()` を実行します。375px幅でも確認でき、実モデルや本番データは使いません。実IMEの変換や全CLIバージョンでの動作を保証する検証ではありません。
 
