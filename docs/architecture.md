@@ -11,7 +11,7 @@
 ```
 
 - **サーバー（`server/`）:** `127.0.0.1` で待ち受けます。起動ごとのトークンと Origin の検査で、他の Web ページからの接続を拒否します。スマホからの接続をオンにしたときだけ、この PC の Tailscale のアドレスでも待ち受けます（`server/remote.js`）。
-- **エンジン:** dshをAgent Client Protocolのモードで子プロセスとして起動し、通常の権限モードごとにプロセスを分けます。セッションに保存された権限イベントは再開先の既定権限より優先されるため、再開時にアプリが明示的に反映します。
+- **エンジン:** dshをAgent Client Protocolのモードで子プロセスとして起動し、通常の権限モードごとにプロセスを分けます。プロセスは最初に使うときに起動しますが、既定の権限モード（`defaultPermissionMode`）の分だけはアプリの起動時と実行環境の再起動後に先に起動し、最初のタスクが起動を待たないようにします。セッションに保存された権限イベントは再開先の既定権限より優先されるため、再開時にアプリが明示的に反映します。
 - **Planの指示付加:** 通常の相談を軽く切り替えられるよう、Planは送信するメッセージの末尾にそのメッセージだけを対象とした相談指示を付ける方式です。ツールを制限する強制方式は採用せず、PTC・権限・MCP・セッションを維持します。`server/thread-utils.js` の `PLAN_INSTRUCTION` を送信直前に付加し、入力原文と `plan` フラグは別に保存するため、再送時に指示が重複しません。初回送信・予約・割り込みに共通です。旧強制方式の `sessionPlan: true/false` があるタスクだけ、一度通常環境で同じIDを再開します。`server/session-policy-plugin.js` が `sandbox/mode` を復元・永続化し、ACP拡張 `agent_desk_session_policy` で通常権限を確認後、旧フラグを削除します。この移行に失敗したときは履歴を新規セッションへ置き換えず停止します。以前の方式で既に要約された文脈は復元しません。
 - **モデル設定:** dsh のホーム設定に経路を書き込みます。`openai-codex` は保存済みモデル選択との互換性のための内部キーで、実際の GPT API は `openai-responses`、送信先は `https://api.openai.com/v1` です。専用の資格情報参照とリクエストhookが、Agent Deskの公式SIWC tokenだけを送信直前に注入・排他更新します。通信は `server/siwc-socket.js` がセッションごとのWebSocketで行い、上流へはHTTP時と同じSSE形式の応答を返します（判断の記録は [GPT消費の見直し](gpt-efficiency.md#siwcのwebsocket通信2026-11-06)）。旧Codex grantは認証に使いません。`anthropic` は従来のAPIキー経路です。
 - **Codex（GP）:** `server/codex-runner.js` が公式app-serverの会話・ターン・承認を管理し、通知を共通のTurnへ変換します。dshのThreadManagerはACP・専用権限・使用量ログに依存するため全面的な多エンジン化はせず、専用Runnerをワークフロー境界で接続しました。端末画面の解析ではなく公式JSON-RPCを使い、表示部品だけを再利用します。[保存と対応範囲](codex.md)。

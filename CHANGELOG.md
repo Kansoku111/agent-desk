@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- アプリの起動時と実行環境の再起動後に、既定の権限モードの dsh を先に起動します。再起動後の最初のタスクが dsh の起動を待たなくなります（CPU が混んでいると 30 秒以上かかっていました）。
+
 ## [0.1.16] - 2026-11-16
 
 ### Added

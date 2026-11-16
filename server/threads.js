@@ -1638,6 +1638,16 @@ export class ThreadManager extends EventEmitter {
     await runtime.closeSession(created.sessionId).catch(() => {})
   }
 
+  /**
+   * Starts a mode's dsh before its first task. A task that finds its runtime
+   * stopped waits for the whole process start before its first request; on a
+   * busy machine that was over half a minute.
+   */
+  async warmRuntime(mode) {
+    await this.pool.get(mode)
+    this.emit('runtime', this.pool.status())
+  }
+
   get busy() {
     return this.active.size > 0 || this.restoring.size > 0 || this.pendingFallbacks.size > 0
   }

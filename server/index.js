@@ -821,6 +821,14 @@ async function restartRuntimesWhenIdle() {
   broadcast('runtime', { runtime: pool.status() })
   broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
   if (catalog.stale || await commandCodeNeedsWarm()) void warmCatalogAndReport('model catalog refresh')
+  warmDefaultRuntime()
+}
+
+// New tasks start in the default permission mode, so its dsh is the one the
+// next task most likely needs. The other modes still start on first use.
+function warmDefaultRuntime() {
+  if (shuttingDown || pool.paused) return
+  threads.warmRuntime(settings.defaultPermissionMode).catch((error) => log('runtime warm-up failed:', error.message.split('\n')[0]))
 }
 
 // A changed child harness touches only the children's layer: recycle the team
@@ -1245,8 +1253,10 @@ void refreshProviderModels()
 providerModelsTimer = setInterval(() => void refreshProviderModels(), 6 * 60 * 60 * 1000)
 providerModelsTimer.unref()
 
-// Boot the default runtime early and learn the model list in the background.
+// Learn the model list in the background, and start the default mode's dsh
+// so the first task does not wait for it.
 void warmCatalogAndReport('model catalog warm-up')
+warmDefaultRuntime()
 
 updates.start()
 modelUpdater.start()
