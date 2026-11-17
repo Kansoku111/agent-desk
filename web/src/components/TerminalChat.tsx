@@ -343,7 +343,9 @@ export function TerminalChat({ terminal, turns, omitted, loaded, error, onShowSc
           {!loaded && !error && <div className="loading-turns"><Loader2 size={14} className="spin" /> 読み込み中…</div>}
           {error && !loaded && <div className="loading-turns">{error}</div>}
           {loaded && omitted > 0 && <div className="loading-turns">これより前の {omitted} 件のやり取りは表示していません</div>}
-          {loaded && shown.length === 0 && <div className="loading-turns">まだ会話がありません。下の欄からメッセージを送ってください。</div>}
+          {loaded && shown.length === 0 && <div className="loading-turns">
+            まだ会話がありません。{terminal.state === 'running' && !terminal.workspaceTrustRequired && '下の欄からメッセージを送ってください。'}
+          </div>}
           {shown.map((turn, index) => (
             <TurnView key={turn.id} turn={turn} workspace={terminal.workspace} threadId={terminal.id} threadBusy={false} undoable={false}
               onClaudeLogin={index === shown.length - 1 && terminal.state === 'running' ? onShowScreen : undefined}

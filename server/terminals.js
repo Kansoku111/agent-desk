@@ -57,6 +57,7 @@ const BACKGROUND_STALE_MS = 6 * 60 * 60 * 1000
 /** Bracketed paste's start and end, which a pasted message must not contain. */
 const PASTE_MARKERS = /\x1b\[20[01]~/g
 const TRACKED_MODES = [25, 1004, 1005, 1006, 1015]
+const WORKSPACE_TRUST_REQUIRED = 'ターミナルで作業フォルダーの信頼確認に回答してください。'
 export class TerminalManager extends EventEmitter {
   /**
    * @param {object} options
@@ -176,6 +177,7 @@ export class TerminalManager extends EventEmitter {
       // What each of them is (a command, an agent type) and since when.
       backgroundWork: live?.alive ? [...live.background.values()].map(({ label, since }) => ({ label, since })) : [],
       exitCode: live?.exitCode ?? null,
+      ...(live?.workspaceTrustRequired ? { workspaceTrustRequired: true } : {}),
       // Chosen in Agent Desk (null: Claude Code's default), and what Claude Code reports using.
       model: record.model ?? null,
       effort: record.effort ?? null,
@@ -561,7 +563,19 @@ export class TerminalManager extends EventEmitter {
     }
     this.live.set(record.id, live)
     // Output goes out once the mirror has parsed it, so a new viewer's screen and the stream line up.
-    proc.onData((data) => term.write(data, () => this.#broadcast(record.id, { event: 'termData', terminalId: record.id, data })))
+    proc.onData((data) => term.write(data, () => {
+      this.#broadcast(record.id, { event: 'termData', terminalId: record.id, data })
+      // The folder trust dialog runs before SessionStart, with no permission hook.
+      // Read the rendered screen: Claude Code may split the labels across PTY writes or wrap them.
+      if (this.live.get(record.id) === live && live.sessionAt === null && !live.workspaceTrustRequired) {
+        const screen = this.#screenLines(live).join('').replace(/\s/g, '')
+        if ((screen.includes('Quicksafetycheck:Isthisaproject') && screen.includes('Yes,Itrustthisfolder'))
+          || screen.includes("ClaudeCodedidn'tstartbecausethisfolderisn'ttrusted.")) {
+          live.workspaceTrustRequired = true
+          this.#changed(record)
+        }
+      }
+    }))
     proc.onExit(({ exitCode }) => {
       if (this.live.get(record.id) !== live) return
       live.alive = false
@@ -708,12 +722,12 @@ export class TerminalManager extends EventEmitter {
    */
   async #whenReady(id) {
     const live = this.live.get(id)
-    if (!live?.alive) throw new Error('Claude Code が動いていません')
-    while (!this.status(id).ready) {
+    while (true) {
+      if (live?.workspaceTrustRequired) throw new Error(WORKSPACE_TRUST_REQUIRED)
+      if (!live?.alive || this.live.get(id) !== live) throw new Error('Claude Code が動いていません')
+      if (this.status(id).ready) return live
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
-      if (!live.alive || this.live.get(id) !== live) throw new Error('Claude Code が動いていません')
     }
-    return live
   }
 
   /** A message typed outside the terminal screen: pasted (keeping its line breaks) and sent with Enter. */
@@ -740,6 +754,7 @@ export class TerminalManager extends EventEmitter {
       let delivered = false
       try {
         if (!current()) throw new Error('Claude Code が動いていません')
+        if (live.workspaceTrustRequired) throw new Error(WORKSPACE_TRUST_REQUIRED)
         guard()
         if (live.sendBlocked) throw new Error('前回の送信状態が不明です。再起動してから送信してください。')
         this.executionGuard?.(record, context)
@@ -752,6 +767,7 @@ export class TerminalManager extends EventEmitter {
         const wait = SEND_ENTER_MS + Math.min(text.length / 10, SEND_ENTER_MAX_MS)
         await new Promise((resolve) => setTimeout(resolve, wait))
         if (!current()) throw new Error('Claude Code が動いていません')
+        if (live.workspaceTrustRequired) throw new Error(WORKSPACE_TRUST_REQUIRED)
         guard()
         live.proc.write('\r')
         delivered = true
@@ -763,7 +779,7 @@ export class TerminalManager extends EventEmitter {
         for (let retries = SEND_RETRIES; retries > 0; retries--) {
           if (live.activity !== 'idle') break
           await new Promise((resolve) => setTimeout(resolve, SEND_RETRY_MS))
-          if (!current() || live.activity !== 'idle') break
+          if (!current() || live.workspaceTrustRequired || live.activity !== 'idle') break
           try {
             guard()
             live.proc.write('\r')
@@ -794,7 +810,7 @@ export class TerminalManager extends EventEmitter {
     if (!record) return null
     const live = this.live.get(id)
     const now = Date.now()
-    const ready = Boolean(live?.alive)
+    const ready = Boolean(live?.alive && !live.workspaceTrustRequired)
       && (live.sessionAt !== null ? now - live.sessionAt >= READY_DELAY_MS : now - live.startedAt >= READY_FALLBACK_MS)
     return {
       state: live ? (live.alive ? 'running' : 'exited') : 'stopped',
@@ -810,7 +826,7 @@ export class TerminalManager extends EventEmitter {
     if (this.#record(id).fallbackTo) throw new Error('このタスクは切り替え済みです。切り替え先で続けてください')
     if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
     const live = this.live.get(id)
-    if (live?.alive) live.proc.write('\r')
+    if (live?.alive && !live.workspaceTrustRequired) live.proc.write('\r')
   }
 
   /** The screen as lines of text, a line Claude Code's width wrapped joined back up. */
@@ -1125,7 +1141,11 @@ export class TerminalManager extends EventEmitter {
     const reported = (effect.model && effect.model !== live.model) || (effect.effort && effect.effort !== live.effort)
     if (effect.model) live.model = effect.model
     if (effect.effort) live.effort = effect.effort
-    if (input.hook_event_name === 'SessionStart') live.sessionAt = Date.now()
+    const clearedTrust = event === 'SessionStart' && live.workspaceTrustRequired
+    if (event === 'SessionStart') {
+      live.sessionAt = Date.now()
+      live.workspaceTrustRequired = false
+    }
     if (event === 'UserPromptSubmit') {
       if (this.fallbacks.has(id)) this.fallbacks.get(id).cancelled = true
       const routes = this.usageFallbackRoutes()
@@ -1142,7 +1162,7 @@ export class TerminalManager extends EventEmitter {
     const backgroundChanged = effect.background ? this.#trackBackground(live, effect.background) : false
     if (save) void this.#save()
     // The team must distinguish a submitted report from an unrelated prompt before acknowledging delivery.
-    if (save || reported || backgroundChanged || before !== live.activity) this.#changed(record, event === 'UserPromptSubmit' ? input : undefined)
+    if (save || reported || backgroundChanged || clearedTrust || before !== live.activity) this.#changed(record, event === 'UserPromptSubmit' ? input : undefined)
     if (live.activity === 'approval' && before !== 'approval') this.emit('approval-needed', { terminalId: id, title: record.title })
     if (effect.finished) void this.#refreshUsage(id)
     if (effect.finished && before !== 'idle' && !record.usageFallbackPending) this.emit('turn-finished', { terminalId: id, title: record.title, failed: Boolean(effect.failed) })

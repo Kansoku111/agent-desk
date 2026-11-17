@@ -240,11 +240,12 @@ function wheel(term: Terminal, terminalId: string, up: boolean) {
  * Claude Code while it works and the field is empty. The keys a phone's keyboard
  * does not have (`showKeys`) are for what the chat cannot answer.
  */
-function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
+function TouchKeys({ terminalId, term, working, showKeys, showComposer, onSent }: {
   terminalId: string
   term: Terminal | null
   working: boolean
   showKeys: boolean
+  showComposer: boolean
   onSent: () => void
 }) {
   const [text, setText] = useDraft(`terminal:${terminalId}`)
@@ -309,6 +310,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
       }
     }
   }
+  if (!showKeys && !showComposer) return null
   return (
     <div className="terminal-touch">
       {showKeys && (
@@ -329,7 +331,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
           ))}
         </div>
       )}
-      {(attachments.length > 0 || uploading > 0) && (
+      {showComposer && (attachments.length > 0 || uploading > 0) && (
         <div className="attachments terminal-attachments">
           {attachments.map((attachment) => (
             <div key={attachment.file} className={`attachment ${isImageAttachment(attachment) ? '' : 'file'}`} title={attachment.name}>
@@ -349,7 +351,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
           {uploading > 0 && <div className="attachment loading"><Loader2 size={16} className="spin" /></div>}
         </div>
       )}
-      <div
+      {showComposer && <div
         className="terminal-input"
         onDragOver={(event) => {
           if (event.dataTransfer.types.includes('Files')) event.preventDefault()
@@ -411,7 +413,7 @@ function TouchKeys({ terminalId, term, working, showKeys, onSent }: {
               <Send size={16} />
             </button>
           )}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -429,6 +431,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
   const touch = isTouch()
   const [mode, setMode] = useState<Mode>(initialMode)
   const screen = mode === 'screen'
+  const trustRequired = Boolean(terminal?.workspaceTrustRequired && !terminal.fallbackTo)
   const [keysOpen, setKeysOpen] = useState(false)
   const chooseMode = (next: Mode) => {
     setMode(next)
@@ -699,6 +702,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
     const size = sizeRef.current() ?? (term ? { cols: term.cols, rows: term.rows } : undefined)
     const result = await act('terminal.restart', { terminalId, size })
     if (result) term?.focus()
+    return Boolean(result)
   }
 
   if (!terminal) return <div className="main-empty">タスクが見つかりません</div>
@@ -754,7 +758,17 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
                 onRestart={() => void restart()}
               />
             )}
-          {terminal.state === 'exited' && !terminal.fallbackTo && !(screen && error) && (
+          {trustRequired && !(screen && error) && (
+            <div className="terminal-note" role="status">
+              <span>{screen && terminal.state === 'running'
+                ? '信頼できるフォルダーなら「Yes, I trust this folder」を選んで Enter を押してください。'
+                : 'Claude Code を起動するには、作業フォルダーの信頼確認が必要です。'}</span>
+              {(terminal.state === 'exited' || !screen) && <button type="button" className="button" onClick={async () => {
+                if (terminal.state !== 'exited' || await restart()) setMode('screen')
+              }}>{terminal.state === 'exited' ? '再起動して確認' : 'ターミナルで確認'}</button>}
+            </div>
+          )}
+          {terminal.state === 'exited' && !terminal.fallbackTo && !trustRequired && !(screen && error) && (
             <div className="terminal-note">
               <span>Claude Code は終了しました{terminal.exitCode ? `（終了コード ${terminal.exitCode}）` : ''}</span>
               <button type="button" className="button" onClick={() => void restart()}><Play size={13} /> 会話を再開</button>
@@ -762,7 +776,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
           )}
           <div className="terminal-bar">
             {!terminal.fallbackTo && <TerminalModelPicker terminal={terminal} />}
-            {!screen && terminal.state === 'running' && (
+            {!screen && !trustRequired && terminal.state === 'running' && (
               <button type="button" className={`icon-button terminal-keys-toggle${keysOpen ? ' active' : ''}`} title="キーボードのキーを表示"
                 aria-label="キーボードのキーを表示" aria-pressed={keysOpen} onClick={() => setKeysOpen((open) => !open)}>
                 <Keyboard size={15} />
@@ -775,7 +789,8 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
               term={screen ? term : null}
               working={terminal.activity === 'running'}
               // The screen has no other way to be answered on a phone; the chat answers with buttons.
-              showKeys={screen || keysOpen}
+              showKeys={screen || (!trustRequired && keysOpen)}
+              showComposer={!trustRequired}
               onSent={conversation.poke}
             />
           )}

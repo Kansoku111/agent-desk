@@ -61,6 +61,7 @@ async function setup(t) {
     send: () => {},
     pty,
     findClaude: () => 'fake-claude',
+    preflight: async () => null,
     claudeHome: path.join(dir, 'claude'),
   }).load()
   t.after(async () => {
@@ -75,6 +76,61 @@ async function createReady(manager, workspace) {
   manager.live.get(terminal.id).sessionAt = Date.now() - 5000
   return terminal
 }
+
+test('a new team leader waits for explicit folder trust without losing its chat draft', async (t) => {
+  const { workspace, pty, manager } = await setup(t)
+  const terminal = await manager.create({ workspace, team: { id: 'team', role: 'leader' }, size: { cols: 48, rows: 20 } })
+  const proc = pty.spawned[0]
+  const client = {}
+  const live = manager.live.get(terminal.id)
+  const states = []
+  manager.on('terminal', (next) => states.push(next.workspaceTrustRequired ?? false))
+  let draft = '最初の依頼'
+  const failures = []
+  const sending = sendTerminalMessage({
+    send: (text) => manager.sendMessage(terminal.id, text),
+    read: () => draft,
+    clear: () => { draft = '' },
+    fail: (message) => failures.push(message),
+  }, draft)
+  proc.emit('Quick safety check: Is this a project you created or one you trust?\r\n\r\n❯ No, exit\r\n  Yes, I trust ')
+  proc.emit('this folder\r\n\r\nEnter to confirm · Esc to cancel')
+  await until(() => states.at(-1) === true)
+  live.startedAt -= 20_000 // The startup fallback must not treat the trust dialog as a composer.
+  assert.equal(manager.status(terminal.id).ready, false)
+  assert.equal(await sending, false)
+  assert.equal(draft, '最初の依頼')
+  assert.match(failures[0], /信頼確認/)
+  await assert.rejects(manager.insertPath(terminal.id, 'attachment.png'), /信頼確認/)
+  manager.pressEnter(terminal.id)
+  assert.deepEqual(proc.written, [])
+
+  // Only the user's explicit keys go through to Claude Code's own dialog.
+  assert.equal(manager.input(terminal.id, client, '\x1b[B'), true)
+  assert.equal(manager.input(terminal.id, client, '\r'), true)
+  assert.deepEqual(proc.written, ['\x1b[B', '\r'])
+  manager.hook(terminal.id, proc.options.env.AGENT_DESK_TERMINAL_SECRET, { hook_event_name: 'SessionStart', session_id: terminal.sessionId })
+  assert.deepEqual(states, [true, false])
+  live.sessionAt = Date.now() - 5000
+  live.activity = 'running'
+  await manager.sendMessage(terminal.id, draft)
+  assert.deepEqual(proc.written, ['\x1b[B', '\r', draft, '\r'])
+})
+
+test('a declined folder remains actionable after exit and can restart in the same task', async (t) => {
+  const { workspace, pty, manager } = await setup(t)
+  const terminal = await manager.create({ workspace })
+  const proc = pty.spawned[0]
+  proc.emit("Claude Code didn't start because this folder isn't trusted.\r\n")
+  proc.exit(1)
+  const { terminal: exited } = await manager.attach(terminal.id, {}, { cols: 100, rows: 30 })
+  assert.equal(exited.state, 'exited')
+  assert.equal(exited.workspaceTrustRequired, true)
+  const restarted = await manager.restart(terminal.id)
+  assert.equal(restarted.state, 'running')
+  assert.equal(restarted.id, terminal.id)
+  assert.equal(restarted.workspaceTrustRequired, undefined)
+})
 
 test('concurrent sends to one terminal serialize bodies and retries after each Enter', async (t) => {
   const { workspace, pty, manager } = await setup(t)
