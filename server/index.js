@@ -40,7 +40,7 @@ import { EquivalentPricing } from './equivalent-pricing.js'
 import { SiwcModelCatalog } from './siwc-models.js'
 import { ModelCatalogUpdater } from './model-updates.js'
 import { installedModels, OpenCodeGoModels } from './opencode-go-models.js'
-import { resetPricing, setCatalogPricing, setEquivalentPricing, setFastPricing } from './usage.js'
+import { loadPricing, resetPricing, setCatalogPricing, setEquivalentPricing, setFastPricing } from './usage.js'
 import { UsageHistory } from './usage-history.js'
 import { ClaudeCost } from './claude-cost.js'
 import { ChatGptUsage } from './chatgpt-usage.js'
@@ -467,8 +467,9 @@ async function applyFastMode() {
 await applyFastMode()
 
 /** Refresh after startup or sign-in; keep running tasks intact until they finish. */
-async function refreshCodexModels() {
+async function refreshCodexModels({ pricesChecked = false } = {}) {
   try {
+    const previousIds = new Set(codexLimits.availability.known)
     const changed = await codexLimits.refresh(credentials)
     // The result of the check (also "signed out") shows in settings.
     broadcast('modelUpdate', { modelUpdate: modelUpdateState() })
@@ -477,6 +478,12 @@ async function refreshCodexModels() {
     broadcast('fastModels', { fastModels: currentFastModels() })
     // The account's list can add models and retire others, as well as move the limits.
     await updateModelCatalog()
+    const addedIds = codexLimits.availability.known.filter(id => !previousIds.has(id))
+    if (!pricesChecked && settings.modelAutoUpdate !== false && addedIds.length) {
+      // Don't make models wait for the anonymous price registry before they can be used.
+      void loadPricing().then(pricing => equivalentPricing.refreshForModels(addedIds, pricing))
+        .catch(error => log('Codex equivalent prices:', error.message))
+    }
   } catch (error) {
     log('Codex model limits:', error.message)
   }
@@ -1030,7 +1037,8 @@ const handlers = {
   }),
   ...createModelHandlers({
     threads, catalog, catalogState, updates, modelUpdater, modelUpdateState,
-    refreshCodexModels, checkProviderModels,
+    refreshCodexModels: () => refreshCodexModels({ pricesChecked: true }), // The manual check already fetched prices.
+    checkProviderModels,
     checkEquivalentPricing: () => equivalentPricing.refresh({ force: true }),
   }),
   ...createTerminalHandlers({ paths, mutateSettings, terminals, teams, agents }),

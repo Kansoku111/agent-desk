@@ -54,10 +54,16 @@ export class EquivalentPricing {
     return this
   }
 
-  refresh({ force = false } = {}) {
+  /** A newly offered model can reach the account list between registry polls. */
+  refreshForModels(ids, pricing) {
+    if (!ids.some(id => isModelId(id) && !pricing.has('openai-codex/' + id))) return Promise.resolve(false)
+    return this.refresh({ force: true })
+  }
+
+  refresh({ force = false, maxAgeMs = MAX_AGE_MS } = {}) {
     if (this.stopped || !this.enabled()) return Promise.resolve(false)
     if (this.pending) return this.pending
-    if (!force && this.checkedAt !== null && this.now() - this.checkedAt < MAX_AGE_MS) return Promise.resolve(false)
+    if (!force && this.checkedAt !== null && this.now() - this.checkedAt < maxAgeMs) return Promise.resolve(false)
     const work = (async () => {
       try {
         const incoming = publicEquivalentRates(await this.registry.get({ force }))
@@ -85,11 +91,19 @@ export class EquivalentPricing {
   }
 
   start() {
-    const schedule = (delay) => {
-      this.timer = setTimeout(() => { void this.refresh(); schedule(MAX_AGE_MS) }, delay)
+    const schedule = (delay, startup = false) => {
+      this.timer = setTimeout(async () => {
+        // Disk rates are for offline use; don't let them postpone the startup check.
+        await this.refresh({ maxAgeMs: startup ? 0 : MAX_AGE_MS })
+        if (this.stopped) return
+        // The fetch completes after the timer fires, and a manual check can also
+        // move the expiry. A timer that fired early waits only until that expiry.
+        const remaining = this.checkedAt === null ? 0 : MAX_AGE_MS - (this.now() - this.checkedAt)
+        schedule(this.enabled() && remaining > 0 ? remaining : MAX_AGE_MS)
+      }, delay)
       this.timer.unref?.()
     }
-    schedule(FIRST_CHECK_MS)
+    schedule(FIRST_CHECK_MS, true)
   }
 
   async stop() {

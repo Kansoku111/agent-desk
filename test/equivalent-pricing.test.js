@@ -177,6 +177,65 @@ test('a price update cannot be lost while catalog files are being read', async (
   assert.equal((await loadPricing()).get('openai-codex/new-test').input, 8)
 })
 
+test('startup refreshes a recent cache that predates new GPT prices, then waits six hours from completion', async (t) => {
+  const interval = 6 * 60 * 60 * 1000
+  let now = 1_000, calls = 0
+  let current = body()
+  const { pricing: initial, registry, file } = await fixture(t, async () => { calls++; return Response.json(current) }, { now: () => now })
+  await initial.refresh()
+  now += 60 * 60 * 1000
+  current = body({
+    'gpt-new': { id: 'gpt-new', cost },
+    'gpt-6.2-sol': { id: 'gpt-6.2-sol', cost: { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5,
+      tiers: [{ input: 4, output: 15, cache_read: 0.2, cache_write: 5, tier: { type: 'context', size: 272000 } }],
+      context_over_200k: { input: 4, output: 15, cache_read: 0.2, cache_write: 5 } } },
+  })
+  // A new server starts with last-good disk rates but no in-memory registry.
+  const restarted = await new EquivalentPricing({ file, registry: new ModelRegistry({ fetchImpl: registry.fetchImpl, now: () => now }), now: () => now }).load()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => restarted.stop())
+  assert.equal(restarted.rates['openai-codex/gpt-6.2-sol'], undefined)
+  restarted.start()
+  t.mock.timers.tick(0)
+  assert.equal(calls, 2, 'even a recent saved cache is refreshed on startup')
+  now += 500 // Simulate a download finishing after its timer fired.
+  t.mock.timers.tick(500)
+  await restarted.pending
+  const pricing = new Map(Object.entries(restarted.rates))
+  near(scoreResponse(pricing, 'openai-codex/gpt-6.2-sol', { inputTokens: 272000, outputTokens: 1000 }, 1).points * 0.002, 0.554)
+  near(scoreResponse(pricing, 'openai-codex/gpt-6.2-sol', { inputTokens: 120000, cacheReadTokens: 152001, outputTokens: 1000 }, 1).points * 0.002, 0.5254002)
+  now += interval - 500
+  t.mock.timers.tick(interval - 500)
+  assert.equal(calls, 2, 'still fresh at six hours from timer start')
+  now += 500
+  t.mock.timers.tick(500)
+  assert.equal(calls, 3, 'download duration cannot make the next timer skip a cycle')
+  await restarted.pending
+})
+
+test('newly offered GPT ids without rates bypass the cache but priced ids and disabled updates do not', async (t) => {
+  let calls = 0, enabled = true, current = body()
+  const { pricing } = await fixture(t, async () => { calls++; return Response.json(current) }, { enabled: () => enabled })
+  await pricing.refresh()
+  const known = new Map(Object.entries(pricing.rates))
+  assert.equal(await pricing.refreshForModels(['gpt-new'], known), false)
+  assert.equal(calls, 1)
+  const id = 'gpt-6.2-astra', key = 'openai-codex/' + id
+  current = body({ [id]: { id, cost: { input: 8, output: 40, cache_read: 0.4, cache_write: 10,
+    tiers: [{ input: 16, output: 60, cache_read: 0.8, cache_write: 20, tier: { type: 'context', size: 272000 } }],
+    context_over_200k: { input: 16, output: 60, cache_read: 0.8, cache_write: 20 } } } })
+  enabled = false
+  assert.equal(await pricing.refreshForModels([id], known), false)
+  assert.equal(calls, 1)
+  enabled = true
+  assert.equal(await pricing.refreshForModels([id], known), true)
+  assert.equal(calls, 2)
+  const updated = new Map(Object.entries(pricing.rates))
+  near(scoreResponse(updated, key, { inputTokens: 120000, cacheReadTokens: 152001, outputTokens: 1000 }, 1).points * 0.002, 2.1016008)
+  assert.equal(await pricing.refreshForModels([id], updated), false)
+  assert.equal(calls, 2)
+})
+
 test('invalid saved prices cannot suppress a fresh lookup', async (t) => {
   let calls = 0
   const { pricing, file } = await fixture(t, async () => { calls++; return Response.json(body()) }, { now: () => 1000 })
