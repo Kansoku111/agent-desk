@@ -1330,49 +1330,6 @@ select:focus {
   width: 100%;
 }
 
-.home-path {
-  margin: 14px 0 0;
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text-subtle);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.suggestions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  width: 100%;
-  margin-top: 16px;
-}
-
-.suggestion {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-  text-align: left;
-}
-
-.suggestion svg {
-  flex: none;
-  margin-top: 2px;
-}
-
-.suggestion:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
 .onboarding {
   display: flex;
   align-items: center;
@@ -3445,10 +3402,6 @@ select:focus {
     z-index: 60;
     width: 90vw;
     box-shadow: var(--shadow-menu);
-  }
-
-  .suggestions {
-    grid-template-columns: 1fr;
   }
 
   .header-chip {
