@@ -5,6 +5,7 @@ import ts from 'typescript'
 import { teamConfig } from '../server/team-config.js'
 import * as workflowEffort from '../shared/workflow-effort.js'
 import * as usageFallback from '../shared/usage-fallback.js'
+import * as modelSelection from '../web/src/model-selection.ts'
 
 // Exercise the actual start form's callbacks without launching a model.
 const source = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
@@ -21,7 +22,7 @@ const groups = [
 ]
 const modules = {
   react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' }, 'lucide-react': {},
-  '../store': {}, '../model-selection': { isModelVisible: () => true }, '../subagent-routes': {},
+  '../store': {}, '../model-selection': { ...modelSelection, isModelVisible: () => true }, '../subagent-routes': {},
   '../util': { parseModel: (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }, pickableEfforts: (efforts) => efforts },
   './Modal': {}, './Popover': {}, './Pickers': { byNewest: () => 0 },
   './TerminalPickers': { claudeModels: () => [], claudeModelName: (_server, model) => model, claudeEfforts: () => ['low', 'high'] },
@@ -63,7 +64,7 @@ test('leader picker selects each provider and stores its own model and effort', 
   const h = harness({})
   for (const [provider, catalog, id] of [
     ['claudeApi', 'anthropic', 'claude-haiku-5-5'], ['deepseek', 'deepseek-official', 'deepseek-v4-flash'],
-    ['opencodeGo', 'opencode-go', 'glm-5.3'], ['openscale', 'openscale', 'deepseek/deepseek-v4.1-flash'], ['local', 'local-llm', 'org/model:8b'],
+    ['opencodeGo', 'opencode-go', 'glm-5.3'], ['local', 'local-llm', 'org/model:8b'],
   ]) {
     const value = JSON.stringify([catalog, id])
     h.field().onChange(value)
@@ -75,6 +76,8 @@ test('leader picker selects each provider and stores its own model and effort', 
     h.field().onChange(value)
     assert.equal(h.draft.dshLeader.effort, 'low')
   }
+  // The server still lists OpenScale in the groups, but the picker offers only the providers it knows.
+  assert.equal(h.field().groups.flatMap((group) => group.models).some((entry) => entry.value === JSON.stringify(['openscale', 'deepseek/deepseek-v4.1-flash'])), false)
   h.field().onChange('claude:haiku')
   assert.equal(h.draft.leaderProvider, 'claude')
   assert.deepEqual(h.draft.leader, { model: 'haiku', effort: null })
@@ -115,6 +118,7 @@ test('existing team keeps its fallback snapshot while child settings are saved',
   assert.equal(calls[0].name, 'team.update')
   assert.equal('leaderFallback' in calls[0].args.patch, false)
   assert.equal('leaderProvider' in calls[0].args.patch, false)
+  assert.equal('openscale' in calls[0].args.patch, false, 'a removed provider is not sent back')
   team.sharedFallbackPolicy = true
   team.usageFallbackRoutes = [{ model: target, effort: 'low' }, { model: current, effort: 'low' }]
   assert.equal(field().value, target)
@@ -165,4 +169,116 @@ test('a running team switches its leader before saving the other settings', asyn
   assert.equal(calls[1].args.authConfirmation, undefined, 'a confirmation authorizes one action')
   team.leaderKind = 'codex'
   assert.equal(nodes(render(), (node) => node.type?.name === 'TeamLeaderField').length, 0)
+})
+
+test('a saved OpenScale leader stays as chosen: marked retired and not switched to another route', () => {
+  const h = harness({ leaderProvider: 'openscale', dshLeader: { provider: 'openscale', model: 'deepseek/deepseek-v4.1-flash', effort: 'low' } })
+  assert.equal(h.draft.leaderProvider, 'openscale')
+  assert.equal(h.draft.dshLeader.provider, 'openscale')
+  assert.equal(h.field().value, JSON.stringify(['openscale', 'deepseek/deepseek-v4.1-flash']))
+  assert.ok(h.field().groups.flatMap((group) => group.models).some((entry) => entry.name === 'OpenScale / deepseek/deepseek-v4.1-flash（廃止）'))
+  assert.equal(nodes(h.tree(), (node) => node.props?.className === 'team-warning').length, 1)
+})
+
+test('a removed provider still on, a retired leader or a free-mode retired child blocks starting; turning the provider off unblocks it', () => {
+  const dialog = (agentTeams) => {
+    const slots = []
+    let cursor = 0
+    const app = { ...server, app: { myPc: 'PC' }, settings: { ...server.settings, agentTeams } }
+    const dependencies = { ...modules,
+      react: { useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], (value) => { slots[index] = typeof value === 'function' ? value(slots[index]) : value }] } },
+      '../store': { useStore: (select) => select({ server: app }), act: async () => ({ ok: true }), setState() {}, startTeam: async () => true },
+      '../team-auth-consent': { needsClaudeAuth: () => false },
+      '../util': { ...modules['../util'], workspaceLabel: () => 'フォルダ' },
+      '../../../shared/workflow-effort.js': workflowEffort,
+    }
+    const exports = {}
+    new Function('require', 'exports', outputText)((name) => dependencies[name], exports)
+    const render = () => { cursor = 0; return exports.TeamStartDialog({ workspace: 'C:/work' }) }
+    return {
+      start: () => nodes(render(), (node) => node.type === 'button' && node.props.children === '始める')[0].props,
+      turnOff: () => {
+        const panel = nodes(render(), (node) => node.type?.name === 'RetiredOn')[0]
+        nodes(panel.type(panel.props), (node) => node.type === 'button')[0].props.onClick()
+      },
+    }
+  }
+  const gptOn = { enabled: true, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } }
+  const gptLeader = { leaderProvider: 'gpt', gptLeader: { model: 'gpt-6-luna', effort: null }, gpt: gptOn }
+  assert.equal(dialog({ leaderProvider: 'openscale', dshLeader: { provider: 'openscale', model: 'deepseek/deepseek-v4.1-flash', effort: null }, gpt: gptOn }).start().disabled, true)
+  assert.equal(dialog(gptLeader).start().disabled, false)
+  // Tier mode does not use the free-mode list: a saved retired child neither blocks the start nor shows.
+  const retiredChild = [{ provider: 'openscale', model: 'z-ai/glm-5.3-flash', effort: null }]
+  // The start dialog takes its mode from the saved default mode.
+  assert.equal(dialog({ ...gptLeader, defaultModelMode: 'tiers', freeModels: retiredChild }).start().disabled, false)
+  assert.equal(dialog({ ...gptLeader, defaultModelMode: 'free', freeModels: retiredChild }).start().disabled, true)
+  // A removed provider that the saved settings still turn on blocks the start until the user turns it off.
+  const on = dialog({ ...gptLeader, retiredProviders: ['openscale'] })
+  assert.equal(on.start().disabled, true)
+  on.turnOff()
+  assert.equal(on.start().disabled, false)
+})
+
+/** A running team's settings dialog on a saved config, with the leader's thread on `leaderModel`. */
+function teamPanel(config, leaderModel, calls = []) {
+  const slots = []
+  let cursor = 0
+  const team = { id: 'team', leaderId: 'leader', leaderKind: 'thread', children: [], config }
+  const app = { ...server, catalog: { ...server.catalog, providers: {} }, settings: { ...server.settings, agentTeams: config }, threads: [{ id: 'leader', model: leaderModel, effort: 'high' }], terminals: [] }
+  const dependencies = { ...modules,
+    react: { useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], (value) => { slots[index] = typeof value === 'function' ? value(slots[index]) : value }] } },
+    '../store': { useStore: (select) => select({ server: app }), act: async (name, args) => { calls.push({ name, args }); return { ok: true } } },
+    '../team-auth-consent': { needsClaudeAuth: () => false },
+    '../../../shared/workflow-effort.js': workflowEffort,
+  }
+  const exports = {}
+  new Function('require', 'exports', outputText)((name) => dependencies[name], exports)
+  const render = () => { cursor = 0; return exports.TeamConfigDialog({ team, onClose() {} }) }
+  return {
+    render,
+    save: () => nodes(render(), (node) => node.type === 'button' && node.props.children === '保存')[0].props,
+    turnOff: () => {
+      const panel = nodes(render(), (node) => node.type?.name === 'RetiredOn')[0]
+      nodes(panel.type(panel.props), (node) => node.type === 'button')[0].props.onClick()
+    },
+  }
+}
+
+test('saving waits until the removed settings are cleared; tier-mode rows do not hold it back', () => {
+  const save = (config) => teamPanel(teamConfig(config), JSON.stringify(['openai-codex', 'gpt-6-luna'])).save()
+  const retired = [{ provider: 'openscale', model: 'z-ai/glm-5.3-flash', effort: null }]
+  assert.equal(save({ modelMode: 'free', freeModels: retired, gpt: { enabled: true } }).disabled, true)
+  assert.equal(save({ modelMode: 'tiers', freeModels: retired, gpt: { enabled: true } }).disabled, false)
+  assert.equal(save({ modelMode: 'free', freeModels: [{ provider: 'gpt', model: 'gpt-6-luna', effort: null }], gpt: { enabled: true } }).disabled, false)
+  assert.equal(save({ retiredProviders: ['openscale'], gpt: { enabled: true } }).disabled, true)
+})
+
+test('a running team on a removed leader can switch its leader to another model, and the field says so', async () => {
+  const calls = []
+  const openscale = JSON.stringify(['openscale', 'deepseek/deepseek-v4.1-flash'])
+  const gpt = JSON.stringify(['openai-codex', 'gpt-6-luna'])
+  const panel = teamPanel(teamConfig({ gpt: { enabled: true } }), openscale, calls)
+  // TeamLeaderField's picker sits inside the component: expand it to reach the model field and its warning.
+  const leaderSection = () => {
+    const element = nodes(panel.render(), (node) => node.type?.name === 'TeamLeaderField')[0]
+    return element.type(element.props)
+  }
+  const leader = () => nodes(leaderSection(), (node) => node.type === field)[0].props
+  assert.equal(leader().value, openscale)
+  assert.ok(leader().groups.flatMap((group) => group.models).some((entry) => entry.name === 'OpenScale / deepseek/deepseek-v4.1-flash（廃止）'))
+  assert.equal(nodes(leaderSection(), (node) => node.props?.className === 'team-warning' && String(node.props.children).includes('選び直')).length, 1)
+  leader().onChange(gpt)
+  await panel.save().onClick()
+  assert.deepEqual(calls.map((call) => call.name), ['team.changeLeader', 'team.update'])
+  assert.equal(calls[0].args.model, gpt)
+})
+
+test('turning off a removed provider that is still on is saved with the team settings', async () => {
+  const calls = []
+  const panel = teamPanel(teamConfig({ gpt: { enabled: true }, retiredProviders: ['openscale'] }), JSON.stringify(['openai-codex', 'gpt-6-luna']), calls)
+  assert.equal(nodes(panel.render(), (node) => node.type?.name === 'RetiredOn').length, 1)
+  panel.turnOff()
+  await panel.save().onClick()
+  assert.equal(calls[0].name, 'team.update')
+  assert.deepEqual(calls[0].args.patch.retiredProviders, [])
 })

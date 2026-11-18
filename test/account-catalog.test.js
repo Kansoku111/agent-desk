@@ -9,6 +9,8 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import WebSocket from 'ws'
 import { Catalog } from '../server/catalog.js'
+import { createAccountHandlers } from '../server/rpc-handlers-accounts.js'
+import { dshEnv } from '../server/dsh-env.js'
 import { readOpenCodeCatalog } from '../server/model-catalog.js'
 import { openCodeModels } from '../server/opencode-go-catalog.js'
 
@@ -201,18 +203,35 @@ test('saving and removing an OpenCode Go key adds and removes its catalog models
   for (const id of ['glm-5.3', 'kimi-k3', 'qwen3.8-max']) assert.ok(ids.includes(id), ids.join(', '))
 })
 
-test('OpenScale key adds only the two standard models and removal clears them', { timeout: 60_000 }, async (t) => {
-  await keyRefreshesCatalog(t, {
-    provider: 'openscale', account: 'openscale', catalogProvider: 'openscale',
-    probe: 'https://api.openscale.so/v1/models', expectedCheck: 'unverified',
-    afterAdded: async ({ added, waitFor }) => {
-      const ids = ['deepseek/deepseek-v4.1-flash', 'z-ai/glm-5.3-flash']
-      assert.deepEqual(added.catalog.models.filter((model) => model.provider === 'openscale').map((model) => model.id).sort(), ids)
-      const state = await waitFor((item) => ids.every((id) => (item.catalog.effortsByModel[JSON.stringify(['openscale', id])] ?? []).some((entry) => entry.value === 'high')))
-      const expected = { 'deepseek/deepseek-v4.1-flash': ['low', 'high', 'max'], 'z-ai/glm-5.3-flash': ['low', 'high'] }
-      for (const id of ids) assert.deepEqual(state.catalog.effortsByModel[JSON.stringify(['openscale', id])].map((entry) => entry.value).filter(Boolean), expected[id])
-    },
+test('the account API no longer accepts an OpenScale key', async () => {
+  const handlers = createAccountHandlers({})
+  await assert.rejects(handlers['account.setKey']({ provider: 'openscale', key: 'fixture-key' }), /不明なプロバイダー/)
+})
+
+test('dsh does not inherit the retired OpenScale key from the environment', () => {
+  const env = dshEnv({ dshHome: 'fixture-home' }, 'workspace-write', { OPENSCALE_API_KEY: 'fixture-inherited', PATH: 'fixture-path' })
+  assert.equal(env.OPENSCALE_API_KEY, undefined)
+  assert.equal(env.PATH, 'fixture-path')
+})
+
+test('the catalog hides OpenScale from an old cache and runtime snapshots', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-catalog-retired-'))
+  const file = path.join(home, 'catalog.json')
+  const model = (provider, id) => ({ provider, id, value: JSON.stringify([provider, id]), name: id })
+  const gpt = model('openai-codex', 'gpt-6-luna')
+  const retired = model('openscale', 'deepseek/deepseek-v4.1-flash')
+  await fs.writeFile(file, JSON.stringify({ models: [gpt, retired], effortsByModel: { [gpt.value]: [], [retired.value]: [] } }))
+  const catalog = await new Catalog(file).load()
+  t.after(async () => {
+    await catalog.flush()
+    await fs.rm(home, { recursive: true, force: true })
   })
+  assert.deepEqual(catalog.snapshot().models, [gpt])
+  assert.equal(catalog.snapshot().providers.openscale, undefined)
+  const options = [gpt, retired].map(({ provider, value, name }) => ({ group: provider, options: [{ value, name }] }))
+  catalog.learn([{ id: 'model', currentValue: retired.value, options }])
+  assert.deepEqual(catalog.snapshot().models.map(({ value }) => value), [gpt.value])
+  assert.deepEqual(catalog.snapshot().effortsByModel, { [gpt.value]: [] })
 })
 
 test('Command Code saves an unverified key and loads both official protocol routes', { timeout: 60_000 }, async (t) => {

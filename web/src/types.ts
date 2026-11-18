@@ -116,7 +116,7 @@ export interface TerminalSummary {
 }
 
 /** Who a team's children run on (Claude (API), DeepSeek, OpenCode Go and local: as a dsh task on the user's API key or own server). */
-export type TeamProvider = 'gpt' | 'codex' | 'claude' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'openscale' | 'commandCode' | 'commandCodeClaude' | 'local'
+export type TeamProvider = 'gpt' | 'codex' | 'claude' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
 /** A Claude Code or dsh model can lead a team. */
 export type TeamLeaderProvider = TeamProvider
 export type TeamTier = 'low' | 'mid'
@@ -253,12 +253,13 @@ export interface TeamSettings {
   deepseek?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   /** Older saves lack it (off). */
   opencodeGo?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
-  openscale?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   commandCode?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   commandCodeClaude?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   /** Older saves lack it (off). */
   local?: { enabled: boolean; low: TeamTierSettings; mid: TeamTierSettings }
   maxChildren: number
+  /** Removed providers the saved settings still turn on (older saves: none). Starting and running a team refuse while any is on. */
+  retiredProviders?: string[]
 }
 
 export interface ImageRef {
@@ -431,8 +432,6 @@ export interface Accounts {
   codex?: { signedIn: boolean; email?: string | null; plan?: string | null }
   claude: { configured: boolean; masked: string | null; workspaceId: string | null }
   deepseek: { configured: boolean; masked: string | null }
-  /** Older servers lack it. */
-  openscale?: { configured: boolean; masked: string | null }
   opencodeGo?: { configured: boolean; masked: string | null }
   commandCode?: { configured: boolean; masked: string | null; modelsCheckedAt: number | null; modelsFailed: boolean; modelsSkipped: number }
   /** configured: a server URL with models; keyed: a key is stored for it. Older servers lack it. */

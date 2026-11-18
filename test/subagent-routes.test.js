@@ -65,6 +65,18 @@ test('routes saved before the per-provider models were replaced keep working, an
   assert.deepEqual(damaged.gp, { target: 'cl', model: 'claude:haiku', effort: null })
 })
 
+test('a saved OpenScale route stays off rather than changing billing paths', () => {
+  const removed = { target: 'dsh', model: '["openscale","deepseek/deepseek-v4.1-flash"]', effort: 'low' }
+  const routes = savedRoutes({ subagentRoutes: { dsh: removed, cl: removed, gp: removed } })
+  for (const [parent, route] of Object.entries(routes)) {
+    assert.deepEqual(route, removed)
+    assert.deepEqual(routePlan(parent, route), { mode: 'off' })
+  }
+  assert.throws(() => validateRoute(removed), /使えないモデル/)
+  const next = mergeRoutes(routes, { dsh: { model: luna, effort: 'low' } })
+  assert.equal(routePlan('dsh', next.dsh).pinned.model, 'gpt-6-luna')
+})
+
 test('the plan keeps a kind\'s own tools unless the route needs the bridge', () => {
   const route = (target, model = null, effort = null) => ({ target, model, effort })
   // Same kind, no model: nothing to change. Codex has no tools of its own, so it always bridges.

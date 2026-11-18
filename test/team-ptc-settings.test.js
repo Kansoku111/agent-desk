@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { assertChildrenOn, PROVIDER_NAMES, TEAM_PROVIDERS, teamConfig } from '../server/team-config.js'
+import * as modelSelection from '../web/src/model-selection.ts'
 
 const source = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, {
@@ -36,6 +37,7 @@ function harness({ mode = 'ptc', busy = false, result = true } = {}) {
       return response
     } },
     '../util': { parseModel: () => null },
+    '../model-selection': modelSelection,
     '../team-auth-consent': { needsClaudeAuth: () => false },
     './PtcToggle': { PtcToggle },
   }
@@ -124,5 +126,11 @@ test('the message for a team with every provider off names every provider a chil
   let message = ''
   try { assertChildrenOn(off) } catch (error) { message = error.message }
   for (const provider of TEAM_PROVIDERS) assert.ok(message.includes(PROVIDER_NAMES[provider]), PROVIDER_NAMES[provider])
-  assert.doesNotThrow(() => assertChildrenOn({ ...off, openscale: { enabled: true } }))
+  assert.equal(TEAM_PROVIDERS.includes('openscale'), false)
+})
+
+test('a team still turned on to a retired provider does not start, instead of moving its work to another provider', () => {
+  const on = { ...Object.fromEntries(TEAM_PROVIDERS.map((provider) => [provider, { enabled: false }])), deepseek: { enabled: true, low: { enabled: true, model: 'deepseek-v4-flash' } } }
+  assert.doesNotThrow(() => assertChildrenOn(on))
+  assert.throws(() => assertChildrenOn({ ...on, retiredProviders: ['openscale'] }), /OpenScale は廃止されました/)
 })

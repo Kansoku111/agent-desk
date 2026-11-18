@@ -6,7 +6,7 @@ import { fastPricing } from '../server/fast-mode.js'
 import { accountModelAdditions } from '../server/codex-models.js'
 import { configuredModelCatalog } from '../server/model-catalog.js'
 
-test('OpenScale standard models use published API rates for equivalents only', async () => {
+test('historical OpenScale usage still uses the bundled rates for equivalents only', async () => {
   const rates = await loadPricing()
   for (const [key, expected] of [
     ['openscale/deepseek/deepseek-v4.1-flash', 0.303],

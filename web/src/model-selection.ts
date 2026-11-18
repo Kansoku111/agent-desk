@@ -1,11 +1,41 @@
 import type { AppState, CatalogModel, TeamProvider } from './types'
 
+/**
+ * Removed providers and the names their saved choices keep. A saved choice on one is never
+ * moved to another route: it stays as chosen, is marked retired, and the user picks a model.
+ */
+const RETIRED_PROVIDERS = new Map([['openscale', 'OpenScale']])
+
+export function isRetiredProvider(provider: string | null | undefined) {
+  return Boolean(provider && RETIRED_PROVIDERS.has(provider))
+}
+
+/** A saved model value (`["openscale","id"]`) on a removed provider. */
+export function isRetiredModel(value: string | null | undefined) {
+  try {
+    const parts: unknown = JSON.parse(value ?? '')
+    return Array.isArray(parts) && typeof parts[0] === 'string' && isRetiredProvider(parts[0])
+  } catch {
+    return false
+  }
+}
+
+/** A removed provider's name in its saved settings and history: `OpenScale（廃止）`. */
+export function retiredLabel(provider: string) {
+  return `${RETIRED_PROVIDERS.get(provider) ?? provider}（廃止）`
+}
+
+/** A retired model's name with its removed provider, e.g. `OpenScale / id（廃止）`. Call only when `isRetiredModel` holds. */
+export function retiredModelName(value: string) {
+  const [provider, id] = JSON.parse(value) as [string, string]
+  return `${RETIRED_PROVIDERS.get(provider)} / ${id}（廃止）`
+}
+
 export function providerReady(server: AppState, provider: string) {
   if (provider === 'codex') return Boolean(server.accounts.codex?.signedIn)
   if (provider === 'openai-codex') return server.accounts.chatgpt.signedIn
   if (provider === 'anthropic') return server.accounts.claude.configured
   if (provider === 'deepseek-official') return server.accounts.deepseek.configured
-  if (provider === 'openscale') return Boolean(server.accounts.openscale?.configured)
   if (provider === 'opencode-go') return Boolean(server.accounts.opencodeGo?.configured)
   if (provider === 'command-code' || provider === 'command-code-claude') return Boolean(server.accounts.commandCode?.configured)
   if (provider === 'local-llm') return Boolean(server.accounts.localLlm?.configured)
@@ -65,12 +95,15 @@ export function pickDefaultModel(server: AppState, current: string | null): stri
       return model && providerReady(server, model.provider) && (allowRetired || !model.retired) ? model : null
     }
     if (usable(current)) return current
+    // A retired choice (the draft's or the default) is kept, not replaced by another route: the user picks its successor.
+    if (isRetiredModel(current)) return current
     if (usable(server.settings.defaultModel)) return server.settings.defaultModel
+    if (isRetiredModel(server.settings.defaultModel)) return server.settings.defaultModel
     const preferred = ['["openai-codex","gpt-6.1-sol"]', '["openai-codex","gpt-5.5"]', '["anthropic","claude-sonnet-5-5"]', '["anthropic","claude-sonnet-5"]']
     for (const value of preferred) if (usable(value)) return value
     // The public Command Code inventory includes models outside the user's plan.
     // Require an explicit choice rather than silently selecting a potentially billed model.
-    return models.find((model) => !['command-code', 'command-code-claude', 'openscale'].includes(model.provider)
+    return models.find((model) => !['command-code', 'command-code-claude'].includes(model.provider)
       && providerReady(server, model.provider) && (allowRetired || !model.retired))?.value ?? null
   }
   return pick(false) ?? pick(true)

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { act, request, setState, startTeam, useStore } from '../store'
 import type { AppState, TeamModelChoice, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
-import { isModelVisible } from '../model-selection'
+import { isModelVisible, isRetiredModel, isRetiredProvider, retiredLabel, retiredModelName } from '../model-selection'
 import { effortLabel, parseModel, pickableEfforts, workspaceLabel } from '../util'
 import { Modal } from './Modal'
 import { byNewest } from './Pickers'
@@ -20,14 +20,20 @@ import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
 import { usesClaudeApi } from '../subagent-routes'
 
 const MAX_CHILDREN = 12
-const PROVIDERS: TeamProvider[] = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'openscale', 'commandCode', 'commandCodeClaude', 'local']
-const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', openscale: 'OpenScale', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
-type DshProvider = 'gpt' | 'codex' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'openscale' | 'commandCode' | 'commandCodeClaude' | 'local'
+const PROVIDERS: TeamProvider[] = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
+const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
+type DshProvider = 'gpt' | 'codex' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
 /** Each dsh provider's models in the model list. */
-const CATALOG_PROVIDER = { gpt: 'openai-codex', codex: 'codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', openscale: 'openscale', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' } as const
-const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', codex: 'codex', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', openscale: 'openscale', 'command-code': 'commandCode', 'command-code-claude': 'commandCodeClaude', 'local-llm': 'local' }
+const CATALOG_PROVIDER = { gpt: 'openai-codex', codex: 'codex', claudeApi: 'anthropic', deepseek: 'deepseek-official', opencodeGo: 'opencode-go', commandCode: 'command-code', commandCodeClaude: 'command-code-claude', local: 'local-llm' } as const
+const CATALOG_TO_TEAM: Record<string, DshProvider> = { 'openai-codex': 'gpt', codex: 'codex', anthropic: 'claudeApi', 'deepseek-official': 'deepseek', 'opencode-go': 'opencodeGo', 'command-code': 'commandCode', 'command-code-claude': 'commandCodeClaude', 'local-llm': 'local' }
 const teamModelGroups = (server: AppState) => modelGroups(server, true).filter((group) => group.id === 'claude-code' || CATALOG_TO_TEAM[group.id])
-const modelValue = (entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? `claude:${entry.model}` : entry.provider === 'codex' ? `codex:${entry.model}` : JSON.stringify([CATALOG_PROVIDER[entry.provider], entry.model])
+// A removed provider's saved choice keeps its own provider name, so it is still shown and never sent to another route.
+const modelValue = (entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? `claude:${entry.model}` : entry.provider === 'codex' ? `codex:${entry.model}`
+  : JSON.stringify([isRetiredProvider(entry.provider) ? entry.provider : CATALOG_PROVIDER[entry.provider], entry.model])
+/** The name of a saved choice that the menu does not list: a removed provider's model is marked retired. */
+const savedName = (server: AppState, entry: { provider: TeamProvider; model: string }) => entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model
+  : isRetiredProvider(entry.provider) ? retiredModelName(modelValue(entry))
+  : server.catalog.models.find((model) => model.value === modelValue(entry))?.name ?? entry.model
 function pickerChoice(value: string): TeamModelChoice | null {
   if (value.startsWith('claude:')) return { provider: 'claude', model: value.slice(7), effort: null }
   if (value.startsWith('codex:')) return { provider: 'codex', model: value.slice(6), effort: null }
@@ -50,6 +56,13 @@ const tierOn = (tier: { enabled?: boolean }) => tier.enabled !== false
 /** Every provider starts off; a team needs at least one on to hand work to. */
 const anyChildOn = (config: Config) => config.modelMode === 'free' ? Boolean(config.freeModels?.length) : PROVIDERS.some((provider) => config[provider]?.enabled)
 
+/**
+ * A removed provider the settings still turn on, or a retired child in free mode: the server refuses a team
+ * that uses either. Tier mode does not use the free-mode list, so its saved rows do not count.
+ */
+const retiredChildBlock = (config: Config) => (config.retiredProviders?.length ?? 0) > 0
+  || (config.modelMode === 'free' && (config.freeModels ?? []).some((entry) => isRetiredProvider(entry.provider)))
+
 /** The settings with every field (settings saved by an older version lack the GPT leader's and DeepSeek's). */
 function fullConfig(saved: Config): Config {
   return {
@@ -59,11 +72,11 @@ function fullConfig(saved: Config): Config {
     modelMode: saved.modelMode ?? 'tiers',
     defaultModelMode: saved.defaultModelMode ?? 'tiers',
     freeModels: saved.freeModels ?? [],
+    retiredProviders: saved.retiredProviders ?? [],
     codex: saved.codex ?? OFF_PROVIDER,
     claudeApi: saved.claudeApi ?? OFF_PROVIDER,
     deepseek: saved.deepseek ?? OFF_PROVIDER,
     opencodeGo: saved.opencodeGo ?? OFF_PROVIDER,
-    openscale: saved.openscale ?? OFF_PROVIDER,
     commandCode: saved.commandCode ?? OFF_PROVIDER,
     commandCodeClaude: saved.commandCodeClaude ?? OFF_PROVIDER,
     local: saved.local ?? OFF_PROVIDER,
@@ -184,7 +197,6 @@ const PROVIDER_NOTE: Record<TeamProvider, string> = {
   claudeApi: 'Anthropic API（従量課金）',
   deepseek: 'DeepSeek API（従量課金）',
   opencodeGo: 'OpenCode Go サブスクリプション',
-  openscale: 'OpenScale（Lite は同時1エージェントまで）',
   commandCode: 'Command Code Provider API',
   commandCodeClaude: 'Command Code Provider API',
   local: '課金なし。小さく明確な作業向け',
@@ -195,7 +207,6 @@ function ProviderCard({ server, config, provider, onChange }: { server: AppState
   const signedOut = provider === 'gpt' && !server.accounts.chatgpt.signedIn
   const noKey = (provider === 'deepseek' && !server.accounts.deepseek.configured) || (provider === 'claudeApi' && !server.accounts.claude.configured)
     || (provider === 'opencodeGo' && !server.accounts.opencodeGo?.configured)
-    || (provider === 'openscale' && !server.accounts.openscale?.configured)
     || (['commandCode', 'commandCodeClaude'].includes(provider) && !server.accounts.commandCode?.configured)
     || (provider === 'local' && !server.accounts.localLlm?.configured)
   return (
@@ -237,7 +248,7 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
   const missing = Array.from(new Map(models.filter((entry) => !groups.some((group) => group.models.some((model) => model.value === modelValue(entry))))
     .map((entry) => [modelValue(entry), entry])).values())
   if (missing.length) groups.unshift({ id: 'current', heading: '選択済み', note: '', models: missing.map((entry) => ({
-    value: modelValue(entry), name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === modelValue(entry))?.name ?? entry.model,
+    value: modelValue(entry), name: savedName(server, entry),
   })) })
   const selected = new Set(models.map(modelValue))
   const toggle = (value: string) => {
@@ -270,9 +281,10 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
       const used = new Set(models.filter((other, i) => i !== index && modelValue(other) !== value).map(modelValue))
       const choices = groups.map((group) => ({ ...group, models: group.models.filter((model) => !used.has(model.value)) })).filter((group) => group.models.length)
       if (!choices.some((group) => group.models.some((model) => model.value === value))) {
-        choices.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name: entry.provider === 'claude' ? claudeModelName(server, entry.model) ?? entry.model : server.catalog.models.find((model) => model.value === value)?.name ?? entry.model }] })
+        choices.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name: savedName(server, entry) }] })
       }
-      const levels = entry.provider === 'claude' ? claudeEfforts(server, entry.model) : dshEfforts(server, entry.model, entry.provider)
+      // A removed provider's row keeps its saved level: no other level is offered for it, so its level cannot change.
+      const levels = isRetiredProvider(entry.provider) ? [] : entry.provider === 'claude' ? claudeEfforts(server, entry.model) : dshEfforts(server, entry.model, entry.provider)
       const otherEfforts = new Set(models.filter((other, i) => i !== index && modelValue(other) === value).map((other) => other.effort ?? null))
       const currentLevel = levels.indexOf(entry.effort ?? '')
       const nextEffort = [...levels.slice(currentLevel + 1), ...levels.slice(0, currentLevel + 1)]
@@ -299,7 +311,7 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
           onClick={() => onChange({ freeModels: models.filter((_, i) => i !== index) })}><Trash2 size={15} /></button>
       </div>
     })}
-    {models.some((model) => model.provider === 'openscale') && <p className="team-warning">OpenScale Lite はリーダーや別タスクを含め同時に1エージェントまでです。並列数は自動制限されません。</p>}
+    {models.some((model) => isRetiredProvider(model.provider)) && <p className="team-warning">OpenScale は廃止されました。該当の子を削除し、選び直してください。</p>}
     {models.some((model) => model.provider === 'claudeApi') && <p className="team-warning">Claude（API）は従量課金です。並列数や長い会話で費用が増えます。</p>}
   </section>
 }
@@ -334,7 +346,7 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
   const groups = teamModelGroups(server)
   if (value && !groups.some((group) => group.models.some((entry) => entry.value === value))) {
     const name = provider === 'claude' ? claudeModelName(server, model ?? null) ?? 'Claude Code の既定'
-      : server.catalog.models.find((entry) => entry.value === value)?.name ?? model ?? ''
+      : model ? savedName(server, { provider, model }) : ''
     groups.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name }] })
   }
   const levels = provider === 'claude' ? claudeEfforts(server, model ?? null) : dshEfforts(server, model ?? null, provider)
@@ -352,7 +364,8 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
           }}
           onEffort={(next) => onChange(provider === 'claude' ? { leader: { effort: next || null } }
             : provider === 'gpt' ? { gptLeader: { effort: next || null } } : { dshLeader: { effort: next || null } })} />
-        <p className="muted">{PROVIDER_NOTE[provider]}{provider === 'gpt' && !server.accounts.chatgpt.signedIn && ' · 要サインイン'}</p>
+        {isRetiredProvider(provider) && <p className="team-warning">OpenScale は廃止されました。リーダーを選び直してください。</p>}
+        <p className="muted">{isRetiredProvider(provider) ? retiredLabel(provider) : PROVIDER_NOTE[provider]}{provider === 'gpt' && !server.accounts.chatgpt.signedIn && ' · 要サインイン'}</p>
       </div>
     </section>
   )
@@ -362,7 +375,7 @@ function LeaderSection({ server, config, onChange }: { server: AppState; config:
 function TeamLeaderField({ server, value, effort, disabled, onChange }: { server: AppState; value: string; effort: string; disabled: boolean; onChange: (model: string, effort: string) => void }) {
   const groups = teamModelGroups(server).filter((group) => group.id !== 'codex')
   if (!groups.some((group) => group.models.some((entry) => entry.value === value))) {
-    const name = value.startsWith('claude:') ? claudeModelName(server, value.slice(7) || null) ?? 'Claude Code の既定' : server.catalog.models.find((entry) => entry.value === value)?.name ?? value
+    const name = value.startsWith('claude:') ? claudeModelName(server, value.slice(7) || null) ?? 'Claude Code の既定' : isRetiredModel(value) ? retiredModelName(value) : server.catalog.models.find((entry) => entry.value === value)?.name ?? value
     groups.unshift({ id: 'current', heading: '選択済み', note: '', models: [{ value, name }] })
   }
   const efforts = (model: string) => {
@@ -376,6 +389,7 @@ function TeamLeaderField({ server, value, effort, disabled, onChange }: { server
         <ModelField label="リーダー" value={value} groups={groups} disabled={disabled} effort={effort} efforts={efforts(value)} allowDefaultEffort allowClearUnavailableEffort
           onChange={(next) => { if (next !== value) onChange(next, '') }}
           onEffort={(next) => onChange(value, next || '')} />
+        {isRetiredModel(value) && <p className="team-warning">OpenScale は廃止されました。リーダーを選び直してください。</p>}
       </div>
     </section>
   )
@@ -408,6 +422,19 @@ function BypassSwitch({ config, onChange }: { config: Config; onChange: Change }
         <span />
       </label>
     </div>
+  )
+}
+
+/** Saved settings that still turn a removed provider on: the team cannot start or run until the user turns it off. */
+function RetiredOn({ config, onChange }: { config: Config; onChange: Change }) {
+  if (!config.retiredProviders?.length) return null
+  return (
+    <section className="account-card">
+      <div className="setting compact">
+        <p className="team-warning">OpenScale は廃止されました。オンのままでは、チームの開始も子の起動もできません。</p>
+        <button type="button" className="button" onClick={() => onChange({ retiredProviders: [] })}>オフにする</button>
+      </div>
+    </section>
   )
 }
 
@@ -455,8 +482,10 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
   const effort = shared ? target?.effort ?? '' : draft.fallbackEffort ?? ''
   const needsAuth = needsClaudeAuth({ ...draft, leaderFallback: fallback }) || Boolean(server.settings.usageFallbackRoutes?.some((route) => route.model.startsWith('claude:')))
   const fallbackReady = !fallback || (draft.leaderProvider !== 'codex' && !fallback.startsWith('codex:') && fallback !== leaderValue && teamModelGroups(server).some((group) => group.models.some((model) => model.value === fallback)) && workflowEffortSupported(effort, workflowLevels(server.catalog, fallback)))
+  // A retired leader, or the children's removed settings, must be fixed first: nothing is started in its place.
+  const blocked = isRetiredProvider(draft.leaderProvider) || retiredChildBlock(draft)
   const start = async () => {
-    if (!fallbackReady || (needsAuth && !auth.ready)) return
+    if (!fallbackReady || blocked || (needsAuth && !auth.ready)) return
     setStarting(true)
     const started = await startTeam(workspace, draft, needsAuth ? auth.confirmation : undefined)
     setStarting(false)
@@ -479,6 +508,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
           <LeanChildrenSwitch config={draft} onChange={change} />
           <PtcToggle mode={draft.toolMode} disabled={starting} onChange={(toolMode) => change({ toolMode })} />
         </section>
+        <RetiredOn config={draft} onChange={change} />
         <ChildModels server={server} config={draft} onChange={change} />
         {!anyChildOn(draft) && <p className="team-warning">子に使うモデルを少なくとも一つ選んでください。</p>}
         <button type="button" className={`link-button team-start-details ${details ? 'open' : ''}`} onClick={() => setDetails(!details)}>
@@ -493,7 +523,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={close}>キャンセル</button>
-        <button type="button" className="button primary" disabled={starting || !anyChildOn(draft) || !fallbackReady || (needsAuth && !auth.ready)} onClick={() => void start()}>始める</button>
+        <button type="button" className="button primary" disabled={starting || !anyChildOn(draft) || !fallbackReady || blocked || (needsAuth && !auth.ready)} onClick={() => void start()}>始める</button>
       </div>
     </Modal>
   )
@@ -524,6 +554,8 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const currentLeader = team.leaderKind === 'thread' ? leaderThread?.model : 'claude:' + (leaderTerminal?.model ?? '')
   const currentEffort = (team.leaderKind === 'thread' ? leaderThread?.effort : leaderTerminal?.effort) || ''
   // Codex and eco leaders stay as they started (the server does not switch them).
+  // A leader on a removed provider is shown as retired, and a running team can switch it to another model.
+  const leaderRetired = team.leaderKind === 'thread' && isRetiredModel(currentLeader)
   const switchable = !team.execution && team.leaderKind !== 'codex' && Boolean(currentLeader)
   const nextLeader = leaderChoice ?? { model: currentLeader ?? '', effort: currentEffort }
   const leaderChanged = switchable && (nextLeader.model !== currentLeader || nextLeader.effort !== currentEffort)
@@ -534,8 +566,10 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
   const teamFallback = teamTarget?.model ?? (team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? '' : draft.leaderFallback ?? '')
   const teamFallbackEffort = teamTarget?.effort ?? (team.sharedFallbackPolicy && Array.isArray(team.usageFallbackRoutes) && !team.leaderFallbackUsed ? '' : draft.fallbackEffort ?? '')
   const toolModeBlocked = team.toolModeBusy && draft.toolMode !== team.config?.toolMode
+  // Removed settings the team cannot run with are cleared before saving, so the leader does not switch while the rest is refused.
+  const retiredBlock = retiredChildBlock(draft)
   const save = async () => {
-    if (toolModeBlocked || (needsAuth && !auth.ready)) return
+    if (toolModeBlocked || retiredBlock || (needsAuth && !auth.ready)) return
     setSaving(true)
     const confirmation = showAuth && auth.ready ? auth.confirmation : undefined
     // A confirmation authorizes one action: the leader's Claude Code launch takes it when there is one.
@@ -544,13 +578,13 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
       if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
       return
     }
-    const result = await act('team.update', { teamId: team.id, authConfirmation: leaderToClaude ? undefined : confirmation, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, openscale: draft.openscale, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren, toolMode: draft.toolMode } })
+    const result = await act('team.update', { teamId: team.id, authConfirmation: leaderToClaude ? undefined : confirmation, patch: { modelMode: draft.modelMode, freeModels: draft.freeModels, gpt: draft.gpt, codex: draft.codex, claude: draft.claude, claudeApi: draft.claudeApi, deepseek: draft.deepseek, opencodeGo: draft.opencodeGo, commandCode: draft.commandCode, commandCodeClaude: draft.commandCodeClaude, local: draft.local, maxChildren: draft.maxChildren, toolMode: draft.toolMode, retiredProviders: draft.retiredProviders } })
     setSaving(false)
     if (result) onClose()
     else if (showAuth) { setAuth({ ready: false }); setAuthRevision((value) => value + 1) }
   }
   const leaderModel = team.leaderKind === 'thread' ? parseModel(server.threads.find((entry) => entry.id === team.leaderId)?.model) : null
-  const leader = team.leaderKind === 'terminal' ? 'Claude Code' : leaderModel ? server.catalog.providers[leaderModel.provider] ?? leaderModel.provider : PROVIDER_NAME[draft.leaderProvider]
+  const leader = team.leaderKind === 'terminal' ? 'Claude Code' : leaderRetired && leaderModel ? retiredLabel(leaderModel.provider) : leaderModel ? server.catalog.providers[leaderModel.provider] ?? leaderModel.provider : PROVIDER_NAME[draft.leaderProvider]
   return (
     <Modal title="このチームの設定" onClose={onClose} width={620} className="team-start-modal">
       <div className="team-start-body">
@@ -564,6 +598,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
           <ChildCount config={draft} onChange={change} />
           <PtcToggle mode={draft.toolMode} disabled={saving || team.toolModeBusy} onChange={(toolMode) => change({ toolMode })} />
         </section>
+        <RetiredOn config={draft} onChange={change} />
         <ChildModels server={server} config={draft} onChange={change} />
         {team.leaderKind === 'codex' ? <p className="muted">Codexリーダーのフォールバックには対応していません。</p>
           : <FallbackSummary server={server} value={teamFallback} effort={teamFallbackEffort} shared={Boolean(team.sharedFallbackPolicy)}
@@ -574,7 +609,7 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
       </div>
       <div className="modal-actions">
         <button type="button" className="button" onClick={onClose}>キャンセル</button>
-        <button type="button" className="button primary" disabled={saving || toolModeBlocked || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
+        <button type="button" className="button primary" disabled={saving || toolModeBlocked || retiredBlock || !anyChildOn(draft) || (needsAuth && !auth.ready)} onClick={() => void save()}>保存</button>
       </div>
     </Modal>
   )
@@ -595,6 +630,7 @@ export function TeamSettings() {
         <p className="muted">
           サイドバーの <span className="cl-mark tm-mark inline">TM</span> で始め、構成もそこで選びます。
         </p>
+        <RetiredOn config={config} onChange={save} />
         <Switch title="自由モードを標準にする" note="オフの場合は低中モード" checked={config.defaultModelMode === 'free'}
           onChange={(value) => save({ defaultModelMode: value ? 'free' : 'tiers' })} />
         <BypassSwitch config={config} onChange={save} />

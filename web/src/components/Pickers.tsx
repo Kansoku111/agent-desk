@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import { act, setState, useStore } from '../store'
 import type { AppState, CatalogModel, FastProvider, PermissionMode } from '../types'
-import { providerReady, visibleModels } from '../model-selection'
+import { isRetiredModel, providerReady, retiredModelName, visibleModels } from '../model-selection'
 import { commandCodeStatus } from '../command-code-status'
 export { pickDefaultModel, providerReady } from '../model-selection'
 import { basename, effortLabel, fastNote, nearestEffort, parseModel, PERMISSION_INFO, pickableEfforts, workspaceLabel } from '../util'
@@ -12,14 +12,13 @@ import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { openProjectDialog } from './ProjectDialog'
 import { useWheelSelect } from './useWheelSelect'
 
-export const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'openscale', 'command-code', 'command-code-claude', 'local-llm']
+export const PROVIDER_ORDER = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'command-code', 'command-code-claude', 'local-llm']
 export const providerHeading = (server: AppState, provider: string) => provider === 'anthropic' ? 'Claude（API）' : server.catalog.providers[provider] ?? provider
 export const PROVIDER_NOTE: Record<string, string> = {
   'openai-codex': 'ChatGPT サブスクリプション',
   anthropic: 'Anthropic API キー',
   'deepseek-official': 'DeepSeek API キー',
   'opencode-go': 'OpenCode Go サブスクリプション',
-  openscale: '標準モード・契約を確認',
   'command-code': 'API・プラン対象を確認',
   'command-code-claude': 'API・プラン対象を確認',
   'local-llm': 'このネットワークのサーバー',
@@ -28,8 +27,8 @@ export const PROVIDER_NOTE: Record<string, string> = {
 function modelName(server: AppState | null, value: string | null) {
   if (!value) return null
   const model = server?.catalog.models.find((entry) => entry.value === value)
-  if (!model) return null
-  if (model.provider === 'openscale') return `OpenScale / ${model.name}`
+  // A saved model on a removed provider is no longer in the catalog; it keeps its name, marked retired.
+  if (!model) return isRetiredModel(value) ? retiredModelName(value) : null
   return ['command-code', 'command-code-claude'].includes(model.provider) ? `Command Code / ${model.name}` : model.name
 }
 

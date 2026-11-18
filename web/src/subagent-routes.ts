@@ -10,7 +10,7 @@ export const ROUTE_KINDS: { id: RouteParent; name: string }[] = [
 ]
 
 /** DSH providers a subagent can run on (server/dsh-config.js SUBAGENT_TOOLS); the server refuses any other. */
-const DSH_PROVIDERS = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'command-code', 'command-code-claude', 'openscale', 'local-llm']
+const DSH_PROVIDERS = ['openai-codex', 'anthropic', 'deepseek-official', 'opencode-go', 'command-code', 'command-code-claude', 'local-llm']
 
 export const DROP_TYPE = 'application/x-agent-desk-subagent'
 

@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import ts from 'typescript'
 import * as workflowEffort from '../shared/workflow-effort.js'
 import * as routes from '../web/src/subagent-routes.ts'
+import * as modelSelection from '../web/src/model-selection.ts'
 
 const jsx = (type, props) => ({ type, props })
 const nodes = (node, match) => !node || typeof node !== 'object' ? [] : [
@@ -36,7 +37,7 @@ const modules = {
   '../../subagent-routes': routes,
   '../Popover': { Dropdown: 'Dropdown', MenuItem: 'MenuItem' },
   '../WorkflowModelField': { CLAUDE_CODE: [], ModelField: 'ModelField', modelGroups: (_server, allowCodex) => { assert.equal(allowCodex, true); return groups } },
-  '../Pickers': {}, '../../model-selection': {},
+  '../Pickers': {}, '../../model-selection': modelSelection,
 }
 const result = {}
 new Function('require', 'exports', outputText)(name => modules[name] ?? {}, result)

@@ -324,7 +324,10 @@ export function summarizeTool(item: ToolItem, workspace?: string | null): ToolSu
   return summary
 }
 
-/** The fixed-model delegation tools Agent Desk adds to dsh (server/dsh-config.js SUBAGENT_TOOLS), by the model family they run. */
+/**
+ * The fixed-model delegation tools Agent Desk adds to dsh (server/dsh-config.js SUBAGENT_TOOLS), by the model family they run.
+ * `subagent_openscale` is no longer offered (OpenScale was removed); its label stays so older transcripts still name the tool.
+ */
 const PINNED_SUBAGENTS: Record<string, string> = {
   subagent_claude: 'Claude', subagent_gpt: 'GPT', subagent_deepseek: 'DeepSeek', subagent_opencode_go: 'OpenCode Go',
   subagent_command_code: 'Command Code', subagent_command_code_claude: 'Command Code', subagent_openscale: 'OpenScale', subagent_local: 'ローカル',

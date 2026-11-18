@@ -145,6 +145,13 @@ test('new tasks retain visible choices, but skip hidden current and saved defaul
   assert.equal(pickDefaultModel(state, null), terra.value)
 })
 
+test('a saved OpenScale default or draft is not replaced by another billing route', () => {
+  const retired = model('openscale', 'deepseek/deepseek-v4.1-flash').value
+  assert.equal(pickDefaultModel(server({}, retired), null), retired)
+  assert.equal(pickDefaultModel(server({}, sol.value), retired), retired)
+  assert.equal(pickDefaultModel(server({}, retired), claude.value), claude.value, 'an explicit replacement takes precedence')
+})
+
 test('default selection requires a connected provider and never resurrects a hidden or stale choice', () => {
   const state = server(Object.fromEntries(catalog.map((entry) => [entry.value, false])), terra.value)
   assert.equal(pickDefaultModel(state, terra.value), null)

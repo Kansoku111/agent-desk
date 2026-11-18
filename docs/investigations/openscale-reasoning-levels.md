@@ -1,6 +1,6 @@
 # OpenScale の推論レベル（2026-11-06）
 
-DeepSeek V4.1 Flash の推論レベルを Low / High の 2 つから広げられるかを調べ、Low / High / Max にした記録です。
+廃止前の OpenScale 接続で、DeepSeek V4.1 Flash の推論レベルを Low / High / Max にした当時の記録です。
 
 ## 背景
 
@@ -39,7 +39,3 @@ DeepSeek V4.1 Flash の推論レベルを Low / High の 2 つから広げられ
 
 - Chat Completions（`reasoning_effort`）に切り替える: 値は公式に書かれていますが、上のとおり効果が見えず、既存タスクの再開確認も要るため見送りました。
 - 受け付ける値をすべて出す: 効かないレベルが選べて誤解を招くため見送りました。
-
-## 運用
-
-- 出すレベルを変えたら `server/index.js` の `openscaleReasoningLearn` を上げます。保存済みの推論レベルが古いと判定され、次の起動で再学習されます。

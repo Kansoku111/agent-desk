@@ -30,6 +30,10 @@ export { carryoverText, isUndoable, restoreNoteText } from './thread-utils.js'
 
 const TURN_EMIT_MS = 60
 
+function assertNotRetiredModel(model) {
+  if (fallbackProvider(model) === 'openscale') throw new Error('OpenScale のサポートは終了しました。別のモデルを選んでください。')
+}
+
 /**
  * The last moment a turn is known to have been active: its start, a tool call,
  * or a message added while it ran. The crash that ended it is unobserved, so
@@ -449,6 +453,7 @@ export class ThreadManager extends EventEmitter {
     if (!PERMISSION_MODES.includes(permissionMode)) throw new Error('不明な権限モードです')
     if (permissionMode === 'chat-web' && (team || ab || preset)) throw new Error('チーム・AB・委託担当ではチャット＋Web検索を使えません')
     assertToolMode(toolMode)
+    assertNotRetiredModel(model)
     if (createReceipt) {
       const { createId, payloadHash } = createReceipt
       if (!validateMessageId(createId) || typeof payloadHash !== 'string' || !/^[a-f0-9]{64}$/.test(payloadHash)) {
@@ -570,6 +575,7 @@ export class ThreadManager extends EventEmitter {
       if (!PERMISSION_MODES.includes(patch.permissionMode)) throw new Error('不明な権限モードです')
       if (running) throw new Error('実行中は権限モードを変更できません')
     }
+    assertNotRetiredModel(patch.model)
     if (patch.toolMode !== undefined) thread.toolMode = patch.toolMode
     if (typeof patch.title === 'string' && patch.title.trim()) thread.title = patch.title.trim().slice(0, 120)
     if (typeof patch.archived === 'boolean') thread.archived = patch.archived
@@ -840,6 +846,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   async #assertModelUsable(model) {
+    assertNotRetiredModel(model)
     let provider = null
     try {
       provider = JSON.parse(model)[0]
@@ -853,9 +860,6 @@ export class ThreadManager extends EventEmitter {
     }
     if (provider === 'deepseek-official' && !accounts.deepseek.configured) {
       throw new Error('DeepSeek のモデルを使うには、設定で DeepSeek の API キーを登録してください。')
-    }
-    if (provider === 'openscale' && !accounts.openscale?.configured) {
-      throw new Error('OpenScale を使うには、設定 → アカウントで API キーを登録してください。')
     }
     if (provider === 'opencode-go' && !accounts.opencodeGo?.configured) {
       throw new Error('OpenCode Go のモデルを使うには、設定で OpenCode Go の API キーを登録してください。')

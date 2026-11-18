@@ -2,13 +2,13 @@
 // It is learned from ACP session config options and cached on disk.
 import { debouncedWriter, readJson } from './json-file.js'
 import { parseConfigOptions } from './transcript.js'
+import { fallbackProvider } from '../shared/usage-fallback.js'
 
 export const PROVIDER_LABELS = {
   'openai-codex': 'ChatGPT',
   anthropic: 'Claude',
   'deepseek-official': 'DeepSeek',
   'opencode-go': 'OpenCode Go',
-  openscale: 'OpenScale',
   'command-code': 'Command Code',
   'command-code-claude': 'Command Code（Claude）',
   'local-llm': 'ローカル LLM',
@@ -43,7 +43,7 @@ function matchesSignature(signature, models) {
   if (!requirements || typeof requirements !== 'object') return true
   const matches = (name, provider) => typeof requirements[name] !== 'boolean'
     || models.some((model) => model.provider === provider) === requirements[name]
-  if (!matches('deepseek', 'deepseek-official') || !matches('opencodeGo', 'opencode-go') || !matches('openscale', 'openscale')) return false
+  if (!matches('deepseek', 'deepseek-official') || !matches('opencodeGo', 'opencode-go')) return false
   if (Array.isArray(requirements.opencodeGoModels)) {
     const actual = models.filter((model) => model.provider === 'opencode-go').map((model) => model.id).sort()
     // parseConfigOptions omits dated aliases from the UI catalog.
@@ -76,8 +76,10 @@ export class Catalog {
 
   async load() {
     this.data = await readJson(this.file, this.data)
-    this.data.models ??= []
-    this.data.effortsByModel ??= {}
+    // Do not offer removed routes while a saved catalog is being refreshed.
+    this.data.models = (this.data.models ?? []).filter((model) => Object.hasOwn(PROVIDER_LABELS, model.provider))
+    this.data.effortsByModel = Object.fromEntries(Object.entries(this.data.effortsByModel ?? {})
+      .filter(([model]) => fallbackProvider(model) !== 'openscale'))
     return this
   }
 
@@ -98,7 +100,7 @@ export class Catalog {
   learn(configOptions) {
     const parsed = parseConfigOptions(configOptions)
     let changed = false
-    const models = parsed.models.filter((model) => PROVIDER_LABELS[model.provider])
+    const models = parsed.models.filter((model) => Object.hasOwn(PROVIDER_LABELS, model.provider))
     const current = models.length > 0 && matchesSignature(this.signature, models)
     // A pending restart can leave old sessions emitting config options. They
     // must neither replace an existing list nor mark the new signature current.
@@ -121,7 +123,7 @@ export class Catalog {
       this.data.signature = this.signature
       changed = true
     }
-    if (parsed.currentModel && configOptions.some((option) => option.id === 'model')) {
+    if (parsed.currentModel && fallbackProvider(parsed.currentModel) !== 'openscale' && configOptions.some((option) => option.id === 'model')) {
       const before = JSON.stringify(this.data.effortsByModel[parsed.currentModel] ?? null)
       if (before !== JSON.stringify(parsed.efforts)) {
         this.data.effortsByModel[parsed.currentModel] = parsed.efforts

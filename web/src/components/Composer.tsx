@@ -3,6 +3,7 @@ import { ArrowUp, CircleX, Clock3, CornerDownRight, FileText, Loader2, Paperclip
 import { act, isImageAttachment, isTouch, removeQueued, retryQueued, sendMessage, setState, startThread, steerQueued, uploadAttachment, useStore } from '../store'
 import type { Attachment, PermissionMode, ThreadSummary } from '../types'
 import { formatTokens } from '../util'
+import { isRetiredModel } from '../model-selection'
 import { EffortPicker, FastModeChip, ModelPicker, PermissionPicker } from './Pickers'
 import { ChatGptLimitChip } from './ChatGptUsage'
 import { SkillPicker } from './SkillPicker'
@@ -66,7 +67,8 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
   const permissionMode = thread ? thread.permissionMode : draft.permissionMode
   const toolMode = (thread ? thread.toolMode : draft.toolMode) ?? 'native'
   const ptcAvailable = !thread?.ab && !thread?.team
-  const canSend = !thread?.fallbackTo && (text.trim().length > 0 || attachments.length > 0) && uploading === 0 && !sending && !changingToolMode && Boolean(model)
+  // A retired model (OpenScale) is never sent: the user picks a model first.
+  const canSend = !thread?.fallbackTo && (text.trim().length > 0 || attachments.length > 0) && uploading === 0 && !sending && !changingToolMode && Boolean(model) && !isRetiredModel(model)
 
   const updateText = (value: string) => {
     setText(value)

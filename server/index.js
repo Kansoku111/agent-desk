@@ -17,7 +17,7 @@ import { findBrowserUse } from './browser-use.js'
 import { ChatGptLogin } from './chatgpt-login.js'
 import { Checkpoints } from './checkpoints.js'
 import {
-  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF, OPENSCALE_REF,
+  ANTHROPIC_ADMIN_REF, ANTHROPIC_REF, COMMAND_CODE_REF, CredentialStore, DEEPSEEK_REF, describeChatGpt, LOCAL_LLM_REF, maskSecret, OPENCODE_GO_REF,
 } from './credentials.js'
 import { contextOverrides, shippedPersona, WEB_SEARCH_PLUGIN, writeHomePatch, writeDshChildPatch, writeTeamChildPatch, writeAbPatches, writeTaskPresetPatch, writeObserverPatch, writeChatWebPatch } from './dsh-config.js'
 import { effectiveHarness } from './team-harness.js'
@@ -169,6 +169,7 @@ const terminals = await new TerminalManager({
   subagentRoute: (record) => {
     if (settings.subagentsEnabled === false) return null
     const plan = routePlan('cl', savedRoutes(settings).cl)
+    if (plan.mode === 'off') return { nativeOff: true }
     if (plan.mode === 'bridge') {
       const server = subagentBridge.mcpServer('cl', record.id, record.workspace)
       return server ? { mcp: { name: server.name, server: claudeMcpServer(server) }, nativeOff: true } : null
@@ -204,7 +205,6 @@ async function accounts() {
     claudeAdmin: { configured: Boolean(snapshot.refs[ANTHROPIC_ADMIN_REF]), masked: maskSecret(snapshot.refs[ANTHROPIC_ADMIN_REF]) },
     deepseek: { configured: Boolean(snapshot.refs[DEEPSEEK_REF]), masked: maskSecret(snapshot.refs[DEEPSEEK_REF]) },
     opencodeGo: { configured: Boolean(snapshot.refs[OPENCODE_GO_REF]), masked: maskSecret(snapshot.refs[OPENCODE_GO_REF]) },
-    openscale: { configured: Boolean(snapshot.refs[OPENSCALE_REF]), masked: maskSecret(snapshot.refs[OPENSCALE_REF]) },
     commandCode: {
       configured: Boolean(snapshot.refs[COMMAND_CODE_REF]), masked: maskSecret(snapshot.refs[COMMAND_CODE_REF]),
       modelsCheckedAt: commandCodeModels.checkedAt, modelsFailed: commandCodeModels.failed, modelsSkipped: commandCodeModels.skipped,
@@ -387,9 +387,6 @@ const catalogSignature = async (result) => JSON.stringify({
   deepseek: (await accounts()).deepseek.configured,
   // OpenCode Go's route is in the home patch only while its key is saved.
   opencodeGo: (await accounts()).opencodeGo.configured,
-  openscale: (await accounts()).openscale.configured,
-  // Bump when the offered OpenScale levels change so cached efforts are relearned.
-  openscaleReasoningLearn: (await accounts()).openscale.configured ? 2 : undefined,
   opencodeGoModels: (await accounts()).opencodeGo.configured
     ? opencodeGoServed() ?? [...(await installedModels(openCodeFetched())).keys()].sort()
     : [],
@@ -435,7 +432,7 @@ async function applyHomePatch() {
     catalogModels: configuredModels,
     subagents,
     subagentsEnabled: settings.subagentsEnabled !== false,
-    nativeSubagents: routePlan('dsh', savedRoutes(settings).dsh).mode !== 'bridge',
+    nativeSubagents: routePlan('dsh', savedRoutes(settings).dsh).mode === 'native',
     settingsFile: paths.settings,
     persona,
     webSearch: { plugin: WEB_SEARCH_PLUGIN, credentials: paths.credentials },
@@ -443,7 +440,6 @@ async function applyHomePatch() {
     localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
     opencodeGo: (await accounts()).opencodeGo.configured,
     opencodeGoModels: opencodeGoServed(),
-    openscale: (await accounts()).openscale.configured,
     commandCodeRoutes: (await accounts()).commandCode.configured ? commandCodeRoutes(commandCodeModels.models, { zdr: settings.commandCodeZdr }) : {},
   })
   const children = await writeTeamChildPatches({ subagents, persona })

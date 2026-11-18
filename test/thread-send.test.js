@@ -10,6 +10,22 @@ import { createSettingsService } from '../server/settings.js'
 import { fixture } from './helpers/thread-manager.js'
 
 
+test('a saved OpenScale task keeps its model and cannot run until explicitly changed', async (t) => {
+  const f = await fixture(t)
+  const model = '["openscale","deepseek/deepseek-v4.1-flash"]'
+  const retired = /OpenScale のサポートは終了しました/
+  await assert.rejects(f.manager.create({ workspace: f.base, model }), retired)
+  await assert.rejects(f.manager.update(f.thread.id, { model }), retired)
+  f.manager.threads.get(f.thread.id).model = model // Simulate an index saved by an older version.
+  await assert.rejects(f.manager.send(f.thread.id, { text: 'fixture' }), retired)
+  assert.equal(f.manager.list()[0].model, model)
+  assert.equal(f.calls.sessions, 0)
+  await f.manager.update(f.thread.id, { model: f.thread.model })
+  await f.manager.send(f.thread.id, { text: 'fixture' })
+  await f.started.promise
+  assert.equal(f.calls.prompts.length, 1)
+})
+
 test('thread RPC only marks accepted human input, never validation failures or an internal retry', async (t) => {
   const f = await fixture(t)
   let answered = 0

@@ -26,7 +26,7 @@ import { isOtherFile } from './attachments.js'
 import { isLeaderUsageLimit } from './leader-usage-limit.js'
 import { usageFallbackChoice } from '../shared/usage-fallback.js'
 import { carryoverText } from './thread-utils.js'
-import { assertChildrenOn, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
+import { assertChildrenOn, assertNoRetiredProviders, assertNotRetired, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
 import { CATALOG_PROVIDER, childPrompt, childTask, clip, describeTool, executionTask, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { markOf, reportsMessage, reportText } from './teams-report.js'
@@ -830,6 +830,8 @@ export class TeamManager extends EventEmitter {
     const saved = teamConfig(this.getSettings())
     const config = mergeTeamConfig(saved, { modelMode: saved.defaultModelMode, ...(choices ?? {}), ...(execution ? { modelMode: 'tiers' } : {}) })
     assertChildrenOn(config)
+    // The leader is started only here; a team already running keeps its leader's own model (changeLeader).
+    assertNotRetired(config.leaderProvider)
     const now = this.now()
     const gpt = config.leaderProvider === 'gpt'
     const dshLeader = config.leaderProvider !== 'claude'
@@ -1297,6 +1299,8 @@ export class TeamManager extends EventEmitter {
 
   async #spawn(team, args, guard = this.#stopGuard(team)) {
     const config = this.config(team)
+    // A team saved with a retired provider is not handed its work under another one.
+    assertNoRetiredProviders(config)
     const title = oneLine(String(args.title ?? '')).slice(0, 80)
     const task = String(args.task ?? '').trim()
     if (!title) throw new Error('title（業務のタイトル）を指定してください')
@@ -1399,6 +1403,9 @@ export class TeamManager extends EventEmitter {
     }
     try {
       if (child.kind === 'thread') {
+        // Checked before the dsh task exists: a retired provider has no catalog entry, so its model id would
+        // have no provider (`[null, model]`) and must not reach dsh.
+        assertNotRetired(child.provider)
         const catalogProvider = CATALOG_PROVIDER[child.provider]
         const value = this.catalog.data.models.find((entry) => entry.provider === catalogProvider && entry.id === child.model)?.value
           ?? JSON.stringify([catalogProvider, child.model])
@@ -1528,6 +1535,8 @@ export class TeamManager extends EventEmitter {
 
   async #send(team, args, guard = this.#stopGuard(team), { executionRetry = false } = {}) {
     const child = this.#child(team, args.child)
+    // A retired child's saved dsh task would still run on its retired provider: nothing is sent to it.
+    assertNotRetired(child.provider)
     this.guardExecution({ id: team.leaderId, workspace: team.workspace })
     if (team.execution && child.closed) this.#checkRoom(team)
     const executionBefore = child.execution ? structuredClone(child.execution) : null
@@ -1716,6 +1725,7 @@ export class TeamManager extends EventEmitter {
       child.pending = []
       child.awaiting = true
       try {
+        assertNotRetired(child.provider)
         await this.threads.send(child.taskId, { text }, { guard: this.#stopGuard(team) })
       } catch (error) {
         child.awaiting = false
@@ -2063,7 +2073,7 @@ export class TeamManager extends EventEmitter {
     const team = this.teams.get(teamId)
     if (!team) throw new Error('チームが見つかりません')
     if (authConfirmation) return this.#confirmAuth(team, authConfirmation, true, () => this.teams.get(teamId) === team).then(() => this.updateConfig(teamId, patch))
-    const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren', 'toolMode', 'modelMode', 'freeModels', ...(!team.execution ? ['leaderFallback', 'fallbackEffort'] : [])].includes(key)))
+    const allowed = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => [...TEAM_PROVIDERS, 'maxChildren', 'toolMode', 'modelMode', 'freeModels', 'retiredProviders', ...(!team.execution ? ['leaderFallback', 'fallbackEffort'] : [])].includes(key)))
     const before = this.#tierLines(this.config(team)).join('\n') + this.config(team).maxChildren
     const next = mergeTeamConfig(this.config(team), allowed)
     const fallbackChanged = next.leaderFallback !== this.config(team).leaderFallback || next.fallbackEffort !== this.config(team).fallbackEffort
@@ -2876,7 +2886,10 @@ export class TeamManager extends EventEmitter {
         this.#report(team, child, 'error', `一時的なエラーのあと、自動で再開できませんでした: ${error.message}`)
       }
       try {
-        if (child.kind === 'thread') this.threads.send(child.taskId, { text: RESUME_TEXT }, { guard: this.#stopGuard(team) }).catch(failed)
+        if (child.kind === 'thread') {
+          assertNotRetired(child.provider)
+          this.threads.send(child.taskId, { text: RESUME_TEXT }, { guard: this.#stopGuard(team) }).catch(failed)
+        }
         else (child.kind === 'codex' ? this.codex : this.agents).run(child.taskId, RESUME_TEXT)
       } catch (error) {
         failed(error)

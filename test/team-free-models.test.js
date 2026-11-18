@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
+import * as modelSelection from '../web/src/model-selection.ts'
 
 const source = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source + '\nexport { FreeModels }', {
@@ -26,6 +27,7 @@ function harness(initial = []) {
     './WorkflowModelField': { ModelField, modelGroups: () => [{ id: 'openai-codex', heading: 'GPT', note: '', models: choices }, { id: 'claude-code', heading: 'Claude Code', note: '', models: claude }, { id: 'anthropic', heading: 'Claude（API）', note: '', models: api }, { id: 'openscale', heading: 'OpenScale', note: '', models: openscale }] },
     './Popover': { Dropdown, MenuItem },
     './TerminalPickers': { claudeEfforts: () => ['low', 'medium', 'high'], claudeModelName: (_, id) => id },
+    '../model-selection': modelSelection,
   }
   const component = {}
   new Function('require', 'exports', outputText)((name) => modules[name] ?? {}, component)
@@ -34,6 +36,7 @@ function harness(initial = []) {
   return {
     get config() { return config },
     fields: () => nodes(render(), (node) => node.type === ModelField).map((node) => node.props),
+    warnings: () => nodes(render(), (node) => node.props?.className === 'team-warning').map((node) => node.props.children),
     items: () => nodes(menu(), (node) => node.type === MenuItem).map((node) => node.props),
     select: (label) => nodes(menu(), (node) => node.type === MenuItem && node.props.label === label)[0].props.onSelect(),
     duplicateButton: (index) => nodes(render(), (node) => node.type === ModelField)[index].props.labelAction.props,
@@ -150,8 +153,23 @@ test('Claude Code and Claude API remain separate selections', () => {
   assert.deepEqual(h.config.freeModels.map(({ provider, effort }) => [provider, effort]), [['claude', null], ['claude', 'low'], ['claudeApi', null], ['claudeApi', 'low']])
 })
 
-test('OpenScale can be selected as a free-mode child', () => {
+test('OpenScale is no longer offered as a free-mode child', () => {
+  // The server still lists its group; the menu offers only the providers the app knows.
   const h = harness()
-  h.select('GLM OpenScale')
-  assert.deepEqual(h.config.freeModels, [{ provider: 'openscale', model: 'z-ai/glm-5.3-flash', effort: null }])
+  assert.equal(h.items().some((item) => item.label === 'GLM OpenScale'), false)
+})
+
+test('a saved OpenScale child stays visible as retired; only the user removes or replaces it', () => {
+  const h = harness([{ provider: 'openscale', model: 'z-ai/glm-5.3-flash', effort: null }])
+  assert.equal(h.fields()[0].value, JSON.stringify(['openscale', 'z-ai/glm-5.3-flash']))
+  assert.ok(h.fields()[0].groups.flatMap((group) => group.models).some((model) => model.name === 'OpenScale / z-ai/glm-5.3-flash（廃止）'))
+  assert.equal(h.warnings().length, 1)
+  h.select('Model 0')
+  assert.deepEqual(h.config.freeModels.map((entry) => entry.provider), ['openscale', 'gpt'], 'adding another child does not change it')
+  h.fields()[0].onChange(choices[2].value)
+  assert.deepEqual(h.config.freeModels[0], { provider: 'gpt', model: 'model-2', effort: null }, 'the user picks its replacement')
+  assert.equal(h.warnings().length, 0)
+  const removed = harness([{ provider: 'openscale', model: 'z-ai/glm-5.3-flash', effort: null }])
+  removed.remove(0)
+  assert.deepEqual(removed.config.freeModels, [])
 })

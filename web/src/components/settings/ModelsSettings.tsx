@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react'
 import { act, useStore } from '../../store'
 import type { FastProvider } from '../../types'
 import { byNewest, providerReady } from '../Pickers'
-import { isModelVisible } from '../../model-selection'
+import { isModelVisible, isRetiredModel, retiredModelName } from '../../model-selection'
 import { workflowLevels, workflowOptions } from '../../../../shared/workflow-effort.js'
 import { DROP_TYPE, ROUTE_KINDS, routesOf, savedModelName, targetGroups, type RouteParent, type SubagentRoute } from '../../subagent-routes'
 import { Dropdown, MenuItem } from '../Popover'
@@ -153,7 +153,7 @@ function Subagents() {
           ...listed,
           // A saved model whose account is not connected stays visible instead of looking unset.
           ...(model && !listed.some((group) => group.models.some((entry) => entry.value === model))
-            ? [{ id: 'saved', heading: '', note: '', models: [{ value: model, name: `${savedModelName(model)}（利用不可）` }] }] : []),
+            ? [{ id: 'saved', heading: '', note: '', models: [{ value: model, name: isRetiredModel(model) ? retiredModelName(model) : `${savedModelName(model)}（利用不可）` }] }] : []),
         ]
         return (
           <div
@@ -212,6 +212,9 @@ function Subagents() {
           </div>
         )
       })}</div>}
+      {enabled && ROUTE_KINDS.some(({ id }) => isRetiredModel(routes[id].model)) && (
+        <p className="team-warning">OpenScale は廃止されました。該当の委託は、モデルを選び直すまで止まります。</p>
+      )}
     </section>
   )
 }

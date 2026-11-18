@@ -9,12 +9,19 @@ import { assertToolMode } from './ptc.js'
  * Anthropic, DeepSeek, OpenCode Go and Command Code API keys, and their own machine), Claude
  * as a Claude Code task.
  */
-export const TEAM_PROVIDERS = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'openscale', 'commandCode', 'commandCodeClaude', 'local']
+export const TEAM_PROVIDERS = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
 /** Providers that can lead a team. */
 export const LEADER_PROVIDERS = TEAM_PROVIDERS
-const EXTRA_DSH_LEADERS = ['codex', 'claudeApi', 'deepseek', 'opencodeGo', 'openscale', 'commandCode', 'commandCodeClaude', 'local']
+const EXTRA_DSH_LEADERS = ['codex', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
+/**
+ * Providers removed from the app, with their names. Saved settings and teams that still use one keep
+ * it as saved, so its work is never moved to another provider or billing route. Picking one anew is
+ * refused, and a team that uses one cannot run until its choices name other providers
+ * (`assertNoRetiredProviders`).
+ */
+export const RETIRED_PROVIDERS = { openscale: 'OpenScale' }
 export const TEAM_TIERS = ['low', 'mid']
-export const PROVIDER_NAMES = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', openscale: 'OpenScale', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
+export const PROVIDER_NAMES = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
 export const MAX_CHILDREN_LIMIT = 12
 export const MAX_TEAM_MODELS = 12
 export const TEAM_MODEL_MODES = ['tiers', 'free']
@@ -27,6 +34,14 @@ const DSH_MODEL = /^[a-z0-9][a-z0-9._-]{0,79}$/i
 const LOCAL_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/
 /** Reasoning levels are the catalog's (or `claude --effort`'s) words. */
 const EFFORT = /^[a-z]{1,16}$/
+/** Providers whose model IDs are a local server's kind (tags and paths allowed). */
+const LOCAL_MODEL_PROVIDERS = ['local', 'commandCode', 'commandCodeClaude']
+const modelPattern = (provider) => (provider === 'claude' ? CLAUDE_MODEL : LOCAL_MODEL_PROVIDERS.includes(provider) ? LOCAL_MODEL : DSH_MODEL)
+
+const isRetired = (provider) => Object.hasOwn(RETIRED_PROVIDERS, provider)
+const retiredError = (names) => new Error(`${names.map((name) => RETIRED_PROVIDERS[name]).join('・')} は廃止されました。別のプロバイダーを選んでください`)
+/** Two saved choices name the same provider, model and reasoning level. */
+const sameChoice = (a, b) => a?.provider === b?.provider && a?.model === b?.model && (a?.effort ?? null) === (b?.effort ?? null)
 
 export const TEAM_DEFAULTS = {
   /** Claude Code and GPT retain their old fields; other dsh leaders use dshLeader. */
@@ -61,13 +76,14 @@ export const TEAM_DEFAULTS = {
   deepseek: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // Their OpenCode Go subscription (open models, with usage limits instead of a per-token bill).
   opencodeGo: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
-  openscale: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // Command Code Provider API routes share a key and the user's plan usage.
   commandCode: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   commandCodeClaude: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   // A model server on the user's machine or network (設定 → アカウント → ローカル LLM).
   local: { enabled: false, low: { enabled: true, model: null, effort: null }, mid: { enabled: true, model: null, effort: null } },
   maxChildren: 6,
+  // Retired providers (RETIRED_PROVIDERS) that the saved settings still turn on. Empty for new settings.
+  retiredProviders: [],
   // Reports that wait while the leader works reach it together, in one turn, instead of one turn each.
   batchReports: true,
   // Children start without the browser, desktop and image tools (a Claude child without its MCP
@@ -86,7 +102,8 @@ export function teamConfig(saved) {
     enabled: value[name]?.enabled ?? TEAM_DEFAULTS[name].enabled, low: tier(name, 'low'), mid: tier(name, 'mid'),
   })
   return {
-    leaderProvider: LEADER_PROVIDERS.includes(value.leaderProvider) ? value.leaderProvider : TEAM_DEFAULTS.leaderProvider,
+    // A retired leader is kept, not reset to Claude Code: resetting would move the team to another billing route.
+    leaderProvider: LEADER_PROVIDERS.includes(value.leaderProvider) || isRetired(value.leaderProvider) ? value.leaderProvider : TEAM_DEFAULTS.leaderProvider,
     toolMode: value.toolMode ?? TEAM_DEFAULTS.toolMode,
     defaultModelMode: TEAM_MODEL_MODES.includes(value.defaultModelMode) ? value.defaultModelMode : 'tiers',
     modelMode: TEAM_MODEL_MODES.includes(value.modelMode) ? value.modelMode : 'tiers',
@@ -103,12 +120,21 @@ export function teamConfig(saved) {
     claudeApi: provider('claudeApi'),
     deepseek: provider('deepseek'),
     opencodeGo: provider('opencodeGo'),
-    openscale: provider('openscale'),
     commandCode: provider('commandCode'),
     commandCodeClaude: provider('commandCodeClaude'),
     local: provider('local'),
     maxChildren: Number.isInteger(value.maxChildren) ? value.maxChildren : TEAM_DEFAULTS.maxChildren,
+    retiredProviders: retiredOn(value),
   }
+}
+
+/**
+ * The retired providers the saved settings still turn on. Settings saved before the removal kept
+ * an `openscale` block with `enabled`; from then on the list is saved.
+ */
+function retiredOn(value) {
+  if (Array.isArray(value.retiredProviders)) return [...new Set(value.retiredProviders.filter(isRetired))]
+  return Object.keys(RETIRED_PROVIDERS).filter((name) => value[name]?.enabled === true)
 }
 
 const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -117,6 +143,20 @@ function choice(value, pattern, name) {
   if (value === null) return null
   if (typeof value !== 'string' || !pattern.test(value)) throw new Error(`${name} の値が不正です`)
   return value
+}
+
+/** A retired choice can only stay as it was saved: picking it anew is refused. */
+function retainedChoice(entry, saved) {
+  const kept = saved.find((item) => sameChoice(item, entry))
+  if (!kept) throw retiredError([entry.provider])
+  return { provider: kept.provider, model: kept.model, effort: kept.effort ?? null }
+}
+
+function pickFreeModel(entry) {
+  if (!TEAM_PROVIDERS.includes(entry.provider)) throw new Error('子のモデルのプロバイダーが不正です')
+  const model = choice(entry.model, modelPattern(entry.provider), '子のモデル')
+  if (!model) throw new Error('子のモデルを選んでください')
+  return { provider: entry.provider, model, effort: choice(entry.effort ?? null, EFFORT, '子の推論レベル') }
 }
 
 /**
@@ -134,16 +174,15 @@ export function mergeTeamConfig(current, patch) {
   }
   if (Object.hasOwn(patch, 'freeModels')) {
     if (!Array.isArray(patch.freeModels) || patch.freeModels.length > MAX_TEAM_MODELS) throw new Error(`子のモデルは ${MAX_TEAM_MODELS} 個まで選べます`)
+    const saved = next.freeModels
     const seen = new Set()
     next.freeModels = patch.freeModels.map((entry) => {
-      if (!isRecord(entry) || !TEAM_PROVIDERS.includes(entry.provider)) throw new Error('子のモデルのプロバイダーが不正です')
-      const model = choice(entry.model, entry.provider === 'claude' ? CLAUDE_MODEL : ['local', 'openscale', 'commandCode', 'commandCodeClaude'].includes(entry.provider) ? LOCAL_MODEL : DSH_MODEL, '子のモデル')
-      if (!model) throw new Error('子のモデルを選んでください')
-      const effort = choice(entry.effort ?? null, EFFORT, '子の推論レベル')
-      const key = JSON.stringify([entry.provider, model, effort])
+      if (!isRecord(entry)) throw new Error('子のモデルのプロバイダーが不正です')
+      const picked = isRetired(entry.provider) ? retainedChoice(entry, saved) : pickFreeModel(entry)
+      const key = JSON.stringify([picked.provider, picked.model, picked.effort])
       if (seen.has(key)) throw new Error('同じモデルと推論レベルは複数選べません')
       seen.add(key)
-      return { provider: entry.provider, model, effort }
+      return picked
     })
   }
   if (Object.hasOwn(patch, 'toolMode')) {
@@ -161,7 +200,9 @@ export function mergeTeamConfig(current, patch) {
     if (Object.hasOwn(patch.leader, 'effort')) next.leader.effort = choice(patch.leader.effort, EFFORT, 'リーダーの推論レベル')
   }
   if (Object.hasOwn(patch, 'leaderProvider')) {
-    if (!LEADER_PROVIDERS.includes(patch.leaderProvider)) throw new Error('リーダーのプロバイダーが不正です')
+    if (isRetired(patch.leaderProvider)) {
+      if (patch.leaderProvider !== next.leaderProvider) throw retiredError([patch.leaderProvider])
+    } else if (!LEADER_PROVIDERS.includes(patch.leaderProvider)) throw new Error('リーダーのプロバイダーが不正です')
     next.leaderProvider = patch.leaderProvider
   }
   if (Object.hasOwn(patch, 'gptLeader')) {
@@ -173,10 +214,16 @@ export function mergeTeamConfig(current, patch) {
     if (patch.dshLeader === null) next.dshLeader = null
     else {
       const entry = patch.dshLeader
-      if (!isRecord(entry) || !EXTRA_DSH_LEADERS.includes(entry.provider)) throw new Error('リーダーのプロバイダーが不正です')
-      const model = choice(entry.model, ['local', 'openscale', 'commandCode', 'commandCodeClaude'].includes(entry.provider) ? LOCAL_MODEL : DSH_MODEL, 'リーダーのモデル')
-      if (!model) throw new Error('リーダーのモデルを選んでください')
-      next.dshLeader = { provider: entry.provider, model, effort: choice(entry.effort ?? null, EFFORT, 'リーダーの推論レベル') }
+      if (!isRecord(entry)) throw new Error('リーダーのプロバイダーが不正です')
+      if (isRetired(entry.provider)) {
+        if (!sameChoice(next.dshLeader, entry)) throw retiredError([entry.provider])
+        next.dshLeader = { provider: entry.provider, model: entry.model, effort: entry.effort ?? null }
+      } else {
+        if (!EXTRA_DSH_LEADERS.includes(entry.provider)) throw new Error('リーダーのプロバイダーが不正です')
+        const model = choice(entry.model, modelPattern(entry.provider), 'リーダーのモデル')
+        if (!model) throw new Error('リーダーのモデルを選んでください')
+        next.dshLeader = { provider: entry.provider, model, effort: choice(entry.effort ?? null, EFFORT, 'リーダーの推論レベル') }
+      }
     }
   }
   if (EXTRA_DSH_LEADERS.includes(next.leaderProvider) && next.dshLeader?.provider !== next.leaderProvider) {
@@ -186,6 +233,16 @@ export function mergeTeamConfig(current, patch) {
     if (!Object.hasOwn(patch, name)) continue
     if (typeof patch[name] !== 'boolean') throw new Error(`agentTeams.${name} は boolean で指定してください`)
     next[name] = patch[name]
+  }
+  for (const name of Object.keys(RETIRED_PROVIDERS)) {
+    // Settings clients from before the removal may still send the provider's block as off: it is ignored.
+    if (isRecord(patch[name]) && patch[name].enabled === true) throw retiredError([name])
+  }
+  if (Object.hasOwn(patch, 'retiredProviders')) {
+    // Only a switch-off: the list may shrink, a retired provider cannot be turned on again.
+    const keep = patch.retiredProviders
+    if (!Array.isArray(keep) || keep.some((name) => !next.retiredProviders.includes(name))) throw new Error('廃止したプロバイダーの設定は消すことだけできます')
+    next.retiredProviders = [...new Set(keep)]
   }
   for (const provider of TEAM_PROVIDERS) {
     if (!Object.hasOwn(patch, provider)) continue
@@ -204,7 +261,7 @@ export function mergeTeamConfig(current, patch) {
         next[provider][tier].enabled = part[tier].enabled
       }
       if (Object.hasOwn(part[tier], 'model')) {
-        next[provider][tier].model = choice(part[tier].model, provider === 'claude' ? CLAUDE_MODEL : ['local', 'openscale', 'commandCode', 'commandCodeClaude'].includes(provider) ? LOCAL_MODEL : DSH_MODEL, `${label}のモデル`)
+        next[provider][tier].model = choice(part[tier].model, modelPattern(provider), `${label}のモデル`)
       }
       if (Object.hasOwn(part[tier], 'effort')) next[provider][tier].effort = choice(part[tier].effort, EFFORT, `${label}の推論レベル`)
     }
@@ -222,8 +279,36 @@ export function mergeTeamConfig(current, patch) {
   return next
 }
 
+/**
+ * The retired providers a team's children would still use: turned on, or a free-mode child. Tier
+ * mode's unused free-mode entries are not in use, so they do not count there. The leader is not
+ * here: a running leader's model is the leader thread's own (changeLeader changes it there, and the
+ * saved config keeps the choice the team started with). Starting a team checks the leader
+ * (`assertNotRetired`).
+ */
+export function retiredProvidersIn(config) {
+  const used = new Set(config.retiredProviders ?? [])
+  if (config.modelMode === 'free') for (const entry of config.freeModels ?? []) if (isRetired(entry?.provider)) used.add(entry.provider)
+  return [...used]
+}
+
+/**
+ * Throws when a retired provider is still in use by children. The work is never handed to another
+ * provider instead: the user picks the choices again.
+ */
+export function assertNoRetiredProviders(config) {
+  const used = retiredProvidersIn(config)
+  if (used.length) throw retiredError(used)
+}
+
+/** Throws for a retired provider: a child or leader on it is not started. */
+export function assertNotRetired(provider) {
+  if (isRetired(provider)) throw retiredError([provider])
+}
+
 /** A team needs a provider to hand work to: throws when the settings turn every one off. */
 export function assertChildrenOn(config) {
+  assertNoRetiredProviders(config)
   if (config.modelMode === 'free') {
     if (!config.freeModels.length) throw new Error('子に使うモデルを少なくとも一つ選んでください')
     return

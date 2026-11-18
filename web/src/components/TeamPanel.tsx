@@ -23,7 +23,8 @@ const STATE_LABEL: Record<TeamChildState, string> = {
   removed: '削除済み',
   resuming: '再開待ち',
 }
-const PROVIDER_LABEL = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude API', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', openscale: 'OpenScale', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル' }
+// openscale: removed; kept so a child of an older team still shows its provider in the panel.
+const PROVIDER_LABEL = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude API', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', openscale: 'OpenScale（廃止）', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル' }
 
 const VERIFICATION_LABEL: Record<string, string> = { passed: '成功', failed: '失敗', stale: '再検証が必要', unverified: '未実行', cancelled: '停止', error: 'エラー' }
 

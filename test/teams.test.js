@@ -6,6 +6,7 @@ import fsSync from 'node:fs'
 import { Readable } from 'node:stream'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { DELIVERY_CHECK_MS, DELIVERY_GIVE_UP_MS, LEADER_SETTLE_MS, MCP_SERVER, PREFIX, REPORT_PREVIEW, REPORT_GATHER_MS, RESUME_DELAY_MS, TeamManager, TYPING_QUIET_MS, describeTool, transientError } from '../server/teams.js'
 import { assertChildrenOn, mergeTeamConfig, teamConfig, TEAM_DEFAULTS } from '../server/team-config.js'
@@ -3139,7 +3140,6 @@ for (const [provider, catalogProvider, model, effort] of [
   ['claudeApi', 'anthropic', 'claude-haiku-5-5', 'low'],
   ['deepseek', 'deepseek-official', 'deepseek-v4-flash', 'medium'],
   ['opencodeGo', 'opencode-go', 'glm-5.3', null],
-  ['openscale', 'openscale', 'deepseek/deepseek-v4.1-flash', 'low'],
   ['commandCode', 'command-code', 'deepseek/flash', null],
   ['commandCodeClaude', 'command-code-claude', 'claude-test', null],
   ['local', 'local-llm', 'org/qwen:8b', 'low'],
@@ -4299,17 +4299,119 @@ test('eco accepts a Codex parent without changing its model route', async (t) =>
   assert.equal(codex.get(parent.id).mcpServers['agent-team'].env.AGENT_DESK_EXECUTION, '1')
 })
 
-test('OpenScale child choices retain model and effort through team creation and spawn', async (t) => {
-  const model = 'z-ai/glm-5.3-flash'
-  const config = mergeTeamConfig({}, { openscale: { enabled: true, low: { model, effort: 'low' } }, freeModels: [{ provider: 'openscale', model, effort: 'high' }] })
-  assert.equal(teamConfig(JSON.parse(JSON.stringify(config))).openscale.low.model, model)
-  assert.equal(config.freeModels[0].effort, 'high')
-  const f = await setup(t, { openscale: config.openscale })
-  await f.tool('spawn', { title: 'child', task: 'work', provider: 'openscale', tier: 'low' })
+const OPENSCALE_ENTRY = { provider: 'openscale', model: 'z-ai/glm-5.3-flash', effort: null }
+const OPENSCALE_LEFT = /OpenScale は廃止されました/
+
+test('OpenScale cannot be picked anew, while a saved choice can be kept as it was', () => {
+  assert.throws(() => mergeTeamConfig({}, { openscale: { enabled: true } }), OPENSCALE_LEFT)
+  assert.throws(() => mergeTeamConfig({}, { leaderProvider: 'openscale' }), OPENSCALE_LEFT)
+  assert.throws(() => mergeTeamConfig({}, { dshLeader: { provider: 'openscale', model: 'z-ai/glm-5.3-flash', effort: null } }), OPENSCALE_LEFT)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [OPENSCALE_ENTRY] }), OPENSCALE_LEFT)
+  // A client that still sends the old block as off changes nothing.
+  assert.deepEqual(mergeTeamConfig({}, { openscale: { enabled: false } }).retiredProviders, [])
+
+  const saved = teamConfig({
+    modelMode: 'free', leaderProvider: 'openscale', dshLeader: { provider: 'openscale', model: 'deepseek/deepseek-v4.1-flash', effort: 'low' },
+    freeModels: [OPENSCALE_ENTRY, { provider: 'gpt', model: 'gpt-6-luna', effort: null }],
+  })
+  // Sent back unchanged (as a settings form does), the saved choices stay.
+  const resent = mergeTeamConfig(saved, { leaderProvider: 'openscale', dshLeader: saved.dshLeader, freeModels: saved.freeModels })
+  assert.deepEqual(resent.freeModels, saved.freeModels)
+  assert.equal(resent.leaderProvider, 'openscale')
+  assert.deepEqual(resent.dshLeader, saved.dshLeader)
+  // Changed, they are a new choice and refused.
+  assert.throws(() => mergeTeamConfig(saved, { freeModels: [{ ...OPENSCALE_ENTRY, effort: 'high' }] }), OPENSCALE_LEFT)
+  assert.throws(() => mergeTeamConfig(saved, { dshLeader: { provider: 'openscale', model: 'other/model', effort: 'low' } }), OPENSCALE_LEFT)
+  // Removing or replacing them is fine.
+  assert.deepEqual(mergeTeamConfig(saved, { freeModels: [] }).freeModels, [])
+  assert.equal(mergeTeamConfig(saved, { leaderProvider: 'claude' }).leaderProvider, 'claude')
+})
+
+test('settings saved with OpenScale keep it: no work moves to another provider, and the children cannot run on it', () => {
+  const legacy = {
+    deepseek: { enabled: true, low: { enabled: true, model: 'deepseek-v4-flash', effort: null } },
+    openscale: { enabled: true, low: { enabled: true, model: 'z-ai/glm-5.3-flash', effort: 'low' }, mid: { enabled: true, model: null, effort: null } },
+  }
+  const config = teamConfig(legacy)
+  assert.deepEqual(config.retiredProviders, ['openscale'])
+  assert.equal(config.openscale, undefined)
+  assert.equal(config.deepseek.enabled, true)
+  assert.throws(() => assertChildrenOn(config), OPENSCALE_LEFT)
+  // Saving other settings keeps it; only the explicit switch-off clears it.
+  const saved = JSON.parse(JSON.stringify(mergeTeamConfig(config, { maxChildren: 8 })))
+  assert.deepEqual(teamConfig(saved).retiredProviders, ['openscale'])
+  assert.equal(teamConfig(saved).maxChildren, 8)
+  assert.throws(() => assertChildrenOn(teamConfig(saved)), OPENSCALE_LEFT)
+  assert.throws(() => mergeTeamConfig(saved, { retiredProviders: ['openscale', 'other'] }), /消すことだけ/)
+  assert.doesNotThrow(() => assertChildrenOn(mergeTeamConfig(saved, { retiredProviders: [] })))
+})
+
+test('an old free-mode OpenScale entry is kept in both modes and blocks only the free mode it is used in', () => {
+  const tiers = teamConfig({ modelMode: 'tiers', gpt: { enabled: true }, freeModels: [OPENSCALE_ENTRY] })
+  assert.deepEqual(tiers.freeModels, [OPENSCALE_ENTRY])
+  assert.doesNotThrow(() => assertChildrenOn(tiers))
+  const free = teamConfig({ modelMode: 'free', freeModels: [OPENSCALE_ENTRY, { provider: 'gpt', model: 'gpt-6-luna', effort: null }] })
+  assert.throws(() => assertChildrenOn(free), OPENSCALE_LEFT)
+  assert.doesNotThrow(() => assertChildrenOn(mergeTeamConfig(free, { freeModels: [{ provider: 'gpt', model: 'gpt-6-luna', effort: null }] })))
+})
+
+test('a saved OpenScale leader is not replaced by Claude Code, and no team starts on it', async (t) => {
+  assert.equal(teamConfig({ leaderProvider: 'openscale' }).leaderProvider, 'openscale')
+  const f = await setup(t)
+  const started = f.threads.calls.length + f.terminals.calls.length
+  f.setSettings({
+    ...structuredClone(TEAM_DEFAULTS),
+    gpt: { enabled: true, low: { model: 'gpt-6-luna', effort: 'medium' }, mid: { model: 'gpt-6.1-sol', effort: 'high' } },
+    leaderProvider: 'openscale', dshLeader: { provider: 'openscale', model: 'deepseek/deepseek-v4.1-flash', effort: 'low' },
+  })
+  await assert.rejects(f.manager.create({ workspace: f.workspace }), OPENSCALE_LEFT)
+  assert.equal(f.threads.calls.length + f.terminals.calls.length, started)
+})
+
+test('changing the leader of a team saved with OpenScale leaves its children and settings working', async (t) => {
+  // The team started with an OpenScale leader (saved as the start choice); its panel then moves the leader to DeepSeek.
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  f.team.config = teamConfig({ ...f.team.config, leaderProvider: 'openscale', dshLeader: { provider: 'openscale', model: 'deepseek/deepseek-v4.1-flash', effort: 'low' } })
+  await f.manager.changeLeader(f.team.id, { model: '["deepseek-official","deepseek-v4-flash"]', effort: null })
+  assert.equal(f.threads.threads.get(f.leader).model, '["deepseek-official","deepseek-v4-flash"]')
+  assert.equal(f.team.config.leaderProvider, 'openscale')
+  await f.tool('spawn', { title: 'child', task: 'work', provider: 'gpt', tier: 'low' })
+  assert.equal(f.team.children.length, 1)
+  await f.manager.updateConfig(f.team.id, { maxChildren: 4 })
+  assert.equal(f.team.config.maxChildren, 4)
+})
+
+test('a team still turned on to OpenScale does not spawn: its work is not given to another provider', async (t) => {
+  const f = await setup(t)
+  f.team.config = teamConfig({
+    ...f.team.config, retiredProviders: ['openscale'], deepseek: { enabled: true, low: { enabled: true, model: 'deepseek-v4-flash', effort: null } },
+  })
+  await assert.rejects(f.tool('spawn', { title: 'x', task: 'y' }), OPENSCALE_LEFT)
+  assert.equal(f.team.children.length, 0)
+  f.team.config = teamConfig({ ...f.team.config, retiredProviders: [], modelMode: 'free', freeModels: [OPENSCALE_ENTRY, { provider: 'gpt', model: 'gpt-6-luna', effort: null }] })
+  await assert.rejects(f.tool('spawn', { title: 'x', task: 'y' }), OPENSCALE_LEFT)
+  assert.equal(f.team.children.length, 0)
+})
+
+test('a child on OpenScale gets no more messages, not even a fresh start', async (t) => {
+  const f = await setup(t, { leaderProvider: 'gpt' })
+  await f.tool('spawn', { title: 'work', task: 'a', tier: 'low', provider: 'gpt', name: 'A' })
   const child = f.team.children[0]
-  assert.equal(child.provider, 'openscale')
-  assert.equal(f.threads.threads.get(child.taskId).model, JSON.stringify(['openscale', model]))
-  assert.equal(f.threads.threads.get(child.taskId).effort, 'low')
+  const deliveries = () => f.threads.calls.filter((call) => (call[0] === 'send' || call[0] === 'steer' || call[0] === 'create') && (call[1] === child.taskId || call[0] === 'create')).length
+  const before = deliveries()
+  child.provider = 'openscale'
+  await assert.rejects(f.tool('send', { child: 'A', message: 'more' }), OPENSCALE_LEFT)
+  await assert.rejects(f.tool('send', { child: 'A', message: 'new start', fresh: true }), OPENSCALE_LEFT)
+  assert.equal(deliveries(), before)
+})
+
+test('the leader\'s spawn tool no longer offers OpenScale', () => {
+  const script = fileURLToPath(new URL('../server/team-mcp.js', import.meta.url))
+  const out = execFileSync(process.execPath, [script], { input: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n', encoding: 'utf8' })
+  const spawn = JSON.parse(out.trim().split('\n')[0]).result.tools.find((tool) => tool.name === 'spawn')
+  assert.equal(spawn.inputSchema.properties.provider.enum.includes('openscale'), false)
+  assert.ok(spawn.inputSchema.properties.provider.enum.includes('deepseek'))
+  assert.doesNotMatch(spawn.inputSchema.properties.provider.description, /OpenScale/)
 })
 
 test('a Codex child reads only the child harness', async (t) => {

@@ -7,7 +7,6 @@ import YAML from 'yaml'
 import { writeText } from './json-file.js'
 import { ANTHROPIC_REF, OPENCODE_GO_REF } from './credentials.js'
 import { LOCAL_PROVIDER, isLocalModelId } from './local-llm.js'
-import { openscaleRoute } from './openscale.js'
 import { isModelId } from './model-catalog.js'
 import { SIWC_KEY_REF, SIWC_RESOURCE } from './siwc-client.js'
 import { childPrompt } from './teams-prompts.js'
@@ -82,7 +81,6 @@ export const SUBAGENT_TOOLS = {
   'opencode-go': { toolName: 'subagent_opencode_go', family: 'OpenCode Go', billing: 'covered by the user\'s OpenCode Go subscription' },
   'command-code': { toolName: 'subagent_command_code', family: 'Command Code', billing: 'billed through the user\'s Command Code account' },
   'command-code-claude': { toolName: 'subagent_command_code_claude', family: 'Command Code (Claude)', billing: 'billed through the user\'s Command Code account' },
-  openscale: { toolName: 'subagent_openscale', family: 'OpenScale', billing: 'billed through the user\'s OpenScale account' },
   'local-llm': { toolName: 'subagent_local', family: 'local LLM', billing: 'run on the user\'s own machine, with no per-token charge' },
 }
 
@@ -186,7 +184,7 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
  */
 export function homePatch({
   anthropicWorkspaceId = null, modelOverrides = {}, catalogModels = {},
-  subagents = [], subagentsEnabled = true, nativeSubagents = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null, commandCodeRoutes = {}, openscale = false,
+  subagents = [], subagentsEnabled = true, nativeSubagents = true, settingsFile = null, persona = null, webSearch = null, instructions = '', localRoute = null, opencodeGo = false, opencodeGoModels = null, commandCodeRoutes = {},
 } = {}) {
   // dsh's default (5 tries, 10 s at most) gives up within about 15 s, shorter
   // than the minute-long upstream hiccups ChatGPT's backend has.
@@ -232,7 +230,6 @@ export function homePatch({
           } } : {}),
           ...(localRoute ? { [LOCAL_PROVIDER]: localRoute } : {}),
           ...commandCodeRoutes,
-          ...(openscale ? { openscale: openscaleRoute() } : {}),
         },
       },
     },

@@ -7,6 +7,7 @@
 // (subagent-bridge-mcp.js) and replaces the task's own delegation tools.
 import { SUBAGENT_TOOLS } from './dsh-config.js'
 import { isLocalModelId } from './local-llm.js'
+import { fallbackProvider } from '../shared/usage-fallback.js'
 
 export const PARENTS = ['dsh', 'cl', 'gp']
 export const CLAUDE_PREFIX = 'claude:'
@@ -101,7 +102,12 @@ export function savedRoutes(saved) {
   const routes = defaultRoutes()
   for (const parent of PARENTS) {
     try {
-      routes[parent] = validateRoute(saved.subagentRoutes[parent])
+      const route = saved.subagentRoutes[parent]
+      // Keep the retired selection visible and disabled until the user picks another route.
+      // Resetting it to a native route would silently change the billing path.
+      if (route?.target === 'dsh' && fallbackProvider(route.model) === 'openscale') {
+        routes[parent] = { target: 'dsh', model: route.model, effort: typeof route.effort === 'string' ? route.effort : null }
+      } else routes[parent] = validateRoute(route)
     } catch {}
   }
   return routes
@@ -109,6 +115,7 @@ export function savedRoutes(saved) {
 
 /**
  * What a kind of task gets for its route.
+ * - `off`: a saved route uses a removed provider and needs a new selection.
  * - `native`: its own delegation tools (dsh `subagent`, Claude Code's Agent).
  *   `pinned` adds a DSH tool on the route's model; `claudeModel` (and `effort`)
  *   make Claude Code's subagents run on a model at a reasoning level.
@@ -118,6 +125,7 @@ export function savedRoutes(saved) {
  * its own tools.
  */
 export function routePlan(parent, route) {
+  if (route.target === 'dsh' && fallbackProvider(route.model) === 'openscale') return { mode: 'off' }
   const own = route.target === parent
   if (!own && !route.model) return { mode: 'native' }
   if (parent === 'gp' || !own) return { mode: 'bridge', target: route.target, model: route.model, effort: route.effort }

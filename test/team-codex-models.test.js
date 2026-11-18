@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { pickableEfforts } from '../web/src/util.ts'
+import * as modelSelection from '../web/src/model-selection.ts'
 
 const source = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source + '\nexport { ChildModels, FreeModels, dshEfforts }', {
@@ -26,6 +27,7 @@ function setup({ signedIn = true, models = [], levels } = {}) {
     'react/jsx-runtime': { jsx, jsxs: jsx },
     '../store': { request: async method => { requests.push(method) } },
     '../util': { pickableEfforts },
+    '../model-selection': modelSelection,
     './WorkflowModelField': { ModelField, modelGroups: () => models.length ? [{ id: 'codex', models: models.map(model => ({ value: 'codex:' + model.id, name: model.name })) }] : [] },
   }
   const component = {}
