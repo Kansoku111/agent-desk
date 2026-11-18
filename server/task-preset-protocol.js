@@ -3,9 +3,15 @@ const MAX_BRIEF = 16_000
 export const PRESET_ACTIVE = new Set(['preparing', 'running', 'verifying', 'stopping'])
 export const PRESET_LABEL = { delegate: '子に委託', review: '独立レビュー' }
 const fence = String.fromCharCode(96).repeat(3)
+// The JSON strings may quote Markdown with their own fences (a proposed prompt, a code sample), so a
+// fence only closes the block right after the object's closing brace.
+const presetBlock = () => new RegExp(fence + 'task-preset\\s*([\\s\\S]*?\\})\\s*' + fence, 'g')
+export function stripPresetBlocks(text) {
+  return text.replace(presetBlock(), '')
+}
 function envelope(text) {
   if (typeof text !== 'string' || text.length > 64_000) throw new Error('担当の出力が長すぎるか、ありません')
-  const blocks = [...text.matchAll(new RegExp(fence + 'task-preset\\s*([\\s\\S]*?)' + fence, 'g'))]
+  const blocks = [...text.matchAll(presetBlock())]
   if (blocks.length !== 1) throw new Error('task-preset のJSONブロックを1つ返してください')
   let value
   try { value = JSON.parse(blocks[0][1]) } catch { throw new Error('担当のJSONを読み取れません') }

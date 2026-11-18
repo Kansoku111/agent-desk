@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { TaskPresets } from '../server/task-presets.js'
 import { TeamManager } from '../server/teams.js'
-import { parsePresetBrief, parsePresetResult, preparePresetPrompt, matchesPresetPrompt, workerPresetInstructions } from '../server/task-preset-protocol.js'
+import { parsePresetBrief, parsePresetResult, preparePresetPrompt, matchesPresetPrompt, workerPresetInstructions, stripPresetBlocks } from '../server/task-preset-protocol.js'
 import { createMcpServerList } from '../server/mcp-servers.js'
 import { runtimeKey } from '../server/runtime.js'
 import { sourceSnapshot } from '../server/execution.js'
@@ -72,6 +72,17 @@ test('one-shot envelopes reject wrong run, ambiguous blocks, extra fields and in
   assert.ok(matchesPresetPrompt(wrapped, preparePresetPrompt(run)))
   assert.equal(matchesPresetPrompt('extra instructions\n' + wrapped, preparePresetPrompt(run)), false)
   assert.equal(matchesPresetPrompt(wrapped.replace('id="123a">', 'id="different">'), preparePresetPrompt(run)), false)
+})
+
+test('envelope JSON may quote Markdown code fences', () => {
+  const run = { id: 'R', kind: 'review' }
+  const quoted = '案:\n' + fence + '\nカードを1枚追加してください。\n' + fence + '\n以上'
+  assert.equal(parsePresetBrief(brief(run, { brief: quoted }), run).brief, quoted)
+  const oneLine = fence + 'task-preset ' + JSON.stringify({ version: 1, requestId: run.id, kind: run.kind, status: 'ready', brief: quoted, questions: '' }) + fence
+  assert.equal(parsePresetBrief(oneLine, run).brief, quoted)
+  const report = '意見\n' + fence + 'ts\nconst a = {}\n' + fence + '\n' + result(run, { summary: quoted })
+  assert.equal(parsePresetResult(report, run).summary, quoted)
+  assert.equal(stripPresetBlocks(report).trim(), '意見\n' + fence + 'ts\nconst a = {}\n' + fence)
 })
 
 test('review fix uses the explicitly selected DSH permission and opinion stays read-only', async (t) => {

@@ -9,7 +9,7 @@ import { workflowEffort, workflowEffortSupported, workflowLevels } from '../shar
 import { reviewModelChoice } from '../shared/task-preset-models.js'
 import { abClaudeArgs } from './ab-runner.js'
 import { PRESET_PROMPT_MARK } from '../shared/task-preset-mark.js'
-import { PRESET_ACTIVE, PRESET_LABEL, preparePresetPrompt, parsePresetBrief, matchesPresetPrompt, workerPresetInstructions, parsePresetResult } from './task-preset-protocol.js'
+import { PRESET_ACTIVE, PRESET_LABEL, preparePresetPrompt, parsePresetBrief, matchesPresetPrompt, workerPresetInstructions, parsePresetResult, stripPresetBlocks } from './task-preset-protocol.js'
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const finalText = (turn) => (turn?.items ?? []).filter((item) => item.type === 'agent').at(-1)?.text ?? ''
@@ -496,7 +496,7 @@ export class TaskPresets extends EventEmitter {
       run.deliveryAttempted = true
       run.deliveryMessageId ??= randomUUID()
       await this.save(run)
-      const opinionReport = run.reviewMode === 'opinion' ? (run.report ?? '').replace(/```task-preset\s*[\s\S]*?```/g, '').trim() : ''
+      const opinionReport = run.reviewMode === 'opinion' ? stripPresetBlocks(run.report ?? '').trim() : ''
       const report = opinionReport || run.result?.summary || run.report || ''
       const limit = run.reviewMode === 'opinion' ? 12000 : 5000
       const text = '[Agent Desk: ' + PRESET_LABEL[run.kind] + 'の結果 / ' + run.id + ']\n状態: ' + run.phase + '\n検証: ' + (run.verification?.status ?? '未実行') + (run.warning ? '\n注意: ' + run.warning : '') + '\n' + report.slice(0, limit) + (report.length > limit ? '\n（報告を省略。全文は資料を参照）' : '') + '\n未完了: ' + (run.error || run.result?.remaining || 'なし') + '\n資料: ' + (run.record ?? '担当開始前') + (run.patch ? '\n修正差分: ' + run.patch : '') + (run.reviewMode === 'opinion' ? '\nこれは別担当の意見です。会話の文脈に沿って検討し、利用者の明示的な依頼なく実装・修正を始めないでください。' : '\nこれは担当の報告です。未検証事項を成功とみなさず、必要に応じて確認してください。')
