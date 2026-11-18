@@ -19,7 +19,7 @@ const ALIASES = [
   { id: 'sonnet', name: 'Sonnet（最新）' },
   { id: 'haiku', name: 'Haiku（最新）' },
 ]
-const NOTE = '両方を選ぶか、外側を押すと反映します。待機中なら会話を引き継いで Claude Code を起動し直します。このタスクだけに効き、Claude Code の既定の設定は変わりません。'
+const NOTE = '両方を選ぶか、外側を押すと反映します。待機中なら会話を引き継いで Claude Code を起動し直します。このタスクにだけ適用し、Claude Code の既定の設定は変わりません。'
 
 const family = (id: string) => ALIASES.findIndex((alias) => id.includes(alias.id))
 

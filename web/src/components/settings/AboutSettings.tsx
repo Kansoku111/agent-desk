@@ -268,7 +268,7 @@ export function AboutSettings() {
           </div>
         ))}
       </dl>
-      <p className="fine-print">サンドボックスは完全な隔離ではありません。重要なリポジトリはバックアップを。</p>
+      <p className="fine-print">サンドボックスは完全な隔離ではありません。重要なリポジトリはバックアップを取ってください。</p>
       <button type="button" className="link-button" onClick={() => openExternal('https://github.com/deepseek-ai/deepseek-harness')}>
         <ExternalLink size={12} /> DeepSeek Harness のリポジトリ
       </button>

@@ -214,7 +214,7 @@ function StartDialog({ source, kind }: { source: TaskPresetSource; kind: TaskPre
       </div></details>
       {cli && inspection && <ClaudeAuthConsent workspace={inspection.workspace} taskPreset onChange={setAuth} />}
       {(preset.saveError || error) && <p className="team-warning" role="alert">{preset.saveError || error}</p>}
-      <div className="preset-start-note muted">{busy ? '閉じても開始処理は続きます。' : '現在のモデルが指示を作り、子が実作業と確認を行います。完了後、親には自動送信しません。'}</div>
+      <div className="preset-start-note muted">{busy ? '閉じても開始処理は続きます。' : '現在のモデルが指示を作り、子が実際に作業して確認します。完了後、親には自動送信しません。'}</div>
       <div className="modal-actions"><button type="button" className="button" onClick={close}>{busy ? '閉じる' : 'キャンセル'}</button>
         <button type="button" className="button primary" disabled={busy || preset.saving || !inspection || !ready || (cli && !auth.ready)} onClick={() => void start()}>{busy && <Loader2 size={14} className="spin" />}始める</button></div>
     </div>

@@ -607,7 +607,7 @@ function TaskGroup({ group, collapsed, onToggle, expanded, onExpand, draftHere, 
         document.body,
       )}
       {colorOpen && createPortal(
-        <Modal title={`${group.label} — 色変更`} onClose={() => setColorOpen(false)} width={320}>
+        <Modal title={`${group.label}の色変更`} onClose={() => setColorOpen(false)} width={320}>
           <div className="modal-body project-color-palette" aria-label="プロジェクトの色">
             {PROJECT_HUES.map((hue, index) => (
               <button key={hue} type="button" className="project-color-swatch"

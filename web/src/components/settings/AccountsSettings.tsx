@@ -178,7 +178,7 @@ function ApiKeyCard({ provider, title, description, consoleUrl, placeholder, hin
         <p className={verified === 'valid' ? 'form-ok' : verified === 'checking' ? 'fine-print' : 'form-warning'}>
           {{
             checking: '接続を確認しています…',
-            valid: '✓ このキーで Claude を使えます。',
+            valid: 'このキーで Claude を使えます。',
             'needs-workspace': 'このキーにはワークスペースの指定が必要です。',
             'workspace-invalid': '設定したワークスペース ID が見つからないか、このキーで使う権限がありません。',
             invalid: 'このキーは認証に失敗しました。新しいキーを登録してください。',
