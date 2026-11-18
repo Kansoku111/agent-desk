@@ -1859,6 +1859,17 @@ test('spawn explains what the leader got wrong', async (t) => {
   await assert.rejects(tool('spawn', { title: 'x', task: 'y', tier: 'mid', provider: 'claude', name: '子1' }), /上限/)
 })
 
+test('TM can open 24 children concurrently but not a 25th', async (t) => {
+  const { team, tool } = await setup(t, { leaderProvider: 'gpt', maxChildren: 24 })
+  const results = await Promise.allSettled(Array.from({ length: 25 }, (_, i) =>
+    tool('spawn', { title: `work ${i + 1}`, task: 'work', tier: 'low', provider: 'gpt' })))
+  const rejected = results.filter((result) => result.status === 'rejected')
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 24)
+  assert.equal(rejected.length, 1)
+  assert.match(rejected[0].reason.message, /上限（24 人）/)
+  assert.equal(team.children.filter((child) => !child.closed).length, 24)
+})
+
 test('a team runs with what was chosen when it started; the saved settings only start the next one', async (t) => {
   const { manager, workspace, team, setSettings, tool, terminals, leader, typed } = await setup(t)
   const started = await manager.create({ workspace, choices: { maxChildren: 2, claude: { low: { model: 'claude-haiku-5-5' } } } })
@@ -1867,7 +1878,7 @@ test('a team runs with what was chosen when it started; the saved settings only 
   // The first team keeps its own, whatever the settings say now.
   setSettings(mergeTeamConfig(TEAM_DEFAULTS, { gpt: { enabled: false } }))
   assert.match(await tool('spawn', { title: 'x', task: 'y', tier: 'low', provider: 'gpt' }), /GPT-6 Luna/)
-  await assert.rejects(manager.create({ workspace, choices: { maxChildren: 99 } }), /1〜12/)
+  await assert.rejects(manager.create({ workspace, choices: { maxChildren: 25 } }), /1〜24/)
   // Who leads cannot change; the leader hears of new tiers.
   terminals.set(leader, { activity: 'idle' })
   manager.updateConfig(team.id, { leaderProvider: 'gpt', claude: { mid: { model: 'opus' } } })
@@ -2727,7 +2738,7 @@ test('team settings: defaults fill in, patches are checked', () => {
   assert.deepEqual(next.gpt.mid, { enabled: true, model: 'gpt-6.1-sol', effort: 'xhigh' })
   assert.equal(next.maxChildren, 8)
   assert.equal(next.leaderBypass, false)
-  assert.throws(() => mergeTeamConfig(undefined, { maxChildren: 0 }), /1〜12/)
+  assert.throws(() => mergeTeamConfig(undefined, { maxChildren: 0 }), /1〜24/)
   assert.throws(() => mergeTeamConfig(undefined, { gpt: { low: { model: 'bad model' } } }), /GPT の低枠のモデル/)
   // Nothing is on until the user turns it on; a team asks for at least one.
   for (const provider of ['gpt', 'claude', 'claudeApi', 'deepseek', 'opencodeGo']) assert.equal(teamConfig({})[provider].enabled, false)
@@ -2756,12 +2767,12 @@ test('free model settings validate the limit, uniqueness and provider-specific I
   assert.equal(teamConfig({}).defaultModelMode, 'tiers')
   assert.equal(teamConfig({}).modelMode, 'tiers')
   assert.deepEqual(teamConfig({}).freeModels, [])
-  const twelve = Array.from({ length: 12 }, (_, i) => ({ provider: 'gpt', model: `model-${i}`, effort: null }))
-  const config = mergeTeamConfig({}, { defaultModelMode: 'free', modelMode: 'free', freeModels: twelve })
+  const models = Array.from({ length: 24 }, (_, i) => ({ provider: 'gpt', model: `model-${i}`, effort: null }))
+  const config = mergeTeamConfig({}, { defaultModelMode: 'free', modelMode: 'free', freeModels: models })
   assert.doesNotThrow(() => assertChildrenOn(config))
-  assert.equal(config.freeModels.length, 12)
-  assert.throws(() => mergeTeamConfig({}, { freeModels: [...twelve, { provider: 'gpt', model: 'extra' }] }), /12 個/)
-  assert.throws(() => mergeTeamConfig({}, { freeModels: [twelve[0], twelve[0]] }), /同じモデル/)
+  assert.deepEqual(config.freeModels, models)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [...models, { provider: 'gpt', model: 'extra' }] }), /24 個/)
+  assert.throws(() => mergeTeamConfig({}, { freeModels: [models[0], models[0]] }), /同じモデル/)
   assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'gpt', model: 'x' }, { provider: 'gpt', model: 'x', effort: null }] }), /同じモデル/)
   assert.throws(() => mergeTeamConfig({}, { freeModels: [{ provider: 'gpt', model: 'x', effort: 'low' }, { provider: 'gpt', model: 'x', effort: 'low' }] }), /同じモデル/)
   const variants = [{ provider: 'gpt', model: 'x', effort: null }, { provider: 'gpt', model: 'x', effort: 'low' }, { provider: 'gpt', model: 'x', effort: 'high' }, { provider: 'local', model: 'x', effort: 'low' }]

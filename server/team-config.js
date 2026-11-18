@@ -1,6 +1,7 @@
 // Settings of the agent teams (設定 → エージェントチーム): who leads (Claude
 // Code or a dsh task, on which model), and which model each provider's
 // "low" and "mid" tier means, or a list of directly selected child models.
+import { MAX_CHILDREN_LIMIT, MAX_TEAM_MODELS } from '../shared/team-limits.js'
 import { assertToolMode } from './ptc.js'
 
 /**
@@ -22,8 +23,6 @@ const EXTRA_DSH_LEADERS = ['codex', 'claudeApi', 'deepseek', 'opencodeGo', 'comm
 export const RETIRED_PROVIDERS = { openscale: 'OpenScale' }
 export const TEAM_TIERS = ['low', 'mid']
 export const PROVIDER_NAMES = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
-export const MAX_CHILDREN_LIMIT = 12
-export const MAX_TEAM_MODELS = 12
 export const TEAM_MODEL_MODES = ['tiers', 'free']
 
 /** A Claude Code model alias (opus) or full name (claude-haiku-5-5), as `claude --model` takes it. */

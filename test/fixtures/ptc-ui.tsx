@@ -54,7 +54,7 @@ const { ExecutionStartDialog } = await import('../../web/src/components/Executio
 const server: any = { app: { remote: false, myPc: workspace }, openTargets: {}, settings: { agentTeams: teamConfig, modelVisibility: {}, projectNames: {} },
   accounts: { chatgpt: { signedIn: true }, claude: { configured: false }, deepseek: { configured: false } },
   catalog: { models: [{ value: model, id: 'fixture', provider: 'openai-codex', name: 'Fixture GPT' }], providers: {},
-    fallbackEfforts: [], effortsByModel: { [model]: [{ value: 'medium', name: 'Medium' }] } }, ab: [run], teams: [team], threads: [] }
+    fallbackEfforts: [], effortsByModel: { [model]: [{ value: 'medium', name: 'Medium' }] } }, codexModels: [], ab: [run], teams: [team], threads: [] }
 store.setState({ server })
 store.connect()
 function TeamFixture({ eco }: { eco: boolean }) {

@@ -17,9 +17,9 @@ import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { needsClaudeAuth, type AuthConsentState } from '../team-auth-consent'
 import { workflowEffortSupported, workflowLevels } from '../../../shared/workflow-effort.js'
 import { usageFallbackChoice } from '../../../shared/usage-fallback.js'
+import { MAX_CHILDREN_LIMIT, MAX_TEAM_MODELS } from '../../../shared/team-limits.js'
 import { usesClaudeApi } from '../subagent-routes'
 
-const MAX_CHILDREN = 12
 const PROVIDERS: TeamProvider[] = ['gpt', 'codex', 'claude', 'claudeApi', 'deepseek', 'opencodeGo', 'commandCode', 'commandCodeClaude', 'local']
 const PROVIDER_NAME: Record<TeamProvider, string> = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
 type DshProvider = 'gpt' | 'codex' | 'claudeApi' | 'deepseek' | 'opencodeGo' | 'commandCode' | 'commandCodeClaude' | 'local'
@@ -257,10 +257,10 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
       return
     }
     const chosen = pickerChoice(value)
-    if (chosen && models.length < MAX_CHILDREN) onChange({ freeModels: [...models, chosen] })
+    if (chosen && models.length < MAX_TEAM_MODELS) onChange({ freeModels: [...models, chosen] })
   }
   return <section className="account-card team-free-models">
-    <div className="account-head"><h3>子のモデル <span className="muted">{models.length} / {MAX_CHILDREN}</span></h3>
+    <div className="account-head"><h3>子のモデル <span className="muted">{models.length} / {MAX_TEAM_MODELS}</span></h3>
       <Dropdown placement="bottom" portal width={300} trigger={({ toggle, open }) => (
         <button type="button" className="button ghost" aria-haspopup="menu" aria-expanded={open} onClick={toggle}><Plus size={14} /> モデルを選択</button>
       )}>
@@ -271,7 +271,7 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
             {group.status && <MenuItem label={group.status} disabled onSelect={() => {}} />}
             {group.empty && <MenuItem label={group.empty} disabled onSelect={() => {}} />}
             {group.models.map((model) => <MenuItem key={model.value} label={model.name} checkable selected={selected.has(model.value)}
-              disabled={!selected.has(model.value) && models.length >= MAX_CHILDREN} onSelect={() => toggle(model.value)} />)}
+              disabled={!selected.has(model.value) && models.length >= MAX_TEAM_MODELS} onSelect={() => toggle(model.value)} />)}
           </div>)}
         </div>}
       </Dropdown>
@@ -290,10 +290,10 @@ function FreeModels({ server, config, onChange }: { server: AppState; config: Co
       const nextEffort = [...levels.slice(currentLevel + 1), ...levels.slice(0, currentLevel + 1)]
         .find((level) => level !== entry.effort && !otherEfforts.has(level))
       const duplicate = <button type="button" className="icon-button team-model-duplicate"
-        title={models.length >= MAX_CHILDREN ? 'モデルは12個まで' : nextEffort ? '別の推論レベルで追加' : '追加できる推論レベルがありません'}
-        aria-label={`モデル ${index + 1}を別の推論レベルで追加`} disabled={models.length >= MAX_CHILDREN || !nextEffort}
+        title={models.length >= MAX_TEAM_MODELS ? `モデルは${MAX_TEAM_MODELS}個まで` : nextEffort ? '別の推論レベルで追加' : '追加できる推論レベルがありません'}
+        aria-label={`モデル ${index + 1}を別の推論レベルで追加`} disabled={models.length >= MAX_TEAM_MODELS || !nextEffort}
         onClick={() => {
-          if (nextEffort && models.length < MAX_CHILDREN) onChange({ freeModels: [...models.slice(0, index + 1), { ...entry, effort: nextEffort }, ...models.slice(index + 1)] })
+          if (nextEffort && models.length < MAX_TEAM_MODELS) onChange({ freeModels: [...models.slice(0, index + 1), { ...entry, effort: nextEffort }, ...models.slice(index + 1)] })
         }}><Plus size={14} /></button>
       return <div className="team-free-model-row" key={`${value}:${index}`}>
         <ModelField label={`モデル ${index + 1}`} labelAction={duplicate} value={value} groups={choices} disabled={false} effort={entry.effort ?? ''}
@@ -403,7 +403,7 @@ function ChildCount({ config, onChange }: { config: Config; onChange: Change }) 
         <p className="muted">完了（close）した子は数えません。</p>
       </div>
       <select value={config.maxChildren} onChange={(event) => onChange({ maxChildren: Number(event.target.value) })} aria-label="同時に動かせる子の数">
-        {Array.from({ length: MAX_CHILDREN }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count} 人まで</option>)}
+        {Array.from({ length: MAX_CHILDREN_LIMIT }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count} 人まで</option>)}
       </select>
     </div>
   )
