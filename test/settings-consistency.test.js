@@ -132,12 +132,12 @@ test('settings.update runtime effect errors also identify the successful commit'
     publishSettings: saved => { live = saved },
     applyHomePatch: () => { throw new Error('patch unavailable') },
   })
-  await assert.rejects(service.update({ customInstructions: 'saved' }), error => {
+  await assert.rejects(service.update({ customInstructionItemsBase: [], customInstructionItems: [{ id: 'test', title: '指示', body: 'saved', enabled: true, targets: { dsh: true, claude: true } }] }), error => {
     assert.equal(error.settingsCommitted, true)
     assert.match(error.message, /保存済み/)
     return true
   })
-  assert.equal(live.customInstructions, 'saved')
+  assert.equal(live.customInstructionItems[0].body, 'saved')
 })
 /* Post-save errors must not be confused with failed persistence, including notices. */
 test('publication notice failure retains the installed saved snapshot', async () => {

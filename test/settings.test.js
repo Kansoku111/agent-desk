@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import { effectiveHarness } from '../server/team-harness.js'
 import { createSettingsService, DEFAULT_SETTINGS, effectiveCustomInstructions, migrateSettings, planSettingsUpdate } from '../server/settings.js'
 
+const instruction = (body, overrides = {}) => ({ id: 'test', title: 'ルール', body, enabled: true, targets: { dsh: true, claude: true }, ...overrides })
+const instructionPatch = (body) => ({ customInstructionItems: [instruction(body)], customInstructionItemsBase: [] })
 const defaults = (patch = {}) => ({ ...structuredClone(DEFAULT_SETTINGS), ...patch })
 const deferred = () => {
   let resolve
@@ -79,24 +81,57 @@ test('concurrent fallback editors cannot overwrite a newer committed route', asy
   assert.deepEqual(h.live.usageFallbackRoutes, a)
 })
 
-test('custom instructions switch preserves text, persists, and refreshes runtime configuration', async () => {
-  const legacy = migrateSettings({ customInstructions: 'saved instructions' })
-  assert.equal(legacy.customInstructionsEnabled, true)
-  assert.equal(effectiveCustomInstructions(legacy), 'saved instructions')
-  assert.equal(effectiveCustomInstructions({ customInstructions: 'legacy' }), 'legacy')
-  const h = harness(legacy)
-  await h.service.update({ customInstructionsEnabled: false })
-  assert.equal(h.live.customInstructions, 'saved instructions')
-  assert.equal(effectiveCustomInstructions(h.live), '')
-  assert.deepEqual(h.events, ['save', 'publish', 'home', 'restart'])
-  const restored = migrateSettings(JSON.parse(JSON.stringify(h.writes[0])))
-  assert.equal(restored.customInstructionsEnabled, false)
-  assert.equal(effectiveCustomInstructions(restored), '')
-  await h.service.update({ customInstructions: 'edited while off' })
-  assert.equal(effectiveCustomInstructions(h.live), '')
-  await h.service.update({ customInstructionsEnabled: true })
-  assert.equal(effectiveCustomInstructions(h.live), 'edited while off')
-  assert.deepEqual(h.events.slice(-4), ['save', 'publish', 'home', 'restart'])
+test('legacy instructions keep their text and on/off state as one item for both targets', () => {
+  for (const enabled of [true, false, undefined]) {
+    const legacy = migrateSettings({ customInstructions: '  saved instructions\n', customInstructionsEnabled: enabled })
+    assert.deepEqual(legacy.customInstructionItems, [instruction('  saved instructions\n', { id: 'legacy', title: '既存のカスタム指示', enabled: enabled !== false })])
+    assert.ok(!Object.hasOwn(legacy, 'customInstructions') && !Object.hasOwn(legacy, 'customInstructionsEnabled'))
+    for (const target of ['dsh', 'claude']) assert.equal(effectiveCustomInstructions(legacy, target), enabled === false ? '' : '  saved instructions\n')
+    assert.deepEqual(migrateSettings(JSON.parse(JSON.stringify(legacy))), legacy)
+  }
+  assert.deepEqual(migrateSettings({ customInstructionItems: [], customInstructions: 'not resurrected' }).customInstructionItems, [])
+})
+
+test('saved items filter by target and only changes to effective dsh text restart dsh', async () => {
+  const h = harness()
+  const save = (items) => h.service.update({ customInstructionItems: items, customInstructionItemsBase: h.live.customInstructionItems })
+  const dsh = instruction('one', { targets: { dsh: true, claude: false } })
+  const claude = instruction('two', { id: 'claude', targets: { dsh: false, claude: true } })
+  const shared = instruction('three', { id: 'shared' })
+  await save([claude])
+  assert.deepEqual(h.events.splice(0), ['save', 'publish'])
+  await save([dsh, claude, shared])
+  assert.deepEqual(h.events.splice(0), ['save', 'publish', 'home', 'restart'])
+  assert.equal(effectiveCustomInstructions(h.live, 'dsh'), 'one\n\nthree')
+  assert.equal(effectiveCustomInstructions(h.live, 'claude'), 'two\n\nthree')
+  const off = { ...shared, enabled: false }
+  await save([dsh, claude, off])
+  assert.equal(effectiveCustomInstructions(h.live, 'claude'), 'two')
+  assert.equal(effectiveCustomInstructions(h.live, 'dsh'), 'one')
+  assert.deepEqual(h.events.splice(0), ['save', 'publish', 'home', 'restart'])
+  await save([dsh, claude, { ...off, body: 'edited while off' }])
+  assert.deepEqual(h.events.splice(0), ['save', 'publish'])
+  assert.equal(migrateSettings(h.live).customInstructionItems[2].body, 'edited while off')
+  await save([dsh, claude, { ...h.live.customInstructionItems[2], enabled: true }])
+  assert.equal(effectiveCustomInstructions(h.live, 'dsh'), 'one\n\nedited while off')
+  await save([dsh, claude])
+  assert.equal(effectiveCustomInstructions(h.live, 'dsh'), 'one')
+})
+
+test('item list validation is atomic and rejects stale editors', async () => {
+  const h = harness()
+  for (const value of [null, [null], [instruction('x'), instruction('y')], [instruction(42)],
+    [instruction('', { title: ' ' })], [instruction('', { title: 'x'.repeat(101) })],
+    [instruction('', { id: '../test' })], [instruction('', { enabled: 'false' })],
+    [instruction('', { targets: { dsh: false, claude: false } })], [instruction('', { targets: { dsh: 'true', claude: false } })]]) {
+    await assert.rejects(h.service.update({ customInstructionItems: value, customInstructionItemsBase: [], theme: 'light' }))
+  }
+  assert.deepEqual(h.events, [])
+  const first = h.service.update(instructionPatch('first'))
+  const stale = h.service.update(instructionPatch('stale'))
+  await first
+  await assert.rejects(stale, /別の画面/)
+  assert.equal(h.live.customInstructionItems[0].body, 'first')
 })
 
 test('manual currency defaults and validation do not infer a USDJPY rate', () => {
@@ -174,11 +209,11 @@ test('subagent routes default to each kind itself, migrate from the old per-prov
 
 test('mixed valid/invalid patches have no persistence, publication or effects', async () => {
   const patches = [
-    { customInstructions: 'valid', dshUpdateChannel: 'invalid' },
+    { ...instructionPatch('valid'), dshUpdateChannel: 'invalid' },
     { theme: 'light', usageCurrency: 'JPY' },
     { theme: 'light', usdJpyRate: 0 },
     { contextLimits: { anthropic: 128_000 }, subagentRoutes: { dsh: { target: 'nowhere' } } },
-    { subagentRoutes: { cl: { model: 'claude:opus' } }, customInstructions: 5 },
+    { subagentRoutes: { cl: { model: 'claude:opus' } }, customInstructionItems: 5, customInstructionItemsBase: [] },
     { fastMode: { anthropic: true }, modelAutoUpdate: 'false' },
     { browserTool: false, defaultPermissionMode: 'invalid' },
     { notifications: true, defaultModel: {} },
@@ -206,7 +241,7 @@ test('planning is pure and preserves existing settings and partial provider maps
     contextLimits: { anthropic: 200_000, unsupported: 'ignored' },
     subagentRoutes: { cl: { model: 'claude:custom' } },
     fastMode: { anthropic: true, unsupported: 'ignored' },
-    customInstructions: '  日本語で\n{{model}}  ',
+    ...instructionPatch('  日本語で\n{{model}}  '),
     customModels: [],
     remoteAccess: true,
     ignored: 'field',
@@ -218,7 +253,7 @@ test('planning is pure and preserves existing settings and partial provider maps
   assert.deepEqual(a.settings.subagentRoutes, { dsh: current.subagentRoutes.dsh, cl: { target: 'cl', model: 'claude:custom', effort: null }, gp: current.subagentRoutes.gp })
   assert.deepEqual(a.settings.fastMode, { 'openai-codex': false, anthropic: true })
   assert.deepEqual(a.settings.fastModePeriods, { anthropic: [[100, 200], [300, null]], legacy: [[1, 2]] })
-  assert.equal(a.settings.customInstructions, patch.customInstructions)
+  assert.deepEqual(a.settings.customInstructionItems, patch.customInstructionItems)
   assert.deepEqual(a.settings.customModels, current.customModels)
   assert.equal(a.settings.remoteAccess, false)
   assert.deepEqual(a.settings.savedExtension, { keep: true })
@@ -234,7 +269,7 @@ test('save failure leaves live settings and fast periods untouched, then the que
   const before = freeze(h.live)
   await assert.rejects(h.service.update({
     contextLimits: { anthropic: 128_000 },
-    customInstructions: 'not committed',
+    ...instructionPatch('not committed'),
     fastMode: { anthropic: true },
     browserTool: false,
     modelAutoUpdate: false,
@@ -245,7 +280,7 @@ test('save failure leaves live settings and fast periods untouched, then the que
   fail = false
   await h.service.update({ theme: 'light' })
   assert.equal(h.live.theme, 'light')
-  assert.equal(h.live.customInstructions, '')
+  assert.deepEqual(h.live.customInstructionItems, [])
   assert.equal(h.live.fastMode.anthropic, false)
   assert.deepEqual(h.live.fastModePeriods.anthropic, [[1, 2]])
   assert.deepEqual(h.events, ['save', 'save', 'publish'])
@@ -253,7 +288,7 @@ test('save failure leaves live settings and fast periods untouched, then the que
 
 test('compound changes save, publish, patch and restart once, after persistence', async () => {
   const h = harness({ modelAutoUpdate: false }, {
-    fast: (live) => assert.equal(live.customInstructions, 'committed'),
+    fast: (live) => assert.equal(live.customInstructionItems[0]?.body, 'committed'),
     catalog: (live) => {
       assert.equal(live.modelAutoUpdate, true)
       return { restartRequired: true }
@@ -262,7 +297,7 @@ test('compound changes save, publish, patch and restart once, after persistence'
   const result = await h.service.update({
     contextLimits: { anthropic: 200_000 },
     subagentRoutes: { gp: { model: 'codex:gpt-custom' } },
-    customInstructions: 'committed',
+    ...instructionPatch('committed'),
     fastMode: { anthropic: true },
     browserHeadless: true,
     browserTool: false,
@@ -283,14 +318,14 @@ test('live state remains unchanged until a delayed save succeeds', async () => {
   const finish = deferred()
   const h = harness({}, { save: async () => { started.resolve(); await finish.promise } })
   const before = h.live
-  const request = h.service.update({ customInstructions: 'later' })
+  const request = h.service.update({ ...instructionPatch('later') })
   await started.promise
   assert.strictEqual(h.live, before)
-  assert.equal(h.live.customInstructions, '')
+  assert.deepEqual(h.live.customInstructionItems, [])
   assert.deepEqual(h.events, ['save'])
   finish.resolve()
   await request
-  assert.equal(h.live.customInstructions, 'later')
+  assert.equal(h.live.customInstructionItems[0]?.body, 'later')
   assert.deepEqual(h.events, ['save', 'publish', 'home', 'restart'])
 })
 
@@ -306,7 +341,7 @@ test('concurrent updates plan from the last commit, capture patches and preserve
       await finish.promise
     },
   })
-  const a = h.service.update({ contextLimits: { anthropic: 200_000 }, customInstructions: 'first' })
+  const a = h.service.update({ contextLimits: { anthropic: 200_000 }, ...instructionPatch('first') })
   await started.promise
   const patch = { contextLimits: { 'openai-codex': 400_000 }, theme: 'light' }
   const b = h.service.update(patch)
@@ -317,7 +352,7 @@ test('concurrent updates plan from the last commit, capture patches and preserve
   const [one, two] = await Promise.all([a, b])
   assert.equal(one.settings.theme, 'dark')
   assert.equal(two.settings.theme, 'light')
-  assert.equal(h.live.customInstructions, 'first')
+  assert.equal(h.live.customInstructionItems[0]?.body, 'first')
   assert.deepEqual(h.live.contextLimits, { anthropic: 200_000, 'openai-codex': 400_000 })
   assert.deepEqual(h.events, ['save', 'publish', 'home', 'restart', 'save', 'publish', 'home', 'restart'])
   assert.deepEqual(h.writes[1], h.live)
@@ -412,16 +447,16 @@ test('the queue includes runtime effects, not just disk writes', async () => {
 
 test('a failed queued request does not drop a following valid update', async () => {
   const h = harness()
-  const invalid = h.service.update({ customInstructions: 'bad', notifications: 'false' })
-  const valid = h.service.update({ customInstructions: 'good' })
+  const invalid = h.service.update({ ...instructionPatch('bad'), notifications: 'false' })
+  const valid = h.service.update({ ...instructionPatch('good') })
   await assert.rejects(invalid, /boolean/)
   await valid
-  assert.equal(h.live.customInstructions, 'good')
+  assert.equal(h.live.customInstructionItems[0]?.body, 'good')
   assert.deepEqual(h.events, ['save', 'publish', 'home', 'restart'])
 })
 
 test('boolean settings and provider toggles reject coercion', async () => {
-  const keys = ['notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'checkpoints', 'modelAutoUpdate', 'customInstructionsEnabled', 'claudeCodeMode']
+  const keys = ['notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'checkpoints', 'modelAutoUpdate', 'claudeCodeMode']
   for (const key of keys) {
     for (const value of ['false', 0, 1, null, undefined, {}, []]) {
       const h = harness()
@@ -452,16 +487,15 @@ test('enum and string settings validate types without restricting opaque custom 
       assert.deepEqual(h.events, [])
     }
   }
-  for (const key of ['defaultModel', 'lastWorkspace', 'defaultEffort', 'customInstructions']) {
+  for (const key of ['defaultModel', 'lastWorkspace', 'defaultEffort']) {
     for (const value of [1, false, {}, [], undefined]) {
       assert.throws(() => planSettingsUpdate(defaults(), { [key]: value }, 0), /文字列/)
     }
   }
   assert.throws(() => planSettingsUpdate(defaults(), { defaultEffort: null }, 0), /文字列/)
-  assert.throws(() => planSettingsUpdate(defaults(), { customInstructions: null }, 0), /文字列/)
   const custom = JSON.stringify({ provider: 'anthropic', model: 'my-custom-model' })
   const h = harness()
-  await h.service.update({ defaultModel: custom, defaultEffort: 'future-effort', lastWorkspace: 'F:\\custom', customInstructions: '' })
+  await h.service.update({ defaultModel: custom, defaultEffort: 'future-effort', lastWorkspace: 'F:\\custom' })
   assert.equal(h.live.defaultModel, custom)
   assert.equal(h.live.defaultEffort, 'future-effort')
   await h.service.update({ defaultModel: null, lastWorkspace: null })
@@ -500,8 +534,11 @@ test('patch/maps, context choices, model IDs and instruction length are validate
     assert.throws(() => planSettingsUpdate(defaults(), { subagentRoutes: { cl: { model: value } } }, 0), /モデル/)
   }
   assert.equal(planSettingsUpdate(defaults(), { subagentRoutes: { cl: { model: null } } }, 0).settings.subagentRoutes.cl.model, null)
-  assert.equal(planSettingsUpdate(defaults(), { customInstructions: 'x'.repeat(10_000) }, 0).settings.customInstructions.length, 10_000)
-  assert.throws(() => planSettingsUpdate(defaults(), { customInstructions: 'x'.repeat(10_001) }, 0), /文字まで/)
+  const items = [instruction('x'.repeat(5_000)), instruction('y'.repeat(5_000), { id: 'off', enabled: false })]
+  const patch = { customInstructionItems: items, customInstructionItemsBase: [] }
+  assert.deepEqual(planSettingsUpdate(defaults(), patch, 0).settings.customInstructionItems, items)
+  items[1].body += 'z'
+  assert.throws(() => planSettingsUpdate(defaults(), patch, 0), /文字まで/)
 })
 
 test('fast mode records opening and closing exactly once without restarting runtimes', async () => {
@@ -527,10 +564,10 @@ test('fast mode records opening and closing exactly once without restarting runt
 
 test('unchanged toggles avoid checks/restarts and home patch content controls restarting', async () => {
   const h = harness({}, { home: () => false })
-  await h.service.update({ browserTool: true, modelAutoUpdate: true, dshUpdateChannel: 'latest', customInstructions: '' })
-  assert.deepEqual(h.events, ['save', 'publish', 'home'])
+  await h.service.update({ browserTool: true, modelAutoUpdate: true, dshUpdateChannel: 'latest', customInstructionItems: [], customInstructionItemsBase: [] })
+  assert.deepEqual(h.events, ['save', 'publish'])
   await h.service.update({ theme: 'light', notifications: false, checkpoints: false })
-  assert.deepEqual(h.events.slice(3), ['save', 'publish'])
+  assert.deepEqual(h.events.slice(2), ['save', 'publish'])
 })
 
 test('catalog toggles combine restart reasons and only enabling checks for new models', async () => {
@@ -564,15 +601,15 @@ test('old saved values and unknown fields are retained without migration', async
 test('effect failure retains the saved commit and retries with a later update', async () => {
   let fail = true
   const h = harness({}, { home: () => { if (fail) throw new Error('home patch unavailable'); return true } })
-  await assert.rejects(h.service.update({ customInstructions: 'already saved' }), error => {
+  await assert.rejects(h.service.update({ ...instructionPatch('already saved') }), error => {
     assert.equal(error.settingsCommitted, true)
     return /home patch unavailable/.test(error.message)
   })
-  assert.equal(h.live.customInstructions, 'already saved')
+  assert.equal(h.live.customInstructionItems[0]?.body, 'already saved')
   assert.deepEqual(h.events, ['save', 'publish', 'home'])
   fail = false
   await h.service.update({ theme: 'light' })
-  assert.equal(h.live.customInstructions, 'already saved')
+  assert.equal(h.live.customInstructionItems[0]?.body, 'already saved')
   assert.equal(h.live.theme, 'light')
   assert.deepEqual(h.events, ['save', 'publish', 'home', 'save', 'publish', 'home', 'restart'])
 })

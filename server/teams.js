@@ -27,13 +27,14 @@ import { isLeaderUsageLimit } from './leader-usage-limit.js'
 import { usageFallbackChoice } from '../shared/usage-fallback.js'
 import { carryoverText } from './thread-utils.js'
 import { assertChildrenOn, assertNoRetiredProviders, assertNotRetired, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
-import { childTurnArgs, leaderLaunch, leaderMcpServer } from './teams-launch.js'
+import { childTurnArgs, leaderLaunch, leaderMcpServer, writeChildPrompt } from './teams-launch.js'
 import { CATALOG_PROVIDER, childPrompt, childTask, clip, describeTool, executionTask, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { markOf, reportsMessage, reportText } from './teams-report.js'
 import { EMPTY_TEAMS, restoreTeams, saveSnapshot } from './teams-store.js'
 import { observerCarryover, observerChildTurns, observerStatus } from './team-observer-data.js'
 import { observerSend, observerStop } from './team-observer-actions.js'
 import { OBSERVER_INSTRUCTIONS } from './team-observer-mcp.js'
+import { instructionsSection } from './instructions-plugin.js'
 import { TeamClaudeAuth, AUTH_REQUIRED } from './claude-auth.js'
 import { ExecutionVerifier, normalizeChecks, sourceSnapshot, verificationReport, workspaceKey, workspaceWithin, workspacesOverlap } from './execution.js'
 import { ExecutionReview } from './execution-review.js'
@@ -529,7 +530,7 @@ export class TeamManager extends EventEmitter {
       else {
         const url = new URL(this.apiUrl()); url.pathname = '/api/team-observer'
         const mcp = this.#writeFile(team, 'observer-mcp.json', JSON.stringify({ mcpServers: { observer: { type: 'stdio', command: this.node, args: [observerMcpScript], env: { AGENT_DESK_OBSERVER_URL: url.href, AGENT_DESK_OBSERVER_TEAM: team.id, AGENT_DESK_OBSERVER_SECRET: observer.secret } } } }))
-        const prompt = this.#writeFile(team, 'observer.md', OBSERVER_INSTRUCTIONS)
+        const prompt = this.#writeFile(team, 'observer.md', [OBSERVER_INSTRUCTIONS, instructionsSection(this.instructions())].filter(Boolean).join('\n\n'))
         await this.agents.setArgs(observer.id, ['--tools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', mcp, '--allowedTools', 'Read,Glob,Grep,mcp__observer', '--permission-mode', 'bypassPermissions', '--append-system-prompt-file', prompt])
         guard()
         this.agents.run(observer.id, text.trim(), { ...(savedImages.length ? { images: savedImages } : {}), ...((observer.carryover || blocks.length) ? { blocks: [...(observer.carryover ? [{ type: 'text', text: observer.carryover }] : []), ...blocks] } : {}) })
@@ -1507,7 +1508,7 @@ export class TeamManager extends EventEmitter {
       } else if (child.kind === 'codex') {
         await this.#toCodex(child, body, guard)
       } else {
-        this.#toAgent(child, body)
+        this.#toAgent(team, child, body)
       }
     } catch (error) {
       if (!switched) Object.assign(child, previous)
@@ -1625,7 +1626,7 @@ export class TeamManager extends EventEmitter {
       }
       guard()
       how = child.kind === 'thread' ? await this.#toThread(child, body, guard)
-        : child.kind === 'codex' ? await this.#toCodex(child, body, guard) : this.#toAgent(child, body)
+        : child.kind === 'codex' ? await this.#toCodex(child, body, guard) : this.#toAgent(team, child, body)
     } catch (error) {
       child.awaiting = false
       if (committed) {
@@ -1702,15 +1703,20 @@ export class TeamManager extends EventEmitter {
   }
 
   /** A Claude child takes a message as its next turn, which resumes its conversation; one that works reads it at its next step. */
-  #toAgent(child, body) {
+  #toAgent(team, child, body) {
     if (!this.agents.get(child.taskId)) throw new Error(`子「${child.name}」のタスクは削除されています`)
     if (this.agents.running(child.taskId)) {
       if (this.agents.steer(child.taskId, body)) return '作業中のところへ割り込みで渡しました'
       child.pending.push(body)
       return 'いまの作業が終わりしだい渡します'
     }
-    this.agents.run(child.taskId, body)
+    this.#runAgent(team, child, body)
     return '送りました'
+  }
+
+  #runAgent(team, child, body) {
+    writeChildPrompt({ child, dir: this.#teamDir(team), instructions: this.instructions(), harness: this.#harness(team).child })
+    this.agents.run(child.taskId, body)
   }
 
   /** Messages for a child that was busy when they came: they go together once it is free. */
@@ -1741,7 +1747,8 @@ export class TeamManager extends EventEmitter {
       child.followups = []
       if (fromLeader) child.awaiting = true
       try {
-        runner.run(child.taskId, text)
+        if (child.kind === 'agent') this.#runAgent(team, child, text)
+        else runner.run(child.taskId, text)
       } catch (error) {
         child.followups = followups
         if (fromLeader) {
@@ -1928,7 +1935,7 @@ export class TeamManager extends EventEmitter {
       void this.#save()
       this.#emit(team)
     } else {
-      this.agents.run(child.taskId, body)
+      this.#runAgent(team, child, body)
     }
     return { team: this.summary(team), ...(source === 'observer' && followupId ? { followupId } : {}) }
   }

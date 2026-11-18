@@ -106,11 +106,16 @@ export function leaderMcpServer({ team, config, models, dir, node, script, apiUr
  */
 export function childTurnArgs({ child, dir, instructions = '', harness = '', lean = false, imageMcp = null }) {
   const mcp = imageMcp && !lean ? writeFile(dir, `${child.id}-image-mcp.json`, JSON.stringify({ mcpServers: { imagegen: imageMcp } })) : null
-  const prompt = writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name, { background: true, harness }), instructions))
+  const prompt = writeChildPrompt({ child, dir, instructions, harness })
   return [
     '--permission-mode', 'bypassPermissions', '--disallowedTools', CHILD_DISALLOWED, '--append-system-prompt-file', prompt,
     ...(child.execution?.mode === 'research' ? ['--tools', 'Read,Glob,Grep'] : []),
     ...(mcp ? ['--mcp-config', mcp] : []),
     ...(lean ? ['--strict-mcp-config', '--no-chrome'] : ['--chrome']),
   ]
+}
+
+/** The same file is reread by Claude on resume; tool flags do not need to change. */
+export function writeChildPrompt({ child, dir, instructions, harness }) {
+  return writeFile(dir, `${child.id}.md`, withInstructions(childPrompt(child.name, { background: true, harness }), instructions))
 }

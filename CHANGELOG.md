@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- パーソナライズの指示を項目ごとに編集・オンオフでき、dsh・Codex（GP）と Claude Code（CL）のどちらに渡すかも選べるようにしました。以前の指示は1件にまとめて引き継ぎます。
 - Code Mode をオンにすると、その後に作る TM・eco の Claude Code のリーダーも Code Mode で起動します。ヘッドレスで動くチームの子・委託・AB は、Claude Code が対話画面でしか Code Mode を使わないため、これまでどおり対象外です。
 - アプリの起動時と実行環境の再起動後に、既定の権限モードの dsh を先に起動します。再起動後の最初のタスクが dsh の起動を待たなくなります（CPU が混んでいると 30 秒以上かかっていました）。
 - Updated the bundled Codex app-server (`@openai/codex`) from 0.167.0 to 0.169.0. The app-server protocol Agent Desk uses only gained optional fields.

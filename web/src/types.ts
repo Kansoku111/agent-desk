@@ -445,6 +445,15 @@ export type FastProvider = 'openai-codex' | 'anthropic'
 export type RouteParent = 'dsh' | 'cl' | 'gp'
 export interface SubagentRoute { target: RouteParent; model: string | null; effort: string | null }
 
+/** One standing instruction (設定 → パーソナライズ). Off keeps it saved; `targets.dsh` also covers Codex (GP). */
+export type CustomInstructionItem = {
+  id: string
+  title: string
+  body: string
+  enabled: boolean
+  targets: { dsh: boolean; claude: boolean }
+}
+
 export interface Settings extends UsageDisplay {
   commandCodeZdr?: boolean
   theme: Theme
@@ -488,10 +497,8 @@ export interface Settings extends UsageDisplay {
   modelAutoUpdate: boolean
   /** Phones on the same tailnet may use the app. */
   remoteAccess: boolean
-  /** Standing instructions the agent reads before every task (設定 → パーソナライズ). */
-  customInstructions: string
-  /** Older saves default to enabled. */
-  customInstructionsEnabled?: boolean
+  /** Standing instructions, in the order they are listed (設定 → パーソナライズ). */
+  customInstructionItems: CustomInstructionItem[]
   /** A local OpenAI-compatible server and the models it listed (older saves lack it). */
   localLlm?: { baseURL: string | null; models: { id: string; contextWindow?: number; maxTokens?: number }[] }
   agentTeams: TeamSettings

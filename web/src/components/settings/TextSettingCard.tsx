@@ -5,7 +5,7 @@ import type { Settings } from '../../types'
 
 type TextKey = { [K in keyof Settings]-?: NonNullable<Settings[K]> extends string ? K : never }[keyof Settings]
 
-/** One free-text setting, edited here and saved as written (カスタム指示, the team harnesses). */
+/** One free-text setting, edited here and saved as written (the team harnesses). */
 export function TextSettingCard({ setting, title, label = title, description, max, placeholder, rows, head, children }: {
   setting: TextKey; title: string; label?: string; description?: string; max: number; placeholder: string; rows: number
   /** Beside the title (a switch). */

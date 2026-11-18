@@ -148,7 +148,7 @@ const credentials = new CredentialStore(paths.credentials)
 const codexApp = new CodexAppServer({ home: paths.codexHome, openUrl: openExternal })
 const codexWork = new CodexWorkServer({ home: paths.codexHome, cwd: paths.myPc })
 const codex = await new CodexRunner({ home: paths.home, server: codexWork, attachmentsDir: paths.attachmentsDir,
-  instructions: () => effectiveCustomInstructions(settings), trustedMcp: [BRIDGE_MCP_SERVER], mcpGuidance: { [BRIDGE_MCP_SERVER]: CODEX_BRIDGE_GUIDANCE } }).load()
+  instructions: () => effectiveCustomInstructions(settings, 'dsh'), trustedMcp: [BRIDGE_MCP_SERVER], mcpGuidance: { [BRIDGE_MCP_SERVER]: CODEX_BRIDGE_GUIDANCE } }).load()
 
 // Agent teams (teams.js) give their leader's Claude Code its flags.
 let teams = null
@@ -163,7 +163,7 @@ const terminals = await new TerminalManager({
     if (client.socket?.readyState === client.socket?.OPEN) client.socket.send(JSON.stringify(frame))
   },
   launch: (record) => teams?.launchFor(record) ?? null,
-  instructions: () => effectiveCustomInstructions(settings),
+  instructions: () => effectiveCustomInstructions(settings, 'claude'),
   imageMcp: claudeImageMcp,
   codeMode: () => settings.claudeCodeMode === true && codeModeConsented(),
   subagentRoute: (record) => {
@@ -436,7 +436,7 @@ async function applyHomePatch() {
     settingsFile: paths.settings,
     persona,
     webSearch: { plugin: WEB_SEARCH_PLUGIN, credentials: paths.credentials },
-    instructions: effectiveCustomInstructions(settings),
+    instructions: effectiveCustomInstructions(settings, 'dsh'),
     localRoute: localRoute(settings.localLlm, { keyed: (await accounts()).localLlm.keyed }),
     opencodeGo: (await accounts()).opencodeGo.configured,
     opencodeGoModels: opencodeGoServed(),
@@ -514,7 +514,7 @@ const subagentAgents = await new ClaudeRunner({ dir: paths.subagentAgents, prefl
 const subagentBridge = await new SubagentBridge({
   file: paths.subagentBridge, paths, settings: getSettings, claude: subagentAgents, codex,
   url: () => `http://127.0.0.1:${server.address().port}/api/subagent`,
-  instructions: () => effectiveCustomInstructions(settings),
+  instructions: () => effectiveCustomInstructions(settings, 'claude'),
   parents: {
     dsh: (id) => { const thread = threads.threads.get(id); return thread ? { workspace: thread.workspace, mode: thread.permissionMode } : null },
     // Claude Code has no sandbox here: the call's approval in Claude Code is the gate, as for any tool.
@@ -556,7 +556,7 @@ teams = await new TeamManager({
   modelVisibility: () => settings.modelVisibility,
   usageFallbackRoutes: () => settings.usageFallbackRoutes,
   apiUrl: () => `http://127.0.0.1:${server.address().port}/api/team`,
-  instructions: () => effectiveCustomInstructions(settings),
+  instructions: () => effectiveCustomInstructions(settings, 'claude'),
   harness: (mode) => ({ parent: effectiveHarness(settings, mode, 'parent'), child: effectiveHarness(settings, mode, 'child') }),
   log,
 }).load()
@@ -586,7 +586,7 @@ codex.on('models', models => {
 
 const abAgents = await new ClaudeRunner({ dir: path.join(paths.home, 'ab-agents'),
   preflight: (context) => teams.claudeAuth.guard(null, context), log }).load()
-const abRunner = new AbRunner({ threads, agents: abAgents, codex, attachmentsDir: paths.attachmentsDir, instructions: () => effectiveCustomInstructions(settings),
+const abRunner = new AbRunner({ threads, agents: abAgents, codex, attachmentsDir: paths.attachmentsDir, instructions: () => effectiveCustomInstructions(settings, 'claude'),
   harness: (side) => effectiveHarness(settings, 'ab', side),
   guard: (record) => teams.guardExecution(record) })
 const ab = await new AbManager({ dir: path.join(paths.home, 'ab'), runner: abRunner, catalog: () => catalogState(),
@@ -619,7 +619,7 @@ presetAgents.on('turn-speed', ({ id, turnId, speed }) => broadcast('agentTurnSpe
 const presets = await new TaskPresets({
   dir: path.join(paths.home, 'task-presets'), threads, terminals, codex, agents: presetAgents, teams,
   catalog: () => catalogState(), settings: getSettings, mcpServers: mcpServersFor,
-  instructions: () => effectiveCustomInstructions(settings),
+  instructions: () => effectiveCustomInstructions(settings, 'claude'),
   writers: () => ab.list().flatMap((run) => run.jobs.filter((job) => job.writable && ['running', 'stopping'].includes(job.status)).map(() => ({ title: run.title, workspace: run.workspace }))),
   validateModel: (value) => validateAbModel(value, catalogState(), settings.modelVisibility),
   authorize: async ({ workspace, model, authConfirmation }) => {

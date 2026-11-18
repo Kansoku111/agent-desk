@@ -1,7 +1,8 @@
 // Settings updates have one commit point: validate the entire patch, persist a
 // candidate, publish it, then apply its effects. No application startup here.
 import { isDeepStrictEqual } from 'node:util'
-import { CONTEXT_CHOICES, CONTEXT_PROVIDERS, INSTRUCTIONS_MAX } from './dsh-config.js'
+import { CONTEXT_CHOICES, CONTEXT_PROVIDERS } from './dsh-config.js'
+import { INSTRUCTIONS_MAX, INSTRUCTION_TITLE_MAX } from '../shared/text-limits.js'
 import { defaultRoutes, mergeRoutes, savedRoutes } from './subagent-routes.js'
 import { UPDATE_CHANNELS } from './update-checks.js'
 import { FAST_PROVIDERS, recordFastPeriod } from './fast-mode.js'
@@ -14,9 +15,14 @@ import { validateUsageFallbackRoutes } from '../shared/usage-fallback.js'
 
 // Idempotent startup migration: GPT fast is not offered by the official SIWC route.
 export function migrateSettings(saved = {}) {
+  const { customInstructions, customInstructionsEnabled, ...rest } = saved
   return {
     ...structuredClone(DEFAULT_SETTINGS),
-    ...saved,
+    ...rest,
+    customInstructionItems: Array.isArray(rest.customInstructionItems) ? rest.customInstructionItems
+      : typeof customInstructions === 'string' && customInstructions.length
+        ? [{ id: 'legacy', title: '既存のカスタム指示', body: customInstructions, enabled: customInstructionsEnabled !== false, targets: { dsh: true, claude: true } }]
+        : [],
     fastMode: {
       ...DEFAULT_SETTINGS.fastMode,
       ...saved.fastMode,
@@ -73,8 +79,7 @@ export const DEFAULT_SETTINGS = {
   dshUpdateChannel: 'latest',
   modelAutoUpdate: true,
   remoteAccess: false,
-  customInstructions: '',
-  customInstructionsEnabled: true,
+  customInstructionItems: [],
   // A local OpenAI-compatible server and the models it listed (see local-llm.js).
   localLlm: { baseURL: null, models: [] },
   commandCodeZdr: false,
@@ -97,7 +102,7 @@ export const DEFAULT_SETTINGS = {
 
 const BOOLEAN_SETTINGS = [
   'notifications', 'browserTool', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool',
-  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'customInstructionsEnabled', 'commandCodeZdr', 'claudeCodeMode',
+  'checkpoints', 'modelAutoUpdate', 'subagentsEnabled', 'commandCodeZdr', 'claudeCodeMode',
 ]
 const TOOL_SETTINGS = ['browserTool', 'browserBackend', 'browserHeadless', 'desktopTool', 'imageTool', 'historyTool']
 const ENUM_SETTINGS = {
@@ -109,8 +114,9 @@ const ENUM_SETTINGS = {
 }
 const owns = (object, key) => Object.hasOwn(object, key)
 
-export function effectiveCustomInstructions(settings) {
-  return settings.customInstructionsEnabled !== false ? settings.customInstructions : ''
+export function effectiveCustomInstructions(settings, target) {
+  return settings.customInstructionItems.filter(item => item.enabled && item.targets[target])
+    .map(item => item.body).filter(body => body.trim()).join('\n\n')
 }
 
 function assertRecord(value, name) {
@@ -209,12 +215,33 @@ export function planSettingsUpdate(current, patch, now) {
     next.subagentRoutes = mergeRoutes(current.subagentRoutes ?? savedRoutes(current), patch.subagentRoutes)
     effects.homePatch = true
   }
-  if (owns(patch, 'customInstructions')) {
-    const text = patch.customInstructions
-    if (typeof text !== 'string') throw new Error('指示は文字列で指定してください')
-    if (text.length > INSTRUCTIONS_MAX) throw new Error(`指示は ${INSTRUCTIONS_MAX.toLocaleString()} 文字までです`)
-    next.customInstructions = text
-    effects.homePatch = true
+  if (owns(patch, 'customInstructions') || owns(patch, 'customInstructionsEnabled')) {
+    throw new Error('カスタム指示の設定形式が変わりました。画面を開き直してください。')
+  }
+  if (owns(patch, 'customInstructionItems')) {
+    if (!isDeepStrictEqual(patch.customInstructionItemsBase, current.customInstructionItems)) {
+      throw new Error('カスタム指示が別の画面で更新されました。最新の内容を確認してください。')
+    }
+    if (!Array.isArray(patch.customInstructionItems)) throw new Error('カスタム指示は配列で指定してください')
+    const ids = new Set()
+    let length = 0
+    next.customInstructionItems = patch.customInstructionItems.map(item => {
+      assertRecord(item, 'カスタム指示')
+      const { id, title, body, enabled, targets } = item
+      if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(id) || ids.has(id)) throw new Error('カスタム指示のIDが不正です')
+      ids.add(id)
+      if (typeof title !== 'string' || !title.trim() || title.length > INSTRUCTION_TITLE_MAX || /[\r\n]/.test(title)) throw new Error(`題名は1行・${INSTRUCTION_TITLE_MAX}文字までです`)
+      if (typeof body !== 'string') throw new Error('指示は文字列で指定してください')
+      length += body.length
+      if (length > INSTRUCTIONS_MAX) throw new Error(`本文は合計 ${INSTRUCTIONS_MAX.toLocaleString()} 文字までです`)
+      assertBoolean(enabled, 'カスタム指示のオン・オフ')
+      assertRecord(targets, '適用先')
+      assertBoolean(targets.dsh, 'dsh・Codexの適用先')
+      assertBoolean(targets.claude, 'Claude Codeの適用先')
+      if (!targets.dsh && !targets.claude) throw new Error('適用先を1つ以上選んでください')
+      return { id, title: title.trim(), body, enabled, targets: { dsh: targets.dsh, claude: targets.claude } }
+    })
+    effects.homePatch ||= effectiveCustomInstructions(next, 'dsh') !== effectiveCustomInstructions(current, 'dsh')
   }
   let localChanged = false
   if (owns(patch, 'localLlm')) {
@@ -295,7 +322,6 @@ export function planSettingsUpdate(current, patch, now) {
   effects.channel = next.dshUpdateChannel !== current.dshUpdateChannel
   effects.modelCatalog = (next.modelAutoUpdate !== false) !== (current.modelAutoUpdate !== false)
   effects.homePatch ||= effects.modelCatalog || next.subagentsEnabled !== current.subagentsEnabled
-    || next.customInstructionsEnabled !== current.customInstructionsEnabled
     || next.commandCodeZdr !== current.commandCodeZdr
   effects.modelCheck = effects.modelCatalog && next.modelAutoUpdate !== false
   // The local route joins the catalog signature and the home patch; it fetches nothing.

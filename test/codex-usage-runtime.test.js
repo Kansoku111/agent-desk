@@ -12,11 +12,12 @@ import { CodexWorkServer } from '../server/codex-work-server.js'
 import { CodexRunner } from '../server/codex-runner.js'
 import { setCatalogPricing } from '../server/usage.js'
 
-test('real Codex notifications price each model response rather than the turn total', { timeout: 60000 }, async t => {
+test('real Codex prices each model response and reads current instructions in new conversations', { timeout: 60000 }, async t => {
   const parent = path.resolve(os.tmpdir())
   const home = await fs.mkdtemp(path.join(parent, 'agent-desk-codex-usage-'))
   const cwd = path.join(home, 'workspace'); await fs.mkdir(cwd)
   let requests = 0, blocked = 0
+  const modelInput = []
   const mock = http.createServer(async (req, res) => {
     if (req.url !== '/v1/responses') { blocked++; res.writeHead(403).end(); return }
     let raw = Buffer.concat(await Array.fromAsync(req))
@@ -24,7 +25,8 @@ test('real Codex notifications price each model response rather than the turn to
     if (req.headers['content-encoding'] === 'gzip') raw = zlib.gunzipSync(raw)
     const body = JSON.parse(raw.toString('utf8'))
     requests++
-    if (requests > 2) { res.writeHead(500).end(); return }
+    modelInput.push(JSON.stringify([body.instructions, body.input]))
+    if (requests > 4) { res.writeHead(500).end(); return }
     const tool = { type: 'custom_tool_call', id: 'ct_local', call_id: 'call_local', name: 'exec', status: 'completed', input: 'text(\"local\")' }
     const item = { type: 'message', id: 'msg_local', status: 'completed', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'offline', annotations: [] }] }
     const first = requests === 1, output = first ? tool : item
@@ -71,7 +73,8 @@ test('real Codex notifications price each model response rather than the turn to
   }
   const server = new Facade()
   setCatalogPricing({ 'openai-codex/gpt-6-luna': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125, tiers: [{ inputTokensAbove: 272000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }] } })
-  const runner = await new CodexRunner({ home, attachmentsDir: home, server }).load()
+  let instructions = 'custom-personalization-initial'
+  const runner = await new CodexRunner({ home, attachmentsDir: home, server, instructions: () => instructions }).load()
   t.after(async () => { await runner.shutdown(); setCatalogPricing({}); mock.closeAllConnections(); await new Promise(resolve => mock.close(resolve)); assert.equal(path.dirname(home), parent); assert.match(path.basename(home), /^agent-desk-codex-usage-/); await fs.rm(home, { recursive: true, force: true }) })
   const task = await runner.create({ workspace: cwd, model: 'gpt-6-luna', effort: 'low', permissionMode: 'read-only' })
   const finished = once(runner, 'finished'); runner.run(task.id, 'Reply offline'); const [result] = await finished
@@ -83,5 +86,18 @@ test('real Codex notifications price each model response rather than the turn to
   assert.equal(usage.output, 20)
   assert.ok(Math.abs(usage.score.points * 0.002 - 0.03001) < 1e-12)
   assert.equal(requests, 2)
+  assert.ok(modelInput[0].includes('custom-personalization-initial'))
+  for (const value of ['custom-personalization-edited', '']) {
+    instructions = value
+    const nextTask = await runner.create({ workspace: cwd, model: 'gpt-6-luna', effort: 'low', permissionMode: 'read-only' })
+    const next = once(runner, 'finished')
+    runner.run(nextTask.id, 'Reply offline')
+    const [turn] = await next
+    assert.equal(turn.status, 'done', turn.error)
+    assert.notEqual(runner.get(nextTask.id).sessionId, runner.get(task.id).sessionId)
+    assert.ok(!modelInput.at(-1).includes('custom-personalization-initial'))
+    assert.equal(modelInput.at(-1).includes('custom-personalization-edited'), Boolean(value))
+  }
+  assert.equal(requests, 4)
   assert.equal(blocked, 0)
 })

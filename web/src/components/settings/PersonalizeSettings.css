@@ -1,0 +1,174 @@
+/* カスタム指示の一覧。行は account-card の中に並べ、編集欄は行を開いたときだけ出す。 */
+
+.instruction-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.instruction-item,
+.instruction-undo {
+  border-top: 1px solid var(--border);
+}
+
+.instruction-list > :first-child {
+  border-top: 0;
+}
+
+.instruction-item.off .instruction-title {
+  color: var(--text-muted);
+}
+
+.instruction-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 題名の行全体が開閉の押しやすい範囲になる。 */
+.instruction-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
+.instruction-toggle > svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.instruction-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instruction-tags {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.instruction-chip {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  font-size: 11px;
+}
+
+.instruction-item > .form-error {
+  margin: 0 0 8px;
+}
+
+.instruction-panel {
+  padding: 2px 0 0 22px;
+}
+
+.instruction-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding-bottom: 16px;
+}
+
+.instruction-editor > input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.instruction-editor .instructions-input {
+  min-height: 120px;
+  max-height: 40vh;
+}
+
+.instruction-target-group {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  font-size: 13px;
+}
+
+.instruction-target-group > .muted {
+  align-self: start;
+  line-height: 32px;
+  font-size: 12px;
+}
+
+.instruction-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+
+.instruction-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.instruction-target input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.instruction-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+/* 本文の合計は左寄せで、ボタンは右端に寄せる。 */
+.instruction-foot > .fine-print,
+.instruction-foot > .form-error {
+  margin: 0 auto 0 0;
+}
+
+.instruction-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.instruction-delete:hover {
+  color: var(--red);
+}
+
+.instruction-undo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  min-height: 44px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.instruction-undo > .form-error {
+  flex-basis: 100%;
+  margin: 0 0 8px;
+}
+
+.instruction-empty {
+  margin: 0;
+  font-size: 13px;
+}

@@ -794,6 +794,26 @@ test('team children read only the child harness; an empty harness adds no sectio
   assert.match(leader, /A report that asks you questions is not a finished task: answer with `send` to the same child/)
 })
 
+test('a Claude team child rereads revised or disabled custom instructions on the same conversation', async (t) => {
+  let instructions = 'before edits'
+  const f = await setup(t, {}, { instructions: () => instructions })
+  await f.tool('spawn', { title: 'Claude child', task: 'bounded task', tier: 'low', provider: 'claude' })
+  const child = f.team.children.at(-1)
+  const id = child.taskId
+  const { args } = f.agents.sessions.get(id)
+  const prompt = args[args.indexOf('--append-system-prompt-file') + 1]
+  assert.match(await fs.readFile(prompt, 'utf8'), /before edits/)
+  for (const value of ['after edits', '']) {
+    f.agents.finish(id, 'finished')
+    instructions = value
+    f.manager.messageChild(f.team.id, child.id, 'follow up')
+    const text = await fs.readFile(prompt, 'utf8')
+    assert.doesNotMatch(text, /before edits/)
+    assert.equal(text.includes('after edits'), Boolean(value))
+    assert.equal(child.taskId, id)
+  }
+})
+
 test('AB parent stages read the parent harness and consultants and the implementer the child harness', async (t) => {
   const f = await setup(t, { leaderProvider: 'gpt' })
   f.agents.live = new Map()
