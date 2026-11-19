@@ -256,10 +256,16 @@ export function Elapsed({ since }: { since: number }) {
   return <>{duration(now - since)}</>
 }
 
+const CHANGES_PREVIEW = 10
+
 function FileChanges({ turn, workspace }: { turn: Turn; workspace: string }) {
   const changes = useMemo(() => fileChanges(turn, workspace), [turn, workspace])
   const [open, setOpen] = useState(false)
+  const [showAll, setShowAll] = useState(false)
   if (!changes.length) return null
+  // Keep a long change list from pushing the conversation out of view; a few more than the limit are not worth a toggle.
+  const collapsible = changes.length > CHANGES_PREVIEW + 2
+  const shown = collapsible && !showAll ? changes.slice(0, CHANGES_PREVIEW) : changes
   const added = changes.reduce((sum, change) => sum + change.added, 0)
   const removed = changes.reduce((sum, change) => sum + change.removed, 0)
   const edits = turn.items.filter((item): item is ToolItem => item.type === 'tool' && item.status === 'completed')
@@ -271,7 +277,7 @@ function FileChanges({ turn, workspace }: { turn: Turn; workspace: string }) {
         <ChevronDown size={14} className={`chev-down ${open ? 'open' : ''}`} />
       </button>
       <ul className="changes-list">
-        {changes.map((change) => (
+        {shown.map((change) => (
           <li key={change.path}>
             {change.created ? <FilePlus2 size={13} /> : <FilePen size={13} />}
             <FileRef refText={change.path} workspace={workspace}><code>{change.path}</code></FileRef>
@@ -279,6 +285,12 @@ function FileChanges({ turn, workspace }: { turn: Turn; workspace: string }) {
           </li>
         ))}
       </ul>
+      {collapsible && (
+        <button type="button" className="changes-more" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}>
+          {showAll ? '折りたたむ' : `他 ${changes.length - CHANGES_PREVIEW} 件`}
+          <ChevronDown size={13} className={`chev-down ${showAll ? 'open' : ''}`} />
+        </button>
+      )}
       {open && (
         <div className="changes-diffs">
           {edits.map((item) => {
