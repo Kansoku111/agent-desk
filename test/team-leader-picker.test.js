@@ -5,6 +5,7 @@ import ts from 'typescript'
 import { teamConfig } from '../server/team-config.js'
 import * as workflowEffort from '../shared/workflow-effort.js'
 import * as usageFallback from '../shared/usage-fallback.js'
+import * as teamLimits from '../shared/team-limits.js'
 import * as modelSelection from '../web/src/model-selection.ts'
 
 // Exercise the actual start form's callbacks without launching a model.
@@ -29,6 +30,7 @@ const modules = {
   './ClaudeAuthConsent': {}, './TeamHarness': {}, './ModeSections': {}, './PtcToggle': {}, './FallbackSummary': {}, '../team-auth-consent': {},
   '../../../shared/usage-fallback.js': usageFallback,
   '../../../shared/workflow-effort.js': {},
+  '../../../shared/team-limits.js': teamLimits,
   './WorkflowModelField': { ModelField: field, modelGroups: (server) => server.groups.map((group) => ({ ...group, models: [...group.models] })) },
 }
 const component = {}

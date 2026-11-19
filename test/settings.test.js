@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { effectiveHarness } from '../server/team-harness.js'
+import { MAX_CHILDREN_LIMIT } from '../shared/team-limits.js'
 import { createSettingsService, DEFAULT_SETTINGS, effectiveCustomInstructions, migrateSettings, planSettingsUpdate } from '../server/settings.js'
 
 const instruction = (body, overrides = {}) => ({ id: 'test', title: 'ルール', body, enabled: true, targets: { dsh: true, claude: true }, ...overrides })
@@ -883,7 +884,7 @@ test('agent team settings merge per field, validate everything and need no runti
   for (const patch of [
     null, [], { leader: 'opus' }, { leader: { model: 'bad model' } }, { leaderBypass: 'yes' },
     { gpt: { enabled: 1 } }, { gpt: { low: { model: 'a b' } } }, { claude: { mid: { effort: 'HIGH!' } } },
-    { maxChildren: 0 }, { maxChildren: 13 }, { maxChildren: 2.5 },
+    { maxChildren: 0 }, { maxChildren: MAX_CHILDREN_LIMIT + 1 }, { maxChildren: 2.5 },
     { gpt: { enabled: true, low: { enabled: false }, mid: { enabled: false } } },
   ]) {
     const before = structuredClone(h.live)

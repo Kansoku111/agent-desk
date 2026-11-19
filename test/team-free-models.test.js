@@ -3,6 +3,9 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import * as modelSelection from '../web/src/model-selection.ts'
+import * as teamLimits from '../shared/team-limits.js'
+
+const { MAX_TEAM_MODELS } = teamLimits
 
 const source = await fs.readFile(new URL('../web/src/components/TeamSettings.tsx', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source + '\nexport { FreeModels }', {
@@ -10,7 +13,7 @@ const { outputText } = ts.transpileModule(source + '\nexport { FreeModels }', {
 })
 const jsx = (type, props) => ({ type, props })
 const ModelField = () => {}, Dropdown = () => {}, MenuItem = () => {}
-const choices = Array.from({ length: 15 }, (_, i) => ({ value: JSON.stringify(['openai-codex', 'model-' + i]), name: 'Model ' + i }))
+const choices = Array.from({ length: MAX_TEAM_MODELS + 3 }, (_, i) => ({ value: JSON.stringify(['openai-codex', 'model-' + i]), name: 'Model ' + i }))
 const claude = [{ value: 'claude:haiku', name: 'Haiku' }]
 const openscale = [{ value: JSON.stringify(['openscale', 'z-ai/glm-5.3-flash']), name: 'GLM OpenScale' }]
 const api = [{ value: JSON.stringify(['anthropic', 'haiku']), name: 'Haiku' }]
@@ -28,6 +31,7 @@ function harness(initial = []) {
     './Popover': { Dropdown, MenuItem },
     './TerminalPickers': { claudeEfforts: () => ['low', 'medium', 'high'], claudeModelName: (_, id) => id },
     '../model-selection': modelSelection,
+    '../../../shared/team-limits.js': teamLimits,
   }
   const component = {}
   new Function('require', 'exports', outputText)((name) => modules[name] ?? {}, component)
@@ -57,17 +61,18 @@ test('check several models and uncheck them without closing the picker', () => {
   assert.deepEqual(h.config.freeModels.map((entry) => entry.model), ['model-1', 'model-2', 'model-0'])
 })
 
-test('enforces twelve models without disabling checked entries', () => {
+test('enforces the model limit without disabling checked entries', () => {
   const h = harness()
-  for (let i = 0; i < 12; i++) h.select('Model ' + i)
-  assert.equal(h.items().find((item) => item.label === 'Model 12').disabled, true)
+  const next = 'Model ' + MAX_TEAM_MODELS
+  for (let i = 0; i < MAX_TEAM_MODELS; i++) h.select('Model ' + i)
+  assert.equal(h.items().find((item) => item.label === next).disabled, true)
   assert.equal(h.items().find((item) => item.label === 'Model 0').disabled, false)
-  h.select('Model 12')
-  assert.equal(h.config.freeModels.length, 12)
+  h.select(next)
+  assert.equal(h.config.freeModels.length, MAX_TEAM_MODELS)
   h.select('Model 0')
-  assert.equal(h.items().find((item) => item.label === 'Model 12').disabled, false)
-  h.select('Model 12')
-  assert.equal(h.config.freeModels.length, 12)
+  assert.equal(h.items().find((item) => item.label === next).disabled, false)
+  h.select(next)
+  assert.equal(h.config.freeModels.length, MAX_TEAM_MODELS)
 })
 
 test('keeps saved unavailable choices, supports per-row changes and avoids duplicates', () => {
@@ -105,7 +110,7 @@ test('duplicates a model beside its row with the next unused effort', () => {
   assert.deepEqual(h.config.freeModels.map(({ model }) => model), ['model-1'], 'unchecking removes every level of that model')
 })
 
-test('disables duplication when levels or the twelve-model limit are exhausted', () => {
+test('disables duplication when levels or the model limit are exhausted', () => {
   server.catalog.effortsByModel[choices[0].value] = []
   const noLevels = harness([{ provider: 'gpt', model: 'model-0', effort: null }])
   assert.equal(noLevels.duplicateButton(0).disabled, true)
@@ -120,11 +125,11 @@ test('disables duplication when levels or the twelve-model limit are exhausted',
   assert.equal(h.duplicateButton(0).disabled, false)
   h.duplicate(0)
   assert.equal(h.config.freeModels[1].effort, 'medium')
-  for (let i = 1; i <= 8; i++) h.select('Model ' + i)
-  assert.equal(h.config.freeModels.length, 12)
+  for (let i = 1; i <= MAX_TEAM_MODELS - 4; i++) h.select('Model ' + i)
+  assert.equal(h.config.freeModels.length, MAX_TEAM_MODELS)
   assert.equal(h.duplicateButton(4).disabled, true)
   h.duplicate(4)
-  assert.equal(h.config.freeModels.length, 12)
+  assert.equal(h.config.freeModels.length, MAX_TEAM_MODELS)
 })
 
 test('keeps default and missing models distinct without duplicated menu entries', () => {
