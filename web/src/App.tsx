@@ -29,6 +29,25 @@ function useTheme() {
   }, [theme])
 }
 
+/**
+ * Hides the browser's right-click menu (Back, Reload, Inspect…) so the window feels like an app.
+ * It stays where it does something useful: text fields (paste, spelling), selected text (copy)
+ * and the terminal. Menus of our own (FileRef) call preventDefault themselves.
+ */
+function useContextMenu() {
+  useEffect(() => {
+    const onMenu = (event: MouseEvent) => {
+      if (event.defaultPrevented) return
+      const target = event.target instanceof Element ? event.target : null
+      if (target?.closest('input, textarea, [contenteditable=""], [contenteditable="true"], .terminal-host')) return
+      if (!document.getSelection()?.isCollapsed) return
+      event.preventDefault()
+    }
+    document.addEventListener('contextmenu', onMenu)
+    return () => document.removeEventListener('contextmenu', onMenu)
+  }, [])
+}
+
 function useShortcuts() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -71,6 +90,7 @@ function Toasts() {
 export function App() {
   useTheme()
   useShortcuts()
+  useContextMenu()
   useSidebarSwipe()
   const connection = useStore((state) => state.connection)
   const ready = useStore((state) => state.server !== null)
