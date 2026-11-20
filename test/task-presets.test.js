@@ -805,6 +805,30 @@ test('ordinary TM admission uses computed child state, including startup and clo
   teams.retries.clear()
 })
 
+test('opinion reviews run beside other sessions\' presets in one folder; writers still exclude each other', async (t) => {
+  const f = await fixture(t)
+  const session = async (title) => ({ kind: 'thread', id: (await f.threads.create({ workspace: f.workspace, model: 'A', permissionMode: 'workspace-write', title })).id })
+  const opinion = { kind: 'review', reviewMode: 'opinion' }
+  const other = await session('別セッション'), writerSource = await session('委託元'), third = await session('もう一つ')
+  const first = await f.start({ ...opinion, requestId: randomUUID(), source: other })
+  const second = await f.start({ ...opinion, requestId: randomUUID() })
+  assert.equal(second.phase, 'preparing', 'a running opinion review does not block another session')
+  await f.complete(other.id, brief(first))
+  await f.complete(f.parent.id, brief(second))
+  assert.deepEqual([first.phase, second.phase], ['running', 'running'])
+  await assert.rejects(f.start({ ...opinion, requestId: randomUUID() }), /実行中/, 'the same session still runs one preset at a time')
+  const writer = await f.start({ requestId: randomUUID(), source: writerSource })
+  assert.equal(writer.phase, 'preparing', 'a writer may start beside reviews that only read')
+  await assert.rejects(f.start({ requestId: randomUUID(), source: third }), /実行中/, 'two writers still exclude each other')
+  assert.doesNotThrow(() => f.manager.room(f.workspace, { readsOnly: true, source: 'thread:' + third.id }))
+  f.threads.restoring.add({ workspace: f.workspace, title: '復元中' })
+  assert.throws(() => f.manager.room(f.workspace, { readsOnly: true }), /復元中/)
+  f.threads.restoring.clear()
+  await f.complete(second.worker.id, result(second))
+  assert.equal(second.phase, 'completed', second.error)
+  assert.ok(second.deliveredAt, 'the opinion returns to its own parent while another session\'s writer prepares')
+})
+
 test('distinct Claude runs cannot both resume after concurrent authorization in one workspace', async (t) => {
   const f = await fixture(t)
   const other = await f.threads.create({ workspace: f.workspace, model: 'A', permissionMode: 'workspace-write', title: 'other parent' })

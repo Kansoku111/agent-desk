@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 独立レビューの「意見を聞く」は、同じフォルダーで別セッションの独立レビューや子に委託が動いていても開始できるようにしました。読むだけなので、ほかの委託の開始も妨げません。書き込む委託・レビュー同士、同じセッションでの重複、復元中は従来どおり待ちます。
+
 ## [0.1.17] - 2026-11-20
 
 ### Changed

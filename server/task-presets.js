@@ -14,6 +14,8 @@ import { PRESET_ACTIVE, PRESET_LABEL, preparePresetPrompt, parsePresetBrief, mat
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const finalText = (turn) => (turn?.items ?? []).filter((item) => item.type === 'agent').at(-1)?.text ?? ''
 const sourceKey = (source) => source.kind + ':' + source.id
+// An opinion review only reads, so it neither collides with nor is collided by another preset in the same folder.
+const readsOnly = (run) => run?.kind === 'review' && run.reviewMode === 'opinion'
 const recordingWarning = (run) => run.snapshotUnavailable
   ? 'フォルダー全体の変更確認・差分保存は上限のため省略します。担当自身の成果物と確認結果を参照してください。理由: ' + run.snapshotUnavailable
   : run.diffUnavailable ? 'フォルダー全体の差分保存は上限のため省略します。変更がないことを意味しません。理由: ' + run.diffUnavailable : ''
@@ -118,11 +120,17 @@ export class TaskPresets extends EventEmitter {
       const ordinary = !record.team && !record.ab && !record.preset && !this.teams.teamLedBy?.(record.id) &&
         (this.threads.threads.get(record.id) === record || this.terminals.records?.get(record.id) === record || this.codex?.records.get(record.id) === record)
       if (context?.operation !== 'restore' && run.source.id !== record.id && !ownWorker && (ordinary || record.permissionMode === 'read-only')) continue
+      // Its own parent and worker stay guarded; restores still wait because they rewrite the files being read.
+      const reading = context?.readsOnly || readsOnly(run) || readsOnly(this.runs.get(record.preset?.runId))
+      const sameSource = run.source.id === record.id || context?.source === sourceKey(run.source)
+      if (reading && context?.operation !== 'restore' && !sameSource && !ownWorker) continue
+      // A result goes back to an ordinary parent, which may already work beside other tasks' presets.
+      if (context?.deliveringTo && context.deliveringTo !== sourceKey(run.source)) continue
       throw new Error(PRESET_LABEL[run.kind] + 'が実行中です（' + run.title + ' / ' + run.id + ' / ' + run.workspace + '）')
     }
     if (record.preset && context?.presetRunId !== record.preset.runId) throw new Error('委託の担当には結果画面から操作してください')
   }
-  room(workspace) {
+  room(workspace, context) {
     for (const record of this.threads.restoring) if (workspacesOverlap(workspace, record.workspace)) throw new Error('同じフォルダーで別タスクが復元中です: ' + record.title)
     // Stored children have no state; summaries include starting and still-stopping workers.
     for (const team of this.teams.list()) {
@@ -133,8 +141,8 @@ export class TaskPresets extends EventEmitter {
       if (writing) throw new Error('同じフォルダーのチーム作業が終わっていません')
     }
     for (const record of this.writers()) if (workspacesOverlap(workspace, record.workspace)) throw new Error('同じフォルダーで別の担当が作業中です: ' + record.title)
-    this.guard({ workspace })
-    this.teams.guardExecution({ workspace })
+    this.guard({ workspace }, context)
+    this.teams.guardExecution({ workspace }, context)
   }
   goalWaiting(thread, { userInput = false } = {}) {
     const controlled = [...this.runs.values()].some((run) => run.source.kind === 'thread' && run.source.id === thread.id)
@@ -178,7 +186,7 @@ export class TaskPresets extends EventEmitter {
     await this.authorize({ workspace: record.workspace, model: config.model, authConfirmation })
     const currentSource = await this.source(source, true)
     if (source.kind === 'codex' && (currentSource.model !== record.model || currentSource.sessionId !== record.sessionId || currentSource.workspace !== record.workspace)) throw new Error('元のGPタスクが変更されました。確認してから開始してください。')
-    this.room(record.workspace)
+    this.room(record.workspace, { readsOnly: reviewMode === 'opinion', source: sourceKey(source) })
     const now = Date.now()
     const run = { id: randomUUID(), requestId, fingerprint, source: { ...source }, sourceSession: record.sessionId, sourceModel: record.modelInUse ?? record.model, kind, title: record.title, workspace: record.workspace, model: config.model, effort, permissionMode: config.model.startsWith('claude:') ? 'danger-full-access' : reviewMode === 'opinion' ? 'read-only' : permissionMode, browser, instruction, checks, ...(reviewMode ? { reviewMode } : {}), phase: 'preparing', createdAt: now, updatedAt: now, report: '', sourceGone: false }
     // Reserve before any filesystem/model await; completion never releases the parent's goal gate.
@@ -457,14 +465,14 @@ export class TaskPresets extends EventEmitter {
     // Only a reply may follow a finished result; the parent need not be waiting for it.
     if (!(reply ? ['needs-attention', 'stopped', 'completed'] : ['needs-attention', 'stopped']).includes(run.phase) || !run.worker) throw new Error('担当の開始前です。元タスクで条件を確認し、新しく開始してください。')
     await this.source(run.source, !reply)
-    this.room(run.workspace)
+    this.room(run.workspace, { readsOnly: readsOnly(run), source: sourceKey(run.source) })
     this.validateModel(run.model)
     await this.authorize({ workspace: run.workspace, model: run.model })
     // Authorization yields: recheck and claim synchronously, just as a new run does.
     await this.source(run.source, !reply)
     if (this.closing) throw new Error('アプリを終了しています')
     if (this.sends.has(id)) throw new Error('結果を送信中です。送信完了後に再開してください。')
-    this.room(run.workspace)
+    this.room(run.workspace, { readsOnly: readsOnly(run), source: sourceKey(run.source) })
     if (reply) run.replying = { phase: run.phase, error: run.error }
     else {
       delete run.replying
@@ -491,7 +499,7 @@ export class TaskPresets extends EventEmitter {
     const task = (async () => {
       const source = await this.source(run.source, true)
       if (automatic && run.sourceSession && source.sessionId !== run.sourceSession) throw new Error('元セッションが変更されました。結果を確認してください。')
-      this.room(run.workspace)
+      this.room(run.workspace, { deliveringTo: sourceKey(run.source) })
       if (run.deliveryAttempted && ['terminal', 'codex'].includes(run.source.kind)) throw new Error('前回の送信状態が不明です。元の会話を確認してください。自動では再送しません。')
       run.deliveryAttempted = true
       run.deliveryMessageId ??= randomUUID()
