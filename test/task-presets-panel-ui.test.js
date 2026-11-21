@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { effortLabel, parseModel } from '../web/src/util.ts'
+import { modelDisplayName } from '../web/src/model-selection.ts'
 
 const jsx = (type, props) => ({ type, props })
 const nodes = (node, match) => !node || typeof node !== 'object' ? [] : [
@@ -20,7 +21,7 @@ const server = { taskPresets: runs, threads: [{ id: 'parent', title: '元の会�
 let state
 const source = await fs.readFile(new URL('../web/src/components/TaskPresets.tsx', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
-const modules = { 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: Symbol('Fragment') }, '../store': { useStore: fn => fn({ server, route: { view: 'preset', id: 'two' } }), setState: patch => { state = patch }, navigate: route => { state = route } }, '../util': { effortLabel, parseModel } }
+const modules = { 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: Symbol('Fragment') }, '../store': { useStore: fn => fn({ server, route: { view: 'preset', id: 'two' } }), setState: patch => { state = patch }, navigate: route => { state = route } }, '../util': { effortLabel, parseModel }, '../model-selection': { modelDisplayName } }
 const result = {}
 new Function('require', 'exports', outputText)(name => modules[name] ?? {}, result)
 
@@ -32,7 +33,7 @@ test('preset panel shows the parent and each worker, and opens the worker view',
   assert.equal(cards.length, 3)
   assert.match(text(cards[0]), /親.*元の会話/)
   assert.match(text(cards[1]), /子に委託.*作業中.*実装モデル.*低/)
-  assert.match(text(cards[2]), /独立レビュー.*完了.*haiku.*低/)
+  assert.match(text(cards[2]), /独立レビュー.*完了.*Haiku.*低/)
   assert.equal(cards[2].props['aria-current'], 'page')
   assert.equal(cards[1].props['aria-current'], undefined)
   cards[2].props.onClick()

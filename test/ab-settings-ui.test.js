@@ -4,7 +4,7 @@ import test from 'node:test'
 import * as awaitImportUsageFallback from '../shared/usage-fallback.js'
 import ts from 'typescript'
 import * as workflowEffort from '../shared/workflow-effort.js'
-import { claudeCodeModels } from '../web/src/model-selection.ts'
+import { claudeCodeModels, modelDisplayName } from '../web/src/model-selection.ts'
 import * as commandCodeStatus from '../web/src/command-code-status.ts'
 
 // Renders the real dialog components with a minimal hooks host, as in execution-settings-ui.test.js.
@@ -107,7 +107,7 @@ function mountAbStartDialog({ config, usageFallbackRoutes, effortsByModel = { [N
     '../store': store,
     '../model-selection': { isModelVisible: () => true, providerReady: () => true, visibleModels: (server) => server.catalog.models },
     './WorkflowModelField': fieldComponents,
-    './FallbackSummary': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, '../store': store }),
+    './FallbackSummary': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, '../store': store, '../model-selection': { modelDisplayName } }),
     '../../../shared/usage-fallback.js': awaitImportUsageFallback,
     '../../../shared/workflow-effort.js': workflowEffort,
     '../../../shared/usage-score.js': { scoresUpTo: () => [] },

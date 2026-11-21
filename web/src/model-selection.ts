@@ -52,9 +52,32 @@ export function visibleModels(server: AppState) {
   return server.catalog.models.filter((model) => isModelVisible(server, model))
 }
 
+/** Claude Code's own aliases; they follow whatever model Claude Code maps them to. */
+export const CLAUDE_CODE_ALIASES = [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:sonnet', name: 'Sonnet' }, { value: 'claude:haiku', name: 'Haiku' }]
+
+/**
+ * The one name every model label shows. It is the model name alone: a "Provider / " prefix
+ * truncated the name in narrow pickers, and menus already group models under their provider.
+ * Where the route matters (same name on two routes), show it in a heading or tooltip instead.
+ * The one exception is a removed provider: its name is why the saved choice no longer works.
+ * Returns null for a value nothing names, so each caller picks its own placeholder.
+ */
+export function modelDisplayName(server: AppState | null | undefined, value: string | null | undefined): string | null {
+  if (!value) return null
+  if (value.startsWith('claude:')) {
+    const id = value.slice(7)
+    return CLAUDE_CODE_ALIASES.find((alias) => alias.value === value)?.name
+      ?? server?.catalog.models.find((model) => model.provider === 'anthropic' && model.id === id)?.name ?? id
+  }
+  const model = server?.catalog.models.find((entry) => entry.value === value)
+  if (model) return model.name
+  // A saved model on a removed provider is no longer in the catalog; it keeps its name, marked retired.
+  return isRetiredModel(value) ? retiredModelName(value) : null
+}
+
 /** Claude Code has its own visibility and never requires an Anthropic API key. */
 export function claudeCodeModels(server: AppState) {
-  const aliases = [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:sonnet', name: 'Sonnet' }, { value: 'claude:haiku', name: 'Haiku' }]
+  const aliases = CLAUDE_CODE_ALIASES
   const listed = server.catalog.models.filter((model) => model.provider === 'anthropic')
     .map((model) => ({ ...model, value: `claude:${model.id}` }))
   return [...aliases, ...listed.filter((model) => !aliases.some((alias) => alias.value === model.value))]

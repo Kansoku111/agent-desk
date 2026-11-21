@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { claudeCodeModels, isModelVisible, providerReady, visibleModels } from '../web/src/model-selection.ts'
+import { CLAUDE_CODE_ALIASES, claudeCodeModels, isModelVisible, modelDisplayName, providerReady, visibleModels } from '../web/src/model-selection.ts'
 import * as commandCodeStatus from '../web/src/command-code-status.ts'
 
 async function load(path, modules, extra = '') {
@@ -19,7 +19,7 @@ async function load(path, modules, extra = '') {
 }
 
 const jsx = (type, props) => ({ type, props })
-const common = { react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {}, '../store': {}, '../command-code-status': commandCodeStatus, '../model-selection': { claudeCodeModels, isModelVisible, providerReady, visibleModels }, '../util': {}, './Popover': {}, './useWheelSelect': {}, './ProjectDialog': {} }
+const common = { react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {}, '../store': {}, '../command-code-status': commandCodeStatus, '../model-selection': { CLAUDE_CODE_ALIASES, claudeCodeModels, isModelVisible, modelDisplayName, providerReady, visibleModels }, '../util': {}, './Popover': {}, './useWheelSelect': {}, './ProjectDialog': {} }
 const pickers = await load('../web/src/components/Pickers.tsx', common)
 const parseModel = (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }
 const workflow = await load('../web/src/components/WorkflowModelField.tsx', { ...common, '../util': { parseModel }, './Pickers': pickers }, '\nexport { selectedName, routeName }')
@@ -100,4 +100,18 @@ test('saved but unavailable Claude choices still show their own route', () => {
   assert.equal(workflow.modelGroups(disconnected).some((group) => group.id === 'anthropic'), false)
   assert.ok(workflow.modelGroups(disconnected).find((group) => group.id === 'claude-code').models.some((entry) => entry.value === `claude:${api.id}`))
   assert.equal(workflow.routeName(workflow.modelGroups(disconnected), `claude:${api.id}`), 'Claude Code / Claude Haiku')
+})
+
+test('every model label is the model name alone, for new and saved models too', () => {
+  const later = model('command-code-claude', 'claude-fable-9', 'Claude Fable 9')
+  const state = { ...server, catalog: { ...server.catalog, models: [...server.catalog.models, later] } }
+  assert.equal(modelDisplayName(state, later.value), 'Claude Fable 9')
+  assert.equal(modelDisplayName(state, api.value), 'Claude Haiku')
+  assert.equal(modelDisplayName(state, 'claude:haiku'), 'Haiku')
+  assert.equal(modelDisplayName(state, `claude:${api.id}`), 'Claude Haiku')
+  assert.equal(modelDisplayName(state, 'claude:claude-unlisted'), 'claude-unlisted')
+  // A removed provider is the reason the choice no longer works, so only that label keeps it.
+  assert.equal(modelDisplayName(state, JSON.stringify(['openscale', 'old-model'])), 'OpenScale / old-model（廃止）')
+  assert.equal(modelDisplayName(state, model('opencode-go', 'gone', 'Gone').value), null)
+  assert.equal(modelDisplayName(state, ''), null)
 })

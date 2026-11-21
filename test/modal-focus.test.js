@@ -24,7 +24,8 @@ test('the AB model fields use the app menu with plain model names, never a nativ
   assert.match(ab, /import \{ CLAUDE_CODE, ModelField, modelGroups \} from '\.\/WorkflowModelField'/)
   assert.doesNotMatch(code, /<select|<option/)
   assert.match(code, /<Dropdown/)
-  assert.match(code, /CLAUDE_CODE = \[\{ value: 'claude:opus', name: 'Opus' \}, \{ value: 'claude:sonnet', name: 'Sonnet' \}, \{ value: 'claude:haiku', name: 'Haiku' \}\]/)
+  assert.match(code, /CLAUDE_CODE = CLAUDE_CODE_ALIASES/)
+  assert.match(await fs.readFile(new URL('../web/src/model-selection.ts', import.meta.url), 'utf8'), /CLAUDE_CODE_ALIASES = \[\{ value: 'claude:opus', name: 'Opus' \}, \{ value: 'claude:sonnet', name: 'Sonnet' \}, \{ value: 'claude:haiku', name: 'Haiku' \}\]/)
   // The model's own name goes into the menu as it is; the heading says where it runs.
   assert.match(code, /<MenuItem key=\{model\.value\} label=\{model\.name\}/)
   assert.doesNotMatch(code, /\$\{model\.name\} ·/)

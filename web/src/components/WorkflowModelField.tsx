@@ -1,14 +1,14 @@
 import { ChevronDown } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { AppState } from '../types'
-import { claudeCodeModels, providerReady, visibleModels } from '../model-selection'
+import { CLAUDE_CODE_ALIASES, claudeCodeModels, providerReady, visibleModels } from '../model-selection'
 import { commandCodeEmptyHint, commandCodeStatus } from '../command-code-status'
 import { effortLabel, parseModel } from '../util'
 import { byNewest, providerHeading, PROVIDER_NOTE, PROVIDER_ORDER } from './Pickers'
 import { Dropdown, MenuDivider, MenuHeading, MenuItem } from './Popover'
 import { useWheelSelect } from './useWheelSelect'
 
-export const CLAUDE_CODE = [{ value: 'claude:opus', name: 'Opus' }, { value: 'claude:sonnet', name: 'Sonnet' }, { value: 'claude:haiku', name: 'Haiku' }]
+export const CLAUDE_CODE = CLAUDE_CODE_ALIASES
 
 interface ModelGroup { id: string; heading: string; note: string; models: { value: string; name: string }[]; empty?: string; status?: string }
 

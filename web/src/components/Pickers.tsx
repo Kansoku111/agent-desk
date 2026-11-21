@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import { act, setState, useStore } from '../store'
 import type { AppState, CatalogModel, FastProvider, PermissionMode } from '../types'
-import { isRetiredModel, providerReady, retiredModelName, visibleModels } from '../model-selection'
+import { modelDisplayName, providerReady, visibleModels } from '../model-selection'
 import { commandCodeStatus } from '../command-code-status'
 export { pickDefaultModel, providerReady } from '../model-selection'
 import { basename, effortLabel, fastNote, nearestEffort, parseModel, PERMISSION_INFO, pickableEfforts, workspaceLabel } from '../util'
@@ -22,14 +22,6 @@ export const PROVIDER_NOTE: Record<string, string> = {
   'command-code': 'API・プラン対象を確認',
   'command-code-claude': 'API・プラン対象を確認',
   'local-llm': 'このネットワークのサーバー',
-}
-
-function modelName(server: AppState | null, value: string | null) {
-  if (!value) return null
-  const model = server?.catalog.models.find((entry) => entry.value === value)
-  // A saved model on a removed provider is no longer in the catalog; it keeps its name, marked retired.
-  if (!model) return isRetiredModel(value) ? retiredModelName(value) : null
-  return model.name
 }
 
 /** Version a model id carries (gpt-6.1-sol → [6, 1], claude-sonnet-5-5 → [5, 5]). */
@@ -69,7 +61,7 @@ export function ModelPicker({ value, onChange }: { value: string | null; onChang
   }, [server])
   const wheel = useWheelSelect<HTMLButtonElement>(selectable, value, onChange)
   if (!server) return null
-  const label = modelName(server, wheel.shown) ?? 'モデルを選択'
+  const label = modelDisplayName(server, wheel.shown) ?? 'モデルを選択'
   return (
     <Dropdown
       width={300}

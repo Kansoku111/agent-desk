@@ -4,7 +4,7 @@ import test from 'node:test'
 import ts from 'typescript'
 import * as workflowEffort from '../shared/workflow-effort.js'
 import * as usageFallback from '../shared/usage-fallback.js'
-import { claudeCodeModels } from '../web/src/model-selection.ts'
+import { claudeCodeModels, modelDisplayName } from '../web/src/model-selection.ts'
 import * as commandCodeStatus from '../web/src/command-code-status.ts'
 
 const jsx = (type, props, key) => ({ type, props: { ...props, ...(key === undefined ? {} : { key }) } })
@@ -126,7 +126,7 @@ function mountExecutionDialog({ childCapabilities = [], childEffort = 'high', le
     },
     '../execution-checks': { nextCheckId: () => 'check-1' },
     './WorkflowModelField': fieldComponents,
-    './FallbackSummary': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, '../store': { setState() {} } }),
+    './FallbackSummary': compile(fallbackSource, { 'react/jsx-runtime': jsxRuntime, '../store': { setState() {} }, '../model-selection': { modelDisplayName } }),
     '../../../shared/usage-fallback.js': usageFallback,
     '../../../shared/workflow-effort.js': workflowEffort,
     './Modal': { Modal: ({ children }) => jsx('div', { children }) },
