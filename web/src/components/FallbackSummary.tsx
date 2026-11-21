@@ -7,10 +7,10 @@ function targetName(server: AppState, value: string) {
     const id = value.slice(7)
     const name = ({ opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' } as Record<string, string>)[id]
       ?? server.catalog.models.find((model) => model.provider === 'anthropic' && model.id === id)?.name ?? id
-    return 'Claude Code / ' + name
+    return name
   }
   const entry = server.catalog.models.find((model) => model.value === value)
-  return entry ? (server.catalog.providers?.[entry.provider] ?? entry.provider) + ' / ' + entry.name : value
+  return entry?.name ?? value
 }
 
 /** A read-only view of the effective policy; editing has one shared entry point. */

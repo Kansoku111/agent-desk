@@ -22,7 +22,7 @@ const jsx = (type, props) => ({ type, props })
 const common = { react: {}, 'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {}, '../store': {}, '../command-code-status': commandCodeStatus, '../model-selection': { claudeCodeModels, isModelVisible, providerReady, visibleModels }, '../util': {}, './Popover': {}, './useWheelSelect': {}, './ProjectDialog': {} }
 const pickers = await load('../web/src/components/Pickers.tsx', common)
 const parseModel = (value) => { try { const [provider, id] = JSON.parse(value); return { provider, id } } catch { return null } }
-const workflow = await load('../web/src/components/WorkflowModelField.tsx', { ...common, '../util': { parseModel }, './Pickers': pickers }, '\nexport { selectedName }')
+const workflow = await load('../web/src/components/WorkflowModelField.tsx', { ...common, '../util': { parseModel }, './Pickers': pickers }, '\nexport { selectedName, routeName }')
 const model = (provider, id, name) => ({ provider, id, name, value: JSON.stringify([provider, id]) })
 const api = model('anthropic', 'claude-haiku-5-5', 'Claude Haiku')
 const server = {
@@ -71,8 +71,8 @@ test('Claude Code and Claude API remain separate groups and choices', () => {
   assert.deepEqual(anthropic.models, [api])
   assert.equal(pickers.providerHeading(server, 'opencode-go'), 'OpenCode Go')
   assert.equal(pickers.providerHeading(server, 'anthropic'), 'Claude（API）')
-  assert.equal(workflow.selectedName(groups, 'claude:haiku'), 'Claude Code / Haiku')
-  assert.equal(workflow.selectedName(groups, api.value), 'Claude（API） / Claude Haiku')
+  assert.equal(workflow.routeName(groups, 'claude:haiku'), 'Claude Code / Haiku')
+  assert.equal(workflow.routeName(groups, api.value), 'Claude（API） / Claude Haiku')
 })
 
 test('hiding Claude Code and API choices affects only the chosen route', () => {
@@ -89,11 +89,15 @@ test('hiding Claude Code and API choices affects only the chosen route', () => {
 
 test('saved but unavailable Claude choices still show their own route', () => {
   const groups = [{ id: 'current', heading: '選択済み', models: [{ value: api.value, name: api.name }, { value: 'claude:haiku', name: 'Haiku' }] }]
-  assert.equal(workflow.selectedName(groups, api.value), 'Claude（API） / Claude Haiku')
-  assert.equal(workflow.selectedName(groups, 'claude:haiku'), 'Claude Code / Haiku')
+  assert.equal(workflow.routeName(groups, api.value), 'Claude（API） / Claude Haiku')
+  assert.equal(workflow.routeName(groups, 'claude:haiku'), 'Claude Code / Haiku')
+  assert.equal(workflow.routeName(groups, ''), 'モデルを選択')
+  // The picker button shows the name alone so a long provider never hides it.
+  assert.equal(workflow.selectedName(groups, 'claude:haiku'), 'Haiku')
+  assert.equal(workflow.selectedName(groups, api.value), 'Claude Haiku')
   assert.equal(workflow.selectedName(groups, ''), 'モデルを選択')
   const disconnected = { ...server, accounts: { ...server.accounts, claude: { configured: false } } }
   assert.equal(workflow.modelGroups(disconnected).some((group) => group.id === 'anthropic'), false)
   assert.ok(workflow.modelGroups(disconnected).find((group) => group.id === 'claude-code').models.some((entry) => entry.value === `claude:${api.id}`))
-  assert.equal(workflow.selectedName(workflow.modelGroups(disconnected), `claude:${api.id}`), 'Claude Code / Claude Haiku')
+  assert.equal(workflow.routeName(workflow.modelGroups(disconnected), `claude:${api.id}`), 'Claude Code / Claude Haiku')
 })

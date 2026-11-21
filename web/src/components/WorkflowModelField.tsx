@@ -38,7 +38,13 @@ export function modelGroups(server: AppState, allowCodex = false): ModelGroup[] 
   ].filter((group) => group.models.length || ('empty' in group && group.empty))
 }
 
+/** The model name alone: the provider prefix truncated it in narrow pickers, and the menu already groups by provider. */
 function selectedName(groups: ModelGroup[], value: string | null) {
+  return groups.flatMap((group) => group.models).find((entry) => entry.value === value)?.name ?? 'モデルを選択'
+}
+
+/** Provider and model, for the tooltip and screen readers where the same name can exist on several routes. */
+function routeName(groups: ModelGroup[], value: string | null) {
   const model = groups.flatMap((group) => group.models).find((entry) => entry.value === value)
   if (!model) return 'モデルを選択'
   if (value?.startsWith('claude:')) return model.name === 'Claude Code の既定' ? model.name : `Claude Code / ${model.name}`
@@ -55,7 +61,7 @@ export function ModelField({ label, labelAction, value, groups, disabled, onChan
   const effortChoices = (clearUnavailableEffort ? [''] : allowDefaultEffort && efforts.length ? ['', ...efforts] : efforts)
     .filter((level) => !unavailableEfforts.includes(level))
   const effortName = !effortsKnown ? effort ? `${effortLabel(effort)}（未確認）` : '未確認' : clearUnavailableEffort ? `${effortLabel(effort)}（非対応）` : !efforts.length ? '指定不可' : effort ? `${effortLabel(effort)}${efforts.includes(effort) ? '' : '（非対応）'}` : allowDefaultEffort ? '既定' : '中'
-  const name = selectedName(groups, value)
+  const name = routeName(groups, value)
   const modelWheel = useWheelSelect<HTMLButtonElement>(disabled ? [] : groups.flatMap((group) => group.models.map((model) => model.value)), value, onChange)
   const effortWheel = useWheelSelect<HTMLButtonElement>(disabled || !value ? [] : effortChoices, effortChoices.includes(effort) ? effort : null, onEffort)
   const wheelName = selectedName(groups, modelWheel.shown ?? value)
@@ -67,7 +73,7 @@ export function ModelField({ label, labelAction, value, groups, disabled, onChan
       portal
       width={300}
       trigger={({ toggle, open }) => (
-        <button ref={modelWheel.ref} type="button" className={`ab-picker ${open ? 'active' : ''} ${modelWheel.pending ? 'wheeling' : ''}`} aria-label={`${label}: ${name}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={toggle}>
+        <button ref={modelWheel.ref} type="button" className={`ab-picker ${open ? 'active' : ''} ${modelWheel.pending ? 'wheeling' : ''}`} aria-label={`${label}: ${name}`} title={name} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={toggle}>
           <span>{wheelName}</span>
           <ChevronDown size={13} />
         </button>

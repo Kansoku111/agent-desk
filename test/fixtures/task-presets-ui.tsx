@@ -85,7 +85,7 @@ const api = {
     labels.push('manual return sends once and becomes sent')
     button('開く').click(); await tick(); button('独立レビュー').click(); await tick(200)
     check(document.querySelectorAll('fieldset.preset-switch').length === 1, 'only the review method selector')
-    check(document.body.textContent?.includes('Claude Code / Haiku'), 'legacy Claude setting is shown for a DSH source')
+    check(document.querySelector('[aria-label$="Claude Code / Haiku"]'), 'legacy Claude setting is shown for a DSH source')
     button('キャンセル').click(); await tick()
     server.settings.taskPresets.reviewSelected = { model: reviewer, effort: 'low' }; publish()
     button('開く').click(); await tick(); button('独立レビュー').click(); await tick(200)

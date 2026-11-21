@@ -239,9 +239,7 @@ function modelLabel(server: AppState, run: TaskPresetRun) {
   const model = run.model.startsWith('claude:')
     ? server.catalog.models.find((entry) => entry.provider === 'anthropic' && entry.id === run.model.slice(7))?.name ?? run.model.slice(7)
     : server.catalog.models.find((entry) => entry.value === run.model)?.name ?? parseModel(run.model)?.id ?? run.model
-  const providerId = parseModel(run.model)?.provider
-  const provider = run.model.startsWith('claude:') ? 'Claude Code' : providerId ? server.catalog.providers[providerId] ?? providerId : ''
-  return (provider ? provider + ' / ' : '') + model
+  return model
 }
 
 export function TaskPresetRuns({ source, onClose }: { source: TaskPresetSource; onClose: () => void }) {
@@ -318,7 +316,7 @@ function ResultDialog({ id }: { id: string }) {
   return <Modal title={run ? LABEL[run.kind] : '委託'} onClose={close} width={760}>
     <div className="modal-body preset-result">
       {!run ? <p>読み込み中…</p> : <>
-        <div className="preset-result-head"><strong>{PHASE[run.phase] ?? run.phase}</strong><span className="muted">{modelGroups(server!).flatMap((group) => group.models.map((model) => ({ ...model, heading: group.heading }))).filter((model) => model.value === run.model).map((model) => model.heading + ' / ' + model.name)[0] ?? run.model} · {effortLabel(run.effort)}</span></div>
+        <div className="preset-result-head"><strong>{PHASE[run.phase] ?? run.phase}</strong><span className="muted">{modelGroups(server!).flatMap((group) => group.models.map((model) => ({ ...model, heading: group.heading }))).filter((model) => model.value === run.model).map((model) => model.name)[0] ?? run.model} · {effortLabel(run.effort)}</span></div>
         {run.error && <p className="team-warning" role="alert">{run.error}</p>}
         {run.deliveryError && <p className="team-warning" role="alert">{run.deliveryError}</p>}
         {run.warning && <p className="team-warning">{run.warning}</p>}

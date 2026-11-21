@@ -29,7 +29,7 @@ function modelName(server: AppState | null, value: string | null) {
   const model = server?.catalog.models.find((entry) => entry.value === value)
   // A saved model on a removed provider is no longer in the catalog; it keeps its name, marked retired.
   if (!model) return isRetiredModel(value) ? retiredModelName(value) : null
-  return ['command-code', 'command-code-claude'].includes(model.provider) ? `Command Code / ${model.name}` : model.name
+  return model.name
 }
 
 /** Version a model id carries (gpt-6.1-sol → [6, 1], claude-sonnet-5-5 → [5, 5]). */
