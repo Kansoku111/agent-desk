@@ -20,7 +20,8 @@ dsh の版を上げる手順そのものは[更新](updating.md#dsh)にありま
 | `fast-mode` | pi-ai `dist/api/` の3つの API | Claude の高速モード（`speed: "fast"`）をリクエスト本文に足す。Anthropic のサーバー側フォールバック（`allowedFallbackModels`）を外す | `fast-mode.test.js` |
 | `opencode-catalog` | pi-ai の OpenCode Go モデル一覧（JSON） | Agent Desk が検証した追加分をメモリ上で足す | `opencode-go-catalog.test.js` |
 | `steer` | `dsh-acp` | 実行中のターンにメッセージを追加する（ACP は2つ目の `session/prompt` を拒否するため） | `steer-patch.test.js` |
-| `acp-image` | `dsh-acp` | 数MBの画像添付の検証で JavaScript のスタック上限に達しないようにする。画像データの検証は維持する | `acp-image-patch.test.js` |
+| `acp-image` | `dsh-acp` | 数MBの画像添付の検証で JavaScript のスタック上限に達しないようにする。画像データの検証は維持する | `acp-image-patch.test.js`、`command-code-runtime.test.js`（アップロードから模擬APIまで） |
+| `mcp-image` | `dsh-mcp-client` | MCP ツールが返す数MBの画像も、同じ検証エラーでテキストに置き換わらないようにする | `mcp-image-patch.test.js` |
 | `retry` | `dsh-llm-pi-ai` | pi-ai が一時的と判断するエラーと、ストリームの無通信タイムアウトを dsh の再試行に回す | `retry-patch.test.js`、`retry-hook.test.js` |
 | `context-overflow` | `dsh-llm-pi-ai` | 文脈サイズを選べる ChatGPT／Claude 経路で、ローカルの予算を超えただけの正常な応答を超過エラーにしない | `context-overflow-patch.test.js` |
 | `reasoning-usage` | `dsh-llm-pi-ai` | pi-ai が報告した推論トークン数を使用量に引き継ぐ | `reasoning-usage-patch.test.js` |

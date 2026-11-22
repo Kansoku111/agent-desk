@@ -1,6 +1,6 @@
 // Real DSH/ACP against local mock endpoints; no provider account or model calls.
 import assert from 'node:assert/strict'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import fs from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
@@ -11,18 +11,18 @@ import { CredentialStore, COMMAND_CODE_REF } from '../server/credentials.js'
 import { commandCodeRoutes } from '../server/command-code.js'
 import { homePatch } from '../server/dsh-config.js'
 import { appPaths } from '../server/paths.js'
+import { createThreadHandlers } from '../server/rpc-handlers-threads.js'
 import { AcpRuntime } from '../server/runtime.js'
+import { ThreadManager } from '../server/threads.js'
 import { TOOL_MODE_CONFIG } from '../server/ptc.js'
 import { turnUsage } from '../server/usage.js'
 
-for (const modelId of ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-flash-vision-exp']) test('real DSH sends a DeepSeek image attachment to the Command Code chat endpoint (' + modelId + ')', { timeout: 90000 }, async (t) => {
+async function imageRuntime(t, modelId) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-image-'))
   const paths = appPaths(home)
   const workspace = path.join(home, 'workspace')
   await fs.mkdir(paths.dshHome, { recursive: true })
   await fs.mkdir(workspace)
-  const sharp = (await import('sharp')).default
-  const image = (await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ee2244' } }).png().toBuffer()).toString('base64')
   const requests = []
   const server = http.createServer(async (req, res) => {
     let raw = ''
@@ -43,13 +43,22 @@ for (const modelId of ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-fla
   await fs.writeFile(paths.homePatch, YAML.stringify(rows))
   await new CredentialStore(paths.credentials).setRef(COMMAND_CODE_REF, 'fixture-not-a-real-key')
   const runtime = new AcpRuntime({ mode: 'read-only', paths, onUpdate: () => {}, onPermission: async () => ({ outcome: { outcome: 'cancelled' } }) })
+  const cleanups = []
   t.after(async () => {
+    for (const cleanup of cleanups) await cleanup()
     await runtime.stop()
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
     assert.equal(path.dirname(home), os.tmpdir())
     await fs.rm(home, { recursive: true, force: true })
   })
+  return { paths, workspace, runtime, requests, cleanups }
+}
+
+for (const modelId of ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-flash-vision-exp']) test('real DSH sends a DeepSeek image attachment to the Command Code chat endpoint (' + modelId + ')', { timeout: 90000 }, async (t) => {
+  const { workspace, runtime, requests } = await imageRuntime(t, modelId)
+  const sharp = (await import('sharp')).default
+  const image = (await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ee2244' } }).png().toBuffer()).toString('base64')
   await runtime.start()
   const session = await runtime.newSession(workspace)
   const result = await runtime.prompt(session.sessionId, [
@@ -62,6 +71,45 @@ for (const modelId of ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-fla
   assert.equal(requests[0].body.model, modelId)
   const user = requests[0].body.messages.find((message) => message.role === 'user')
   assert.ok(user?.content.some((part) => part.type === 'image_url' && part.image_url?.url === `data:image/png;base64,${image}`), 'image bytes and MIME reach the HTTP request')
+})
+
+test('a large PNG uploaded with the first message reaches a vision endpoint through real DSH', { timeout: 90_000 }, async (t) => {
+  const modelId = 'deepseek/deepseek-v4.1-flash'
+  const { paths, workspace, runtime, requests, cleanups } = await imageRuntime(t, modelId)
+  const pool = Object.assign(new EventEmitter(), {
+    get: () => runtime.start(), holderOf: (id) => runtime.liveSessions.has(id) ? runtime : null, status: () => ({}),
+  })
+  const threads = new ThreadManager({ paths, pool, catalog: { learn: () => false },
+    getAccounts: async () => ({ commandCode: { configured: true } }), getTurnUsage: async () => null })
+  cleanups.push(() => threads.shutdown())
+  runtime.onUpdate = (id, update) => threads.onUpdate(id, update)
+  const rpc = createThreadHandlers({ paths, threads, mutateSettings: async () => {} })
+  await fs.mkdir(paths.attachmentsDir)
+
+  // A real PNG that crosses the old regexp limit without needing a checked-in binary.
+  const sharp = (await import('sharp')).default
+  const width = 1400, height = 1250
+  const png = await sharp({ create: { width, height, channels: 3, background: '#ee2244' } }).png({ compressionLevel: 0 }).toBuffer()
+  assert.ok(png.length > 5 * 1024 * 1024)
+  const image = await rpc['attachment.add']({ name: 'fixture.png', mimeType: 'image/png', data: png.toString('base64') })
+  const text = 'Describe this image'
+  const { thread } = await rpc['thread.create']({ workspace, model: JSON.stringify(['command-code', modelId]), permissionMode: 'read-only',
+    toolMode: 'ptc', createId: '838129e4-4dd8-436f-bc34-28aff1277950', text, images: [image] })
+  await threads.active.get(thread.id)?.done
+  const { turns: [turn] } = await rpc['thread.get']({ threadId: thread.id })
+  assert.equal(turn.status, 'done', JSON.stringify(turn.error))
+  assert.deepEqual(turn.user.images, [image])
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].url, '/provider/v1/chat/completions')
+  const { content } = requests[0].body.messages.find((message) => message.role === 'user')
+  assert.ok(content.some((part) => part.type === 'text' && part.text.includes(text)))
+  const sent = content.find((part) => part.type === 'image_url')?.image_url?.url
+  assert.ok(sent?.startsWith('data:image/'), 'the model request contains an inline image')
+  // dsh may normalize PNG bytes before sending; check the decoded picture.
+  const { data, info } = await sharp(Buffer.from(sent.slice(sent.indexOf(',') + 1), 'base64')).removeAlpha().raw().toBuffer({ resolveWithObject: true })
+  assert.deepEqual([info.width, info.height], [width, height])
+  // Normalization may use lossy compression.
+  assert.ok([238, 34, 68].every((value, index) => Math.abs(data[index] - value) <= 3), 'the image keeps its fixture color')
 })
 
 for (const endpoint of ['chat', 'messages']) for (const mode of ['unknown', 'default', 'low', 'xhigh', 'max', ...(endpoint === 'chat' ? ['ling-low', 'ling-medium', 'ling-high', 'ling1019-low', 'ling1019-medium', 'ling1019-high'] : [])]) {

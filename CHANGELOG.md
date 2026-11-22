@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- dsh で数MBの画像を添付すると、モデルに届く前にエラーになることがあった問題を修正しました。
+- dsh で数MBの画像を添付したときや、MCP ツールが数MBの画像を返したときに、画像がモデルに届く前にエラーになることがあった問題を修正しました。
 
 ## [0.1.17] - 2026-11-20
 
