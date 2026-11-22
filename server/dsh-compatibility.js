@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { patchAcpSource } from './steer-patch.js'
+import { patchAcpImageSource } from './acp-image-patch.js'
 import { patchGoalSource, patchGoalDriverSource } from './goal-patch.js'
 import { patchMcpTimeoutSource } from './mcp-timeout-patch.js'
 import { patchMcpStartupSource } from './mcp-startup-patch.js'
@@ -30,6 +31,7 @@ const HOOKS = [
   { name: 'fast-mode', module: null },
   { name: 'opencode-catalog', module: null },
   { name: 'steer', module: 'acp', patch: patchAcpSource },
+  { name: 'acp-image', module: 'acp', patch: patchAcpImageSource },
   { name: 'retry', module: 'llm', patch: patchRetrySource },
   { name: 'context-overflow', module: 'llm', patch: patchContextOverflowSource },
   { name: 'reasoning-usage', module: 'llm', patch: patchReasoningUsageSource },

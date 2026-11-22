@@ -8,6 +8,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { composeCompatibilityPatches, runtimeHookArgs } from '../server/dsh-compatibility.js'
 import { patchAcpSource } from '../server/steer-patch.js'
+import { patchAcpImageSource } from '../server/acp-image-patch.js'
 import { patchGoalSource, patchGoalDriverSource } from '../server/goal-patch.js'
 import { patchMcpTimeoutSource } from '../server/mcp-timeout-patch.js'
 import { patchMcpStartupSource } from '../server/mcp-startup-patch.js'
@@ -68,7 +69,7 @@ async function fixture(t) {
   for (const file of ['scripts/check-dsh.mjs', ...[
     'dsh-compatibility.js', 'steer-patch.js', 'goal-patch.js', 'retry-patch.js', 'mcp-timeout-patch.js', 'fast-mode-hook.js', 'fast-mode.js',
     'compaction-hook.js', 'compaction-patch.js', 'context-overflow-hook.js', 'context-overflow-patch.js', 'reasoning-usage-hook.js', 'reasoning-usage-patch.js',
-    'steer-hook.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js',
+    'steer-hook.js', 'acp-image-hook.js', 'acp-image-patch.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js',
     'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js', 'gpt-cache-diagnostics.js',
     'mcp-startup-hook.js', 'mcp-startup-patch.js', 'mcp-startup.js',
     'fs-search-hook.js', 'fs-search-patch.js', 'fs-search.js', 'fs-read-hook.js', 'fs-read-patch.js',
@@ -146,10 +147,10 @@ async function fixture(t) {
 test('compatibility uses runtime hook registration order, not reversed load entry order', async (t) => {
   const { acpSource, llmSource, compactionSource, searchSource, readToolSource, goalToolSource, goalDriverSource, ptcRuntimeSource, ptcWorkerSource, toolsSource } = await fixture(t)
   assert.deepEqual(runtimeHookArgs().filter((arg) => arg !== '--import').map((url) => path.basename(new URL(url).pathname)), [
-    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'retry-hook.js', 'context-overflow-hook.js', 'reasoning-usage-hook.js', 'compaction-hook.js', 'goal-hook.js', 'goal-wait-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'mcp-startup-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'ptc-errors-hook.js', 'ptc-sdk-hook.js', 'ptc-results-hook.js', 'fs-search-hook.js', 'fs-read-hook.js',
+    'fast-mode-hook.js', 'opencode-catalog-hook.js', 'steer-hook.js', 'acp-image-hook.js', 'retry-hook.js', 'context-overflow-hook.js', 'reasoning-usage-hook.js', 'compaction-hook.js', 'goal-hook.js', 'goal-wait-hook.js', 'goal-tool-hook.js', 'mcp-timeout-hook.js', 'mcp-startup-hook.js', 'output-speed-hook.js', 'ptc-hook.js', 'ptc-errors-hook.js', 'ptc-sdk-hook.js', 'ptc-results-hook.js', 'fs-search-hook.js', 'fs-read-hook.js',
   ])
   assert.deepEqual(composeCompatibilityPatches({ acp: acpSource, llm: llmSource, compaction: compactionSource, search: searchSource, readTool: readToolSource, goalTool: goalToolSource, goalDriver: goalDriverSource, ptcRuntime: ptcRuntimeSource, ptcWorker: ptcWorkerSource, tools: toolsSource }), {
-    acp: patchPtcSource(patchOutputSpeedSource(patchMcpStartupSource(patchMcpTimeoutSource(patchGoalSource(patchAcpSource(acpSource)))))), llm: patchReasoningUsageSource(patchContextOverflowSource(patchRetrySource(llmSource))), compaction: patchCompactionSource(compactionSource), search: patchFsSearchSource(searchSource), readTool: patchFsReadSource(readToolSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource), ptcRuntime: patchPtcRuntimeSource(ptcRuntimeSource), ptcWorker: patchPtcWorkerSource(ptcWorkerSource), tools: patchPtcResultsSource(patchPtcSdkSource(toolsSource)),
+    acp: patchPtcSource(patchOutputSpeedSource(patchMcpStartupSource(patchMcpTimeoutSource(patchGoalSource(patchAcpImageSource(patchAcpSource(acpSource))))))), llm: patchReasoningUsageSource(patchContextOverflowSource(patchRetrySource(llmSource))), compaction: patchCompactionSource(compactionSource), search: patchFsSearchSource(searchSource), readTool: patchFsReadSource(readToolSource), goalTool: patchGoalToolSource(goalToolSource), goalDriver: patchGoalDriverSource(goalDriverSource), ptcRuntime: patchPtcRuntimeSource(ptcRuntimeSource), ptcWorker: patchPtcWorkerSource(ptcWorkerSource), tools: patchPtcResultsSource(patchPtcSdkSource(toolsSource)),
   })
 })
 
@@ -171,6 +172,7 @@ test('a catalog format warning blocks the update before the runtime starts', asy
 
 for (const [name, field, change] of [
   ['steer', 'acp', (source) => source.replace('a prompt is already in flight for this session', 'upstream changed admission')],
+  ['acp-image', 'acp', (source) => source.replace('data.toString("base64") !== block.data', 'false')],
   ['goal', 'acp', (source) => source.replace('settleAfterQuiescence(inflight) {', 'upstreamSettlement(inflight) {')],
   ['goal-wait', 'goalDriver', (source) => source.replace('function readyToDrive(state)', 'function changedReady(state)')],
   ['goal-tool', 'goalTool', (source) => source.replace('Replacement cap; valid only with action edit.', 'changed upstream cap')],
@@ -254,7 +256,7 @@ test('retry check export is mandatory, not merely an optional startup warning', 
   await assert.rejects(verifyInstall({ root, timeoutMs: 30_000 }), /isRetryableAssistantError is unavailable/)
 })
 
-for (const name of ['goal', 'goal-wait', 'goal-tool', 'mcp-startup', 'ptc', 'ptc-errors', 'ptc-sdk', 'ptc-results', 'compaction', 'context-overflow', 'reasoning-usage', 'fs-read']) {
+for (const name of ['acp-image', 'goal', 'goal-wait', 'goal-tool', 'mcp-startup', 'ptc', 'ptc-errors', 'ptc-sdk', 'ptc-results', 'compaction', 'context-overflow', 'reasoning-usage', 'fs-read']) {
   test(`the gate observes actual ${name} hook transformations, not just standalone patch functions`, async (t) => {
     const { root } = await fixture(t)
     const hook = path.join(root, 'server', `${name}-hook.js`)
