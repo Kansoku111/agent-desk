@@ -31,6 +31,8 @@ test('model lists from Ollama, vLLM, LM Studio and llama.cpp are read', () => {
   assert.deepEqual(parseModelList({ object: 'list', data: [{ id: 'qwen3:8b' }, { id: 'qwen3:8b' }, { id: 'bad id' }] }), [{ id: 'qwen3:8b' }])
   assert.deepEqual(parseModelList({ data: [{ id: 'org/model', max_model_len: 32768 }] }), [{ id: 'org/model', contextWindow: 32768 }])
   assert.deepEqual(parseModelList({ data: [{ id: 'm.gguf', meta: { n_ctx_train: 4096 } }] }), [{ id: 'm.gguf', contextWindow: 4096 }])
+  // llama.cpp server: the allocated window (n_ctx) wins over the training length.
+  assert.deepEqual(parseModelList({ data: [{ id: 'q.gguf', meta: { n_ctx: 262144, n_ctx_train: 1048576 } }] }), [{ id: 'q.gguf', contextWindow: 262144 }])
   assert.deepEqual(parseModelList({ models: { a: { context_length: 8192 } } }), [{ id: 'a', contextWindow: 8192 }])
   assert.deepEqual(parseModelList({ models: ['b'] }), [{ id: 'b' }])
   assert.deepEqual(parseModelList(null), [])

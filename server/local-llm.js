@@ -28,9 +28,13 @@ export function normalizeBaseUrl(text) {
   return url.href.replace(/\/+$/, '')
 }
 
-/** The first positive integer among a model entry's context fields (vLLM, LM Studio, llama.cpp, others). */
+/**
+ * The first positive integer among a model entry's context fields (vLLM, LM Studio, llama.cpp, others).
+ * llama.cpp's meta.n_ctx is the window the server actually allocated (its -c); it comes before
+ * n_ctx_train, which only says what the model was trained on and can exceed what the server holds.
+ */
 function contextOf(entry) {
-  for (const value of [entry.context_length, entry.max_model_len, entry.context_window, entry.max_context_length, entry.meta?.n_ctx_train]) {
+  for (const value of [entry.context_length, entry.max_model_len, entry.context_window, entry.max_context_length, entry.meta?.n_ctx, entry.meta?.n_ctx_train]) {
     if (Number.isInteger(value) && value > 0) return value
   }
   return null
