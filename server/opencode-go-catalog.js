@@ -1,5 +1,7 @@
 // A data-only overlay for pi-ai's mixed-protocol OpenCode Go catalog. The same
 // merge runs in the server and the runtime loader; installed packages stay untouched.
+import { withUsableThinkingLevels } from './thinking-levels.js'
+
 export const OPENCODE_GO_PROVIDER = 'opencode-go'
 
 // pi-ai 1.4.0 still uses the retired free-preview id. The documented Go model
@@ -44,24 +46,6 @@ export function combineOpenCodeAdditions(...sources) {
 export function openCodeModels(data) {
   return Object.values(data ?? {}).flatMap((group) => Object.values(group ?? {}))
     .filter((model) => (model?.type ?? 'chat') === 'chat' && typeof model?.id === 'string')
-}
-
-const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-
-/**
- * pi-ai leaves thinkingLevelMap out for reasoning models without effort control
- * (toggle-only or no options). A map that disables every level instead makes dsh
- * reject the model ("invalid reasoning metadata"), so such a map is dropped.
- * Same reading as pi-ai's getSupportedThinkingLevels.
- */
-export function withUsableThinkingLevels(model) {
-  const map = model?.thinkingLevelMap
-  if (!model?.reasoning || !map || typeof map !== 'object') return model
-  const usable = THINKING_LEVELS.some((level) => map[level] !== null
-    && (!['xhigh', 'max'].includes(level) || map[level] !== undefined))
-  if (usable) return model
-  const { thinkingLevelMap: _, ...rest } = model
-  return rest
 }
 
 /** Only new chat definitions of a protocol/endpoint the installed catalog already uses. */

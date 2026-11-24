@@ -69,7 +69,7 @@ async function fixture(t) {
   for (const file of ['scripts/check-dsh.mjs', ...[
     'dsh-compatibility.js', 'steer-patch.js', 'goal-patch.js', 'retry-patch.js', 'mcp-timeout-patch.js', 'fast-mode-hook.js', 'fast-mode.js',
     'compaction-hook.js', 'compaction-patch.js', 'context-overflow-hook.js', 'context-overflow-patch.js', 'reasoning-usage-hook.js', 'reasoning-usage-patch.js',
-    'steer-hook.js', 'acp-image-hook.js', 'mcp-image-hook.js', 'image-base64-patch.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js',
+    'steer-hook.js', 'acp-image-hook.js', 'mcp-image-hook.js', 'image-base64-patch.js', 'retry-hook.js', 'goal-hook.js', 'mcp-timeout-hook.js', 'opencode-catalog-hook.js', 'opencode-go-catalog.js', 'thinking-levels.js',
     'output-speed-hook.js', 'output-speed-patch.js', 'output-speed-bridge.js', 'output-speed.js', 'gpt-cache-diagnostics.js',
     'mcp-startup-hook.js', 'mcp-startup-patch.js', 'mcp-startup.js',
     'fs-search-hook.js', 'fs-search-patch.js', 'fs-search.js', 'fs-read-hook.js', 'fs-read-patch.js',

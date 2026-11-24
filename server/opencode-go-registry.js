@@ -81,7 +81,7 @@ export function registryDefinitions(body, liveIds, base) {
     const definition = {
       id, name: model.name, provider: 'opencode-go', api, baseUrl,
       input: ['text', ...(model.modalities.input.includes('image') ? ['image'] : [])],
-      // Like pi-ai's own catalog, no effort choices means no map (see withUsableThinkingLevels).
+      // Like pi-ai's own catalog, no effort choices means no map (see thinking-levels.js).
       reasoning: model.reasoning, ...(efforts ? { thinkingLevelMap } : {}),
       contextWindow: model.limit.context, maxTokens: model.limit.output,
       cost: { input: model.cost.input, output: model.cost.output, cacheRead: model.cost.cache_read ?? 0, cacheWrite: model.cost.cache_write ?? 0 },

@@ -46,6 +46,30 @@ test('Fable 5.2 is bundled with official limits and adaptive thinking', async ()
   assert.deepEqual(configured.pricing['anthropic/claude-fable-5-2'], model.cost)
 })
 
+test('a fetched reasoning model gets exactly the levels its map allows, never none', async () => {
+  // dsh rejects an empty reasoningEfforts for the whole route, and a map that
+  // disables every level leaves pi-ai no level to offer either.
+  const allNull = { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null }
+  const model = (id, thinkingLevelMap) => ({
+    id, name: id, api: 'anthropic-messages', provider: 'anthropic', baseUrl: 'https://api.anthropic.com',
+    reasoning: true, input: ['text'], contextWindow: 200000, maxTokens: 8000,
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }, thinkingLevelMap,
+  })
+  const fetched = { providers: { anthropic: { 'anthropic-messages': {
+    'test-all-null': model('test-all-null', allNull),
+    'test-minimal-only': model('test-minimal-only', { ...allNull, minimal: 'minimal' }),
+    'test-max-only': model('test-max-only', { ...allNull, max: 'max' }),
+    'test-medium-high': model('test-medium-high', { ...allNull, medium: 'medium', high: 'high' }),
+  } } } }
+  const { definitions } = await configuredModelCatalog([], fetched)
+  const efforts = (id) => definitions.anthropic.find((entry) => entry.id === id).reasoningEfforts
+  assert.deepEqual(efforts('test-all-null'), { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' })
+  assert.deepEqual(efforts('test-minimal-only'), { minimal: 'minimal' })
+  assert.deepEqual(efforts('test-max-only'), { max: 'max' })
+  // An explicit null is unsupported, not "use the level's own name".
+  assert.deepEqual(efforts('test-medium-high'), { medium: 'medium', high: 'high' })
+})
+
 test('a bundled model the installed catalog already ships is left alone', () => {
   const shipped = structuredClone(base)
   shipped['anthropic-messages']['claude-sonnet-5-5'] = { id: 'claude-sonnet-5-5', name: 'Shipped' }

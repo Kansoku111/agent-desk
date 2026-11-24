@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import extras from './catalog-extras.json' with { type: 'json' }
 import { GPT_PROVIDER, siwcCatalog } from './siwc-route.js'
 import { mergeOpenCodeCatalog } from './opencode-go-catalog.js'
+import { supportedThinkingLevels, withUsableThinkingLevels } from './thinking-levels.js'
 
 const MARKER = 'agentDeskAdded'
 
@@ -228,6 +229,24 @@ export async function catalogModelLimits() {
   return result
 }
 
+/**
+ * dsh's reasoningEfforts for one reasoning model. An explicit null in
+ * thinkingLevelMap means the level is unsupported (pi-ai's reading), so it must
+ * not be offered. dsh rejects an empty result for the whole route: a map that
+ * leaves no level gets pi-ai's defaults, and one whose only levels are outside
+ * low–max keeps those levels.
+ */
+function reasoningEffortsFor(model) {
+  const usable = withUsableThinkingLevels(model)
+  const map = usable.thinkingLevelMap
+  const efforts = Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max']
+    .map(level => [level, map?.[level] === undefined ? (level === 'max' ? null : level) : map[level]])
+    .filter(([, wire]) => wire !== null))
+  if (Object.keys(efforts).length) return efforts
+  return Object.fromEntries(supportedThinkingLevels(usable).filter(level => level !== 'off')
+    .map(level => [level, map?.[level] ?? level]))
+}
+
 // Materialize additions into the app-owned DSH configuration, never mutate installed packages.
 export async function configuredModelCatalog(customModels = [], fetched = null) {
   const [dir] = catalogDataDirs()
@@ -259,11 +278,7 @@ export async function configuredModelCatalog(customModels = [], fetched = null) 
         // This new model requires adaptive thinking; it is not in the installed pi-ai catalog yet.
         ...(provider === 'anthropic' && model.id === 'claude-fable-5-2' && model[MARKER]
           ? { compat: { forceAdaptiveThinking: true, supportsTemperature: false } } : {}),
-        reasoningEfforts: model.reasoning
-          ? Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max']
-            .map(level => [level, model.thinkingLevelMap?.[level] ?? (level === 'max' ? null : level)])
-            .filter(([, wire]) => wire !== null))
-          : false,
+        reasoningEfforts: model.reasoning ? reasoningEffortsFor(model) : false,
       }))
     added.push(...result.added.map(id => `${provider}/${id}`))
     models.push(...result.models.map(model => ({ provider, ...model })))
