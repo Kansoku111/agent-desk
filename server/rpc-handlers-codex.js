@@ -39,6 +39,7 @@ export function createCodexHandlers({ codex, teams, paths, getSettings, mutateSe
       return { task: value }
     },
     'codex.task.get': ({ taskId }) => ({ task: task(taskId), turns: codex.turns(taskId), permissions: codex.pendingPermissions(taskId) }),
+    'codex.skills': async ({ taskId }) => ({ skills: await codex.skills(task(taskId).workspace) }),
     'codex.task.send': async ({ taskId, text, images }) => {
       const value = task(taskId)
       if (value.ab || value.team?.childId || (value.team && value.team.role !== 'leader')) throw new Error('この担当はAB・チームの画面から操作してください')

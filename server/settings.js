@@ -13,6 +13,12 @@ import { HARNESS_KEYS, effectiveHarness, migrateHarnesses, parseHarness } from '
 import { isUsdJpyRate } from '../shared/usage-score.js'
 import { validateUsageFallbackRoutes } from '../shared/usage-fallback.js'
 
+export const SKILL_BUTTONS_MAX = 5
+
+function assertSkillName(name) {
+  if (typeof name !== 'string' || !name.trim() || name.length > 1000) throw new Error('skill の名前が不正です')
+}
+
 // Idempotent startup migration: GPT fast is not offered by the official SIWC route.
 export function migrateSettings(saved = {}) {
   const { customInstructions, customInstructionsEnabled, ...rest } = saved
@@ -30,6 +36,9 @@ export function migrateSettings(saved = {}) {
     },
     // Saves from before the routes kept a model per provider; those keys stay in the file, unused.
     subagentRoutes: savedRoutes(saved),
+    // Saves from before the Skills button kept up to five favorites in order: the first five starred names.
+    skillButtons: Array.isArray(saved.skillButtons) ? saved.skillButtons
+      : Object.keys(saved.favoriteSkills ?? {}).filter((name) => saved.favoriteSkills[name] === true).slice(0, SKILL_BUTTONS_MAX),
     // Saves from before per-mode harnesses, or before harnesses (方針・プレイブック).
     ...migrateHarnesses(saved),
   }
@@ -67,6 +76,9 @@ export const DEFAULT_SETTINGS = {
   checkpoints: true,
   projectNames: {},
   projectColors: {},
+  // Starred skills, in the Skills button's order (shared by dsh, Claude Code and Codex tasks; names only).
+  skillButtons: [],
+  // Older saves and versions read this; kept in step with skillButtons.
   favoriteSkills: {},
   // null keeps each model's context size / leaves the fixed-model tool out.
   contextLimits: { 'openai-codex': null, anthropic: null },
@@ -157,18 +169,31 @@ export function planSettingsUpdate(current, patch, now) {
     // cannot replace one another's choices. ACP values are opaque strings.
     next.modelVisibility = { ...current.modelVisibility, ...patch.modelVisibility }
   }
+  if (owns(patch, 'skillButtons')) {
+    if (!Array.isArray(patch.skillButtons) || patch.skillButtons.length > SKILL_BUTTONS_MAX) throw new Error(`お気に入りの skill は${SKILL_BUTTONS_MAX}個までです`)
+    for (const name of patch.skillButtons) assertSkillName(name)
+    if (new Set(patch.skillButtons).size !== patch.skillButtons.length) throw new Error('同じ skill が重複しています')
+    next.skillButtons = [...patch.skillButtons]
+  }
+  // Toggles by name (a page from before the ordered list); merged on the settings queue.
   if (owns(patch, 'favoriteSkills')) {
     assertRecord(patch.favoriteSkills, 'favoriteSkills')
     for (const [name, favorite] of Object.entries(patch.favoriteSkills)) {
-      if (!name.trim() || name.length > 1000) throw new Error('skill の名前が不正です')
+      assertSkillName(name)
       assertBoolean(favorite, 'favoriteSkills の値')
     }
-    // Merge individual choices on the settings queue so separate windows do not overwrite each other.
-    const favorites = { ...current.favoriteSkills }
+    const buttons = [...(next.skillButtons ?? [])]
     for (const [name, favorite] of Object.entries(patch.favoriteSkills)) {
-      if (favorite) Object.defineProperty(favorites, name, { value: true, enumerable: true, configurable: true, writable: true })
-      else delete favorites[name]
+      const at = buttons.indexOf(name)
+      if (favorite && at < 0) buttons.push(name)
+      if (!favorite && at >= 0) buttons.splice(at, 1)
     }
+    if (buttons.length > SKILL_BUTTONS_MAX) throw new Error(`お気に入りの skill は${SKILL_BUTTONS_MAX}個までです`)
+    next.skillButtons = buttons
+  }
+  if (owns(patch, 'skillButtons') || owns(patch, 'favoriteSkills')) {
+    const favorites = {}
+    for (const name of next.skillButtons) Object.defineProperty(favorites, name, { value: true, enumerable: true, configurable: true, writable: true })
     next.favoriteSkills = favorites
   }
   if (owns(patch, 'contextLimits')) {

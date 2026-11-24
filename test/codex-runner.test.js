@@ -728,3 +728,30 @@ test('a task that mounts the subagent bridge is told to use it, and no other tas
   await start(runner, plain.id)
   assert.equal(server.calls.filter(call => call.method === 'thread/start').at(-1).params.developerInstructions, 'global instruction')
 })
+
+test('a $skill in the message also goes as Codex skill items; a failed lookup sends the text alone', async t => {
+  const { dir, server, runner } = await setup(t)
+  const raw = server.rawRequest.bind(server)
+  let failList = false
+  server.rawRequest = async (method, params = {}) => {
+    if (method !== 'skills/list') return raw(method, params)
+    server.calls.push({ method, params })
+    if (failList) throw new Error('down')
+    return { data: [{ cwd: params.cwds[0], errors: [], skills: [
+      { name: 'review', description: 'Long', shortDescription: 'Short', path: '/skills/review/SKILL.md', scope: 'repo', enabled: true },
+      { name: 'off', description: 'Off', path: '/skills/off/SKILL.md', scope: 'user', enabled: false },
+    ] }] }
+  }
+  assert.deepEqual(await runner.skills(dir), [{ name: 'review', description: 'Short', path: '/skills/review/SKILL.md' }])
+  const task = await runner.create({ workspace: dir, model: 'gpt-test' })
+  const first = await start(runner, task.id, 'use $review and $off, not a$review or $unknown.')
+  assert.deepEqual(server.calls.find(x => x.method === 'turn/start').params.input, [
+    { type: 'text', text: 'use $review and $off, not a$review or $unknown.', text_elements: [] },
+    { type: 'skill', name: 'review', path: '/skills/review/SKILL.md' },
+  ])
+  await finish(runner, server, task.id, first)
+  failList = true
+  const second = await start(runner, task.id, 'again $review')
+  assert.deepEqual(server.calls.filter(x => x.method === 'turn/start').at(-1).params.input, [{ type: 'text', text: 'again $review', text_elements: [] }])
+  await finish(runner, server, task.id, second)
+})

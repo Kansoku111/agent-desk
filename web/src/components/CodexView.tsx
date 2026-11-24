@@ -13,6 +13,7 @@ import { SubagentPanel } from './SubagentPanel'
 import { TeamPanel, TeamToggle } from './TeamPanel'
 import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
 import { useConversationScroll } from './useConversationScroll'
+import { insertSkill, SkillPicker } from './SkillPicker'
 
 export function CodexView({ taskId }: { taskId: string }) {
   const task = useStore((state) => state.server?.codexTasks?.find((entry) => entry.id === taskId))
@@ -106,6 +107,13 @@ export function CodexView({ taskId }: { taskId: string }) {
       <textarea {...ime.fieldProps} rows={2} value={text} aria-label="メッセージ" placeholder={working ? '追加指示を入力…' : 'メッセージを入力…'} onChange={(event) => setText(event.target.value)} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void addFiles([...event.clipboardData.files]) } }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !isTouch()) { event.preventDefault(); void send() } }} />
       <div className="composer-bar"><div className="composer-left">
         <button type="button" className="icon-button" aria-label="画像を添付" disabled={Boolean(teamChild)} onClick={() => input.current?.click()}><Paperclip size={16} /></button><input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={(event) => { void addFiles([...event.target.files ?? []]); event.target.value = '' }} />
+        {!task.ab && !teamChild && <SkillPicker source={{ kind: 'codex', taskId }} onSelect={(name) => {
+          const element = ime.fieldProps.ref.current, current = getDraft(draftKey)
+          const start = element?.selectionStart ?? current.length
+          const next = insertSkill('codex', current, start, element?.selectionEnd ?? start, name)
+          setText(next.text)
+          requestAnimationFrame(() => { element?.focus(); element?.setSelectionRange(next.caret, next.caret) })
+        }} />}
         <CodexModelPicker task={task} models={choices} disabled={working || owned || fastUpdating} onChange={update} />
         {!owned && (fast !== undefined || fastOn) && <button type="button" className={`chip fast-chip${fastOn ? ' on' : ''}`} aria-pressed={fastOn}
           title={`次の送信から Fast モードを切り替えます。オンにすると利用枠の消費が増えます。${fast ? `（${fastNote(fast)}）` : ''}`}

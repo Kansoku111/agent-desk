@@ -5269,6 +5269,23 @@ button.team-node:disabled {
 .skill-picker-row { display: flex; align-items: center; }
 .skill-picker-row .menu-item { flex: 1; min-width: 0; }
 .skill-picker-row .skill-favorite { margin-right: 6px; }
+/* The composer's Skills button: the current starred skill, a slide strip while choosing, and the full list. */
+.skill-button { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.chip.skill-current { max-width: 12em; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.chip.skill-more { padding: 0 5px; }
+.skill-dots { display: inline-flex; gap: 3px; font-style: normal; }
+.skill-dots b { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.3; }
+.skill-dots b.on { opacity: 1; }
+.skill-slider { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 50; display: flex; gap: 2px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated); box-shadow: var(--shadow-menu); white-space: nowrap; pointer-events: none; max-width: min(92vw, 520px); }
+.skill-slider span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 4px 10px; border-radius: 8px; color: var(--text-muted); font-size: 13px; }
+.skill-slider span.on { flex-shrink: 0; background: var(--accent); color: var(--accent-text); }
+.terminal-input .skill-button { grid-column: 2; grid-row: 2; justify-self: start; align-self: center; }
+.skill-count { margin-left: 4px; font-weight: normal; }
+.skill-favorite-row { display: flex; align-items: center; gap: 4px; }
+.skill-favorite-row .skill-row { flex: 1; min-width: 0; }
+.skill-favorite-row.dragging { opacity: 0.6; }
+.skill-grip { flex: none; cursor: grab; touch-action: none; color: var(--text-muted); }
+.skill-row.missing { opacity: 0.55; }
 
 /* Settings → Skills */
 .skills-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

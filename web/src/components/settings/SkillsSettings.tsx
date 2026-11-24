@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
-import { FolderOpen, Languages, Loader2, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { FolderOpen, GripVertical, Languages, Loader2, Trash2 } from 'lucide-react'
 import { request, toast, useStore } from '../../store'
 import { requestErrorMessage } from '../../rpc-client'
 import { workspaceLabel } from '../../util'
 import { openRef } from '../FileRef'
 import { ConfirmDialog } from '../Modal'
-import { FavoriteSkillButton, useFavoriteSkills } from '../SkillFavorites'
+import { FavoriteSkillButton, saveSkillButtons, SKILL_BUTTONS_MAX, useSkillButtons } from '../SkillFavorites'
 
 interface SkillEntry {
   name: string
@@ -36,9 +36,62 @@ const SCOPES: { id: SkillEntry['scope']; label: string }[] = [
   { id: 'bundled', label: '組み込み' },
 ]
 
+const moved = (names: string[], from: number, to: number) => {
+  const next = [...names]
+  next.splice(to, 0, ...next.splice(from, 1))
+  return next
+}
+
+/** Drag (or arrow keys on) a row's grip to reorder the starred skills; the order is the Skills button's. */
+function useReorder(names: string[]) {
+  const [drag, setDrag] = useState<{ from: number; to: number; id: number } | null>(null)
+  const rows = useRef(new Map<string, HTMLDivElement>())
+  const mids = useRef<number[]>([])
+  const order = drag ? moved(names, drag.from, drag.to) : names
+  const save = (next: string[]) => { if (next.join('\n') !== names.join('\n')) void saveSkillButtons(next) }
+  const grip = (name: string) => {
+    const from = names.indexOf(name)
+    return {
+      onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return
+        try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* the pointer is already gone */ }
+        // Row midpoints as laid out before the drag, so the preview moving rows does not feed back.
+        mids.current = names.map((entry) => {
+          const box = rows.current.get(entry)?.getBoundingClientRect()
+          return box ? box.top + box.height / 2 : 0
+        })
+        setDrag({ from, to: from, id: event.pointerId })
+      },
+      onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (!drag || drag.id !== event.pointerId) return
+        const to = mids.current.filter((mid, at) => at !== drag.from && mid < event.clientY).length
+        if (to !== drag.to) setDrag({ ...drag, to })
+      },
+      onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (!drag || drag.id !== event.pointerId) return
+        save(moved(names, drag.from, drag.to))
+        setDrag(null)
+      },
+      onPointerCancel: () => setDrag(null),
+      onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => {
+        const to = from + (event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0)
+        if (to === from || to < 0 || to >= names.length) return
+        event.preventDefault()
+        save(moved(names, from, to))
+      },
+    }
+  }
+  const ref = (name: string) => (element: HTMLDivElement | null) => {
+    if (element) rows.current.set(name, element)
+    else rows.current.delete(name)
+  }
+  return { order, dragging: drag ? names[drag.from] : null, grip, ref }
+}
+
 /** Settings → Skills: what the agent can load in a project, and which skill wins a name clash. */
 export function SkillsSettings() {
-  const favorites = useFavoriteSkills()
+  const buttons = useSkillButtons()
+  const reorder = useReorder(buttons)
   const myPc = useStore((state) => state.server?.app.myPc)
   const names = useStore((state) => state.server?.settings.projectNames)
   const known = useStore((state) => state.server?.settings.workspaces) ?? []
@@ -103,6 +156,31 @@ export function SkillsSettings() {
     openRef(skill.file, null, 'reveal').catch((reason) => toast(requestErrorMessage(reason), 'error'))
   }
 
+  const row = (skill: SkillEntry) => (
+    <div key={skill.file} className={`skill-row ${skill.active ? '' : 'shadowed'}`}>
+      <div className="skill-main">
+        <div className="skill-title">
+          <strong>{skill.name}</strong>
+          <code>{skill.root}</code>
+          {!skill.active && <span className="badge danger">上書きされています</span>}
+          {!skill.userInvocable && !skill.modelInvocable && <span className="badge">呼び出し不可</span>}
+          {!skill.userInvocable && skill.modelInvocable && <span className="badge">自動のみ</span>}
+          {skill.userInvocable && !skill.modelInvocable && <span className="badge">手動のみ</span>}
+        </div>
+        <p>{skill.descriptionJa ?? skill.description}</p>
+      </div>
+      <FavoriteSkillButton name={skill.name} />
+      <button type="button" className="icon-button small" onClick={() => reveal(skill)} title="場所を表示" aria-label={`${skill.name} の場所を表示`}>
+        <FolderOpen size={14} />
+      </button>
+      {skill.scope !== 'bundled' && (
+        <button type="button" className="icon-button small" disabled={busy} onClick={() => setDeleting(skill)} title="削除" aria-label={`${skill.name} を削除`}>
+          <Trash2 size={14} />
+        </button>
+      )}
+    </div>
+  )
+
   return (
     <div className="settings-section skills-settings">
       <div className="skills-bar">
@@ -120,36 +198,38 @@ export function SkillsSettings() {
       {error && <p className="notice notice-warning" role="alert">{error}</p>}
       {!error && !skills && workspace && <p className="skill-empty">読み込み中…</p>}
       {skills && !skills.length && <p className="skill-empty">skills はありません</p>}
-      {skills && [{ id: 'favorite', label: 'お気に入り' }, ...SCOPES].map(({ id, label }) => {
-        const rows = skills.filter((skill) => id === 'favorite' ? favorites.has(skill.name) : skill.scope === id && !favorites.has(skill.name))
+      {skills && buttons.length > 0 && (
+        <section className="skill-group">
+          <h3>お気に入り <span className="skill-count">{buttons.length}/{SKILL_BUTTONS_MAX}</span></h3>
+          {reorder.order.map((name) => {
+            const skill = skills.find((entry) => entry.name === name && entry.active)
+            const handle = (
+              <button type="button" className="icon-button small skill-grip" {...reorder.grip(name)}
+                title="ドラッグで並べ替え" aria-label={`${name} の順番を変える（上下キー）`}>
+                <GripVertical size={14} />
+              </button>
+            )
+            return (
+              <div key={name} ref={reorder.ref(name)} className={`skill-favorite-row ${reorder.dragging === name ? 'dragging' : ''}`}>
+                {handle}
+                {skill ? row(skill) : (
+                  <div className="skill-row missing">
+                    <div className="skill-main"><div className="skill-title"><strong>{name}</strong></div></div>
+                    <FavoriteSkillButton name={name} />
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </section>
+      )}
+      {skills && SCOPES.map(({ id, label }) => {
+        const rows = skills.filter((skill) => skill.scope === id && !(skill.active && buttons.includes(skill.name)))
         if (!rows.length) return null
         return (
           <section key={id} className="skill-group">
             <h3>{label}</h3>
-            {rows.map((skill) => (
-              <div key={skill.file} className={`skill-row ${skill.active ? '' : 'shadowed'}`}>
-                <div className="skill-main">
-                  <div className="skill-title">
-                    <strong>{skill.name}</strong>
-                    <code>{skill.root}</code>
-                    {!skill.active && <span className="badge danger">上書きされています</span>}
-                    {!skill.userInvocable && !skill.modelInvocable && <span className="badge">呼び出し不可</span>}
-                    {!skill.userInvocable && skill.modelInvocable && <span className="badge">自動のみ</span>}
-                    {skill.userInvocable && !skill.modelInvocable && <span className="badge">手動のみ</span>}
-                  </div>
-                  <p>{skill.descriptionJa ?? skill.description}</p>
-                </div>
-                <FavoriteSkillButton name={skill.name} favorite={favorites.has(skill.name)} />
-                <button type="button" className="icon-button small" onClick={() => reveal(skill)} title="場所を表示" aria-label={`${skill.name} の場所を表示`}>
-                  <FolderOpen size={14} />
-                </button>
-                {skill.scope !== 'bundled' && (
-                  <button type="button" className="icon-button small" disabled={busy} onClick={() => setDeleting(skill)} title="削除" aria-label={`${skill.name} を削除`}>
-                    <Trash2 size={14} />
-                  </button>
-                )}
-              </div>
-            ))}
+            {rows.map(row)}
           </section>
         )
       })}

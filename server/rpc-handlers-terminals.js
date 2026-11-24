@@ -1,6 +1,7 @@
 // RPC handlers for the Claude Code task terminals and the agent teams that run
 // on them (see index.js).
 import { attachmentPath } from './attachments.js'
+import { listClaudeSkills } from './claude-skills.js'
 
 /** Handlers for terminals and teams; index.js merges them into the request table. */
 export function createTerminalHandlers({ paths, mutateSettings, terminals, teams, agents }) {
@@ -31,6 +32,11 @@ export function createTerminalHandlers({ paths, mutateSettings, terminals, teams
     'terminal.choose': ({ terminalId, key, label, dialogId }) => terminals.choose(terminalId, key, label, dialogId),
     'terminal.respond': ({ terminalId, dialogId, key, text }) => terminals.respond(terminalId, dialogId, { key, text }),
     'terminal.answer': ({ terminalId, dialogId, answers, decline }) => terminals.answerQuestion(terminalId, dialogId, { answers, decline: decline === true }),
+    'terminal.skills': async ({ terminalId }) => {
+      const terminal = terminals.list().find((entry) => entry.id === terminalId)
+      if (!terminal) throw new Error('Claude Code タスクが見つかりません')
+      return { skills: await listClaudeSkills(terminal.workspace, terminals.claudeHome) }
+    },
     'terminal.send': async ({ terminalId, text }) => {
       await terminals.sendMessage(terminalId, text)
       // Something other than null: the page takes null as a failure.

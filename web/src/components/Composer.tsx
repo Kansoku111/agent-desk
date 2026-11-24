@@ -6,7 +6,7 @@ import { formatTokens } from '../util'
 import { isRetiredModel } from '../model-selection'
 import { EffortPicker, FastModeChip, ModelPicker, PermissionPicker } from './Pickers'
 import { ChatGptLimitChip } from './ChatGptUsage'
-import { SkillPicker } from './SkillPicker'
+import { insertSkill, SkillPicker } from './SkillPicker'
 
 // Unsent text survives switching between threads.
 const drafts = new Map<string, string>()
@@ -234,17 +234,14 @@ export const Composer = memo(function Composer({ thread, autoFocus }: { thread?:
             }}
           />
           {(thread?.workspace ?? draft.workspace) && !thread?.ab && permissionMode !== 'chat-web' && (
-            <SkillPicker workspace={(thread?.workspace ?? draft.workspace)!} threadId={thread?.id} onSelect={(name) => {
+            <SkillPicker source={{ kind: 'dsh', workspace: (thread?.workspace ?? draft.workspace)!, threadId: thread?.id }} onSelect={(name) => {
               const element = input.current
               const start = element?.selectionStart ?? text.length
-              const end = element?.selectionEnd ?? start
-              const before = text.slice(0, start)
-              const after = text.slice(end)
-              const insertion = `${before && !/\s$/.test(before) ? ' ' : ''}/${name}${/^\s/.test(after) ? '' : ' '}`
-              updateText(before + insertion + after)
+              const next = insertSkill('dsh', text, start, element?.selectionEnd ?? start, name)
+              updateText(next.text)
               requestAnimationFrame(() => {
                 element?.focus()
-                element?.setSelectionRange(start + insertion.length, start + insertion.length)
+                element?.setSelectionRange(next.caret, next.caret)
               })
             }} />
           )}

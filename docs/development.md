@@ -29,7 +29,7 @@ AB・TM・ecoのPTC画面検証は同じViteフィクスチャサーバーの `p
 
 TM・eco共通の親の自動継続待機は `test/goal-driver-wait.test.js`・`test/goal-patch.test.js`・`test/thread-goal-wait.test.js`・`test/teams.test.js` で、予約前／実行直前の再確認、ターン終了、設定の適用確認、報告の配送順序を検査します。`test/ptc-runtime.test.js` は通常方式・PTCの実dshで、待機中にgoal roundのモデル要求が増えないこと、目標のactive／armed状態と残り回数、明示入力の受領、キャンセル、同一プロセスの通常セッションの自動継続を確認します。`wait` の並行作業指定より質問・停止・未配送の報告を優先すること、送信失敗・重複再送・内部報告が質問待ちを解除しないこと、休止中の親のキャンセル、停止と送信の競合も検査します。実dshでは質問への割り込み受理と待機解除の原子性、終了済みターンへの割り込みが管理外のモデル要求を開始しないことを確認します。`goal-wait` と steering の実フック合成も更新時の互換性ゲートに含みます。TM・ecoのdshの子は `test/team-child-runtime.test.js` と `test/ptc-runtime.test.js` でgoalツールとドライバーの無効化を確認します。通常方式・PTCの実dshとローカル模擬応答で、保存済みgoalを持つ子が外部待ちを報告した後に自動ラウンドを起こさず、同じ会話に再依頼でき、保存済みgoalも保持されることを検査します。
 
-Skillsのお気に入りは同じフィクスチャサーバーの `skill-favorites-ui.html` で `await skillFavoritesTest.run()` を実行すると、設定と入力欄の追加・解除・優先表示・再表示・選択を実コンポーネントで確認できます。RPCは模擬応答で、本番データは使いません。
+Skillsのお気に入りは同じフィクスチャサーバーの `skill-favorites-ui.html` で `await skillFavoritesTest.run()` を実行すると、設定と入力欄の追加・優先表示・1個時のタップ・スライドでの切り替え・並べ替え・5個の上限を実コンポーネントで確認できます。RPCは模擬応答で、本番データは使いません。
 
 設定の回帰確認は同じフィクスチャサーバーの `settings-bug-audit-ui.html` で `await settingsAudit.run()` を実行します。候補が後から届くClaudeワークスペースの選択・送信と、検証行の削除→追加→保存を実コンポーネントで確認します。`usage-pricing-ui.html` の `await usagePricingTest.run()` は、未算定・一部未算定・非課金・利用なし・既知ゼロをタイル、モデル行、グラフのツールチップで確認します。どちらもRPCは模擬応答で、本番データや実モデルを使いません。
 

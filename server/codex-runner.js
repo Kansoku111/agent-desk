@@ -272,15 +272,38 @@ export class CodexRunner extends EventEmitter {
     return turnId
   }
 
-  async #input(text, images) {
+  /** The skills Codex offers in a folder, as its own skills/list reports them. */
+  async skills(workspace) {
+    const { data } = await this.server.use(() => this.server.rawRequest('skills/list', { cwds: [workspace] }))
+    const entry = data?.find(item => path.resolve(item.cwd) === path.resolve(workspace)) ?? data?.[0]
+    return (entry?.skills ?? []).filter(skill => skill.enabled !== false)
+      .map(skill => ({ name: skill.name, description: skill.interface?.shortDescription || skill.shortDescription || skill.description || '', path: skill.path }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  // A `$name` in the text also goes as a skill item, as Codex's own composer sends it, so
+  // the skill is loaded even where text mentions alone are not resolved. A failed lookup
+  // leaves the message as plain text rather than holding it back.
+  async #skillItems(text, workspace) {
+    const names = new Set([...String(text).matchAll(/(?:^|[\s(])\$([\w:-]+(?:\.[\w:-]+)*)/g)].map(match => match[1]))
+    if (!names.size) return []
+    try {
+      return (await this.skills(workspace)).filter(skill => names.has(skill.name)).map(skill => ({ type: 'skill', name: skill.name, path: skill.path }))
+    } catch {
+      return []
+    }
+  }
+
+  async #input(text, images, workspace) {
     const checked = await abImages(this.attachmentsDir, images)
-    return [...(text ? [{ type: 'text', text, text_elements: [] }] : []), ...checked.map(image => ({ type: 'localImage', path: path.resolve(this.attachmentsDir, image.file) }))]
+    return [...(text ? [{ type: 'text', text, text_elements: [] }] : []), ...(text && workspace ? await this.#skillItems(text, workspace) : []),
+      ...checked.map(image => ({ type: 'localImage', path: path.resolve(this.attachmentsDir, image.file) }))]
   }
 
   async #execute(id, live) {
     let record = this.#record(id)
     await this.#save(record, true)
-    const input = await this.#input(live.turn.user.text, live.turn.user.images)
+    const input = await this.#input(live.turn.user.text, live.turn.user.images, record.workspace)
     await this.server.use(async () => {
       if (live.ended) return
       if (live.stopping) return this.#finish(id, live, 'stopped')
@@ -343,7 +366,7 @@ export class CodexRunner extends EventEmitter {
     const live = this.live.get(id)
     if (!live || live.ended || live.stopping) return false
     this.executionGuard?.(this.#record(id))
-    const input = await this.#input(text, images)
+    const input = await this.#input(text, images, this.#record(id).workspace)
     const turnId = await live.ready.promise
     if (!turnId || live.ended || live.stopping) return false
     const messageId = randomUUID()

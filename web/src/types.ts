@@ -479,8 +479,8 @@ export interface Settings extends UsageDisplay {
   /** New Claude Code tasks start in its experimental Code Mode. */
   claudeCodeMode?: boolean
   checkpoints: boolean
-  /** Favorite skill invocation names, shared across projects. */
-  favoriteSkills?: Record<string, boolean>
+  /** Starred skill names in the Skills button's order (at most 5), shared across projects and kinds of task. */
+  skillButtons?: string[]
   projectNames: Record<string, string>
   /** Sidebar tint of each project: an index into PROJECT_HUES, or -1 for none. */
   projectColors: Record<string, number>

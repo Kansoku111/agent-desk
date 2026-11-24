@@ -22,6 +22,7 @@ import { TaskPresetRuns, TaskPresetToggle } from './TaskPresets'
 import { TerminalChat, useConversation } from './TerminalChat'
 import { TerminalModelPicker } from './TerminalPickers'
 import { Elapsed } from './TurnView'
+import { insertSkill, SkillPicker } from './SkillPicker'
 
 type Size = { cols: number; rows: number }
 
@@ -372,6 +373,12 @@ function TouchKeys({ terminalId, term, working, showKeys, showComposer, onSent }
         <input ref={file} type="file" multiple hidden onChange={(event) => {
           void attach(event.target.files)
           event.target.value = ''
+        }} />
+        <SkillPicker source={{ kind: 'claude', terminalId }} onSelect={(name, known) => {
+          const element = ime.fieldProps.ref.current
+          const next = insertSkill('claude', getDraft(`terminal:${terminalId}`), 0, 0, name, known)
+          setText(next.text)
+          requestAnimationFrame(() => { element?.focus(); element?.setSelectionRange(next.text.length, next.text.length) })
         }} />
         <textarea
           {...ime.fieldProps}
