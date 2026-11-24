@@ -82,14 +82,20 @@ function nodes(node, match) {
 }
 
 for (const mode of ['TM', 'eco']) {
-  for (const kind of ['thread', 'terminal']) {
+  for (const kind of ['thread', 'terminal', 'codex']) {
     test(mode + '/' + kind + ': leader is the first card and sidebar selection follows navigation', async () => {
       const h = await harness(mode === 'eco' ? {} : undefined)
       h.team.leaderKind = kind
       if (kind === 'terminal') h.state.server.terminals.push({ id: 'leader', title: 'Claude leader', activity: 'idle', state: 'running' })
+      if (kind === 'codex') h.state.server.codexTasks = [{ id: 'leader', title: 'Codex leader', status: 'idle', pendingApproval: false, model: 'gpt-codex-test' }]
       const cards = () => nodes(h.panel.TeamPanel({ team: h.team }), (node) => node.type === h.panel.ChildCard || node.props?.title === 'リーダーの会話を開く')
       assert.equal(cards().length, 3)
       assert.equal(cards()[0].props.title, 'リーダーの会話を開く')
+      if (kind === 'codex') {
+        // The Codex leader is found among Codex tasks, not shown as a stopped terminal.
+        assert.equal(cards()[0].props.className, 'subagent-card team-card state-idle')
+        assert.equal(nodes(cards()[0], (node) => node.props?.className === 'subagent-card-activity')[0].props.children, 'gpt-codex-test')
+      }
       for (const child of h.team.children) {
         const card = cards().find((card) => card.props.child === child)
         assert.equal(card.props.selected, false)

@@ -3,7 +3,7 @@ import {
   CheckCircle2, ChevronRight, CircleDot, CircleSlash, Crown, Gauge, Loader2, MessageCircleQuestion, Network, PanelRight, RefreshCw, ShieldAlert, SlidersHorizontal, Square, Trash2, Users, X, XCircle,
 } from 'lucide-react'
 import { act, navigate, openTeamChild, setTeamPanel, useStore } from '../store'
-import type { AppState, TeamChild, TeamChildState, TeamSummary, TerminalSummary, ThreadSummary } from '../types'
+import type { AppState, CodexTaskSummary, TeamChild, TeamChildState, TeamSummary, TerminalSummary, ThreadSummary } from '../types'
 import { effortLabel, parseModel, relativeTime, resetLabel } from '../util'
 import { ChatGptLimits } from './ChatGptUsage'
 import { ConfirmDialog, Modal } from './Modal'
@@ -54,7 +54,7 @@ export function StateIcon({ state, size = 14 }: { state: TeamChildState; size?: 
 }
 
 /** The leader's state in the same words as a child's. */
-function leaderState(leader: TerminalSummary | ThreadSummary | undefined): TeamChildState {
+function leaderState(leader: TerminalSummary | ThreadSummary | CodexTaskSummary | undefined): TeamChildState {
   if (!leader) return 'stopped'
   if ('activity' in leader) {
     if (leader.state !== 'running') return 'stopped'
@@ -66,23 +66,27 @@ function leaderState(leader: TerminalSummary | ThreadSummary | undefined): TeamC
   return leader.status === 'error' ? 'error' : 'idle'
 }
 
-/** A team's leader task: Claude Code or a dsh task. */
+/** A team's leader task: Claude Code, a dsh task or a Codex task. */
 function useLeader(team: TeamSummary | undefined) {
   return useStore((state) => (!team ? undefined
     : team.leaderKind === 'thread'
       ? state.server?.threads.find((entry) => entry.id === team.leaderId)
-      : state.server?.terminals.find((entry) => entry.id === team.leaderId)))
+      : team.leaderKind === 'codex'
+        ? state.server?.codexTasks?.find((entry) => entry.id === team.leaderId)
+        : state.server?.terminals.find((entry) => entry.id === team.leaderId)))
 }
 
 /** The leader as the diagram shows it: its model and what runs it. */
-function leaderModel(server: AppState | null, leader: TerminalSummary | ThreadSummary | undefined) {
+function leaderModel(server: AppState | null, leader: TerminalSummary | ThreadSummary | CodexTaskSummary | undefined, kind: TeamSummary['leaderKind']) {
   if (!leader) return ''
   if ('activity' in leader) return claudeModelName(server, leader.model ?? leader.modelInUse) ?? 'Claude Code の既定'
+  // A Codex task stores the bare model id, not a catalog value.
+  if (kind === 'codex') return server?.catalog.models.find((model) => model.provider === 'codex' && model.id === leader.model)?.name ?? leader.model ?? 'Codex の既定'
   return server?.catalog.models.find((model) => model.value === leader.model)?.name ?? parseModel(leader.model)?.id ?? 'モデル未設定'
 }
 
 /** The view a team's leader opens in. */
-const leaderRoute = (team: TeamSummary) => ({ view: team.leaderKind === 'thread' ? 'thread' as const : 'terminal' as const, id: team.leaderId })
+const leaderRoute = (team: TeamSummary) => ({ view: team.leaderKind === 'terminal' ? 'terminal' as const : team.leaderKind, id: team.leaderId })
 
 export function useTeam(teamId: string | null | undefined) {
   return useStore((state) => (teamId ? state.server?.teams?.find((team) => team.id === teamId) : undefined))
@@ -326,7 +330,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
           </div>
           <PtcToggle mode={team.config?.toolMode} disabled={team.toolModeBusy} onChange={(toolMode) => act('team.update', { teamId: team.id, patch: { toolMode } })} />
           <Notices team={team} />
-          {team.leaderFallbackUsed && <p role="status" className="muted">利用上限のためリーダーを切り替えました{leader ? `（${leaderModel(server, leader)}）` : ''}。</p>}
+          {team.leaderFallbackUsed && <p role="status" className="muted">利用上限のためリーダーを切り替えました{leader ? `（${leaderModel(server, leader, team.leaderKind)}）` : ''}。</p>}
           {team.leaderFallbackError && <p role="alert" className="error-text">切り替えできませんでした: {team.leaderFallbackError}</p>}
           {!team.execution && <button type="button" className="subagent-card team-card team-observer-entry" onClick={() => setObserverOpen(true)}>
             <div className="subagent-card-head"><span className="team-card-name">観測者</span>{team.observer?.running && <Loader2 size={13} className="spin" />}<ChevronRight size={14} className="subagent-card-chev" /></div>
@@ -345,7 +349,7 @@ export const TeamPanel = memo(function TeamPanel({ team }: { team: TeamSummary }
               <span className="subagent-time"><StateIcon state={status} size={12} /> {STATE_LABEL[status]}</span>
             </div>
             <div className="subagent-card-title">{leader?.title ?? 'リーダー'}</div>
-            <div className="subagent-card-activity">{leaderModel(server, leader)}</div>
+            <div className="subagent-card-activity">{leaderModel(server, leader, team.leaderKind)}</div>
             <ChevronRight size={14} className="subagent-card-chev" />
           </button>
           {children.map((child) => (
@@ -417,9 +421,9 @@ function TeamDiagram({ team, onClose }: { team: TeamSummary; onClose: () => void
   const children = [...team.children].sort((a, b) => a.createdAt - b.createdAt)
   const { width, height, cx, boxes, rows, busY } = layout(children.length)
   const lead = leaderState(leader)
-  const model = leaderModel(server, leader)
+  const model = leaderModel(server, leader, team.leaderKind)
   const provider = leader && !('activity' in leader) ? parseModel(leader.model)?.provider : null
-  const providerName = provider ? server?.catalog.providers[provider] ?? provider : team.leaderKind === 'thread' ? 'dsh' : 'Claude Code'
+  const providerName = provider ? server?.catalog.providers[provider] ?? provider : team.leaderKind === 'thread' ? 'dsh' : team.leaderKind === 'codex' ? 'Codex' : 'Claude Code'
   const trunkEnd = children.length ? busY(rows - 1) : PAD + LEADER_H
   // Lines to working children are drawn last, over the quiet ones they share a bus with.
   const order = children.map((child, index) => ({ child, box: boxes[index] }))

@@ -281,7 +281,9 @@ function TouchKeys({ terminalId, term, working, showKeys, showComposer, onSent }
       } finally {
         setSending(false)
       }
-      setAttachments([])
+      // Only what was sent goes: a file added while these went in waits for the next message.
+      const sentFiles = new Set(attachments.map((entry) => entry.file))
+      setAttachments((current) => current.filter((entry) => !sentFiles.has(entry.file)))
     }
     // The server pastes the message (line breaks kept) and presses Enter, and answers whether it took it; it waits for the file paths to be taken first.
     setSending(true)
