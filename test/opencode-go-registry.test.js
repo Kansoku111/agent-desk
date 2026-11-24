@@ -61,6 +61,29 @@ test('exact official ids can fill new or renamed models without a hardcoded alia
   assert.deepEqual(registryDefinitions(body(metadata('new-family-free')), ['new-family'], previous), {})
 })
 
+test('reasoning models without effort choices get no thinking map, so dsh does not reject them', () => {
+  // hungerg-free had reasoning_options [] and failed every turn with "invalid reasoning metadata".
+  const result = registryDefinitions(body(
+    metadata('no-options', { reasoning_options: [] }),
+    metadata('toggle-only', { reasoning_options: [{ type: 'toggle' }] }),
+  ), ['no-options', 'toggle-only'], base)
+  for (const id of ['no-options', 'toggle-only']) {
+    const definition = result['openai-completions'][id]
+    assert.equal(definition.reasoning, true)
+    assert.equal('thinkingLevelMap' in definition, false)
+  }
+})
+
+test('a cached definition that disables every thinking level is repaired when merged', () => {
+  const allNull = Object.fromEntries(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((level) => [level, null]))
+  const cached = { 'openai-completions': { 'cached-free': { ...native('cached-free'), thinkingLevelMap: allNull } } }
+  const merged = openCodeModels(mergeOpenCodeCatalog(base, cached)).find((model) => model.id === 'cached-free')
+  assert.equal('thinkingLevelMap' in merged, false)
+  const kept = openCodeModels(mergeOpenCodeCatalog(base, { 'openai-completions': { 'max-only': { ...native('max-only'), thinkingLevelMap: { ...allNull, max: 'max' } } } }))
+    .find((model) => model.id === 'max-only')
+  assert.equal(kept.thinkingLevelMap.max, 'max')
+})
+
 test('every route accepts a model against the installed pi-ai data, so a moved base URL cannot silently add nothing', async () => {
   const data = JSON.parse(await fs.readFile(path.join(catalogDataDirs()[0], 'opencode-go.json'), 'utf8'))
   for (const [api, npm, endpoint] of [

@@ -59,11 +59,15 @@ export function registryDefinitions(body, liveIds, base) {
     const bases = Object.values(base[api] ?? {}).filter((entry) => entry.provider === 'opencode-go' && entry.baseUrl === baseUrl)
     if (!bases.length) continue
     const thinkingLevelMap = Object.fromEntries(LEVELS.map((level) => [level, null]))
+    let efforts = false
     for (const option of model.reasoning_options ?? []) {
       if (option?.type !== 'effort' || !Array.isArray(option.values)) continue
       for (const wire of option.values) {
         const level = wire === 'none' ? 'off' : wire
-        if (LEVELS.includes(level)) thinkingLevelMap[level] = wire
+        if (LEVELS.includes(level)) {
+          thinkingLevelMap[level] = wire
+          efforts = true
+        }
       }
     }
     const compat = commonCompat(bases)
@@ -77,7 +81,8 @@ export function registryDefinitions(body, liveIds, base) {
     const definition = {
       id, name: model.name, provider: 'opencode-go', api, baseUrl,
       input: ['text', ...(model.modalities.input.includes('image') ? ['image'] : [])],
-      reasoning: model.reasoning, thinkingLevelMap,
+      // Like pi-ai's own catalog, no effort choices means no map (see withUsableThinkingLevels).
+      reasoning: model.reasoning, ...(efforts ? { thinkingLevelMap } : {}),
       contextWindow: model.limit.context, maxTokens: model.limit.output,
       cost: { input: model.cost.input, output: model.cost.output, cacheRead: model.cost.cache_read ?? 0, cacheWrite: model.cost.cache_write ?? 0 },
       ...(Object.keys(compat).length ? { compat } : {}),

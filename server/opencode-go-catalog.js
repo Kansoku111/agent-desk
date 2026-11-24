@@ -46,6 +46,24 @@ export function openCodeModels(data) {
     .filter((model) => (model?.type ?? 'chat') === 'chat' && typeof model?.id === 'string')
 }
 
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * pi-ai leaves thinkingLevelMap out for reasoning models without effort control
+ * (toggle-only or no options). A map that disables every level instead makes dsh
+ * reject the model ("invalid reasoning metadata"), so such a map is dropped.
+ * Same reading as pi-ai's getSupportedThinkingLevels.
+ */
+export function withUsableThinkingLevels(model) {
+  const map = model?.thinkingLevelMap
+  if (!model?.reasoning || !map || typeof map !== 'object') return model
+  const usable = THINKING_LEVELS.some((level) => map[level] !== null
+    && (!['xhigh', 'max'].includes(level) || map[level] !== undefined))
+  if (usable) return model
+  const { thinkingLevelMap: _, ...rest } = model
+  return rest
+}
+
 /** Only new chat definitions of a protocol/endpoint the installed catalog already uses. */
 export function mergeOpenCodeCatalog(original, additions) {
   additions = canonicalOpenCodeCatalog(additions)
@@ -66,7 +84,7 @@ export function mergeOpenCodeCatalog(original, additions) {
         || !Array.isArray(model.input) || !model.input.length || model.input.some((value) => !['text', 'image'].includes(value))
         || !model.cost || !Number.isFinite(model.cost.input) || !Number.isFinite(model.cost.output)) continue
       data[api][typed ? `chat:${id}` : id] = {
-        ...Object.fromEntries(Object.entries(model).filter(([field]) => fields.has(field))),
+        ...Object.fromEntries(Object.entries(withUsableThinkingLevels(model)).filter(([field]) => fields.has(field))),
         ...(typed ? { type: 'chat' } : {}),
       }
       known.add(id)
