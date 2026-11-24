@@ -1,6 +1,9 @@
 {
   "source": "command-code@1.88.2",
   "reference": "https://unpkg.com/command-code@1.88.2/dist/bundled/command-code-knowledge/reference/models.md",
+  "modelReferences": {
+    "thinkingmachines/inkling-2-mini": "https://unpkg.com/command-code@1.93.2/dist/bundled/command-code-knowledge/reference/models.md"
+  },
   "models": {
     "deepseek/deepseek-v4-pro": [
       "high",
@@ -140,6 +143,12 @@
     ],
     "thinkingmachines/inkling": [],
     "thinkingmachines/inkling-small": [],
+    "thinkingmachines/inkling-2-mini": [
+      "low",
+      "medium",
+      "high",
+      "max"
+    ],
     "reflection/beam:free": [
       "low",
       "medium",

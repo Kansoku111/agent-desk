@@ -98,6 +98,17 @@ test('official model-specific effort levels use only Provider API-compatible val
   assert.equal(routes['command-code-claude'].compat.forceAdaptiveThinking, true)
 })
 
+test('an existing Inkling 2 Mini inventory needs to relearn its previously empty effort choices', () => {
+  const { models } = parseCommandCodeModels({ data: [{
+    id: 'thinkingmachines/inkling-2-mini', name: 'Inkling 2 Mini', context_length: 1048576,
+    supported_endpoints: ['/chat/completions'],
+  }] })
+  const key = JSON.stringify(['command-code', models[0].id])
+  assert.equal(matchesCommandCodeEfforts(models, { [key]: [] }), false)
+  const choices = ['', 'low', 'medium', 'high', 'max'].map((value) => ({ value }))
+  assert.equal(matchesCommandCodeEfforts(models, { [key]: choices }), true)
+})
+
 test('inventory is not applied until all known model efforts reach the picker', () => {
   const models = [
     { id: 'deepseek/deepseek-v4.1-flash', endpoint: 'chat' },

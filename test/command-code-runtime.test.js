@@ -17,8 +17,8 @@ import { ThreadManager } from '../server/threads.js'
 import { TOOL_MODE_CONFIG } from '../server/ptc.js'
 import { turnUsage } from '../server/usage.js'
 
-async function imageRuntime(t, modelId) {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-image-'))
+async function chatRuntime(t, modelId) {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-command-chat-'))
   const paths = appPaths(home)
   const workspace = path.join(home, 'workspace')
   await fs.mkdir(paths.dshHome, { recursive: true })
@@ -55,8 +55,28 @@ async function imageRuntime(t, modelId) {
   return { paths, workspace, runtime, requests, cleanups }
 }
 
+test('Inkling 2 Mini exposes its effort choices and sends each selected level', { timeout: 90000 }, async (t) => {
+  const modelId = 'thinkingmachines/inkling-2-mini'
+  const { workspace, runtime, requests } = await chatRuntime(t, modelId)
+  await runtime.start()
+  const session = await runtime.newSession(workspace)
+  const levels = ['low', 'medium', 'high', 'max']
+  const option = session.configOptions.find((option) => option.id === 'reasoning_effort')
+  assert.deepEqual(option?.options.map(({ value }) => value), ['', ...levels])
+  for (const effort of ['', ...levels]) {
+    if (effort) {
+      const options = await runtime.setOption(session.sessionId, 'reasoning_effort', effort)
+      assert.equal(options.find((option) => option.id === 'reasoning_effort')?.currentValue, effort)
+    }
+    const result = await runtime.prompt(session.sessionId, [{ type: 'text', text: 'fixture' }])
+    assert.equal(result.stopReason, 'end_turn')
+  }
+  assert.deepEqual(requests.map(({ body }) => [body.model, body.reasoning_effort]),
+    [undefined, ...levels].map((effort) => [modelId, effort]))
+})
+
 for (const modelId of ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-flash-vision-exp']) test('real DSH sends a DeepSeek image attachment to the Command Code chat endpoint (' + modelId + ')', { timeout: 90000 }, async (t) => {
-  const { workspace, runtime, requests } = await imageRuntime(t, modelId)
+  const { workspace, runtime, requests } = await chatRuntime(t, modelId)
   const sharp = (await import('sharp')).default
   const image = (await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ee2244' } }).png().toBuffer()).toString('base64')
   await runtime.start()
@@ -75,7 +95,7 @@ for (const modelId of ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-fla
 
 test('a large PNG uploaded with the first message reaches a vision endpoint through real DSH', { timeout: 90_000 }, async (t) => {
   const modelId = 'deepseek/deepseek-v4.1-flash'
-  const { paths, workspace, runtime, requests, cleanups } = await imageRuntime(t, modelId)
+  const { paths, workspace, runtime, requests, cleanups } = await chatRuntime(t, modelId)
   const pool = Object.assign(new EventEmitter(), {
     get: () => runtime.start(), holderOf: (id) => runtime.liveSessions.has(id) ? runtime : null, status: () => ({}),
   })
