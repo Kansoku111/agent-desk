@@ -263,7 +263,7 @@ export class Checkpoints {
     const skip = await fs.readFile(skipFile, 'utf8').then(JSON.parse).catch(() => null)
     if (skip && Date.now() - skip.at < SKIP_MS) throw Object.assign(new Error(skip.reason), { code: 'CHECKPOINT_SNAPSHOT_LIMIT' })
     // A snapshot cut off by a timeout or a crash leaves the index locked.
-    await fs.rm(path.join(repo.gitDir, 'index.lock'), { force: true })
+    await dropIndexLock(repo)
     let large = []
     try {
       large = await largeFiles(repo)
@@ -280,7 +280,7 @@ export class Checkpoints {
       if (error.killed) {
         const reason = 'フォルダ内のファイルが多すぎるため、変更を戻すための保存を省略しました。'
         await fs.writeFile(skipFile, JSON.stringify({ at: Date.now(), reason })).catch(() => {})
-        await fs.rm(path.join(repo.gitDir, 'index.lock'), { force: true })
+        await dropIndexLock(repo)
         throw Object.assign(new Error(reason), { code: 'CHECKPOINT_SNAPSHOT_LIMIT' })
       }
       throw error
@@ -321,6 +321,15 @@ export function repoId(workspace) {
   const resolved = path.resolve(workspace)
   const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved
   return createHash('sha256').update(key).digest('hex').slice(0, 16)
+}
+
+/**
+ * Removes a stale index.lock. On Windows a killed Git can keep the file open for a
+ * while (or a child Git keeps running), so unlinking fails with EBUSY; that must not
+ * replace the error being reported. A lock that is still held makes Git fail with its own message.
+ */
+async function dropIndexLock(repo) {
+  await fs.rm(path.join(repo.gitDir, 'index.lock'), { force: true }).catch(() => {})
 }
 
 async function hasObjects(repo) {

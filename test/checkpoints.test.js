@@ -239,6 +239,30 @@ test('an early Git exit reports its command failure instead of an unhandled stdi
   } finally { mocked.mock.restore(); syncBuiltinESMExports() }
 })
 
+test('a timed-out snapshot reports the size limit even when its index lock cannot be removed yet', async (t) => {
+  const { base, workspace, checkpoints, write } = await setup()
+  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  await write('source', 'before')
+  await checkpoints.snapshot(workspace)
+  const repo = [...checkpoints.repos.values()][0]
+  const original = childProcess.execFile
+  const mocked = t.mock.method(childProcess, 'execFile', (command, args, options, callback) => {
+    if (command === 'git' && args.includes('add')) {
+      // Stands in for a killed Git on Windows that still holds index.lock (unlink fails with EBUSY).
+      setImmediate(async () => {
+        await fs.mkdir(path.join(repo.gitDir, 'index.lock', 'held'), { recursive: true })
+        callback(Object.assign(new Error('Command failed: git add'), { killed: true, signal: 'SIGTERM' }), '', '')
+      })
+      return { stdin: new PassThrough() }
+    }
+    return original(command, args, options, callback)
+  })
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(checkpoints.snapshot(workspace, 'task/before'), (error) => error.code === 'CHECKPOINT_SNAPSHOT_LIMIT')
+  } finally { mocked.mock.restore(); syncBuiltinESMExports() }
+})
+
 test('restore removes files whose names start with two dots', async (t) => {
   const { base, workspace, checkpoints, write, exists } = await setup()
   t.after(() => fs.rm(base, { recursive: true, force: true }))
