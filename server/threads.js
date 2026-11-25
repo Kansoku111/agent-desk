@@ -29,6 +29,16 @@ import { hasGoalHistory } from './normal-fallback-handoff.js'
 export { carryoverText, isUndoable, restoreNoteText } from './thread-utils.js'
 
 const TURN_EMIT_MS = 60
+// An idle task's turns leave memory and are read again when the task is next
+// used. A long task's transcript is tens of MB on disk and up to three times
+// that once parsed, and every task opened since startup used to stay loaded:
+// the server reached Node's ~4 GB heap limit and stopped. Team, AB, preset and
+// fallback tasks stay loaded because other managers read their turns directly.
+const IDLE_TURNS_MS = 10 * 60_000
+const MAX_IDLE_TURNS = 4
+// A just-opened task is not dropped for the count alone, so opening several in a row does not reread them.
+const MIN_IDLE_TURNS_MS = 30_000
+const TURNS_PRUNE_MS = 60_000
 
 function assertNotRetiredModel(model) {
   if (fallbackProvider(model) === 'openscale') throw new Error('OpenScale のサポートは終了しました。別のモデルを選んでください。')
@@ -98,6 +108,12 @@ export class ThreadManager extends EventEmitter {
     this.permissions = new Map()
     this.emitTimers = new Map()
     this.indexWriter = debouncedWriter(paths.threadsIndex)
+    this.turnsUsedAt = new Map()
+    // Tasks whose turns were dropped (pruneTurns); never-opened tasks are not in it.
+    this.unloadedTurns = new Set()
+    this.updateLoads = new Map()
+    this.turnsPruner = setInterval(() => this.pruneTurns(), TURNS_PRUNE_MS)
+    this.turnsPruner.unref?.()
     pool.on('exit', (info) => this.#onRuntimeExit(info))
   }
 
@@ -142,6 +158,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   async #loadTurns(threadId) {
+    this.turnsUsedAt.set(threadId, Date.now())
     if (this.turns.has(threadId)) return this.turns.get(threadId)
     if (this.turnLoads.has(threadId)) return this.turnLoads.get(threadId)
     const loading = this.#readTurns(threadId)
@@ -182,6 +199,7 @@ export class ThreadManager extends EventEmitter {
     const receipts = new Map((doc.receipts ?? []).map((entry) => [entry.messageId, entry]))
     this.receipts.set(threadId, receipts)
     this.turns.set(threadId, turns)
+    this.unloadedTurns.delete(threadId)
     thread.score = scoresUpTo(turns).at(-1) ?? emptyScore()
     this.#saveIndex()
     // Settled interrupted turns are transcript changes too: the file must say what
@@ -230,20 +248,71 @@ export class ThreadManager extends EventEmitter {
   }
 
   #turnDocument(threadId) {
-    return { version: 1, turns: this.turns.get(threadId) ?? [], receipts: [...(this.receipts.get(threadId)?.values() ?? [])] }
+    // Turns that are not in memory are not empty: writing [] would erase the task's history.
+    const turns = this.turns.get(threadId)
+    if (!turns) throw new Error(`turns of ${threadId} are not loaded`)
+    this.turnsUsedAt.set(threadId, Date.now())
+    return { version: 1, turns, receipts: [...(this.receipts.get(threadId)?.values() ?? [])] }
   }
 
   #saveTurns(threadId) {
+    if (!this.turns.has(threadId)) return console.warn(`[agent-desk] not saving ${threadId}: its turns are not loaded`)
     this.#turnWriter(threadId).schedule(this.#turnDocument(threadId))
   }
 
   /** For an update that changed `turn` alone: only that turn is written until the next whole save. */
   #saveLive(threadId, turn) {
+    if (!this.turns.has(threadId)) return console.warn(`[agent-desk] not saving ${threadId}: its turns are not loaded`)
     this.#turnWriter(threadId).scheduleLive(turn, this.#turnDocument(threadId))
   }
 
   #persistTurns(threadId) {
-    return this.#turnWriter(threadId).write(this.#turnDocument(threadId))
+    try {
+      return this.#turnWriter(threadId).write(this.#turnDocument(threadId))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  /** Drops the turns of idle tasks unused for a while, and beyond the newest few. */
+  pruneTurns(now = Date.now()) {
+    const idle = [...this.turns.keys()].filter((id) => this.#canUnloadTurns(id))
+      .map((id) => [id, this.turnsUsedAt.get(id) ?? 0]).sort((a, b) => b[1] - a[1])
+    idle.forEach(([id, usedAt], index) => {
+      const unused = now - usedAt
+      if (unused > IDLE_TURNS_MS || (index >= MAX_IDLE_TURNS && unused > MIN_IDLE_TURNS_MS)) this.#unloadTurns(id)
+    })
+  }
+
+  /** Whether `threadId`'s turns can leave memory now with nothing unsaved or in use. */
+  #canUnloadTurns(threadId) {
+    const thread = this.threads.get(threadId)
+    if (!thread || this.stopping || thread.team || thread.ab || thread.preset
+      || thread.usageFallbackFrom || thread.usageFallbackPending || thread.usageFallbackPreparing || thread.fallbackTo) return false
+    if (this.active.has(threadId) || this.requests.has(threadId) || this.turnLoads.has(threadId) || this.updateLoads.has(threadId)
+      || this.removing.has(threadId) || this.pendingFallbacks.has(threadId) || this.pendingUsageRefresh.has(threadId)
+      || this.restoring.has(thread)) return false
+    for (const entry of this.permissions.values()) if (entry.threadId === threadId) return false
+    for (const key of this.emitTimers.keys()) if (key.startsWith(`${threadId}:`)) return false
+    const writer = this.turnWriters.get(threadId)
+    return !writer || writer.idle?.() === true
+  }
+
+  #unloadTurns(threadId) {
+    this.turns.delete(threadId)
+    this.receipts.delete(threadId)
+    // The writer keeps the last document it was given, and with it every turn.
+    this.turnWriters.delete(threadId)
+    this.turnsUsedAt.delete(threadId)
+    this.unloadedTurns.add(threadId)
+  }
+
+  /** An update for a task whose turns left memory: applied in arrival order once they are read back. */
+  #applyAfterLoad(threadId, sessionId, update) {
+    const previous = this.updateLoads.get(threadId) ?? this.#loadTurns(threadId)
+    const next = previous.then(() => this.onUpdate(sessionId, update, true)).catch(() => {})
+    this.updateLoads.set(threadId, next)
+    void next.finally(() => { if (this.updateLoads.get(threadId) === next) this.updateLoads.delete(threadId) })
   }
 
   // Serialize admission/status, not model execution. A status lookup cannot
@@ -485,6 +554,7 @@ export class ThreadManager extends EventEmitter {
     }
     this.threads.set(thread.id, thread)
     this.turns.set(thread.id, [])
+    this.turnsUsedAt.set(thread.id, Date.now())
     this.receipts.set(thread.id, new Map())
     if (createReceipt) this.createReceipts.set(createReceipt.createId, { ...createReceipt, threadId: thread.id, deleted: false })
     this.#saveIndex()
@@ -752,6 +822,8 @@ export class ThreadManager extends EventEmitter {
       }
     }
     this.turns.delete(threadId)
+    this.turnsUsedAt.delete(threadId)
+    this.unloadedTurns.delete(threadId)
     this.pendingUsageRefresh.delete(threadId)
     this.receipts.delete(threadId)
     this.turnWriters.delete(threadId)
@@ -1500,12 +1572,14 @@ export class ThreadManager extends EventEmitter {
 
   // ---------------------------------------------------------------- runtime callbacks
 
-  onUpdate(sessionId, update) {
+  /** `replayed`: an update held while the task's turns were read back (#applyAfterLoad). */
+  onUpdate(sessionId, update, replayed = false) {
     const threadId = this.sessionIndex.get(sessionId)
     const thread = threadId && this.threads.get(threadId)
     if (!thread || this.removing.has(threadId) || this.stopping) return
     const active = this.active.get(threadId)
     if (active?.phase === 'starting') return
+    if (!replayed && !active && (this.unloadedTurns.has(threadId) || this.updateLoads.has(threadId))) return this.#applyAfterLoad(threadId, sessionId, update)
     const turn = active?.turn ?? this.turns.get(threadId)?.at(-1)
     if (!turn) return
     if (Object.hasOwn(update._meta ?? {}, OUTPUT_SPEED_META)) {
@@ -1668,6 +1742,7 @@ export class ThreadManager extends EventEmitter {
   }
 
   async #shutdown() {
+    clearInterval(this.turnsPruner)
     const active = [...this.active.values()]
     await Promise.all([...this.active.keys()].map((threadId) => this.cancel(threadId, { allowFallbackPending: true })))
     await Promise.allSettled([...this.requests.values(), ...this.removing.values(), ...this.turnLoads.values()])

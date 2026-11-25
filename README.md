@@ -60,7 +60,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-shortcut.ps1
 - 画面のソースが変わっていればビルドし直します。
 - 古いコードのサーバーが動いていれば、作業中のタスクがないときに入れ替えます。開いているウィンドウは自動で再接続し、新しい画面に読み込み直します。
 
-コンソール画面は出ません。起動の記録は `%APPDATA%\AgentDesk\launcher.log` に残ります。
+コンソール画面は出ません。起動の記録は `%APPDATA%\AgentDesk\launcher.log`（前回分は `launcher.prev.log`）に残ります。
 
 ### コマンドから
 

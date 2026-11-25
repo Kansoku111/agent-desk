@@ -55,6 +55,7 @@ import { appPaths, projectRoot } from './paths.js'
 import { PERMISSION_MODES, RuntimePool } from './runtime.js'
 import { openAppWindow, openExternal, openTargets } from './system.js'
 import { ThreadManager } from './threads.js'
+import { watchMemory } from './memory-watch.js'
 import { handoffClaudeToThread, handoffThreadToClaude } from './normal-fallback-handoff.js'
 import { SubagentTracker } from './subagents.js'
 import { assignProjectColors } from './project-colors.js'
@@ -1238,6 +1239,7 @@ scheduleIdleExit()
 if (settings.remoteAccess) void remote.start().catch((error) => log('remote access:', error.message))
 // Now that the port is known: reports that waited while the app was closed go to their leaders.
 teams.start()
+watchMemory(log, { details: () => `task transcripts in memory: ${threads.turns.size}` })
 
 void refreshChatGptUsage()
 void refreshUsageHistory()

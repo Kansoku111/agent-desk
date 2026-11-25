@@ -50,10 +50,15 @@ export function transcriptWriter(file, delayMs = 400) {
   let latest = chain
   let queued = 0
   let failures = 0
+  let writing = 0
+  // Whether the last write to finish failed: memory then holds what the file lacks.
+  let failed = false
 
   const append = (task) => {
     queued += 1
+    writing += 1
     latest = chain.then(task)
+    latest.then(() => { failed = false }, () => { failed = true }).finally(() => { writing -= 1 })
     chain = latest.catch(() => {}) // A failed write must not poison later writes.
     return latest
   }
@@ -129,6 +134,10 @@ export function transcriptWriter(file, delayMs = 400) {
       pendingDoc = undefined
       pendingTurn = undefined
       return enqueueDoc(doc)
+    },
+    /** Nothing waits to be written, is being written, or failed: the document on disk is the latest one, without a live file. */
+    idle() {
+      return !timer && pendingDoc === undefined && pendingTurn === undefined && !liveQueued && writing === 0 && !failed
     },
     flush() {
       if (timer) clearTimeout(timer)

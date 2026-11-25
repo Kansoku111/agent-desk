@@ -6,7 +6,8 @@
 //      instance that is still running older code, once it has no task
 //      running; until then the server waits in the background).
 // Output goes to <data folder>/launcher.log; a non-zero exit makes launch.vbs
-// show where to look.
+// show where to look. The previous run's log is kept as launcher.prev.log: it
+// holds why a server that stopped on its own (out of memory, say) ended.
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -17,6 +18,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const paths = appPaths()
 fs.mkdirSync(paths.home, { recursive: true })
 const logFile = path.join(paths.home, 'launcher.log')
+try { fs.renameSync(logFile, path.join(paths.home, 'launcher.prev.log')) } catch {}
 fs.writeFileSync(logFile, `[${new Date().toISOString()}] launching from ${root}\n`)
 const log = (line) => fs.appendFileSync(logFile, `${line}\n`)
 
