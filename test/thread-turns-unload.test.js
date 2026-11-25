@@ -113,3 +113,71 @@ test('the writer is idle only when the file holds the latest document', async (t
   await tick()
   assert.equal(writer.idle(), true)
 })
+
+const chunk = (text) => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } })
+const agentText = (turn) => turn.items.filter((item) => item.type === 'agent').map((item) => item.text).join('')
+
+test('a late update whose turns cannot be read back is held and applied when they can', async (t) => {
+  const f = await finishedTurn(t)
+  const sessionId = f.manager.threads.get(f.thread.id).sessionId
+  f.manager.pruneTurns(Date.now() + LATER)
+  await fs.rename(f.turnFile, `${f.turnFile}.away`)
+  f.manager.onUpdate(sessionId, chunk(' late'))
+  await f.manager.updateLoads.get(f.thread.id)
+  assert.equal(f.manager.heldUpdates.get(f.thread.id).length, 1)
+  await fs.rename(`${f.turnFile}.away`, f.turnFile)
+  const { turns } = await f.manager.get(f.thread.id)
+  assert.match(agentText(turns.at(-1)), /answer late$/)
+  assert.equal(f.manager.heldUpdates.has(f.thread.id), false)
+})
+
+test('a dropped task whose file went missing fails instead of reading as empty', async (t) => {
+  const f = await finishedTurn(t)
+  f.manager.pruneTurns(Date.now() + LATER)
+  await fs.rm(f.turnFile)
+  await assert.rejects(f.manager.get(f.thread.id), /履歴ファイルが見つかりません/)
+  await assert.rejects(f.manager.messageStatus(f.thread.id, MESSAGE_ID), /履歴ファイルが見つかりません/)
+  await assert.rejects(f.manager.send(f.thread.id, { text: 'question', messageId: MESSAGE_ID }), /履歴ファイルが見つかりません/)
+  assert.equal(f.calls.prompts.length, 1, 'the accepted message is not sent again')
+  await assert.rejects(fs.stat(f.turnFile), { code: 'ENOENT' })
+})
+
+test('an empty task that was never sent still opens after it was dropped', async (t) => {
+  const f = await fixture(t)
+  f.manager.pruneTurns(Date.now() + LATER)
+  assert.equal(f.manager.turns.has(f.thread.id), false)
+  assert.deepEqual((await f.manager.get(f.thread.id)).turns, [])
+})
+
+test('a late update received just before shutdown is saved', async (t) => {
+  const f = await finishedTurn(t)
+  const sessionId = f.manager.threads.get(f.thread.id).sessionId
+  f.manager.pruneTurns(Date.now() + LATER)
+  f.manager.onUpdate(sessionId, chunk(' before shutdown'))
+  await f.manager.shutdown()
+  assert.match(agentText((await f.disk()).turns.at(-1)), /answer before shutdown$/)
+})
+
+test('a late update of a finished turn is saved whole, so the task can still leave memory', async (t) => {
+  const f = await finishedTurn(t)
+  f.manager.onUpdate(f.manager.threads.get(f.thread.id).sessionId, chunk(' late'))
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  await tick()
+  await assert.rejects(fs.stat(f.turnFile.replace(/\.json$/, '.live.json')), { code: 'ENOENT' })
+  assert.match(agentText((await f.disk()).turns.at(-1)), /answer late$/)
+  f.manager.pruneTurns(Date.now() + LATER)
+  assert.equal(f.manager.turns.has(f.thread.id), false)
+})
+
+test('the next send starts only after late updates of the last turn are applied', async (t) => {
+  const f = await finishedTurn(t)
+  const sessionId = f.manager.threads.get(f.thread.id).sessionId
+  f.manager.pruneTurns(Date.now() + LATER)
+  for (let i = 0; i < 20; i++) f.manager.onUpdate(sessionId, chunk(` ${i}`))
+  const finished = new Promise((resolve) => f.manager.once('turn-finished', resolve))
+  await f.manager.send(f.thread.id, { text: 'next' })
+  await finished
+  const { turns } = await f.manager.get(f.thread.id)
+  assert.equal(turns.length, 2)
+  assert.equal(agentText(turns[0]), 'answer' + Array.from({ length: 20 }, (_, i) => ` ${i}`).join(''))
+})

@@ -39,6 +39,7 @@ const MAX_IDLE_TURNS = 4
 // A just-opened task is not dropped for the count alone, so opening several in a row does not reread them.
 const MIN_IDLE_TURNS_MS = 30_000
 const TURNS_PRUNE_MS = 60_000
+const MAX_HELD_UPDATES = 1000
 
 function assertNotRetiredModel(model) {
   if (fallbackProvider(model) === 'openscale') throw new Error('OpenScale のサポートは終了しました。別のモデルを選んでください。')
@@ -109,9 +110,12 @@ export class ThreadManager extends EventEmitter {
     this.emitTimers = new Map()
     this.indexWriter = debouncedWriter(paths.threadsIndex)
     this.turnsUsedAt = new Map()
-    // Tasks whose turns were dropped (pruneTurns); never-opened tasks are not in it.
-    this.unloadedTurns = new Set()
+    // Tasks whose turns were dropped (pruneTurns) → whether they held turns or receipts
+    // then, so their file must exist. Never-opened tasks are not in it.
+    this.unloadedTurns = new Map()
     this.updateLoads = new Map()
+    // Late updates whose task's turns could not be read back: applied once they can be.
+    this.heldUpdates = new Map()
     this.turnsPruner = setInterval(() => this.pruneTurns(), TURNS_PRUNE_MS)
     this.turnsPruner.unref?.()
     pool.on('exit', (info) => this.#onRuntimeExit(info))
@@ -157,11 +161,12 @@ export class ThreadManager extends EventEmitter {
     return path.join(this.paths.threadsDir, `${threadId}.json`)
   }
 
-  async #loadTurns(threadId) {
+  /** `draining`: reading back for updates that arrived before shutdown began (#applyAfterLoad). */
+  async #loadTurns(threadId, draining = false) {
     this.turnsUsedAt.set(threadId, Date.now())
     if (this.turns.has(threadId)) return this.turns.get(threadId)
     if (this.turnLoads.has(threadId)) return this.turnLoads.get(threadId)
-    const loading = this.#readTurns(threadId)
+    const loading = this.#readTurns(threadId, draining)
     this.turnLoads.set(threadId, loading)
     try {
       return await loading
@@ -170,12 +175,15 @@ export class ThreadManager extends EventEmitter {
     }
   }
 
-  async #readTurns(threadId) {
-    const thread = this.#available(threadId)
+  async #readTurns(threadId, draining = false) {
+    const thread = this.#available(threadId, undefined, false, draining)
     // Losing receipts on a corrupt document could execute an accepted message
-    // twice. Fail closed rather than treating a broken transcript as empty.
-    const doc = await readTranscript(this.#turnFile(threadId), { version: 1, turns: [] })
-    this.#available(threadId, thread)
+    // twice. Fail closed rather than treating a broken transcript as empty, and
+    // the same for a missing one that was saved with turns before they were dropped.
+    const saved = this.unloadedTurns.get(threadId) === true
+    const doc = await readTranscript(this.#turnFile(threadId), saved ? null : { version: 1, turns: [] })
+    if (!doc) throw new Error('タスクの履歴ファイルが見つかりません')
+    this.#available(threadId, thread, false, draining)
     const turns = doc.turns ?? []
     let interrupted = false
     for (const turn of turns) {
@@ -195,7 +203,7 @@ export class ThreadManager extends EventEmitter {
       }
     }
     const repaired = await this.#recoverUsage(threadId, thread, turns)
-    this.#available(threadId, thread)
+    this.#available(threadId, thread, false, draining)
     const receipts = new Map((doc.receipts ?? []).map((entry) => [entry.messageId, entry]))
     this.receipts.set(threadId, receipts)
     this.turns.set(threadId, turns)
@@ -206,6 +214,7 @@ export class ThreadManager extends EventEmitter {
     // the UI was shown (failed tools included), not that work is still running.
     if (interrupted || repaired.length) this.#saveTurns(threadId)
     if (repaired.length) this.emit('usage-priced', this.summary(thread))
+    this.#applyHeld(threadId)
     return turns
   }
 
@@ -299,20 +308,51 @@ export class ThreadManager extends EventEmitter {
   }
 
   #unloadTurns(threadId) {
+    this.unloadedTurns.set(threadId, this.turns.get(threadId).length > 0 || this.receipts.get(threadId)?.size > 0)
     this.turns.delete(threadId)
     this.receipts.delete(threadId)
     // The writer keeps the last document it was given, and with it every turn.
     this.turnWriters.delete(threadId)
     this.turnsUsedAt.delete(threadId)
-    this.unloadedTurns.add(threadId)
   }
 
-  /** An update for a task whose turns left memory: applied in arrival order once they are read back. */
+  /**
+   * An update for a task whose turns left memory: applied in arrival order once
+   * they are read back. One that cannot be read now is held, not dropped, and
+   * applied when the turns are next read.
+   */
   #applyAfterLoad(threadId, sessionId, update) {
-    const previous = this.updateLoads.get(threadId) ?? this.#loadTurns(threadId)
-    const next = previous.then(() => this.onUpdate(sessionId, update, true)).catch(() => {})
+    const previous = this.updateLoads.get(threadId) ?? Promise.resolve()
+    const next = previous.then(async () => {
+      try {
+        await this.#loadTurns(threadId, true)
+      } catch (error) {
+        if (!this.threads.has(threadId) || this.removing.has(threadId)) return
+        const held = this.heldUpdates.get(threadId) ?? []
+        if (!held.length) console.warn(`[agent-desk] ${threadId}: could not read its turns back for a late update (${shortMessage(error)}); holding it until they can be read`)
+        held.push({ sessionId, update })
+        if (held.length > MAX_HELD_UPDATES) held.shift()
+        this.heldUpdates.set(threadId, held)
+        return
+      }
+      this.onUpdate(sessionId, update, true)
+    })
     this.updateLoads.set(threadId, next)
     void next.finally(() => { if (this.updateLoads.get(threadId) === next) this.updateLoads.delete(threadId) })
+  }
+
+  #applyHeld(threadId) {
+    const held = this.heldUpdates.get(threadId)
+    if (!held) return
+    this.heldUpdates.delete(threadId)
+    // They belong to the turn that had ended; a turn started since is not theirs.
+    if (this.active.has(threadId)) return console.warn(`[agent-desk] ${threadId}: dropped ${held.length} late updates of a finished turn: a new turn has started`)
+    for (const { sessionId, update } of held) this.onUpdate(sessionId, update, true)
+  }
+
+  /** Until updates of the last turn that wait for a read-back are applied, a new turn must not start. */
+  async #settleLateUpdates(threadId) {
+    while (this.updateLoads.has(threadId)) await this.updateLoads.get(threadId)
   }
 
   // Serialize admission/status, not model execution. A status lookup cannot
@@ -327,10 +367,10 @@ export class ThreadManager extends EventEmitter {
     return request
   }
 
-  #available(threadId, expected, allowPending = false) {
+  #available(threadId, expected, allowPending = false, draining = false) {
     const thread = this.#require(threadId)
     if (thread.usageFallbackPending && !allowPending) throw new Error('切り替え先を準備中です')
-    if (this.stopping) throw new Error('アプリを終了しています')
+    if (this.stopping && !draining) throw new Error('アプリを終了しています')
     if (this.removing.has(threadId) || (expected && thread !== expected)) throw new Error('タスクを削除しています')
     return thread
   }
@@ -824,6 +864,7 @@ export class ThreadManager extends EventEmitter {
     this.turns.delete(threadId)
     this.turnsUsedAt.delete(threadId)
     this.unloadedTurns.delete(threadId)
+    this.heldUpdates.delete(threadId)
     this.pendingUsageRefresh.delete(threadId)
     this.receipts.delete(threadId)
     this.turnWriters.delete(threadId)
@@ -852,6 +893,7 @@ export class ThreadManager extends EventEmitter {
     if (observerContext && (thread.team?.role !== 'observer' || typeof observerContext !== 'string' || observerContext.length > 12000)) throw new Error('観測者の会話引き継ぎが不正です')
     if (plan && thread.ab) throw new Error('ABではPlanを使えません')
     const turns = await this.#loadTurns(threadId)
+    await this.#settleLateUpdates(threadId)
     this.#available(threadId, thread, allowPending)
     const known = this.#receipt(threadId, message)
     if (known) return known
@@ -1576,7 +1618,8 @@ export class ThreadManager extends EventEmitter {
   onUpdate(sessionId, update, replayed = false) {
     const threadId = this.sessionIndex.get(sessionId)
     const thread = threadId && this.threads.get(threadId)
-    if (!thread || this.removing.has(threadId) || this.stopping) return
+    // A held update arrived before shutdown began; it is saved before the shutdown flush.
+    if (!thread || this.removing.has(threadId) || (this.stopping && !replayed)) return
     const active = this.active.get(threadId)
     if (active?.phase === 'starting') return
     if (!replayed && !active && (this.unloadedTurns.has(threadId) || this.updateLoads.has(threadId))) return this.#applyAfterLoad(threadId, sessionId, update)
@@ -1603,7 +1646,10 @@ export class ThreadManager extends EventEmitter {
       this.#emitThread(thread)
     }
     if (side.configOptions) this.#learnOptions(thread, side.configOptions)
-    this.#saveLive(threadId, turn)
+    // A late update of a finished turn goes into the whole document: a live file
+    // left behind would keep the task from leaving memory (#canUnloadTurns).
+    if (active) this.#saveLive(threadId, turn)
+    else this.#saveTurns(threadId)
     this.#emitTurn(threadId, turn)
   }
 
@@ -1747,6 +1793,7 @@ export class ThreadManager extends EventEmitter {
     await Promise.all([...this.active.keys()].map((threadId) => this.cancel(threadId, { allowFallbackPending: true })))
     await Promise.allSettled([...this.requests.values(), ...this.removing.values(), ...this.turnLoads.values()])
     await Promise.all(active.map((entry) => entry.done))
+    await Promise.allSettled([...this.updateLoads.values()])
     // One failing file must not keep the others from being written.
     const flushes = await Promise.allSettled([this.indexWriter.flush(), ...[...this.turnWriters.values()].map((writer) => writer.flush())])
     for (const timer of this.emitTimers.values()) clearTimeout(timer)

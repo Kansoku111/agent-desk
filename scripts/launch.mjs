@@ -18,8 +18,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const paths = appPaths()
 fs.mkdirSync(paths.home, { recursive: true })
 const logFile = path.join(paths.home, 'launcher.log')
-try { fs.renameSync(logFile, path.join(paths.home, 'launcher.prev.log')) } catch {}
-fs.writeFileSync(logFile, `[${new Date().toISOString()}] launching from ${root}\n`)
+const started = `[${new Date().toISOString()}] launching from ${root}\n`
+try {
+  fs.renameSync(logFile, path.join(paths.home, 'launcher.prev.log'))
+  fs.writeFileSync(logFile, started)
+} catch (error) {
+  // A log that could not be set aside is kept and added to: it may hold why the last run ended.
+  if (error.code === 'ENOENT') fs.writeFileSync(logFile, started)
+  else fs.appendFileSync(logFile, `\n${started}(the previous log could not be kept as launcher.prev.log: ${error.message})\n`)
+}
 const log = (line) => fs.appendFileSync(logFile, `${line}\n`)
 
 function mtime(file) {

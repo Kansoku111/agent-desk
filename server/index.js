@@ -1239,7 +1239,13 @@ scheduleIdleExit()
 if (settings.remoteAccess) void remote.start().catch((error) => log('remote access:', error.message))
 // Now that the port is known: reports that waited while the app was closed go to their leaders.
 teams.start()
-watchMemory(log, { details: () => `task transcripts in memory: ${threads.turns.size}` })
+// What holds conversations in memory: normal tasks drop idle ones, GP and Claude runners keep all they loaded.
+const loadedTurns = (records) => [...records.values()].reduce((sum, record) => sum + (record.turns?.length ?? 0), 0)
+watchMemory(log, { details: () => [
+  `tasks ${threads.turns.size} loaded / ${threads.unloadedTurns.size} dropped`,
+  `GP ${codex.records.size} (${loadedTurns(codex.records)} turns)`,
+  `Claude runners ${[agents, subagentAgents, abAgents, presetAgents].reduce((sum, runner) => sum + runner.records.size, 0)} (${[agents, subagentAgents, abAgents, presetAgents].reduce((sum, runner) => sum + loadedTurns(runner.records), 0)} turns)`,
+].join(', ') })
 
 void refreshChatGptUsage()
 void refreshUsageHistory()
