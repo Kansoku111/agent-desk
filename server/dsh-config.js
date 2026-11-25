@@ -154,6 +154,7 @@ const HEADER = `# Managed by Agent Desk: this file is rewritten on every start.
 # instead of DeepSeek's search, which fails without a DeepSeek API key.
 # The workflow tool is off: one call fans out many subagents, which defeats a
 # limit on subagent use the user sets in a request or the custom instructions.
+# DeepSeek requests carry no session log or plugin list.
 `
 
 /**
@@ -237,6 +238,12 @@ export function homePatch({
     ...(acpModel ? [{ id: 'acp', config: { provider: 'openai-codex', model: acpModel } }] : []),
     // Its tool and prompt section go together; delegation is configured below.
     { id: 'tool-workflow', disabled: true },
+    // Shipped dsh adds the whole session log (prompts, replies, tool output,
+    // paths, and earlier turns on other providers) and the installed plugin list
+    // to every DeepSeek request, whatever the endpoint. The model never reads
+    // either, so they stay off; no Agent Desk screen offers to turn them on.
+    { id: 'session-log-deepseek', config: { enabled: false } },
+    { id: 'plugin-package-inventory-deepseek', config: { enabled: false } },
     // Replace only discovery; keep Harness's skill registry, tool and invocation policy.
     { id: 'skill-filesystem', disabled: true },
     { insert: [
