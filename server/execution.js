@@ -3,13 +3,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { execFile, spawn } from 'node:child_process'
-import { promisify } from 'node:util'
+import { spawn } from 'node:child_process'
 import { readJson, writeJson } from './json-file.js'
 import { assertToolMode } from './ptc.js'
 import { watchSource } from './source-watcher.js'
+import { execFileTreeAsync } from './process-tree.js'
 
-const exec = promisify(execFile)
+const exec = execFileTreeAsync
 const hash = (value) => createHash('sha256').update(value).digest('hex')
 const PLAIN_IGNORED_DIRS = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', 'coverage', '.cache'])
 export const workspaceKey = (folder) => {

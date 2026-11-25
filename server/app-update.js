@@ -9,12 +9,13 @@
 // the open windows reconnect and reload by themselves, and puts the old
 // version back when the new one does not start.
 import { createHash } from 'node:crypto'
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { execFileTree } from './process-tree.js'
 import { compareVersions, isVersion } from './update-checks.js'
 
 /** The release file a zip install takes. */
@@ -93,7 +94,7 @@ export async function latestRelease({ repo, needAsset = false, fetch = globalThi
 
 function run(file, args, { cwd, timeoutMs = 300_000 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, timeout: timeoutMs, windowsHide: true, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFileTree(file, args, { cwd, timeout: timeoutMs, windowsHide: true, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) return reject(new Error((stderr || stdout || error.message).trim().slice(-1500)))
       resolve(stdout)
     })

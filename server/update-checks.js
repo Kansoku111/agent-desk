@@ -9,10 +9,11 @@
 // facts (versions, repository, release notes) and leaves the steps to
 // docs/updating.md, so it stays right as the procedure changes. Claude Code is
 // the user's own CLI and updates itself with `claude update`.
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFileTree, killTree } from './process-tree.js'
 import { findClaude, INHERITED_MARKERS, launchCommand } from './terminal-helpers.js'
 
 export const DSH_PACKAGES = ['@deepseek-ai/dsh', '@deepseek-ai/dsh-atomic-write']
@@ -96,7 +97,8 @@ export function runNpm(args, { cwd, timeoutMs = 600_000 } = {}) {
     let stderr = ''
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk })
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk })
-    const timer = setTimeout(() => child.kill(), timeoutMs)
+    // On Windows the child is cmd.exe; npm itself runs under it.
+    const timer = setTimeout(() => void killTree(child), timeoutMs)
     child.on('error', (error) => {
       clearTimeout(timer)
       reject(error)
@@ -140,7 +142,7 @@ export function runClaude(args, { timeoutMs = 30_000 } = {}) {
   if (!claude) return Promise.resolve(null)
   const { file, args: argv } = launchCommand(claude, args)
   return new Promise((resolve, reject) => {
-    execFile(file, argv, { env: claudeEnv(), timeout: timeoutMs, windowsHide: true, encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFileTree(file, argv, { env: claudeEnv(), timeout: timeoutMs, windowsHide: true, encoding: 'utf8' }, (error, stdout, stderr) => {
       if (error) return reject(new Error(`${(stderr || stdout || error.message).trim().slice(-1500)}`))
       resolve(stdout)
     })

@@ -3,10 +3,10 @@
 // Snapshots live in a separate git repository per workspace inside the app
 // data folder. The workspace (and any git repository of its own) is only read,
 // except by a restore, which rewrites exactly the files that differ.
-import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { execFileTree } from './process-tree.js'
 
 // Larger files are left out of snapshots, so a restore never touches them.
 export const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -324,9 +324,9 @@ export function repoId(workspace) {
 }
 
 /**
- * Removes a stale index.lock. On Windows a killed Git can keep the file open for a
- * while (or a child Git keeps running), so unlinking fails with EBUSY; that must not
- * replace the error being reported. A lock that is still held makes Git fail with its own message.
+ * Removes a stale index.lock. On Windows a just-killed Git can keep the file open for a
+ * moment, so unlinking fails with EBUSY; that must not replace the error being
+ * reported. A lock that is still held makes Git fail with its own message.
  */
 async function dropIndexLock(repo) {
   await fs.rm(path.join(repo.gitDir, 'index.lock'), { force: true }).catch(() => {})
@@ -428,7 +428,7 @@ function gitEnv(repo, literal) {
 
 function git(repo, args, { input = '', literal = false, timeout = SNAPSHOT_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
-    const child = execFile('git', ['-c', 'safe.directory=*', ...args], {
+    const child = execFileTree('git', ['-c', 'safe.directory=*', ...args], {
       env: gitEnv(repo, literal),
       windowsHide: true,
       timeout,
