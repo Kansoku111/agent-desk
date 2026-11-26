@@ -2,6 +2,10 @@
 // Shipped dsh uploads the whole session log (prompts, replies, tool output, paths)
 // and the installed plugin list with every DeepSeek request, also to a non-official
 // endpoint. Agent Desk turns both off in the home patch.
+// The checks below are allowlists, not a search for those two names: a dsh update
+// that renames them or adds another field fails here instead of sending it silently.
+// When this fails, find out what the new field carries before allowing it, and keep
+// anything that holds conversation, files, paths or an inventory of the machine off.
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import fs from 'node:fs/promises'
@@ -13,6 +17,13 @@ import { CredentialStore, DEEPSEEK_REF } from '../server/credentials.js'
 import { dshChildPatch, homePatch } from '../server/dsh-config.js'
 import { appPaths } from '../server/paths.js'
 import { runDshChild } from '../server/subagent-dsh.js'
+
+// Anthropic Messages parameters; dsh sends DeepSeek requests in this format.
+const MESSAGES_FIELDS = new Set(['model', 'messages', 'system', 'max_tokens', 'stream', 'thinking', 'tools',
+  'tool_choice', 'output_config', 'temperature', 'top_p', 'top_k', 'stop_sequences'])
+// Sent by dsh-llm-deepseek with no setting to stop them (docs/architecture.md):
+// a random id kept in dsh-home/.anonymous-user-id and the session id.
+const KNOWN_HEADERS = new Set(['x-deepseek-harness-user-id', 'x-deepseek-harness-session-id'])
 
 test('DeepSeek requests carry no session log or plugin inventory', { timeout: 90000 }, async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-desk-deepseek-'))
@@ -27,7 +38,7 @@ test('DeepSeek requests carry no session log or plugin inventory', { timeout: 90
       res.writeHead(404).end()
       return
     }
-    requests.push({ url: req.url, body: JSON.parse(raw) })
+    requests.push({ url: req.url, headers: req.headers, body: JSON.parse(raw) })
     const events = [
       { type: 'message_start', message: { id: 'mock', type: 'message', role: 'assistant', model, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -58,9 +69,11 @@ test('DeepSeek requests carry no session log or plugin inventory', { timeout: 90
   const reply = await runDshChild({ paths, workspace, prompt: 'fixture prompt', mode: 'read-only', patchFile })
   assert.equal(reply, 'fixture reply')
   assert.ok(requests.length >= 1)
-  for (const { body } of requests) {
+  for (const { body, headers } of requests) {
     assert.equal(body.model, model)
-    assert.equal(body.dsh_session_log, undefined)
-    assert.equal(body.dsh_plugin_packages, undefined)
+    const extra = Object.keys(body).filter((key) => !MESSAGES_FIELDS.has(key))
+    assert.deepEqual(extra, [], 'unexpected fields in a DeepSeek request')
+    const tracking = Object.keys(headers).filter((name) => /^x-(deepseek|dsh)/i.test(name) && !KNOWN_HEADERS.has(name))
+    assert.deepEqual(tracking, [], 'unexpected identification headers in a DeepSeek request')
   }
 })

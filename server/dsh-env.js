@@ -14,7 +14,11 @@ export function dshEnv(paths, mode, base = process.env) {
   return Object.assign(env, {
     DSH_HOME: paths.dshHome,
     DSH_PERMISSION_MODE: mode,
+    // Two separate opt-outs of dsh's OTel upload (session logs sent on /feedback):
+    // the mode turns the exporter off, the second removes the plugin. Either still
+    // holds if a dsh update renames the other.
     DSH_TELEMETRY_MODE: 'DISABLED',
+    DSH_TELEMETRY_DISABLED: '1',
     AGENT_DESK_FAST_MODE: paths.fastMode,
     AGENT_DESK_OPENCODE_CATALOG: paths.opencodeGoCatalog,
     AGENT_DESK_SIWC_CREDENTIALS: paths.credentials,

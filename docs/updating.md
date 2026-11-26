@@ -48,6 +48,7 @@ dsh と同梱の Codex は `package.json` で版を固定しているため、�
 2. `npm install --save-exact --no-audit --no-fund @deepseek-ai/dsh@<版> @deepseek-ai/dsh-atomic-write@<版>`
 3. `node --test test/*-patch.test.js test/dsh-compatibility.test.js` を実行します。Agent Desk は dsh のソースに独自のフックを当てています。上流のコードが変わると、ここが失敗します。フックの一覧、合わなくなったときの直し方、合わせ直すか作り直すか外すかの判断は [dsh への読み込み時フック](dsh-hooks.md) にあります。
    PTCの公開APIと内部フックの境界は[PTC仕様の「反映と制約」](ptc.md#反映と制約)を参照してください。「共通」の `npm test` では、`test/ptc-guidance.test.js`・`test/ptc-sdk.test.js`・`test/ptc-runtime.test.js` の案内到達、data編集、読み取り専用、モード解除・再開・セッション分離も確認します。これらは実dshと模擬モデル応答で動き、実モデルへの問い合わせは不要です。通常起動が成功してもフックの適用成功は保証されないため、不一致を警告のまま放置して更新完了にはしません。
+   `node --test test/deepseek-privacy.test.js` も実行します。DeepSeek へのリクエストに、許可した項目以外が付いていないかを確かめます。失敗したら、新しい項目が何を含むかを確かめて利用者に報告します。テストを緩めて通しません。一度送信がオンになると、オフの間に溜まった分もまとめて送られるためです。
 4. `node scripts/check-dsh.mjs` で、新しい dsh が実際に起動し、セッションを作ってモデルを選べることを確かめます。最後の行に `"ok":true` が出れば成功です。
 5. 「共通」の確認とコミットをします。
 
