@@ -1,5 +1,17 @@
 /* カスタム指示の一覧。行は account-card の中に並べ、編集欄は行を開いたときだけ出す。 */
 
+.instruction-card-head {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.instruction-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .instruction-list {
   display: flex;
   flex-direction: column;

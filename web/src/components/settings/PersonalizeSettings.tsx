@@ -53,12 +53,16 @@ function InstructionList({ saved }: { saved: CustomInstructionItem[] }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
   const [newDraft, setNewDraft] = useState<Draft | null>(null)
   const [undo, setUndo] = useState<Undo | null>(null)
+  const [bulkError, setBulkError] = useState<string | null>(null)
   const stale = !busy && !sameItems(saved, base)
   const locked = busy || stale
   const savedBodies = saved.reduce((sum, item) => sum + item.body.length, 0)
+  const allEnabled = saved.every((item) => item.enabled)
+  const allDisabled = saved.every((item) => !item.enabled)
 
   /** Saves the whole list against `base`. Returns the error message, or null on success. */
   const save = async (next: CustomInstructionItem[]): Promise<string | null> => {
+    setBulkError(null)
     setBusy(true)
     try {
       const result = await request<{ settings: Settings }>('settings.update', {
@@ -82,6 +86,11 @@ function InstructionList({ saved }: { saved: CustomInstructionItem[] }) {
 
   const setEnabled = (id: string, enabled: boolean) =>
     save(saved.map((item) => item.id === id ? { ...item, enabled } : item))
+
+  const setAllEnabled = async (enabled: boolean) => {
+    if (saved.every((item) => item.enabled === enabled)) return null
+    return save(saved.map((item) => item.enabled === enabled ? item : { ...item, enabled }))
+  }
 
   const saveEdit = async (id: string, draft: Draft) => {
     const error = await save(saved.map((item) => item.id === id
@@ -119,16 +128,27 @@ function InstructionList({ saved }: { saved: CustomInstructionItem[] }) {
 
   return (
     <section className="account-card">
-      <div className="account-head">
+      <div className="account-head instruction-card-head">
         <h3>カスタム指示</h3>
-        <button type="button" className="button" disabled={newDraft !== null}
-          onClick={() => setNewDraft({ title: '', body: '', targets: { dsh: true, claude: true } })}>
-          <Plus size={14} />追加
-        </button>
+        <div className="instruction-head-actions">
+          {saved.length > 0 && (
+            <>
+              <button type="button" className="button" disabled={locked || allEnabled}
+                onClick={() => void setAllEnabled(true).then(setBulkError)}>すべてオン</button>
+              <button type="button" className="button" disabled={locked || allDisabled}
+                onClick={() => void setAllEnabled(false).then(setBulkError)}>すべてオフ</button>
+            </>
+          )}
+          <button type="button" className="button" disabled={newDraft !== null}
+            onClick={() => setNewDraft({ title: '', body: '', targets: { dsh: true, claude: true } })}>
+            <Plus size={14} />追加
+          </button>
+        </div>
       </div>
+      {bulkError && <p className="form-error">{bulkError}</p>}
       {stale && (
         <div className="team-warning" role="alert">
-          別の画面で変更されました。 <button type="button" className="button small" onClick={() => setBase(saved)}>下書きを残して続ける</button>
+          別の画面で変更されました。 <button type="button" className="button small" onClick={() => { setBase(saved); setBulkError(null) }}>下書きを残して続ける</button>
         </div>
       )}
       <ul className="instruction-list">

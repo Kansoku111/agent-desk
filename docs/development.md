@@ -33,7 +33,7 @@ Skillsのお気に入りは同じフィクスチャサーバーの `skill-favori
 
 設定の回帰確認は同じフィクスチャサーバーの `settings-bug-audit-ui.html` で `await settingsAudit.run()` を実行します。候補が後から届くClaudeワークスペースの選択・送信と、検証行の削除→追加→保存を実コンポーネントで確認します。`usage-pricing-ui.html` の `await usagePricingTest.run()` は、未算定・一部未算定・非課金・利用なし・既知ゼロをタイル、モデル行、グラフのツールチップで確認します。どちらもRPCは模擬応答で、本番データや実モデルを使いません。
 
-パーソナライズの項目移行・適用先・文字数上限は `test/settings.test.js` と `test/instructions.test.js`、Claude Code の既存チーム子への反映は `test/teams.test.js`、Codex の新規会話への反映は `test/codex-usage-runtime.test.js` で確認します。同じ画面フィクスチャサーバーの `personalize-ui.html` で、開閉・編集・適用先・オンオフ・削除と取り消しを確認できます。実モデルや本番データは使いません。
+パーソナライズの項目移行・適用先・文字数上限は `test/settings.test.js` と `test/instructions.test.js`、一括オン・オフなどの画面操作は `test/personalize-ui.test.js`、Claude Code の既存チーム子への反映は `test/teams.test.js`、Codex の新規会話への反映は `test/codex-usage-runtime.test.js` で確認します。同じ画面フィクスチャサーバーの `personalize-ui.html` で、開閉・編集・適用先・オンオフ・一括切り替え・削除と取り消しを確認できます。実モデルや本番データは使いません。
 
 ブラウザ操作の切り替えは `test/browser-mcp.test.js` と `test/ptc-runtime.test.js` で、MCPの登録と再開後にモデルへ送られるツール定義を確認します。Chromeの起動処理と専用プロファイルを共有し、dshを再接続して登録を入れ替えることで、選択中のツールだけをモデルに渡します。両方を登録してUI上の表示だけ切り替えると、モデル入力に両方のツール定義が残ります。Browser Useのブラウザ操作は、タスクのファイル権限を広げずに済むようアプリ側で定型化しています。
 
