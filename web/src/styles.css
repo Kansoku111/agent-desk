@@ -3190,6 +3190,72 @@ select:focus {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
+.tri-slider {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex: none;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  user-select: none;
+  touch-action: none;
+}
+
+.tri-slider-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 3);
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+  transform: translateX(calc(var(--tri-index, 2) * 100%));
+  transition: transform 0.16s ease, background 0.16s ease;
+  pointer-events: none;
+}
+
+.tri-slider.tri-slider-off .tri-slider-thumb {
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--border-strong), 0 1px 3px rgba(0, 0, 0, 0.14);
+}
+
+.tri-slider button {
+  position: relative;
+  z-index: 1;
+  height: 22px;
+  min-width: 56px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tri-slider button.on {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.tri-slider.tri-slider-off button.on {
+  color: var(--text);
+}
+
+.tri-slider button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.tri-slider button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .switch {
   position: relative;
   flex: none;

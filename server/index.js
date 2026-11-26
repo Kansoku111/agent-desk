@@ -145,15 +145,14 @@ if (!settingsKept && assignProjectColors(settings.projectColors ?? {}, [paths.my
 if (!settings.defaultEffort) settings.defaultEffort = 'medium'
 await fsp.mkdir(paths.myPc, { recursive: true })
 
+// Agent teams (teams.js) give their leader's Claude Code its flags.
+let teams = null
+let threads = null
 const credentials = new CredentialStore(paths.credentials)
 const codexApp = new CodexAppServer({ home: paths.codexHome, openUrl: openExternal })
 const codexWork = new CodexWorkServer({ home: paths.codexHome, cwd: paths.myPc })
 const codex = await new CodexRunner({ home: paths.home, server: codexWork, attachmentsDir: paths.attachmentsDir,
-  instructions: () => effectiveCustomInstructions(settings, 'dsh'), trustedMcp: [BRIDGE_MCP_SERVER], mcpGuidance: { [BRIDGE_MCP_SERVER]: CODEX_BRIDGE_GUIDANCE } }).load()
-
-// Agent teams (teams.js) give their leader's Claude Code its flags.
-let teams = null
-let threads = null
+  instructions: (record) => (teams?.personalizeFor(record) === false ? '' : effectiveCustomInstructions(settings, 'dsh')), trustedMcp: [BRIDGE_MCP_SERVER], mcpGuidance: { [BRIDGE_MCP_SERVER]: CODEX_BRIDGE_GUIDANCE } }).load()
 const claudeImageMcp = (workspace) => settings.imageTool ? claudeMcpServer(imageMcpServer(paths, workspace)) : null
 // Claude Code tasks: the user's own `claude` CLI in a terminal (see terminals.js).
 const terminals = await new TerminalManager({

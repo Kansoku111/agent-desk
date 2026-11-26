@@ -121,6 +121,7 @@ export type TeamProvider = 'gpt' | 'codex' | 'claude' | 'claudeApi' | 'deepseek'
 export type TeamLeaderProvider = TeamProvider
 export type TeamTier = 'low' | 'mid'
 export type TeamModelMode = 'tiers' | 'free'
+export type TeamPersonalizeMode = 'off' | 'leader' | 'all'
 export type TeamModelChoice = { provider: TeamProvider; model: string; effort: string | null }
 /** `removed`: the child's task was deleted on its own. */
 export type TeamChildState = 'running' | 'approval' | 'idle' | 'closed' | 'error' | 'stopped' | 'removed' | 'resuming'
@@ -236,6 +237,7 @@ export interface TeamSettings {
   dshLeader?: { provider: Exclude<TeamProvider, 'claude' | 'gpt'>; model: string; effort: string | null } | null
   leaderFallback?: string; fallbackEffort?: string
   toolMode?: ToolMode
+  personalizeMode?: TeamPersonalizeMode
   defaultModelMode?: TeamModelMode
   modelMode?: TeamModelMode
   freeModels?: TeamModelChoice[]

@@ -26,7 +26,7 @@ import { isOtherFile } from './attachments.js'
 import { isLeaderUsageLimit } from './leader-usage-limit.js'
 import { usageFallbackChoice } from '../shared/usage-fallback.js'
 import { carryoverText } from './thread-utils.js'
-import { assertChildrenOn, assertNoRetiredProviders, assertNotRetired, mergeTeamConfig, PROVIDER_NAMES, teamConfig, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
+import { assertChildrenOn, assertNoRetiredProviders, assertNotRetired, mergeTeamConfig, PROVIDER_NAMES, teamConfig, teamPersonalizeEnabled, TEAM_PROVIDERS, TEAM_TIERS } from './team-config.js'
 import { childTurnArgs, leaderLaunch, leaderMcpServer, writeChildPrompt } from './teams-launch.js'
 import { CATALOG_PROVIDER, childPrompt, childTask, clip, describeTool, executionTask, modelName, oneLine, PREFIX, tierLines } from './teams-prompts.js'
 import { markOf, reportsMessage, reportText } from './teams-report.js'
@@ -192,6 +192,10 @@ export class TeamManager extends EventEmitter {
       if (thread.team?.role === 'observer') return 'native'
       const team = thread.team && this.teams.get(thread.team.id)
       return team ? this.config(team).toolMode : undefined
+    }
+    threads.teamCustomInstructions = (thread) => {
+      if (!thread.team) return undefined
+      return this.personalizeFor(thread) ? 'on' : 'off'
     }
     threads.userMessageAccepted = (threadId) => this.userWrote(threadId)
     threads.teamModelGuard = (thread) => {
@@ -530,7 +534,7 @@ export class TeamManager extends EventEmitter {
       else {
         const url = new URL(this.apiUrl()); url.pathname = '/api/team-observer'
         const mcp = this.#writeFile(team, 'observer-mcp.json', JSON.stringify({ mcpServers: { observer: { type: 'stdio', command: this.node, args: [observerMcpScript], env: { AGENT_DESK_OBSERVER_URL: url.href, AGENT_DESK_OBSERVER_TEAM: team.id, AGENT_DESK_OBSERVER_SECRET: observer.secret } } } }))
-        const prompt = this.#writeFile(team, 'observer.md', [OBSERVER_INSTRUCTIONS, instructionsSection(this.instructions())].filter(Boolean).join('\n\n'))
+        const prompt = this.#writeFile(team, 'observer.md', [OBSERVER_INSTRUCTIONS, instructionsSection(this.#instructionsFor(team, 'observer'))].filter(Boolean).join('\n\n'))
         await this.agents.setArgs(observer.id, ['--tools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', mcp, '--allowedTools', 'Read,Glob,Grep,mcp__observer', '--permission-mode', 'bypassPermissions', '--append-system-prompt-file', prompt])
         guard()
         this.agents.run(observer.id, text.trim(), { ...(savedImages.length ? { images: savedImages } : {}), ...((observer.carryover || blocks.length) ? { blocks: [...(observer.carryover ? [{ type: 'text', text: observer.carryover }] : []), ...blocks] } : {}) })
@@ -715,6 +719,19 @@ export class TeamManager extends EventEmitter {
     return file
   }
 
+  /** Whether global personalization applies to a team record (leader, child, or observer). */
+  personalizeFor(record) {
+    const team = record?.team?.id ? this.teams.get(record.team.id) : null
+    if (!team || team.execution) return true
+    const role = record.team.role === 'observer' ? 'observer' : record.team.childId ? 'child' : 'leader'
+    return teamPersonalizeEnabled(this.config(team).personalizeMode, role)
+  }
+
+  #instructionsFor(team, role) {
+    if (team?.execution || teamPersonalizeEnabled(this.config(team).personalizeMode, role)) return this.instructions()
+    return ''
+  }
+
   /**
    * The flags a team leader's Claude Code starts with (TerminalManager's
    * `launch`). The files are written each time: the server's port may have changed.
@@ -724,7 +741,7 @@ export class TeamManager extends EventEmitter {
     if (!team || record.team.role !== 'leader' || team.retiredLeaders?.some((entry) => entry.id === record.id)) return null
     return leaderLaunch({
       team, config: this.config(team), models: this.catalogState().models, dir: this.#teamDir(team),
-      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.instructions(), harness: this.#harness(team).parent, imageMcp: this.imageMcp(team.workspace),
+      node: this.node, script: this.script, apiUrl: this.apiUrl(), instructions: this.#instructionsFor(team, 'leader'), harness: this.#harness(team).parent, imageMcp: this.imageMcp(team.workspace),
     })
   }
 
@@ -734,7 +751,7 @@ export class TeamManager extends EventEmitter {
     const lean = this.#lean(team, child)
     // Image output writes to the workspace, so do not add it to research-only children.
     const imageMcp = !lean && child.execution?.mode !== 'research' ? this.imageMcp(team.workspace) : null
-    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.instructions(), harness: this.#harness(team).child, lean, imageMcp })
+    return childTurnArgs({ child, dir: this.#teamDir(team), instructions: this.#instructionsFor(team, 'child'), harness: this.#harness(team).child, lean, imageMcp })
   }
 
   /** A child without the browser, desktop and image tools (its MCP servers): the team keeps children lean and its spawn did not ask for them. */
@@ -829,7 +846,7 @@ export class TeamManager extends EventEmitter {
    */
   async create({ workspace, size, choices = {}, authConfirmation, execution = null }) {
     const saved = teamConfig(this.getSettings())
-    const config = mergeTeamConfig(saved, { modelMode: saved.defaultModelMode, ...(choices ?? {}), ...(execution ? { modelMode: 'tiers' } : {}) })
+    const config = mergeTeamConfig(saved, { modelMode: saved.defaultModelMode, ...(choices ?? {}), ...(execution ? { modelMode: 'tiers', personalizeMode: 'all' } : {}) })
     assertChildrenOn(config)
     // The leader is started only here; a team already running keeps its leader's own model (changeLeader).
     assertNotRetired(config.leaderProvider)
@@ -1715,7 +1732,7 @@ export class TeamManager extends EventEmitter {
   }
 
   #runAgent(team, child, body) {
-    writeChildPrompt({ child, dir: this.#teamDir(team), instructions: this.instructions(), harness: this.#harness(team).child })
+    writeChildPrompt({ child, dir: this.#teamDir(team), instructions: this.#instructionsFor(team, 'child'), harness: this.#harness(team).child })
     this.agents.run(child.taskId, body)
   }
 

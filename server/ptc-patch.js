@@ -8,13 +8,13 @@ export function patchPtcSource(source) {
     'async prompt(params, imageEnabled, requestSignal) {',
     '} else if (event.type === "tool/call") {',
   ]
-  if (source.includes('agentDeskSetToolMode') || anchors.some((anchor) => source.split(anchor).length !== 2)
+  if (source.includes('agentDeskSetSessionOption') || anchors.some((anchor) => source.split(anchor).length !== 2)
     || !source.includes('function toolCallUpdate(event) {')
     || !source.includes('async function toolResultUpdate(ctx, event) {')) return null
-  const imports = `import { withToolMode as agentDeskToolOptions, setToolMode as agentDeskSetToolMode, assertPresentationReady as agentDeskPresentationReady, TOOL_MODE_CONFIG as agentDeskToolModeId, ptcEventUpdate as agentDeskPtcUpdate, ptcResultEvent as agentDeskPtcResult } from ${JSON.stringify(new URL('./ptc-bridge.js', import.meta.url).href)};\n`
+  const imports = `import { withToolMode as agentDeskToolOptions, hasSessionOption as agentDeskHasSessionOption, setSessionOption as agentDeskSetSessionOption, assertPresentationReady as agentDeskPresentationReady, ptcEventUpdate as agentDeskPtcUpdate, ptcResultEvent as agentDeskPtcResult } from ${JSON.stringify(new URL('./ptc-bridge.js', import.meta.url).href)};\n`
   return imports + source
     .replace(anchors[0], 'return this.modelControl.options(signal).then((options) => agentDeskToolOptions(this, options));')
-    .replace(anchors[1], `if (configId === agentDeskToolModeId) return agentDeskSetToolMode(this, value).then(() => this.configOptions(signal));
+    .replace(anchors[1], `if (agentDeskHasSessionOption(configId)) return agentDeskSetSessionOption(this, configId, value).then(() => this.configOptions(signal));
 return this.modelControl.set(configId, value, signal).then((options) => agentDeskToolOptions(this, options));`)
     .replace(anchors[2], 'this.configOptions().then((configOptions) => {')
     .replace(anchors[3], `${anchors[3]}\nagentDeskPresentationReady(this);`)

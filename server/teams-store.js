@@ -19,7 +19,7 @@ export function restoreTeams(saved, getSettings) {
     team.queue = Array.isArray(team.queue) ? team.queue.filter((item) => item.kind !== 'approval') : []
     team.asks = Array.isArray(team.asks) ? team.asks : []
     team.leaderKind = team.leaderKind === 'thread' ? 'thread' : team.leaderKind === 'codex' ? 'codex' : 'terminal'
-    team.config = teamConfig({ ...(team.config ?? getSettings()), toolMode: team.config?.toolMode ?? 'native' })
+    team.config = teamConfig({ ...(team.config ?? getSettings()), toolMode: team.config?.toolMode ?? 'native', personalizeMode: team.config?.personalizeMode ?? 'all' })
     teams.push(team)
   }
   return teams

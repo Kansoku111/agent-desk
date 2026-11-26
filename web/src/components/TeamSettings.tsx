@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { type CSSProperties, type KeyboardEvent, useEffect, useState } from 'react'
 import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { act, request, setState, startTeam, useStore } from '../store'
-import type { AppState, TeamModelChoice, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
+import type { AppState, TeamModelChoice, TeamPersonalizeMode, TeamProvider, TeamSettings as Config, TeamSummary, TeamTier } from '../types'
 import { isModelVisible, isRetiredModel, isRetiredProvider, retiredLabel, retiredModelName } from '../model-selection'
 import { effortLabel, parseModel, pickableEfforts, workspaceLabel } from '../util'
 import { Modal } from './Modal'
@@ -69,6 +69,7 @@ function fullConfig(saved: Config): Config {
     ...saved,
     leaderProvider: saved.leaderProvider ?? 'claude',
     gptLeader: saved.gptLeader ?? { model: null, effort: 'high' },
+    personalizeMode: saved.personalizeMode ?? 'all',
     modelMode: saved.modelMode ?? 'tiers',
     defaultModelMode: saved.defaultModelMode ?? 'tiers',
     freeModels: saved.freeModels ?? [],
@@ -460,6 +461,80 @@ function Switch({ title, note, checked, onChange }: { title: string; note: strin
   )
 }
 
+const PERSONALIZE_OPTIONS: { value: TeamPersonalizeMode; label: string; note: string }[] = [
+  { value: 'off', label: 'なし', note: '親・子・観測者に適用しません' },
+  { value: 'leader', label: '親のみ', note: 'リーダーだけに適用します' },
+  { value: 'all', label: 'すべて', note: 'リーダー・子・観測者に適用します' },
+]
+
+function TeamPersonalizeSlider({ value, disabled = false, onChange }: {
+  value: TeamPersonalizeMode
+  disabled?: boolean
+  onChange: (value: TeamPersonalizeMode) => void
+}) {
+  const index = Math.max(0, PERSONALIZE_OPTIONS.findIndex((option) => option.value === value))
+  const current = PERSONALIZE_OPTIONS[index]
+  const pickAt = (clientX: number, rect: DOMRect) => {
+    if (!rect.width) return
+    const next = Math.min(PERSONALIZE_OPTIONS.length - 1, Math.max(0, Math.floor(((clientX - rect.left) / rect.width) * PERSONALIZE_OPTIONS.length)))
+    if (PERSONALIZE_OPTIONS[next].value !== value) onChange(PERSONALIZE_OPTIONS[next].value)
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return
+    const delta = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : null
+    const next = delta !== null ? Math.min(PERSONALIZE_OPTIONS.length - 1, Math.max(0, index + delta))
+      : event.key === 'Home' ? 0
+        : event.key === 'End' ? PERSONALIZE_OPTIONS.length - 1
+          : null
+    if (next === null) return
+    event.preventDefault()
+    if (next !== index) onChange(PERSONALIZE_OPTIONS[next].value)
+    const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="radio"]')
+    buttons[next]?.focus()
+  }
+  return (
+    <div className="setting compact">
+      <div>
+        <h3>パーソナライズ</h3>
+        <p className="muted">{current.note}</p>
+      </div>
+      <div
+        className={`tri-slider ${value === 'off' ? 'tri-slider-off' : ''}`}
+        style={{ '--tri-index': index } as CSSProperties}
+        role="radiogroup"
+        aria-label="パーソナライズの適用範囲"
+        onKeyDown={onKeyDown}
+        onPointerDown={(event) => {
+          if (disabled || event.button !== 0) return
+          pickAt(event.clientX, event.currentTarget.getBoundingClientRect())
+        }}
+        onPointerMove={(event) => {
+          if (disabled || (event.buttons & 1) === 0) return
+          if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.setPointerCapture?.(event.pointerId)
+          pickAt(event.clientX, event.currentTarget.getBoundingClientRect())
+        }}
+      >
+        <span className="tri-slider-thumb" aria-hidden="true" />
+        {PERSONALIZE_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={option.value === value}
+            tabIndex={option.value === value ? 0 : -1}
+            disabled={disabled}
+            className={option.value === value ? 'on' : ''}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /**
  * TM: starts a team in a folder with the choices made here. They start from
  * the last team's, and the next team starts from these.
@@ -506,6 +581,7 @@ export function TeamStartDialog({ workspace }: { workspace: string }) {
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
           <LeanChildrenSwitch config={draft} onChange={change} />
+          <TeamPersonalizeSlider value={draft.personalizeMode ?? 'all'} disabled={starting} onChange={(personalizeMode) => change({ personalizeMode })} />
           <PtcToggle mode={draft.toolMode} disabled={starting} onChange={(toolMode) => change({ toolMode })} />
         </section>
         <RetiredOn config={draft} onChange={change} />
@@ -596,6 +672,15 @@ export function TeamConfigDialog({ team, onClose }: { team: TeamSummary; onClose
         </p>
         <section className="account-card">
           <ChildCount config={draft} onChange={change} />
+          {!team.execution && (
+            <div className="setting compact">
+              <div>
+                <h3>パーソナライズ</h3>
+                <p className="muted">開始時に固定</p>
+              </div>
+              <span className="muted">{PERSONALIZE_OPTIONS.find((option) => option.value === (draft.personalizeMode ?? 'all'))?.label ?? 'すべて'}</span>
+            </div>
+          )}
           <PtcToggle mode={draft.toolMode} disabled={saving || team.toolModeBusy} onChange={(toolMode) => change({ toolMode })} />
         </section>
         <RetiredOn config={draft} onChange={change} />

@@ -32,7 +32,7 @@ dsh の版を上げる手順そのものは[更新](updating.md#dsh)にありま
 | `mcp-timeout` | `dsh-acp` | Agent Desk が載せる MCP サーバーごとに呼び出しの時間制限を設定できるようにする（画像生成が60秒で切れないように） | `mcp-timeout-patch.test.js` |
 | `mcp-startup` | `dsh-acp` | 組み込みの MCP（chrome・desktop・history・imagegen）だけを並列に起動する | `mcp-startup.test.js` |
 | `output-speed` | `dsh-acp` | 出力速度の表示のため、モデルの応答ストリームを観測する | `dsh-compatibility.test.js` |
-| `ptc` | `dsh-acp` | PTC の切り替えと、プログラム内のツール呼び出し履歴を ACP に出す | `ptc.test.js` |
+| `ptc` | `dsh-acp` | PTC の切り替えとチーム単位のパーソナライズオンオフ、プログラム内のツール呼び出し履歴を ACP に出す | `ptc.test.js`、`team-personalize.test.js` |
 | `ptc-errors` | `dsh-ptc-runtime-node`（`index.js`・`process.js`） | 型の除去と構文エラーの診断、ワーカーへの `input.get()` の受け渡し | `ptc-diagnostics.test.js` |
 | `ptc-sdk` | `dsh-tool-executor-ptc` | `run_code.data`、SDK の型宣言の共有化、結果の描画 | `ptc-sdk.test.js` |
 | `ptc-results` | `dsh-tool-executor-ptc` | `edit`・`write`・`apply_patch` の結果からファイル全文を外し、`read` の行の表示を短くする | `ptc-results.test.js` |

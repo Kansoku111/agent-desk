@@ -24,6 +24,13 @@ export const RETIRED_PROVIDERS = { openscale: 'OpenScale' }
 export const TEAM_TIERS = ['low', 'mid']
 export const PROVIDER_NAMES = { gpt: 'GPT', codex: 'Codex', claude: 'Claude', claudeApi: 'Claude（API）', deepseek: 'DeepSeek', opencodeGo: 'OpenCode Go', commandCode: 'Command Code', commandCodeClaude: 'Command Code（Claude）', local: 'ローカル LLM' }
 export const TEAM_MODEL_MODES = ['tiers', 'free']
+export const TEAM_PERSONALIZE_MODES = ['off', 'leader', 'all']
+
+export function teamPersonalizeEnabled(mode, role) {
+  if (mode === 'off') return false
+  if (mode === 'leader') return role === 'leader'
+  return true
+}
 
 /** A Claude Code model alias (opus) or full name (claude-haiku-5-5), as `claude --model` takes it. */
 const CLAUDE_MODEL = /^[a-z0-9][a-z0-9.\-[\]]{0,79}$/i
@@ -46,6 +53,8 @@ export const TEAM_DEFAULTS = {
   /** Claude Code and GPT retain their old fields; other dsh leaders use dshLeader. */
   leaderProvider: 'claude',
   toolMode: 'ptc',
+  // Whether global custom instructions (設定 → パーソナライズ) apply to all, leader only, or none.
+  personalizeMode: 'all',
   // The default applies to new teams; modelMode is the mode of this team.
   defaultModelMode: 'tiers',
   modelMode: 'tiers',
@@ -104,6 +113,7 @@ export function teamConfig(saved) {
     // A retired leader is kept, not reset to Claude Code: resetting would move the team to another billing route.
     leaderProvider: LEADER_PROVIDERS.includes(value.leaderProvider) || isRetired(value.leaderProvider) ? value.leaderProvider : TEAM_DEFAULTS.leaderProvider,
     toolMode: value.toolMode ?? TEAM_DEFAULTS.toolMode,
+    personalizeMode: TEAM_PERSONALIZE_MODES.includes(value.personalizeMode) ? value.personalizeMode : TEAM_DEFAULTS.personalizeMode,
     defaultModelMode: TEAM_MODEL_MODES.includes(value.defaultModelMode) ? value.defaultModelMode : 'tiers',
     modelMode: TEAM_MODEL_MODES.includes(value.modelMode) ? value.modelMode : 'tiers',
     freeModels: Array.isArray(value.freeModels) ? value.freeModels.map((model) => ({ ...model })) : [],
@@ -187,6 +197,10 @@ export function mergeTeamConfig(current, patch) {
   if (Object.hasOwn(patch, 'toolMode')) {
     assertToolMode(patch.toolMode)
     next.toolMode = patch.toolMode
+  }
+  if (Object.hasOwn(patch, 'personalizeMode')) {
+    if (!TEAM_PERSONALIZE_MODES.includes(patch.personalizeMode)) throw new Error('パーソナライズの適用範囲が不正です')
+    next.personalizeMode = patch.personalizeMode
   }
   for (const name of ['leaderFallback', 'fallbackEffort']) {
     if (!Object.hasOwn(patch, name)) continue

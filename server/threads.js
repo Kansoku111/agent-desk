@@ -20,6 +20,7 @@ import {
 import { turnUsage } from './usage.js'
 import { OUTPUT_SPEED_META } from './output-speed.js'
 import { TOOL_MODE_CONFIG, assertToolMode, assertToolModeApplied, toolModeOption } from './ptc.js'
+import { CUSTOM_INSTRUCTIONS_CONFIG, assertCustomInstructionsApplied, assertCustomInstructionsMode, customInstructionsOption } from './custom-instructions.js'
 import { emptyScore, scoresUpTo } from '../shared/usage-score.js'
 import { assertSessionPolicy } from './session-policy-plugin.js'
 import { goalCommandObjective } from './goal-command.js'
@@ -1422,6 +1423,18 @@ export class ThreadManager extends EventEmitter {
         this.#learnOptions(thread, changed)
       }
       assertToolModeApplied(this.liveOptions.get(thread.sessionId), toolMode)
+    }
+
+    const customInstructions = this.teamCustomInstructions?.(thread) ?? 'on'
+    assertCustomInstructionsMode(customInstructions)
+    const instructionsOption = customInstructionsOption(this.liveOptions.get(thread.sessionId))
+    if (customInstructions === 'off' || instructionsOption) {
+      if (instructionsOption?.currentValue !== customInstructions) {
+        const changed = await runtime.setOption(thread.sessionId, CUSTOM_INSTRUCTIONS_CONFIG, customInstructions)
+        this.#checkRun(thread, active)
+        this.#learnOptions(thread, changed)
+      }
+      assertCustomInstructionsApplied(this.liveOptions.get(thread.sessionId), customInstructions)
     }
 
     // Model first: the effort choices depend on the model.
